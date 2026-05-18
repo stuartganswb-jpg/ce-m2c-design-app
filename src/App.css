@@ -1,0 +1,48 @@
+/* Shop App Professional Theme */
+.App {
+  text-align: center;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f4f4f4;
+  min-height: 100vh;
+}
+
+.App-header {
+  background-color: #282c34;
+  padding: 20px;
+  color: white;
+}
+
+.tab-navigation {
+  margin-top: 20px;
+}
+
+.tab-navigation button {
+  padding: 12px 24px;
+  margin: 0 5px;
+  border: none;
+  background-color: #4a4a4a;
+  color: white;
+  cursor: pointer;
+  font-weight: bold;
+  border-radius: 4px 4px 0 0;
+}
+
+.tab-navigation button:hover {
+  background-color: #666;
+}
+
+/* This highlights the active tab */
+.tab-navigation button.active {
+  background-color: #007bff;
+}
+
+.tab-content {
+  background: white;
+  margin: 20px auto;
+  padding: 30px;
+  width: 90%;
+  max-width: 1200px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  border-radius: 8px;
+  min-height: 500px;
+}
