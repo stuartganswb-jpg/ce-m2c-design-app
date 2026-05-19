@@ -1,39 +1,6 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../firebase';
-import { doc, writeBatch } from "firebase/firestore";
-
-// --- MOCK DATABASE (Jobs passed from Tab 10 Coop) ---
-const MOCK_APPROVED_JOBS = [
-  {
-    jobId: 'JOB-9042', status: 'APPROVED',
-    customer: { id: 'CUST-882', name: 'Smith Residence' }, sidemark: 'Guest Bedroom One',
-    cpqData: { totalPrice: 1450.00, finish: 'Matte Brass', items: [{ sku: 'TUBE-100-STL', desc: '1.0" Steel Tube', qty: 1 }, { sku: 'BRK-DEC-MB', desc: 'Deco Bracket', qty: 3 }] },
-    visionData: { shape: 'MITERED', poleDiameter: 1.0, cutList: { tubeB: 80.00 } },
-    dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, packing: false }
-  }
-];
-
-// --- MOCK CROSS-APP SYNC DATA ---
-const MOCK_SYNC_DATA = {
-    FINISHING: {
-        outbound: [
-            { id: 'FIN-001', name: 'CHAMPAGNE METALLIC', type: 'PLATING', status: 'Pending Floor Recipe' },
-            { id: 'FIN-002', name: 'BURNISHED SILVER', type: 'PLATING', status: 'Pending Floor Recipe' }
-        ],
-        inbound: [
-            { id: 'FLR-991', name: 'CUSTOM ANTIQUE BRASS (RUSH)', author: 'John (Paint Dept)', status: 'Pending PLM Approval & Texture' }
-        ]
-    },
-    FABRICATION: {
-        outbound: [
-            { id: 'CE-INV-8832', name: 'MITERED ELBOW 1.0"', type: 'COMPONENT', status: 'Missing CNC Program' },
-            { id: 'CE-INV-1105', name: 'FLUTED CYLINDER FINIAL', type: 'HARDWARE', status: 'Missing CNC Program' }
-        ],
-        inbound: [
-            { id: 'PRG-LATHE-042', name: 'CUSTOM FLUTED PROFILE v2', author: 'Mike (Machinist)', status: 'Unlinked Program File' }
-        ]
-    }
-};
+import { collection, onSnapshot, query, where, doc, writeBatch, updateDoc, addDoc, serverTimestamp, getDocs } from "firebase/firestore";
 
 // --- EXTENDED APP TARGET SCHEMAS ---
 const SCHEMAS = {
@@ -45,83 +12,166 @@ const SCHEMAS = {
         { key: 'cost', label: 'Unit Cost ($)', required: false },
         { key: 'uom', label: 'Unit of Measure', required: false },
         { key: 'finishDetail', label: 'Finish', required: false },
-        { key: 'collection', label: 'Collection', required: false },
-        { key: 'vendorName', label: 'Vendor Name', required: false },
-        { key: 'vendorId', label: 'Vendor ID', required: false },
-        { key: 'leadTime', label: 'Lead Time (Days)', required: false },
-        { key: 'moq', label: 'Minimum Order Qty', required: false },
-        { key: 'material', label: 'Raw Material', required: false },
+        { key: 'vendorName', label: 'Vendor Name', required: false }
     ],
     ASSEMBLIES: [
         { key: 'legacyErpId', label: 'NS Internal ID (Unique)', required: true },
         { key: 'itemName', label: 'Assembly Name', required: true },
-        { key: 'description', label: 'Description', required: false },
         { key: 'collection', label: 'Collection', required: false }
+    ],
+    BOMS: [
+        { key: 'assemblyErpId', label: 'Assembly NS ID (Parent)', required: true },
+        { key: 'componentErpId', label: 'Component NS ID (Child)', required: true },
+        { key: 'qty', label: 'BOM Quantity', required: true }
     ]
 };
 
 const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const [activeView, setActiveView] = useState('NETSUITE'); 
-  const [prodSubView, setProdSubView] = useState('DISPATCH'); // 'DISPATCH' or 'DATA_SYNC'
-  const [syncCategory, setSyncCategory] = useState('FABRICATION'); // 'FABRICATION' or 'FINISHING'
+  const [prodSubView, setProdSubView] = useState('DISPATCH'); 
+  const [syncCategory, setSyncCategory] = useState('FABRICATION'); 
   
-  const [jobs, setJobs] = useState(MOCK_APPROVED_JOBS);
-  const [activeJobId, setActiveJobId] = useState(MOCK_APPROVED_JOBS[0]?.jobId || null);
-  const [terminalLogs, setTerminalLogs] = useState(["> SYSTEM ONLINE. WAITING FOR DISPATCH COMMANDS..."]);
+  // --- LIVE DATA STATE ---
+  const [jobs, setJobs] = useState([]);
+  const [activeJobId, setActiveJobId] = useState(null);
+  const [syncData, setSyncData] = useState({ FABRICATION: { outbound: [], inbound: [] }, FINISHING: { outbound: [], inbound: [] } });
   
+  // --- NS EXPORT TRACKING ---
+  const [nsMetrics, setNsMetrics] = useState({ invTotal: 0, invPending: 0, asmTotal: 0, asmPending: 0, bomTotal: 0 });
+
+  const [terminalLogs, setTerminalLogs] = useState(["> SYSTEM ONLINE. WAITING FOR LIVE DISPATCH COMMANDS..."]);
   const [mapperConfig, setMapperConfig] = useState(null); 
   const [fieldMap, setFieldMap] = useState({});
-  const [syncData, setSyncData] = useState(MOCK_SYNC_DATA);
   
   const fileInputInvRef = useRef(null);
   const fileInputAsmRef = useRef(null);
-  const activeJob = jobs.find(j => j.jobId === activeJobId);
+  const fileInputBomRef = useRef(null);
+
+  const activeJob = jobs.find(j => j.id === activeJobId);
 
   const logToTerminal = (message) => setTerminalLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`]);
 
-  const handleDispatch = (node) => {
-      if (!activeJob) return;
-      logToTerminal(`INITIATING PUSH TO ${node.toUpperCase()} NODE...`);
-      setTimeout(() => {
-          logToTerminal(`✅ SUCCESS: ${activeJob.jobId} -> ${node.toUpperCase()} QUEUE.`);
-          setJobs(prevJobs => prevJobs.map(job => {
-              if (job.jobId === activeJob.jobId) return { ...job, dispatchStatus: { ...job.dispatchStatus, [node]: true } };
-              return job;
-          }));
-      }, 800);
-  };
+  // ============================================================================
+  // LIVE FIREBASE LISTENERS (Data Sync & NS Metrics)
+  // ============================================================================
+  useEffect(() => {
+    // 1. LISTEN FOR APPROVED JOBS
+    const qJobs = query(collection(db, "Jobs"), where("status", "==", "APPROVED"));
+    const unsubJobs = onSnapshot(qJobs, (snap) => {
+        const fetchedJobs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setJobs(fetchedJobs);
+        if (fetchedJobs.length > 0 && !activeJobId) setActiveJobId(fetchedJobs[0].id);
+    });
 
-  const handleSyncData = (category, direction, id) => {
-      if (direction === 'outbound') {
-          logToTerminal(`📡 PUSHING DATA TO ${category} APP: Ref ${id}`);
-          setTimeout(() => {
-              logToTerminal(`✅ FLOOR APP RECEIVED DATA. WAITING FOR FLOOR OPERATOR INPUT.`);
-              setSyncData(prev => ({
-                  ...prev,
-                  [category]: { ...prev[category], outbound: prev[category].outbound.filter(f => f.id !== id) }
-              }));
-          }, 800);
-      } else {
-          logToTerminal(`📡 INGESTING ${category} RECORD INTO MASTER PLM: Ref ${id}`);
-          setTimeout(() => {
-              logToTerminal(`✅ INGESTED TO TAB 4 MASTER LIBRARY.`);
-              setSyncData(prev => ({
-                  ...prev,
-                  [category]: { ...prev[category], inbound: prev[category].inbound.filter(f => f.id !== id) }
-              }));
-          }, 800);
+    // 2. FETCH NS METRICS (Inventory & Assemblies)
+    const qParts = query(collection(db, "Approved_Designs"));
+    const unsubParts = onSnapshot(qParts, (snap) => {
+        const parts = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        const inv = parts.filter(p => p.partClass === "Inventory");
+        const asm = parts.filter(p => p.partClass === "Assembly");
+        
+        setNsMetrics(prev => ({
+            ...prev,
+            invTotal: inv.length,
+            invPending: inv.filter(p => p.legacyErpId === "PENDING").length,
+            asmTotal: asm.length,
+            asmPending: asm.filter(p => p.legacyErpId === "PENDING").length
+        }));
+
+        // Populate Outbound Fabrication (Missing Programs)
+        const missingPrograms = inv.filter(p => p.manufacturingSpecs?.isInHouse && (!p.manufacturingSpecs?.programNum || p.manufacturingSpecs.programNum === ""))
+            .map(p => ({ id: p.id, name: p.itemName, type: p.manufacturingSpecs?.productType, status: "Missing CNC Program" }));
+        setSyncData(prev => ({ ...prev, FABRICATION: { ...prev.FABRICATION, outbound: missingPrograms } }));
+    });
+
+    // 3. FETCH NS METRICS (BOMs)
+    const qBoms = query(collection(db, "assembly_pins"));
+    const unsubBoms = onSnapshot(qBoms, (snap) => {
+        setNsMetrics(prev => ({ ...prev, bomTotal: snap.docs.length }));
+    });
+
+    // 4. LISTEN FOR FINISHING / INBOUND (Unchanged from before)
+    const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (docSnap) => {
+        if (docSnap.exists() && docSnap.data().finishes) {
+            const missingRecipes = docSnap.data().finishes.filter(f => !f.hasFloorRecipe).map(f => ({ id: f.id, name: f.name, type: f.type, status: "Pending Floor Recipe" }));
+            setSyncData(prev => ({ ...prev, FINISHING: { ...prev.FINISHING, outbound: missingRecipes } }));
+        }
+    });
+
+    return () => { unsubJobs(); unsubParts(); unsubBoms(); unsubFinishes(); };
+  }, [activeJobId]);
+
+
+  // ============================================================================
+  // NETSUITE DYNAMIC CSV EXPORTERS
+  // ============================================================================
+  const generateNetSuiteCSV = async (type) => {
+      logToTerminal(`[NS HUB] QUERYING DATABASE FOR ${type} EXPORT...`);
+      let csvContent = "data:text/csv;charset=utf-8,";
+      let count = 0;
+
+      try {
+          if (type === 'INVENTORY') {
+              const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "==", "Inventory")));
+              csvContent += "PLM_ID,NS_InternalID,ItemName,ProductType,BasePrice,Cost,UOM,Finish,Vendor\n";
+              snap.docs.forEach(d => {
+                  const data = d.data();
+                  const specs = data.manufacturingSpecs || {};
+                  // Only push if it was created in the app (PENDING) or if you want a full sync
+                  csvContent += `${data.id},${data.legacyErpId || ''},"${data.itemName || ''}",${specs.productType || ''},${specs.basePrice || 0},${specs.cost || 0},${specs.uom || ''},"${specs.finishDetail || ''}","${specs.vendorName || ''}"\n`;
+                  count++;
+              });
+          } 
+          else if (type === 'ASSEMBLIES') {
+              const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "==", "Assembly")));
+              csvContent += "PLM_ID,NS_InternalID,AssemblyName,Collection\n";
+              snap.docs.forEach(d => {
+                  const data = d.data();
+                  csvContent += `${data.id},${data.legacyErpId || ''},"${data.itemName || ''}","${data.collection || ''}"\n`;
+                  count++;
+              });
+          }
+          else if (type === 'BOMS') {
+              // BOM requires joining the assembly ID and the component ID
+              const asmSnap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "==", "Assembly")));
+              const assemblies = {};
+              asmSnap.docs.forEach(d => assemblies[d.data().itemId] = d.data().legacyErpId || "PENDING");
+
+              const pinSnap = await getDocs(collection(db, "assembly_pins"));
+              csvContent += "Assembly_NS_ID,Component_NS_ID,Quantity\n";
+              pinSnap.docs.forEach(d => {
+                  const data = d.data();
+                  const asmErpId = assemblies[data.assemblyId] || data.assemblyId;
+                  csvContent += `${asmErpId},${data.legacyErpId || data.partId},${data.defaultQty || 1}\n`;
+                  count++;
+              });
+          }
+          else if (type === 'SALES_ORDER') {
+              csvContent += "ExternalID,Customer,Date,Item,Quantity,Rate,Amount,Memo\n";
+              activeJob?.cpqData?.items?.forEach(item => { 
+                  csvContent += `${activeJob.jobId},${activeJob.customer?.name || ''},${new Date().toLocaleDateString()},${item.sku},${item.qty},0.00,0.00,${activeJob.sidemark || ''}\n`; 
+                  count++;
+              });
+          }
+
+          logToTerminal(`✅ [NS HUB] GENERATED CSV WITH ${count} ROWS. DOWNLOADING...`);
+          const encodedUri = encodeURI(csvContent);
+          const link = document.createElement("a"); 
+          link.setAttribute("href", encodedUri); 
+          link.setAttribute("download", `NS_SYNC_${type.toUpperCase()}_${Date.now()}.csv`);
+          document.body.appendChild(link); link.click(); document.body.removeChild(link);
+
+      } catch (err) {
+          console.error(err);
+          logToTerminal(`❌ [NS ERROR] CSV EXPORT FAILED.`);
       }
   };
 
-  const generateCSV = (type) => {
-      logToTerminal(`GENERATING MAPPED CSV FOR NETSUITE: [${type.toUpperCase()}]`);
-      let csvContent = "data:text/csv;charset=utf-8,ExternalID,Customer,Date,Item,Quantity,Rate,Amount,Memo\n";
-      activeJob?.cpqData.items.forEach(item => { csvContent += `${activeJob.jobId},${activeJob.customer.name},${new Date().toLocaleDateString()},${item.sku},${item.qty},0.00,0.00,${activeJob.sidemark}\n`; });
-      const encodedUri = encodeURI(csvContent);
-      const link = document.createElement("a"); link.setAttribute("href", encodedUri); link.setAttribute("download", `NS_SYNC_${type.toUpperCase()}_${Date.now()}.csv`);
-      document.body.appendChild(link); link.click(); document.body.removeChild(link);
-  };
 
+  // ============================================================================
+  // ETL CSV IMPORTER ENGINE
+  // ============================================================================
   const parseCSV = (text) => {
       const lines = text.split('\n').filter(l => l.trim() !== '');
       if (lines.length === 0) return [];
@@ -150,13 +200,14 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               if (hLower.includes('baseprice') || hLower === 'price') initialMap['basePrice'] = h;
               if (hLower.includes('cost') || hLower === 'purchaseprice') initialMap['cost'] = h;
               if (hLower === 'type') initialMap['productType'] = h;
-              if (hLower.includes('uom') || hLower === 'unit') initialMap['uom'] = h;
-              if (hLower.includes('vendor') && !hLower.includes('id')) initialMap['vendorName'] = h;
-              if (hLower.includes('lead')) initialMap['leadTime'] = h;
+              if (hLower.includes('parent') || hLower.includes('assembly')) initialMap['assemblyErpId'] = h;
+              if (hLower.includes('component') || hLower.includes('member')) initialMap['componentErpId'] = h;
+              if (hLower.includes('qty') || hLower === 'quantity') initialMap['qty'] = h;
           });
           setFieldMap(initialMap); setMapperConfig({ type: importType, data, headers });
           if (fileInputInvRef.current) fileInputInvRef.current.value = '';
           if (fileInputAsmRef.current) fileInputAsmRef.current.value = '';
+          if (fileInputBomRef.current) fileInputBomRef.current.value = '';
       };
       reader.readAsText(file);
   };
@@ -176,27 +227,37 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           mapperConfig.data.forEach(row => {
               const mappedRow = {};
               Object.keys(fieldMap).forEach(appKey => { mappedRow[appKey] = row[fieldMap[appKey]] || ""; });
-              if (!mappedRow.itemName) return; 
 
-              if (mapperConfig.type === 'INVENTORY') {
+              if (mapperConfig.type === 'INVENTORY' && mappedRow.itemName) {
                   const newId = `${currentBrand.toUpperCase()}-INV-${mappedRow.legacyErpId || Math.floor(1000+Math.random()*90000)}`;
                   const docRef = doc(db, "Approved_Designs", newId);
                   batch.set(docRef, {
                       id: newId, itemId: newId, legacyErpId: mappedRow.legacyErpId.toUpperCase() || "PENDING", itemName: mappedRow.itemName.toUpperCase(),
                       brandId: currentBrand, partClass: "Inventory", sharedBrands: [currentBrand], 
-                      manufacturingSpecs: {
-                          productType: mappedRow.productType || "COMPONENT", cost: parseFloat(mappedRow.cost) || 0, basePrice: parseFloat(mappedRow.basePrice) || 0, uom: mappedRow.uom || "EA", finishDetail: mappedRow.finishDetail || "N/A", collection: mappedRow.collection || "N/A", watchList: "NONE", isInHouse: mappedRow.vendorName ? false : true, vendorName: mappedRow.vendorName || "", vendorId: mappedRow.vendorId || "", leadTime: mappedRow.leadTime || "", moq: mappedRow.moq || "", material: mappedRow.material || "", layeringSequence: "10",
-                          parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER" }
-                      },
-                      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+                      manufacturingSpecs: { productType: mappedRow.productType || "COMPONENT", cost: parseFloat(mappedRow.cost) || 0, basePrice: parseFloat(mappedRow.basePrice) || 0, uom: mappedRow.uom || "EA", finishDetail: mappedRow.finishDetail || "N/A", vendorName: mappedRow.vendorName || "" }
                   }, { merge: true });
-              } else if (mapperConfig.type === 'ASSEMBLIES') {
+              } 
+              else if (mapperConfig.type === 'ASSEMBLIES' && mappedRow.itemName) {
                   const newId = `${currentBrand.toUpperCase()}-ASM-${mappedRow.legacyErpId || Math.floor(1000+Math.random()*90000)}`;
                   const docRef = doc(db, "Approved_Designs", newId);
                   batch.set(docRef, {
-                      id: newId, itemId: newId, partClass: "Assembly", brandId: currentBrand, legacyErpId: mappedRow.legacyErpId.toUpperCase() || "PENDING", itemName: mappedRow.itemName.toUpperCase(), description: mappedRow.description || "", collection: mappedRow.collection || "N/A", lifecycleStatus: "APPROVED", approvals: { designer: true, technical: true, machinist: true }, subAssemblies: [], outsourceKits: [], spatialCallouts: [],
-                      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+                      id: newId, itemId: newId, partClass: "Assembly", brandId: currentBrand, legacyErpId: mappedRow.legacyErpId.toUpperCase() || "PENDING", itemName: mappedRow.itemName.toUpperCase(), lifecycleStatus: "APPROVED"
                   }, { merge: true });
+              }
+              else if (mapperConfig.type === 'BOMS' && mappedRow.assemblyErpId && mappedRow.componentErpId) {
+                  const newId = `BOM-${Math.floor(10000+Math.random()*90000)}`;
+                  const docRef = doc(db, "assembly_pins", newId);
+                  batch.set(docRef, {
+                      id: newId,
+                      assemblyId: mappedRow.assemblyErpId.toUpperCase(), // Using ERP ID directly for now
+                      partId: mappedRow.componentErpId.toUpperCase(),
+                      legacyErpId: mappedRow.componentErpId.toUpperCase(),
+                      partName: "NS IMPORTED COMPONENT",
+                      defaultQty: parseInt(mappedRow.qty) || 1,
+                      isExistingLibraryPart: true,
+                      author: "NS_SYNC",
+                      createdAt: new Date().toISOString()
+                  });
               }
               count++;
           });
@@ -204,6 +265,31 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           logToTerminal(`✅ [MDM SUCCESS] ${count} ITEMS MAPPED & IMPORTED!`); alert(`Success! ${count} items were imported.`); setMapperConfig(null); 
       } catch (error) {
           console.error(error); logToTerminal(`❌ [MDM ERROR] IMPORT FAILED: ${error.message}`); alert("Import failed."); setMapperConfig({ ...mapperConfig, isProcessing: false });
+      }
+  };
+
+  const handleDispatch = async (node) => {
+      if (!activeJob) return;
+      logToTerminal(`INITIATING LIVE PUSH TO ${node.toUpperCase()} NODE...`);
+      try {
+          await updateDoc(doc(db, "Jobs", activeJob.id), { [`dispatchStatus.${node}`]: true, updatedAt: serverTimestamp() });
+          logToTerminal(`✅ SUCCESS: ${activeJob.jobId} -> ${node.toUpperCase()} QUEUE.`);
+      } catch (err) { logToTerminal(`❌ ERROR: Failed to dispatch job to ${node}.`); }
+  };
+
+  const handleSyncData = async (category, direction, id) => {
+      if (direction === 'outbound') {
+          logToTerminal(`📡 SENDING REQUEST TO ${category} FLOOR APP...`);
+          try {
+              await addDoc(collection(db, "floor_sync_requests"), { category, type: "DATA_REQUEST", targetId: id, status: "SENT_TO_FLOOR", createdAt: serverTimestamp() });
+              logToTerminal(`✅ FLOOR APP RECEIVED DATA. WAITING FOR OPERATOR INPUT.`);
+          } catch (err) { console.error(err); }
+      } else {
+          logToTerminal(`📡 INGESTING ${category} RECORD INTO MASTER PLM...`);
+          try {
+              await updateDoc(doc(db, "floor_sync_requests", id), { status: "APPROVED", updatedAt: serverTimestamp() });
+              logToTerminal(`✅ INGESTED TO TAB 4 MASTER LIBRARY.`);
+          } catch (err) { console.error(err); }
       }
   };
 
@@ -225,63 +311,69 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
         {/* ========================================================================= */}
         {activeView === 'NETSUITE' && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                    
+                    {/* INVENTORY */}
                     <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                        <div style={{ padding: '10px 15px', background: '#007bff', color: '#fff', fontWeight: 'bold', borderBottom: '2px solid #000' }}>👥 CUSTOMERS</div>
-                        <div style={{ padding: '20px', fontSize: '0.8rem', flex: 1, color: '#666', fontStyle: 'italic' }}>Customer CRM bidirectional sync is running in mocked environment mode.</div>
-                        <div style={{ display: 'flex', borderTop: '2px solid #000', marginTop: 'auto' }}>
-                            <button onClick={() => generateCSV('customers')} style={{ flex: 1, padding: '15px 10px', background: '#f8f9fa', fontWeight: 'bold', cursor: 'pointer', border: 'none', borderRight: '1px solid #ccc' }}>📄 EXPORT CSV</button>
-                            <button style={{ flex: 1, padding: '15px 10px', background: '#eee', color: '#999', fontWeight: 'bold', cursor: 'not-allowed', border: 'none' }}>API SYNC</button>
+                        <div style={{ padding: '10px 15px', background: '#28a745', color: '#fff', fontWeight: 'bold', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between' }}>
+                            <span>📦 INVENTORY (ITEMS)</span>
+                            {nsMetrics.invPending > 0 && <span style={{ background: '#ffc107', color: '#000', padding: '2px 6px', fontSize: '0.7rem', borderRadius: '4px' }}>{nsMetrics.invPending} PENDING PUSH</span>}
                         </div>
-                    </div>
-                    <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                        <div style={{ padding: '10px 15px', background: '#28a745', color: '#fff', fontWeight: 'bold', borderBottom: '2px solid #000' }}>📦 INVENTORY (MDM HUB)</div>
-                        <div style={{ padding: '15px', fontSize: '0.8rem', flex: 1 }}><div style={{ color: '#555', lineHeight: '1.4' }}>Upload NS Item Export CSV. Fields mapped here will populate Tab 4 (Master Library).</div></div>
+                        <div style={{ padding: '15px', fontSize: '0.8rem', flex: 1 }}>
+                            <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{nsMetrics.invTotal} Total Items</div>
+                            <div style={{ color: '#555', marginTop: '5px' }}>Items created in the PLM without a NetSuite ID will be flagged as Pending Push.</div>
+                        </div>
                         <div style={{ display: 'flex', borderTop: '2px solid #000', marginTop: 'auto' }}>
                             <input type="file" accept=".csv" ref={fileInputInvRef} onChange={(e) => handleImportClick(e, 'INVENTORY')} style={{ display: 'none' }} />
-                            <button onClick={() => fileInputInvRef.current.click()} style={{ flex: 1.5, padding: '15px 10px', background: '#28a745', color: '#fff', fontWeight: 'bold', cursor: 'pointer', border: 'none', borderRight: '2px solid #000' }}>⬆️ UPLOAD CSV</button>
-                            <button onClick={() => logToTerminal('Exporting Inventory CSV...')} style={{ flex: 1, padding: '15px 10px', background: '#f8f9fa', fontWeight: 'bold', cursor: 'pointer', border: 'none' }}>📄 EXPORT</button>
+                            <button onClick={() => fileInputInvRef.current.click()} style={{ flex: 1.5, padding: '15px 10px', background: '#eafaf1', color: '#28a745', fontWeight: 'bold', cursor: 'pointer', border: 'none', borderRight: '2px solid #000' }}>⬆️ IMPORT CSV</button>
+                            <button onClick={() => generateNetSuiteCSV('INVENTORY')} style={{ flex: 1, padding: '15px 10px', background: '#28a745', color: '#fff', fontWeight: 'bold', cursor: 'pointer', border: 'none' }}>⬇️ EXPORT {nsMetrics.invPending > 0 ? 'PENDING' : 'ALL'}</button>
                         </div>
                     </div>
+
+                    {/* ASSEMBLIES */}
                     <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                        <div style={{ padding: '10px 15px', background: '#6c757d', color: '#fff', fontWeight: 'bold', borderBottom: '2px solid #000' }}>⚙️ MASTER ASSEMBLIES</div>
-                        <div style={{ padding: '15px', fontSize: '0.8rem', flex: 1 }}><div style={{ color: '#555', lineHeight: '1.4' }}>Upload NS Assembly Export CSV. Mapped items will auto-approve for Tab 8 (CPQ).</div></div>
+                        <div style={{ padding: '10px 15px', background: '#6c757d', color: '#fff', fontWeight: 'bold', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between' }}>
+                            <span>⚙️ MASTER ASSEMBLIES</span>
+                            {nsMetrics.asmPending > 0 && <span style={{ background: '#ffc107', color: '#000', padding: '2px 6px', fontSize: '0.7rem', borderRadius: '4px' }}>{nsMetrics.asmPending} PENDING PUSH</span>}
+                        </div>
+                        <div style={{ padding: '15px', fontSize: '0.8rem', flex: 1 }}>
+                            <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{nsMetrics.asmTotal} Total Assemblies</div>
+                            <div style={{ color: '#555', marginTop: '5px' }}>Parent Assembly headers used in CPQ and Manufacturing logic.</div>
+                        </div>
                         <div style={{ display: 'flex', borderTop: '2px solid #000', marginTop: 'auto' }}>
                             <input type="file" accept=".csv" ref={fileInputAsmRef} onChange={(e) => handleImportClick(e, 'ASSEMBLIES')} style={{ display: 'none' }} />
-                            <button onClick={() => fileInputAsmRef.current.click()} style={{ flex: 1.5, padding: '15px 10px', background: '#6c757d', color: '#fff', fontWeight: 'bold', cursor: 'pointer', border: 'none', borderRight: '2px solid #000' }}>⬆️ UPLOAD CSV</button>
-                            <button onClick={() => logToTerminal('Exporting Assemblies CSV...')} style={{ flex: 1, padding: '15px 10px', background: '#f8f9fa', fontWeight: 'bold', cursor: 'pointer', border: 'none' }}>📄 EXPORT</button>
+                            <button onClick={() => fileInputAsmRef.current.click()} style={{ flex: 1.5, padding: '15px 10px', background: '#f8f9fa', color: '#6c757d', fontWeight: 'bold', cursor: 'pointer', border: 'none', borderRight: '2px solid #000' }}>⬆️ IMPORT CSV</button>
+                            <button onClick={() => generateNetSuiteCSV('ASSEMBLIES')} style={{ flex: 1, padding: '15px 10px', background: '#6c757d', color: '#fff', fontWeight: 'bold', cursor: 'pointer', border: 'none' }}>⬇️ EXPORT {nsMetrics.asmPending > 0 ? 'PENDING' : 'ALL'}</button>
                         </div>
                     </div>
-                </div>
 
-                <div style={{ background: '#fff', border: '2px solid #000', flex: 1, display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                    <div style={{ padding: '12px 15px', background: '#000', color: '#fff', fontWeight: 'bold', borderBottom: '2px solid #000' }}>📑 TRANSACTIONAL SYNC (SALES ORDERS & WORK ORDERS)</div>
-                    <div style={{ display: 'flex', flex: 1 }}>
-                        <div style={{ width: '300px', borderRight: '2px solid #000', background: '#f8f9fa', padding: '15px', overflowY: 'auto' }}>
-                            <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', marginBottom: '10px' }}>APPROVED JOBS WAITING FOR NS SO:</div>
-                            {jobs.map(job => (
-                                <div key={job.jobId} onClick={() => setActiveJobId(job.jobId)} style={{ background: job.jobId === activeJobId ? '#e6f2ff' : '#fff', border: `2px solid ${job.jobId === activeJobId ? '#007bff' : '#ccc'}`, padding: '10px', cursor: 'pointer', marginBottom: '10px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}><span style={{color:'#007bff'}}>{job.jobId}</span><span>${job.cpqData.totalPrice.toFixed(2)}</span></div>
-                                    <div style={{ fontSize: '0.75rem', color: '#555', marginTop: '5px' }}>{job.customer.name}</div>
-                                </div>
-                            ))}
+                    {/* BOMS */}
+                    <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
+                        <div style={{ padding: '10px 15px', background: '#17a2b8', color: '#fff', fontWeight: 'bold', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between' }}>
+                            <span>🏗️ MASTER BOMS (COMPONENTS)</span>
                         </div>
-                        <div style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                            {activeJob ? (
-                                <>
-                                    <div style={{ display: 'flex', gap: '20px' }}>
-                                        <div style={{ flex: 1, background: '#f4f4f4', padding: '15px', border: '1px solid #ccc' }}>
-                                            <div style={{ fontWeight: 'bold', fontSize: '0.8rem', borderBottom: '1px solid #bbb', paddingBottom: '5px', marginBottom: '10px', color: '#007bff' }}>NS SALES ORDER PAYLOAD</div>
-                                            <ul style={{ margin: 0, paddingLeft: '15px', fontSize: '0.8rem', lineHeight: '1.6' }}><li><strong>Customer:</strong> {activeJob.customer.id}</li><li><strong>Memo:</strong> {activeJob.sidemark}</li><li><strong>Total:</strong> ${activeJob.cpqData.totalPrice.toFixed(2)}</li></ul>
-                                        </div>
-                                    </div>
-                                    <div style={{ display: 'flex', gap: '15px', marginTop: 'auto' }}>
-                                        <button onClick={() => generateCSV('salesOrder')} style={{ flex: 1, padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', fontSize: '1rem' }}>📥 EXPORT CSV (SALES ORDER)</button>
-                                    </div>
-                                </>
-                            ) : ( <div style={{ color: '#999', margin: 'auto' }}>Select a job from the queue.</div> )}
+                        <div style={{ padding: '15px', fontSize: '0.8rem', flex: 1 }}>
+                            <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{nsMetrics.bomTotal} Total BOM Connections</div>
+                            <div style={{ color: '#555', marginTop: '5px' }}>Links Component Items to Assembly Items. Push these *after* syncing Items and Assemblies.</div>
+                        </div>
+                        <div style={{ display: 'flex', borderTop: '2px solid #000', marginTop: 'auto' }}>
+                            <input type="file" accept=".csv" ref={fileInputBomRef} onChange={(e) => handleImportClick(e, 'BOMS')} style={{ display: 'none' }} />
+                            <button onClick={() => fileInputBomRef.current.click()} style={{ flex: 1.5, padding: '15px 10px', background: '#e0f7fa', color: '#17a2b8', fontWeight: 'bold', cursor: 'pointer', border: 'none', borderRight: '2px solid #000' }}>⬆️ IMPORT CSV</button>
+                            <button onClick={() => generateNetSuiteCSV('BOMS')} style={{ flex: 1, padding: '15px 10px', background: '#17a2b8', color: '#fff', fontWeight: 'bold', cursor: 'pointer', border: 'none' }}>⬇️ EXPORT BOMS</button>
                         </div>
                     </div>
+
+                    {/* CUSTOMERS / SO SYNC */}
+                    <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
+                        <div style={{ padding: '10px 15px', background: '#000', color: '#fff', fontWeight: 'bold', borderBottom: '2px solid #000' }}>📑 TRANSACTIONAL SYNC</div>
+                        <div style={{ padding: '15px', fontSize: '0.8rem', flex: 1, color: '#666', fontStyle: 'italic' }}>
+                            Sales Orders and Customer sync generated directly from the Dispatch Queue.
+                        </div>
+                        <div style={{ display: 'flex', borderTop: '2px solid #000', marginTop: 'auto' }}>
+                            <button onClick={() => generateNetSuiteCSV('SALES_ORDER')} style={{ flex: 1, padding: '15px 10px', background: '#000', color: '#fff', fontWeight: 'bold', cursor: 'pointer', border: 'none' }}>📥 EXPORT SALES ORDERS</button>
+                        </div>
+                    </div>
+
                 </div>
             </div>
         )}
@@ -291,8 +383,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
         {/* ========================================================================= */}
         {activeView === 'PRODUCTION' && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                
-                {/* SUB-NAVIGATION */}
                 <div style={{ display: 'flex', gap: '10px', background: '#e9ecef', padding: '10px', border: '2px solid #000' }}>
                     <button onClick={() => setProdSubView('DISPATCH')} style={{ padding: '10px 20px', background: prodSubView === 'DISPATCH' ? '#000' : 'transparent', color: prodSubView === 'DISPATCH' ? '#fff' : '#000', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>🚀 JOB DISPATCH QUEUE</button>
                     <button onClick={() => setProdSubView('DATA_SYNC')} style={{ padding: '10px 20px', background: prodSubView === 'DATA_SYNC' ? '#007bff' : 'transparent', color: prodSubView === 'DATA_SYNC' ? '#fff' : '#000', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>🔄 CROSS-APP DATA SYNC</button>
@@ -305,12 +395,13 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                                 <span style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>📥 DISPATCH QUEUE</span><span style={{ fontSize: '0.8rem', fontWeight: 'bold', background: '#28a745', padding: '3px 8px', borderRadius: '12px' }}>{jobs.length} READY</span>
                             </div>
                             <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px', background: '#f8f9fa', minHeight: '500px', overflowY: 'auto' }}>
+                                {jobs.length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', textAlign: 'center' }}>Queue is empty.</div>}
                                 {jobs.map(job => {
-                                    const isSelected = job.jobId === activeJobId;
+                                    const isSelected = job.id === activeJobId;
                                     return (
-                                        <div key={job.jobId} onClick={() => setActiveJobId(job.jobId)} style={{ background: isSelected ? '#e6f2ff' : '#fff', border: `2px solid ${isSelected ? '#007bff' : '#ccc'}`, padding: '12px', cursor: 'pointer' }}>
+                                        <div key={job.id} onClick={() => setActiveJobId(job.id)} style={{ background: isSelected ? '#e6f2ff' : '#fff', border: `2px solid ${isSelected ? '#007bff' : '#ccc'}`, padding: '12px', cursor: 'pointer' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><span style={{ fontWeight: 'bold', color: isSelected ? '#007bff' : '#333' }}>{job.jobId}</span></div>
-                                            <div style={{ fontSize: '0.8rem', color: '#666', fontWeight: 'bold' }}>{job.customer.name}</div>
+                                            <div style={{ fontSize: '0.8rem', color: '#666', fontWeight: 'bold' }}>{job.customer?.name || "Unknown"}</div>
                                         </div>
                                     );
                                 })}
@@ -325,7 +416,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#d9534f', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>🏭 FIREBASE: SHOP FLOOR APP</div>
                                         </div>
                                         <div style={{ width: '180px', background: '#f8f9fa', borderLeft: '2px solid #000', display: 'flex', padding: '15px' }}>
-                                            <button onClick={() => handleDispatch('fabrication')} disabled={activeJob.dispatchStatus.fabrication} style={{ width: '100%', background: activeJob.dispatchStatus.fabrication ? '#ccc' : '#d9534f', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: activeJob.dispatchStatus.fabrication ? 'not-allowed' : 'pointer' }}>{activeJob.dispatchStatus.fabrication ? '✅ ROUTED' : 'PUSH TO SHOP'}</button>
+                                            <button onClick={() => handleDispatch('fabrication')} disabled={activeJob.dispatchStatus?.fabrication} style={{ width: '100%', background: activeJob.dispatchStatus?.fabrication ? '#ccc' : '#d9534f', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: activeJob.dispatchStatus?.fabrication ? 'not-allowed' : 'pointer' }}>{activeJob.dispatchStatus?.fabrication ? '✅ ROUTED' : 'PUSH TO SHOP'}</button>
                                         </div>
                                     </div>
                                     <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', boxShadow: '5px 5px 0 #6f42c1' }}>
@@ -333,7 +424,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#6f42c1', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>🎨 FIREBASE: FINISHING FLOOR APP</div>
                                         </div>
                                         <div style={{ width: '180px', background: '#f8f9fa', borderLeft: '2px solid #000', display: 'flex', padding: '15px' }}>
-                                            <button onClick={() => handleDispatch('finishing')} disabled={activeJob.dispatchStatus.finishing} style={{ width: '100%', background: activeJob.dispatchStatus.finishing ? '#ccc' : '#6f42c1', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: activeJob.dispatchStatus.finishing ? 'not-allowed' : 'pointer' }}>{activeJob.dispatchStatus.finishing ? '✅ ROUTED' : 'PUSH TO PAINT'}</button>
+                                            <button onClick={() => handleDispatch('finishing')} disabled={activeJob.dispatchStatus?.finishing} style={{ width: '100%', background: activeJob.dispatchStatus?.finishing ? '#ccc' : '#6f42c1', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: activeJob.dispatchStatus?.finishing ? 'not-allowed' : 'pointer' }}>{activeJob.dispatchStatus?.finishing ? '✅ ROUTED' : 'PUSH TO PAINT'}</button>
                                         </div>
                                     </div>
                                 </>
@@ -342,42 +433,31 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                     </div>
                 )}
 
-                {/* --- BI-DIRECTIONAL DATA SYNC MODULE --- */}
                 {prodSubView === 'DATA_SYNC' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', flex: 1 }}>
-                        
-                        {/* CATEGORY SELECTOR */}
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <button onClick={() => setSyncCategory('FABRICATION')} style={{ padding: '10px 20px', background: syncCategory === 'FABRICATION' ? '#d9534f' : '#f8f9fa', color: syncCategory === 'FABRICATION' ? '#fff' : '#666', border: `2px solid ${syncCategory === 'FABRICATION' ? '#000' : '#ccc'}`, fontWeight: 'bold', cursor: 'pointer' }}>🏭 FABRICATION DEPT (PROGRAMS)</button>
                             <button onClick={() => setSyncCategory('FINISHING')} style={{ padding: '10px 20px', background: syncCategory === 'FINISHING' ? '#6f42c1' : '#f8f9fa', color: syncCategory === 'FINISHING' ? '#fff' : '#666', border: `2px solid ${syncCategory === 'FINISHING' ? '#000' : '#ccc'}`, fontWeight: 'bold', cursor: 'pointer' }}>🎨 FINISHING DEPT (RECIPES)</button>
                         </div>
-
                         <div style={{ display: 'flex', gap: '20px', flex: 1 }}>
                             
                             {/* OUTBOUND */}
                             <div style={{ flex: 1, background: '#fff', border: `2px solid ${syncCategory === 'FINISHING' ? '#6f42c1' : '#d9534f'}`, display: 'flex', flexDirection: 'column', boxShadow: `8px 8px 0 ${syncCategory === 'FINISHING' ? 'rgba(111, 66, 193, 0.2)' : 'rgba(217, 83, 79, 0.2)'}` }}>
                                 <div style={{ padding: '15px', background: syncCategory === 'FINISHING' ? '#6f42c1' : '#d9534f', color: '#fff', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <span style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>📤 OUTBOUND: PLM TO FLOOR</span>
-                                    <span style={{ fontSize: '0.8rem', fontWeight: 'bold', background: '#fff', color: syncCategory === 'FINISHING' ? '#6f42c1' : '#d9534f', padding: '3px 8px', borderRadius: '12px' }}>{syncData[syncCategory].outbound.length} PENDING</span>
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 'bold', background: '#fff', color: syncCategory === 'FINISHING' ? '#6f42c1' : '#d9534f', padding: '3px 8px', borderRadius: '12px' }}>{syncData[syncCategory]?.outbound.length || 0} PENDING</span>
                                 </div>
-                                <div style={{ padding: '20px', flex: 1, background: '#f8f9fa' }}>
-                                    <div style={{ fontSize: '0.8rem', color: '#666', marginBottom: '15px', fontStyle: 'italic' }}>
-                                        {syncCategory === 'FINISHING' 
-                                            ? "Finishes created in PLM Tab 4 that need a chemical/process recipe mapped by the floor team." 
-                                            : "Parts created in PLM Tab 4 marked as In-House that need a CNC/Machine program assigned by the Floor team."}
-                                    </div>
+                                <div style={{ padding: '20px', flex: 1, background: '#f8f9fa', overflowY: 'auto' }}>
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                                        {syncData[syncCategory].outbound.length === 0 && <div style={{ textAlign: 'center', color: '#999', marginTop: '40px' }}>All items mapped.</div>}
-                                        {syncData[syncCategory].outbound.map(item => (
+                                        {syncData[syncCategory]?.outbound.length === 0 && <div style={{ textAlign: 'center', color: '#999', marginTop: '40px' }}>All items mapped.</div>}
+                                        {syncData[syncCategory]?.outbound.map(item => (
                                             <div key={item.id} style={{ background: '#fff', border: '1px solid #ccc', borderLeft: '5px solid #ffc107', padding: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                 <div>
                                                     <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#333' }}>{item.name}</div>
                                                     <div style={{ fontSize: '0.7rem', color: '#666' }}>ID: {item.id} | Type: {item.type}</div>
                                                     <div style={{ fontSize: '0.7rem', color: '#d9534f', fontWeight: 'bold', marginTop: '5px' }}>⚠️ {item.status}</div>
                                                 </div>
-                                                <button onClick={() => handleSyncData(syncCategory, 'outbound', item.id)} style={{ padding: '10px 15px', background: syncCategory === 'FINISHING' ? '#6f42c1' : '#d9534f', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer' }}>
-                                                    🔔 PING FLOOR APP
-                                                </button>
+                                                <button onClick={() => handleSyncData(syncCategory, 'outbound', item.id)} style={{ padding: '10px 15px', background: syncCategory === 'FINISHING' ? '#6f42c1' : '#d9534f', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer' }}>🔔 PING FLOOR APP</button>
                                             </div>
                                         ))}
                                     </div>
@@ -388,17 +468,12 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                             <div style={{ flex: 1, background: '#fff', border: '2px solid #28a745', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 rgba(40, 167, 69, 0.2)' }}>
                                 <div style={{ padding: '15px', background: '#28a745', color: '#fff', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <span style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>📥 INBOUND: FLOOR TO PLM</span>
-                                    <span style={{ fontSize: '0.8rem', fontWeight: 'bold', background: '#fff', color: '#28a745', padding: '3px 8px', borderRadius: '12px' }}>{syncData[syncCategory].inbound.length} PENDING</span>
+                                    <span style={{ fontSize: '0.8rem', fontWeight: 'bold', background: '#fff', color: '#28a745', padding: '3px 8px', borderRadius: '12px' }}>{syncData[syncCategory]?.inbound.length || 0} PENDING</span>
                                 </div>
-                                <div style={{ padding: '20px', flex: 1, background: '#f8f9fa' }}>
-                                    <div style={{ fontSize: '0.8rem', color: '#666', marginBottom: '15px', fontStyle: 'italic' }}>
-                                        {syncCategory === 'FINISHING' 
-                                            ? "Custom finishes created by floor operators that need to be approved into the PLM Master Dictionary." 
-                                            : "New G-Code/Machine programs uploaded by floor operators that need to be linked to a Master Part in PLM."}
-                                    </div>
+                                <div style={{ padding: '20px', flex: 1, background: '#f8f9fa', overflowY: 'auto' }}>
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                                        {syncData[syncCategory].inbound.length === 0 && <div style={{ textAlign: 'center', color: '#999', marginTop: '40px' }}>No inbound items.</div>}
-                                        {syncData[syncCategory].inbound.map(item => (
+                                        {syncData[syncCategory]?.inbound.length === 0 && <div style={{ textAlign: 'center', color: '#999', marginTop: '40px' }}>No inbound items.</div>}
+                                        {syncData[syncCategory]?.inbound.map(item => (
                                             <div key={item.id} style={{ background: '#fff', border: '1px solid #ccc', borderLeft: '5px solid #17a2b8', padding: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                 <div>
                                                     <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#333' }}>{item.name}</div>
@@ -413,7 +488,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                 </div>
                             </div>
-
                         </div>
                     </div>
                 )}
