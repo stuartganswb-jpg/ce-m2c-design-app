@@ -6,6 +6,7 @@ import LandingPage from './LandingPage';
 import HQ from './components/HQ/HQ';
 import ShopFloor from './components/ShopFloor/ShopFloor';
 import FinishingFloor from './components/FinishingFloor/FinishingFloor';
+import PickPackApp from './components/PickPack/PickPackApp'; // 🚀 NEW: Import Pick & Pack App
 
 const App = () => {
   return (
@@ -20,6 +21,9 @@ const App = () => {
         {/* The Factory Apps */}
         <Route path="/shop-floor" element={<ShopFloor />} />
         <Route path="/finishing-floor" element={<FinishingFloor />} />
+        
+        {/* 🚀 NEW: The Warehouse Routing */}
+        <Route path="/pick-pack" element={<PickPackApp />} />
       </Routes>
     </Router>
   );

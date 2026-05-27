@@ -56,6 +56,17 @@ const LandingPage = () => {
             <span>➔</span>
           </button>
 
+          {/* 🚀 NEW: WAREHOUSE / PICK & PACK LINK */}
+          <button 
+            onClick={() => navigate('/pick-pack')}
+            style={{ width: '100%', padding: '15px 20px', background: '#fff', border: '2px solid #28a745', color: '#28a745', textAlign: 'left', cursor: 'pointer', fontFamily: 'monospace', fontWeight: 'bold', fontSize: '0.9rem', transition: '0.1s', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '4px 4px 0 #28a745' }}
+            onMouseOver={(e) => { e.currentTarget.style.background = '#28a745'; e.currentTarget.style.color = '#fff'; }}
+            onMouseOut={(e) => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.color = '#28a745'; }}
+          >
+            <span>[04] WAREHOUSE (PICK & PACK)</span>
+            <span>➔</span>
+          </button>
+
         </div>
 
         {/* FOOTER METADATA */}
