@@ -9,7 +9,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const [isProcessing, setIsProcessing] = useState(false);
     
     const [hqParts, setHqParts] = useState([]);
-    const [globalLists, setGlobalLists] = useState({ collections: [], prodTypes: [] }); 
+    const [globalLists, setGlobalLists] = useState({ collections: [], prodTypes: [], customers: [] }); 
 
     const [globalFinishes, setGlobalFinishes] = useState([]);
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);
@@ -17,6 +17,11 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
     const [patternId, setPatternId] = useState("");
     const [finishId, setFinishId] = useState(""); 
+    
+    // 🚀 NEW: Added Customer Mapping to Pipeline
+    const [customerId, setCustomerId] = useState("");
+    const [clientSku, setClientSku] = useState("");
+    
     const [collectionName, setCollectionName] = useState("");
     const [productType, setProductType] = useState("");
     const [notes, setNotes] = useState("");
@@ -33,7 +38,8 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                 if (docSnap.exists()) {
                     setGlobalLists({
                         collections: docSnap.data().collections || [],
-                        prodTypes: docSnap.data().prodTypes || []
+                        prodTypes: docSnap.data().prodTypes || [],
+                        customers: docSnap.data().customers || []
                     });
                     setCollectionName(docSnap.data().collections?.[0] || '');
                     setProductType(docSnap.data().prodTypes?.[0] || '');
@@ -108,31 +114,14 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         }
     }, [currentIndex, queue]);
 
-    // 🚀 DUAL-CANVAS ENGINE: Burns the text directly into the high-res image and crops a thumb
+    // 🚀 NEW: Clean High-Res, Burned Thumbnail (Bottom Right)
     const generateWatermarkedImages = (file, textStr) => {
         return new Promise((resolve) => {
             if (!file) return resolve({ hiResBlob: null, thumbBlob: null });
             const img = new Image();
             img.onload = () => {
                 try {
-                    // 1. Full Size Original Watermark
-                    const hiCanvas = document.createElement('canvas');
-                    const hiCtx = hiCanvas.getContext('2d');
-                    hiCanvas.width = img.width;
-                    hiCanvas.height = img.height;
-                    hiCtx.drawImage(img, 0, 0);
-
-                    const hiFontSize = Math.max(16, Math.floor(img.height * 0.03)); 
-                    hiCtx.font = `bold ${hiFontSize}px monospace`;
-                    const hiPad = hiFontSize * 0.4;
-                    const hiTxtW = hiCtx.measureText(textStr).width;
-                    hiCtx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-                    hiCtx.fillRect(hiPad, img.height - hiFontSize - hiPad * 3, hiTxtW + hiPad * 2, hiFontSize + hiPad * 2);
-                    hiCtx.fillStyle = '#333333';
-                    hiCtx.textBaseline = 'top';
-                    hiCtx.fillText(textStr, hiPad * 2, img.height - hiFontSize - hiPad * 1.5);
-
-                    // 2. 250x250 Thumbnail Cropper
+                    // Create Thumbnail Canvas
                     const thCanvas = document.createElement('canvas');
                     const thCtx = thCanvas.getContext('2d');
                     thCanvas.width = 250;
@@ -142,11 +131,25 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                     const sy = (img.height - minDim) / 2;
                     thCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 250, 250);
 
-                    hiCanvas.toBlob((hiBlob) => {
-                        thCanvas.toBlob((thBlob) => {
-                            resolve({ hiResBlob: hiBlob, thumbBlob: thBlob });
-                        }, 'image/png', 0.9);
-                    }, 'image/png', 1.0);
+                    // Burn Internal Watermark into LOWER RIGHT of Thumbnail
+                    const thFontSize = 14;
+                    thCtx.font = `bold ${thFontSize}px monospace`;
+                    const thPad = thFontSize * 0.4;
+                    const thTxtW = thCtx.measureText(textStr).width;
+                    
+                    const thBoxX = 250 - thTxtW - thPad * 3;
+                    const thBoxY = 250 - thFontSize - thPad * 3;
+
+                    thCtx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+                    thCtx.fillRect(thBoxX, thBoxY, thTxtW + thPad * 2, thFontSize + thPad * 2);
+                    thCtx.fillStyle = '#333333';
+                    thCtx.textBaseline = 'top';
+                    thCtx.fillText(textStr, thBoxX + thPad, thBoxY + thPad * 1.5);
+
+                    thCanvas.toBlob((thBlob) => {
+                        // Return the completely clean, original file as the high-res blob
+                        resolve({ hiResBlob: file, thumbBlob: thBlob });
+                    }, 'image/png', 0.9);
 
                 } catch (err) { resolve({ hiResBlob: file, thumbBlob: null }); }
             };
@@ -157,7 +160,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
     const handleProcessAndNext = async (e) => {
         if (e) e.preventDefault();
-        if (!patternId) return alert("You must provide a Config ID.");
+        if (!patternId) return alert("You must provide a Pattern ID.");
         
         setIsProcessing(true);
         
@@ -206,6 +209,8 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                 id: assetDocId,
                 patternId: String(patternId).toUpperCase(),
                 finishId: String(finishId).toUpperCase(),
+                customerId: customerId || '',
+                clientSku: String(clientSku).toUpperCase(),
                 name: displayId, 
                 collection: collectionName,
                 productType: productType,
@@ -221,6 +226,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             }, { merge: true });
 
             setNotes(""); 
+            setClientSku(""); 
             setCurrentIndex(prev => prev + 1);
             setIsProcessing(false);
 
@@ -279,7 +285,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                     <div style={{ fontSize: '3rem' }}>✅</div>
                     <h2 style={{ margin: '10px 0 0 0' }}>BATCH COMPLETE</h2>
                     <p style={{ fontWeight: 'bold' }}>Processed {safeQueue.length} images.</p>
-                    <button onClick={() => { setQueue([]); setCurrentIndex(0); setPatternId(''); setFinishId(''); setAssociatedParts([]); setAssociatedFinishes([]); }} style={{ marginTop: '20px', padding: '10px 20px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>START NEW BATCH</button>
+                    <button onClick={() => { setQueue([]); setCurrentIndex(0); setPatternId(''); setFinishId(''); setCustomerId(''); setClientSku(''); setAssociatedParts([]); setAssociatedFinishes([]); }} style={{ marginTop: '20px', padding: '10px 20px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>START NEW BATCH</button>
                 </div>
             ) : (
                 <div style={{ display: 'flex', gap: '20px', flex: 1 }}>
@@ -323,7 +329,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                     style={{ width: '100%', padding: '15px', border: '3px solid #d9534f', fontSize: '1.2rem', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px' }} 
                                 />
                                 {isLibraryMatch && (
-                                    <div style={{ fontSize: '0.7rem', color: '#28a745', fontWeight: 'bold', marginTop: '5px' }}>✓ Matches an existing Master Library Part</div>
+                                    <div style={{ fontSize: '0.7rem', color: '#28a745', fontWeight: 'bold', marginTop: '5px' }}>✓ Matches Master Library Part</div>
                                 )}
                             </div>
                             <div style={{ flex: 1 }}>
@@ -335,6 +341,28 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                     onKeyDown={handleKeyDown}
                                     placeholder="e.g. EP01" 
                                     style={{ width: '100%', padding: '15px', border: '3px solid #d9534f', fontSize: '1.2rem', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px' }} 
+                                />
+                            </div>
+                        </div>
+
+                        {/* 🚀 NEW: Customer & Client SKU Mapping */}
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CUSTOMER</label>
+                                <select value={customerId} onChange={e => setCustomerId(e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #28a745', fontWeight: 'bold', marginTop: '5px' }}>
+                                    <option value="">Select...</option>
+                                    {globalLists.customers.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CLIENT SKU / PART #</label>
+                                <input 
+                                    type="text" 
+                                    value={clientSku} 
+                                    onChange={e => setClientSku(e.target.value)} 
+                                    onKeyDown={handleKeyDown}
+                                    placeholder="e.g. CUST-999" 
+                                    style={{ width: '100%', padding: '12px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px' }} 
                                 />
                             </div>
                         </div>
@@ -359,7 +387,6 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             <textarea 
                                 value={notes} 
                                 onChange={e => setNotes(e.target.value)} 
-                                onKeyDown={handleKeyDown}
                                 placeholder="Any keywords you want to search by later..." 
                                 style={{ width: '100%', padding: '12px', border: '1px solid #ccc', minHeight: '80px', fontFamily: 'monospace', boxSizing: 'border-box', marginTop: '5px', resize: 'vertical' }} 
                             />
@@ -388,34 +415,6 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             </div>
                         )}
 
-                        {/* FINISH TAGGING */}
-                        <select 
-                            onChange={(e) => {
-                                if (e.target.value && !associatedFinishes.includes(e.target.value)) {
-                                    setAssociatedFinishes(prev => [...prev, e.target.value]);
-                                }
-                            }} 
-                            style={{ padding: '10px', border: '2px solid #6f42c1', fontWeight: 'bold' }}
-                        >
-                            <option value="">+ Link to Master Finish...</option>
-                            <optgroup label="In-House & Global Finishes">
-                                {[...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])].map(f => <option key={f.id} value={f.id}>{String(f.name || f.id)}</option>)}
-                            </optgroup>
-                            <optgroup label="Outsourced Finishes">
-                                {(Array.isArray(outsourceFinishes)?outsourceFinishes:[]).map(f => <option key={f.id} value={f.id}>{String(f.name || f.id)}</option>)}
-                            </optgroup>
-                        </select>
-                        {associatedFinishes.length > 0 && (
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                                {associatedFinishes.map(finId => (
-                                    <span key={finId} style={{ background: '#6f42c1', color: '#fff', padding: '4px 8px', fontSize: '0.7rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                        {String(allFinishes.find(f => f.id === finId)?.name || finId)}
-                                        <span onClick={() => setAssociatedFinishes(prev => prev.filter(id => id !== finId))} style={{ cursor: 'pointer', fontWeight: 'bold' }}>×</span>
-                                    </span>
-                                ))}
-                            </div>
-                        )}
-
                         <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             <div style={{ fontSize: '0.75rem', color: '#888', textAlign: 'center', fontStyle: 'italic' }}>Tip: Press Enter to submit instantly</div>
                             <button 
@@ -435,7 +434,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             >
                                 {isProcessing ? "📸 GENERATING THUMB & UPLOADING..." : "⏭️ PROCESS & NEXT"}
                             </button>
-                            <button onClick={() => { setNotes(""); setCurrentIndex(prev => prev + 1); }} disabled={isProcessing} style={{ padding: '10px', background: 'transparent', color: '#d9534f', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>
+                            <button onClick={() => { setNotes(""); setClientSku(""); setCurrentIndex(prev => prev + 1); }} disabled={isProcessing} style={{ padding: '10px', background: 'transparent', color: '#d9534f', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>
                                 SKIP THIS IMAGE
                             </button>
                         </div>
