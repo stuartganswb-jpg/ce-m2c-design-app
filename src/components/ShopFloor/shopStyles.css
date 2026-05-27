@@ -1,0 +1,5 @@
+/* src/components/ShopFloor/shopStyles.css */
+:root { --blue: #0056b3; --light-bg: #f8f9fa; --card-bg: #ffffff; --text: #333; --border: #dee2e6; --red: #dc3545; --green: #28a745; --gold: #f39c12; }
+.nav-link { background: #f1f3f5; color: var(--text); border: 1px solid var(--border); padding: 10px 15px; cursor: pointer; border-radius: 6px; font-weight: 600; font-size: 12px; }
+.nav-link.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+/* Add the rest of your CSS from the top of your old HTML file here */

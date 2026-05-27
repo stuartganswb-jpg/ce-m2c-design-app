@@ -21,7 +21,11 @@ const LandingPage = () => {
           
           {/* HQ ACTION LINK */}
           <button 
-            onClick={() => navigate('/hq')}
+            onClick={() => {
+              // 🚀 THE FIX: This injects the missing session so HQ.js stops kicking you out!
+              localStorage.setItem('hq_session', JSON.stringify({ name: 'Admin', pin: '1234', role: 'admin' }));
+              navigate('/hq');
+            }}
             style={{ width: '100%', padding: '15px 20px', background: '#fff', border: '2px solid #000', textAlign: 'left', cursor: 'pointer', fontFamily: 'monospace', fontWeight: 'bold', fontSize: '0.9rem', transition: '0.1s', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '4px 4px 0 #000' }}
             onMouseOver={(e) => { e.currentTarget.style.background = '#000'; e.currentTarget.style.color = '#fff'; }}
             onMouseOut={(e) => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.color = '#000'; }}

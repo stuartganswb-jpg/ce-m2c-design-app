@@ -1,16 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
+import { db, storage } from '../../firebase';
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
-const MOCK_SAVED_CONFIGS = [
-  { id: 'CFG-001', name: 'Harlow Rod Assembly - Matte Brass', category: 'HARDWARE', realWidthInches: 84, realHeightInches: 4, color: '#d4af37', label: '84" HARLOW POLE' },
-  { id: 'CFG-002', name: 'Modern Fascia Track - Antique Bronze', category: 'HARDWARE', realWidthInches: 120, realHeightInches: 6, color: '#4a3728', label: '120" FLAT TRACK' }
-];
+const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
+  const [viewMode, setViewMode] = useState('ENGINEERING');
+  const [isPushingToCPQ, setIsPushingToCPQ] = useState(false);
 
-const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
-  const [viewMode, setViewMode] = useState('ENGINEERING'); 
-
-  // ==========================================
-  // STATE: VISUAL OVERLAY ENGINE
-  // ==========================================
   const [activeBg, setActiveBg] = useState(null); 
   const [visualTool, setVisualTool] = useState("pan"); 
   const fileInputRef = useRef(null);
@@ -19,7 +15,7 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
   const [pixelsPerInch, setPixelsPerInch] = useState(4.5); 
   const [isCalibrated, setIsCalibrated] = useState(false);
   
-  const [selectedConfigId, setSelectedConfigId] = useState(MOCK_SAVED_CONFIGS[0].id);
+  const [selectedConfigId, setSelectedConfigId] = useState("");
   const [placedItems, setPlacedItems] = useState([]);
   const [activePlacedId, setActivePlacedId] = useState(null);
 
@@ -32,53 +28,26 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
   
   const [engScale, setEngScale] = useState(1.25); 
   const [engPan, setEngPan] = useState({ x: 0, y: 0 });
+  const [engTool, setEngTool] = useState("pan"); 
+  const [attachments, setAttachments] = useState([]); 
+  const [shopNotes, setShopNotes] = useState([]); 
+  
+  const [engData, setEngData] = useState({
+    jobName: '', sidemark: '', shape: 'MITERED', inputMode: 'ORDERING',   
+    w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
+    proj: 3.625, mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
+    endStyle: 'RETURN_BEND', poleDiameter: 1.0, finialW: 3.5, bracketW: 3.0,           
+    bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
+  });
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState(null);
   const svgRef = useRef(null);
   const innerGroupRef = useRef(null);
 
-  // ==========================================
-  // STATE: ENGINEERING TOP-DOWN ENGINE
-  // ==========================================
-  const [engTool, setEngTool] = useState("pan"); 
-  const [attachments, setAttachments] = useState([]); 
-  const [shopNotes, setShopNotes] = useState([]); 
-  
-  const [engData, setEngData] = useState({
-    jobName: '',
-    sidemark: '',
-    shape: 'MITERED',       
-    inputMode: 'ORDERING',   
-    w1: 30, w2: 80, w3: 30,  
-    a1: 135, a2: 135,        
-    bowDepth: 15,            
-    
-    proj: 3.625,             
-    mountLeft: 'OPEN',       
-    mountRight: 'OPEN',      
-    mountOuter: 'OPEN',      
-    endStyle: 'RETURN_BEND', 
-    poleDiameter: 1.0,       
-    finialW: 3.5,            
-    bracketW: 3.0,           
-    bracketThickness: 0.25,  
-    insideMountDeduct: 0.25, 
-    returnRadius: 4.0,       
-    gripAllowance: 8.5       
-  });
-
-  // --- BI-DIRECTIONAL CPQ SYNC SIMULATION ---
-  useEffect(() => {
-      if (cpqActiveItems) {
-          // Sync logic here
-      }
-  }, [cpqActiveItems]);
-
-  // --- ENGINEERING MATH CALCULATIONS ---
+  // --- HARDWARE MATH CALCULATIONS (RESTORED TO PERFECT WORKING STATE) ---
   const rad = (deg) => (deg * Math.PI) / 180;
   const S = 3.5; 
-  
   let mDeduct1 = 0; let mDeduct2 = 0;
   let wall1 = engData.w1; let wall2 = engData.w2; let wall3 = engData.w3;
   let pole1 = 0; let pole2 = 0; let pole3 = 0;
@@ -90,270 +59,128 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
 
   const isLeftInside = engData.shape === 'STRAIGHT' ? engData.mountLeft === 'INSIDE' : engData.mountOuter === 'INSIDE';
   const isRightInside = engData.shape === 'STRAIGHT' ? engData.mountRight === 'INSIDE' : engData.mountOuter === 'INSIDE';
-
   const bendDeductL = (!isLeftInside && engData.endStyle === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
   const bendDeductR = (!isRightInside && engData.endStyle === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
-  
   const imDeductL = isLeftInside ? engData.insideMountDeduct : 0;
   const imDeductR = isRightInside ? engData.insideMountDeduct : 0;
 
-  // 1. Core Hardware Deductions & Reverse Engineering
   if (engData.shape === 'STRAIGHT') {
-      if (engData.inputMode === 'WALL') {
-          wall2 = engData.w2; 
-          pole2 = wall2 - bendDeductL - bendDeductR - imDeductL - imDeductR;
-      } else {
-          pole2 = engData.w2 - bendDeductL - bendDeductR - imDeductL - imDeductR; 
-          wall2 = engData.w2;
-      }
+      if (engData.inputMode === 'WALL') { wall2 = engData.w2; pole2 = wall2 - bendDeductL - bendDeductR - imDeductL - imDeductR; } 
+      else { pole2 = engData.w2 - bendDeductL - bendDeductR - imDeductL - imDeductR; wall2 = engData.w2; }
   } else if (engData.shape === 'MITERED') {
       mDeduct1 = engData.a1 === 180 ? 0 : engData.proj * Math.tan(rad((180 - engData.a1) / 2));
       mDeduct2 = engData.a2 === 180 ? 0 : engData.proj * Math.tan(rad((180 - engData.a2) / 2));
-      
-      if (engData.inputMode === 'WALL') {
-          pole1 = Math.max(0, wall1 - mDeduct1 - imDeductL);
-          pole2 = Math.max(0, wall2 - mDeduct1 - mDeduct2);
-          pole3 = Math.max(0, wall3 - mDeduct2 - imDeductR);
-      } else {
-          pole1 = engData.w1 - bendDeductL - imDeductL; 
-          wall1 = pole1 + mDeduct1 + imDeductL;
-          
-          pole2 = engData.w2; 
-          wall2 = pole2 + mDeduct1 + mDeduct2;
-          
-          pole3 = engData.w3 - bendDeductR - imDeductR; 
-          wall3 = pole3 + mDeduct2 + imDeductR;
-      }
-      sawAngle1 = engData.a1 === 180 ? 0 : 90 - (engData.a1 / 2);
-      sawAngle2 = engData.a2 === 180 ? 0 : 90 - (engData.a2 / 2);
+      if (engData.inputMode === 'WALL') { pole1 = Math.max(0, wall1 - mDeduct1 - imDeductL); pole2 = Math.max(0, wall2 - mDeduct1 - mDeduct2); pole3 = Math.max(0, wall3 - mDeduct2 - imDeductR); } 
+      else { pole1 = engData.w1 - bendDeductL - imDeductL; wall1 = pole1 + mDeduct1 + imDeductL; pole2 = engData.w2; wall2 = pole2 + mDeduct1 + mDeduct2; pole3 = engData.w3 - bendDeductR - imDeductR; wall3 = pole3 + mDeduct2 + imDeductR; }
+      sawAngle1 = engData.a1 === 180 ? 0 : 90 - (engData.a1 / 2); sawAngle2 = engData.a2 === 180 ? 0 : 90 - (engData.a2 / 2);
   } else if (engData.shape === 'BOW') {
       const c = engData.w2; const h = engData.bowDepth;
       if (h > 0) {
-        const rInput = (h/2) + ((c*c)/(8*h));
-        const theta = 2 * Math.asin(c / (2 * rInput));
-        if (engData.inputMode === 'WALL') {
-            bowR = rInput; 
-            bowHW_R = bowR - engData.proj;
-            pole2 = Math.max(0, (bowHW_R * theta) - imDeductL - imDeductR);
-            wall2 = c;
-        } else {
-            bowHW_R = rInput; 
-            bowR = bowHW_R + engData.proj;
-            pole2 = (bowHW_R * theta) - imDeductL - imDeductR;
-            wall2 = 2 * bowR * Math.sin(theta / 2); 
-        }
+        const rInput = (h/2) + ((c*c)/(8*h)); const theta = 2 * Math.asin(c / (2 * rInput));
+        if (engData.inputMode === 'WALL') { bowR = rInput; bowHW_R = bowR - engData.proj; pole2 = Math.max(0, (bowHW_R * theta) - imDeductL - imDeductR); wall2 = c; } 
+        else { bowHW_R = rInput; bowR = bowHW_R + engData.proj; pole2 = (bowHW_R * theta) - imDeductL - imDeductR; wall2 = 2 * bowR * Math.sin(theta / 2); }
       }
   }
 
-  // 2. Ledgers Logic
   let endFootprint = 0; let endRawAdd = 0;    
-  if (engData.endStyle === 'FINIAL') {
-      endFootprint = engData.finialW; endRawAdd = 0; 
-  } else if (engData.endStyle === 'RETURN_MITER') {
-      endFootprint = Math.max(0, (engData.bracketW - engData.poleDiameter) / 2); endRawAdd = 0; 
-  } else if (engData.endStyle === 'RETURN_BEND') {
-      endFootprint = Math.max(0, (engData.bracketW - engData.poleDiameter) / 2); endRawAdd = engData.gripAllowance; 
-  }
+  if (engData.endStyle === 'FINIAL') { endFootprint = engData.finialW; endRawAdd = 0; } 
+  else if (engData.endStyle === 'RETURN_MITER') { endFootprint = Math.max(0, (engData.bracketW - engData.poleDiameter) / 2); endRawAdd = 0; } 
+  else if (engData.endStyle === 'RETURN_BEND') { endFootprint = Math.max(0, (engData.bracketW - engData.poleDiameter) / 2); endRawAdd = engData.gripAllowance; }
 
-  const addL_TOL = isLeftInside ? 0 : endFootprint;
-  const addR_TOL = isRightInside ? 0 : endFootprint;
-  const addL_RAW = isLeftInside ? 0 : endRawAdd;
-  const addR_RAW = isRightInside ? 0 : endRawAdd;
+  const addL_TOL = isLeftInside ? 0 : endFootprint; const addR_TOL = isRightInside ? 0 : endFootprint;
+  const addL_RAW = isLeftInside ? 0 : endRawAdd; const addR_RAW = isRightInside ? 0 : endRawAdd;
 
-  const orderL = pole1 + bendDeductL + imDeductL;
-  const orderR = pole3 + bendDeductR + imDeductR;
+  const orderL = pole1 + bendDeductL + imDeductL; const orderR = pole3 + bendDeductR + imDeductR;
   const orderC = engData.shape === 'STRAIGHT' ? (pole2 + bendDeductL + bendDeductR + imDeductL + imDeductR) : (engData.shape === 'BOW' ? pole2 + imDeductL + imDeductR : pole2);
 
-  const tolLeft = engData.shape === 'MITERED' ? orderL + addL_TOL : 0;
-  const tolRight = engData.shape === 'MITERED' ? orderR + addR_TOL : 0;
+  const tolLeft = engData.shape === 'MITERED' ? orderL + addL_TOL : 0; const tolRight = engData.shape === 'MITERED' ? orderR + addR_TOL : 0;
   const tolCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? orderC + addL_TOL + addR_TOL : orderC;
 
-  const rawLeft = engData.shape === 'MITERED' ? pole1 + addL_RAW : 0;
-  const rawRight = engData.shape === 'MITERED' ? pole3 + addR_RAW : 0;
+  const rawLeft = engData.shape === 'MITERED' ? pole1 + addL_RAW : 0; const rawRight = engData.shape === 'MITERED' ? pole3 + addR_RAW : 0;
   const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 + addL_RAW + addR_RAW : pole2;
   const miterArmCut = Math.max(0, engData.proj - engData.bracketThickness);
 
-  // --- SVG GEOMETRY CALCULATIONS ---
-  const P2 = { x: 500 - (wall2 * S)/2, y: 250 };
-  const P3 = { x: 500 + (wall2 * S)/2, y: 250 };
-  let P1 = P2, P4 = P3;
-  let HS = {x: 0, y: 0}, HE = {x: 0, y: 0}, HC1 = {x: 0, y: 0}, HC2 = {x: 0, y: 0};
-  let nL = {x: 0, y: -1}, nR = {x: 0, y: -1}; 
+  const P2 = { x: 500 - (wall2 * S)/2, y: 250 }; const P3 = { x: 500 + (wall2 * S)/2, y: 250 };
+  let P1 = P2, P4 = P3, HS = {x: 0, y: 0}, HE = {x: 0, y: 0}, HC1 = {x: 0, y: 0}, HC2 = {x: 0, y: 0}, nL = {x: 0, y: -1}, nR = {x: 0, y: -1}; 
 
   if (engData.shape === 'STRAIGHT') {
-      HS = { x: 500 - (pole2 * S)/2, y: P2.y + engData.proj * S };
-      HE = { x: 500 + (pole2 * S)/2, y: P3.y + engData.proj * S };
-      nL = { x: 0, y: -1 }; nR = { x: 0, y: -1 };
+      HS = { x: 500 - (pole2 * S)/2, y: P2.y + engData.proj * S }; HE = { x: 500 + (pole2 * S)/2, y: P3.y + engData.proj * S }; nL = { x: 0, y: -1 }; nR = { x: 0, y: -1 };
   } else if (engData.shape === 'MITERED') {
       const t1 = rad(180 - engData.a1); const t2 = rad(180 - engData.a2);
-      P1 = { x: P2.x - (wall1 * S) * Math.cos(t1), y: P2.y + (wall1 * S) * Math.sin(t1) };
-      P4 = { x: P3.x + (wall3 * S) * Math.cos(t2), y: P3.y + (wall3 * S) * Math.sin(t2) };
-
-      HC1 = { x: P2.x + (mDeduct1 * S), y: P2.y + (engData.proj * S) };
-      HC2 = { x: P3.x - (mDeduct2 * S), y: P3.y + (engData.proj * S) };
-      HS = { x: HC1.x - (pole1 * S) * Math.cos(t1), y: HC1.y + (pole1 * S) * Math.sin(t1) };
-      HE = { x: HC2.x + (pole3 * S) * Math.cos(t2), y: HC2.y + (pole3 * S) * Math.sin(t2) };
-
-      const ndxL = P1.x - HS.x; const ndyL = P1.y - HS.y; 
-      const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1;
-      nL = { x: ndxL/nlenL, y: ndyL/nlenL };
-      
-      const ndxR = P4.x - HE.x; const ndyR = P4.y - HE.y; 
-      const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1;
-      nR = { x: ndxR/nlenR, y: ndyR/nlenR };
+      P1 = { x: P2.x - (wall1 * S) * Math.cos(t1), y: P2.y + (wall1 * S) * Math.sin(t1) }; P4 = { x: P3.x + (wall3 * S) * Math.cos(t2), y: P3.y + (wall3 * S) * Math.sin(t2) };
+      HC1 = { x: P2.x + (mDeduct1 * S), y: P2.y + (engData.proj * S) }; HC2 = { x: P3.x - (mDeduct2 * S), y: P3.y + (engData.proj * S) };
+      HS = { x: HC1.x - (pole1 * S) * Math.cos(t1), y: HC1.y + (pole1 * S) * Math.sin(t1) }; HE = { x: HC2.x + (pole3 * S) * Math.cos(t2), y: HC2.y + (pole3 * S) * Math.sin(t2) };
+      const ndxL = P1.x - HS.x; const ndyL = P1.y - HS.y; const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1; nL = { x: ndxL/nlenL, y: ndyL/nlenL };
+      const ndxR = P4.x - HE.x; const ndyR = P4.y - HE.y; const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1; nR = { x: ndxR/nlenR, y: ndyR/nlenR };
   } else if (engData.shape === 'BOW') {
       if (engData.bowDepth > 0) {
-          const rW_px = bowR * S;
-          const rH_px = bowHW_R * S;
-          bowCX = 500; bowCY = P2.y + rW_px - engData.bowDepth * S;
-          bowStartAngle = Math.atan2(P2.y - bowCY, P2.x - bowCX);
-          bowEndAngle = Math.atan2(P3.y - bowCY, P3.x - bowCX);
+          const rW_px = bowR * S; const rH_px = bowHW_R * S; bowCX = 500; bowCY = P2.y + rW_px - engData.bowDepth * S;
+          bowStartAngle = Math.atan2(P2.y - bowCY, P2.x - bowCX); bowEndAngle = Math.atan2(P3.y - bowCY, P3.x - bowCX);
           if (bowEndAngle < bowStartAngle) bowEndAngle += 2 * Math.PI;
-
-          HS = { x: bowCX + rH_px * Math.cos(bowStartAngle), y: bowCY + rH_px * Math.sin(bowStartAngle) };
-          HE = { x: bowCX + rH_px * Math.cos(bowEndAngle), y: bowCY + rH_px * Math.sin(bowEndAngle) };
-
-          const ndxL = P2.x - HS.x; const ndyL = P2.y - HS.y; 
-          const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1;
-          nL = { x: ndxL/nlenL, y: ndyL/nlenL };
-          
-          const ndxR = P3.x - HE.x; const ndyR = P3.y - HE.y; 
-          const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1;
-          nR = { x: ndxR/nlenR, y: ndyR/nlenR };
-
-          bowWallPath = `M ${P2.x} ${P2.y} A ${rW_px} ${rW_px} 0 0 1 ${P3.x} ${P3.y}`;
-          bowHWPath = `M ${HS.x} ${HS.y} A ${rH_px} ${rH_px} 0 0 1 ${HE.x} ${HE.y}`;
+          HS = { x: bowCX + rH_px * Math.cos(bowStartAngle), y: bowCY + rH_px * Math.sin(bowStartAngle) }; HE = { x: bowCX + rH_px * Math.cos(bowEndAngle), y: bowCY + rH_px * Math.sin(bowEndAngle) };
+          const ndxL = P2.x - HS.x; const ndyL = P2.y - HS.y; const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1; nL = { x: ndxL/nlenL, y: ndyL/nlenL };
+          const ndxR = P3.x - HE.x; const ndyR = P3.y - HE.y; const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1; nR = { x: ndxR/nlenR, y: ndyR/nlenR };
+          bowWallPath = `M ${P2.x} ${P2.y} A ${rW_px} ${rW_px} 0 0 1 ${P3.x} ${P3.y}`; bowHWPath = `M ${HS.x} ${HS.y} A ${rH_px} ${rH_px} 0 0 1 ${HE.x} ${HE.y}`;
       }
   }
 
-  // --- HARDWARE DRAWING REDEFINITIONS (French Return "Stop Early" Math) ---
   let drawHS = { ...HS }; let drawHE = { ...HE };
   if (engData.endStyle === 'RETURN_BEND') {
       const r = engData.returnRadius * S;
       if (!isLeftInside) {
           let inVec = {x: 1, y: 0};
-          if (engData.shape === 'MITERED') {
-              const dx = HC1.x - HS.x; const dy = HC1.y - HS.y; 
-              const len = Math.sqrt(dx*dx + dy*dy) || 1; 
-              inVec = {x: dx/len, y: dy/len};
-          } else if (engData.shape === 'BOW') {
-              const angleShift = r / (bowHW_R * S); 
-              bowStartAngle += angleShift;
-              drawHS = { x: bowCX + (bowHW_R*S) * Math.cos(bowStartAngle), y: bowCY + (bowHW_R*S) * Math.sin(bowStartAngle) };
-              bowHWPath = `M ${drawHS.x} ${drawHS.y} A ${bowHW_R*S} ${bowHW_R*S} 0 0 1 ${drawHE.x} ${drawHE.y}`;
-          }
+          if (engData.shape === 'MITERED') { const dx = HC1.x - HS.x; const dy = HC1.y - HS.y; const len = Math.sqrt(dx*dx + dy*dy) || 1; inVec = {x: dx/len, y: dy/len}; } 
+          else if (engData.shape === 'BOW') { const angleShift = r / (bowHW_R * S); bowStartAngle += angleShift; drawHS = { x: bowCX + (bowHW_R*S) * Math.cos(bowStartAngle), y: bowCY + (bowHW_R*S) * Math.sin(bowStartAngle) }; bowHWPath = `M ${drawHS.x} ${drawHS.y} A ${bowHW_R*S} ${bowHW_R*S} 0 0 1 ${drawHE.x} ${drawHE.y}`; }
           if (engData.shape !== 'BOW') drawHS = { x: HS.x + inVec.x * r, y: HS.y + inVec.y * r };
       }
-
       if (!isRightInside) {
           let inVec = {x: -1, y: 0};
-          if (engData.shape === 'MITERED') {
-              const dx = HC2.x - HE.x; const dy = HC2.y - HE.y; 
-              const len = Math.sqrt(dx*dx + dy*dy) || 1; 
-              inVec = {x: dx/len, y: dy/len};
-          } else if (engData.shape === 'BOW') {
-              const angleShift = r / (bowHW_R * S); 
-              bowEndAngle -= angleShift;
-              drawHE = { x: bowCX + (bowHW_R*S) * Math.cos(bowEndAngle), y: bowCY + (bowHW_R*S) * Math.sin(bowEndAngle) };
-              bowHWPath = `M ${drawHS.x} ${drawHS.y} A ${bowHW_R*S} ${bowHW_R*S} 0 0 1 ${drawHE.x} ${drawHE.y}`;
-          }
+          if (engData.shape === 'MITERED') { const dx = HC2.x - HE.x; const dy = HC2.y - HE.y; const len = Math.sqrt(dx*dx + dy*dy) || 1; inVec = {x: dx/len, y: dy/len}; } 
+          else if (engData.shape === 'BOW') { const angleShift = r / (bowHW_R * S); bowEndAngle -= angleShift; drawHE = { x: bowCX + (bowHW_R*S) * Math.cos(bowEndAngle), y: bowCY + (bowHW_R*S) * Math.sin(bowEndAngle) }; bowHWPath = `M ${drawHS.x} ${drawHS.y} A ${bowHW_R*S} ${bowHW_R*S} 0 0 1 ${drawHE.x} ${drawHE.y}`; }
           if (engData.shape !== 'BOW') drawHE = { x: HE.x + inVec.x * r, y: HE.y + inVec.y * r };
       }
   }
 
-  // --- SVG RENDER HELPERS ---
   const renderEndTreatment = (isLeft, forceFlatten = false) => {
       const isInside = isLeft ? isLeftInside : isRightInside;
-      const startOrig = isLeft ? HS : HE; 
-      const stopPoint = isLeft ? drawHS : drawHE; 
-      const norm = isLeft ? nL : nR; 
-      
-      if (isInside) {
-          if (forceFlatten) return null; 
-          return <line x1={startOrig.x - norm.y*15} y1={startOrig.y + norm.x*15} x2={startOrig.x + norm.y*15} y2={startOrig.y - norm.x*15} stroke="#888" strokeWidth="6" />;
-      }
-
+      const startOrig = isLeft ? HS : HE; const stopPoint = isLeft ? drawHS : drawHE; const norm = isLeft ? nL : nR; 
+      if (isInside) return forceFlatten ? null : <line x1={startOrig.x - norm.y*15} y1={startOrig.y + norm.x*15} x2={startOrig.x + norm.y*15} y2={startOrig.y - norm.x*15} stroke="#888" strokeWidth="6" />;
       if (engData.endStyle === 'FINIAL') {
           let outVec = {x: -1, y: 0};
           if (engData.shape === 'STRAIGHT') outVec = isLeft ? {x: -1, y: 0} : {x: 1, y: 0};
-          if (engData.shape === 'MITERED') {
-              const dx = (isLeft?HS:HE).x - (isLeft?HC1:HC2).x; const dy = (isLeft?HS:HE).y - (isLeft?HC1:HC2).y;
-              const len = Math.sqrt(dx*dx + dy*dy) || 1; outVec = {x: dx/len, y: dy/len};
-          }
-          if (engData.shape === 'BOW') {
-              const rx = startOrig.x - bowCX; const ry = startOrig.y - bowCY; const rlen = Math.sqrt(rx*rx + ry*ry) || 1;
-              outVec = isLeft ? {x: ry/rlen, y: -rx/rlen} : {x: -ry/rlen, y: rx/rlen};
-          }
+          else if (engData.shape === 'MITERED') { const dx = (isLeft?HS:HE).x - (isLeft?HC1:HC2).x; const dy = (isLeft?HS:HE).y - (isLeft?HC1:HC2).y; const len = Math.sqrt(dx*dx + dy*dy) || 1; outVec = {x: dx/len, y: dy/len}; }
+          else if (engData.shape === 'BOW') { const rx = startOrig.x - bowCX; const ry = startOrig.y - bowCY; const rlen = Math.sqrt(rx*rx + ry*ry) || 1; outVec = isLeft ? {x: ry/rlen, y: -rx/rlen} : {x: -ry/rlen, y: rx/rlen}; }
           const fw = engData.finialW * S;
-          if (forceFlatten) {
-              const fX = startOrig.x + outVec.x * fw;
-              return <circle cx={fX} cy="0" r="10" fill="#d4af37" />;
-          }
-          return <line x1={startOrig.x} y1={startOrig.y} x2={startOrig.x + outVec.x*fw} y2={startOrig.y + outVec.y*fw} stroke="#d4af37" strokeWidth="6" />;
+          return forceFlatten ? <circle cx={startOrig.x + outVec.x * fw} cy="0" r="10" fill="#d4af37" /> : <line x1={startOrig.x} y1={startOrig.y} x2={startOrig.x + outVec.x*fw} y2={startOrig.y + outVec.y*fw} stroke="#d4af37" strokeWidth="6" />;
       }
-
       if (engData.endStyle === 'RETURN_MITER') {
           const wx = startOrig.x + norm.x * (engData.proj * S); const wy = startOrig.y + norm.y * (engData.proj * S);
           let outVec = {x: -1, y: 0};
           if (engData.shape === 'STRAIGHT') outVec = isLeft ? {x: -1, y: 0} : {x: 1, y: 0};
-          if (engData.shape === 'MITERED') {
-              const dx = (isLeft?HS:HE).x - (isLeft?HC1:HC2).x; const dy = (isLeft?HS:HE).y - (isLeft?HC1:HC2).y;
-              const len = Math.sqrt(dx*dx + dy*dy) || 1; outVec = {x: dx/len, y: dy/len};
-          }
+          if (engData.shape === 'MITERED') { const dx = (isLeft?HS:HE).x - (isLeft?HC1:HC2).x; const dy = (isLeft?HS:HE).y - (isLeft?HC1:HC2).y; const len = Math.sqrt(dx*dx + dy*dy) || 1; outVec = {x: dx/len, y: dy/len}; }
           if (forceFlatten) return <line x1={startOrig.x} y1="0" x2={startOrig.x} y2="-15" stroke="#d4af37" strokeWidth="8" />;
-          return (
-            <g>
-              <line x1={startOrig.x} y1={startOrig.y} x2={wx} y2={wy} stroke="#d4af37" strokeWidth="1.5" />
-              <line x1={startOrig.x + outVec.x*2 - norm.x*2} y1={startOrig.y + outVec.y*2 - norm.y*2} x2={startOrig.x - outVec.x*2 + norm.x*2} y2={startOrig.y - outVec.y*2 + norm.y*2} stroke="#fff" strokeWidth="0.5" />
-            </g>
-          );
+          return ( <g><line x1={startOrig.x} y1={startOrig.y} x2={wx} y2={wy} stroke="#d4af37" strokeWidth="1.5" /><line x1={startOrig.x + outVec.x*2 - norm.x*2} y1={startOrig.y + outVec.y*2 - norm.y*2} x2={startOrig.x - outVec.x*2 + norm.x*2} y2={startOrig.y - outVec.y*2 + norm.y*2} stroke="#fff" strokeWidth="0.5" /></g> );
       }
-
       if (engData.endStyle === 'RETURN_BEND') {
           const r = engData.returnRadius * S; const projPx = engData.proj * S;
           let outVec = {x: -1, y: 0};
           if (engData.shape === 'STRAIGHT') outVec = isLeft ? {x: -1, y: 0} : {x: 1, y: 0};
-          if (engData.shape === 'MITERED') {
-              const dx = (isLeft?HS:HE).x - (isLeft?HC1:HC2).x; const dy = (isLeft?HS:HE).y - (isLeft?HC1:HC2).y;
-              const len = Math.sqrt(dx*dx + dy*dy) || 1; outVec = {x: dx/len, y: dy/len};
-          }
-          if (engData.shape === 'BOW') {
-              const rx = stopPoint.x - bowCX; const ry = stopPoint.y - bowCY; const rlen = Math.sqrt(rx*rx + ry*ry) || 1;
-              outVec = isLeft ? {x: ry/rlen, y: -rx/rlen} : {x: -ry/rlen, y: rx/rlen};
-          }
-          const arcCX = stopPoint.x + norm.x * r; const arcCY = stopPoint.y + norm.y * r;
-          const arcEndX = arcCX + outVec.x * r; const arcEndY = arcCY + outVec.y * r;
-          const sweep = isLeft ? 1 : 0;
-          const wallX = arcEndX + norm.x * (projPx - r); const wallY = arcEndY + norm.y * (projPx - r);
-          
+          if (engData.shape === 'MITERED') { const dx = (isLeft?HS:HE).x - (isLeft?HC1:HC2).x; const dy = (isLeft?HS:HE).y - (isLeft?HC1:HC2).y; const len = Math.sqrt(dx*dx + dy*dy) || 1; outVec = {x: dx/len, y: dy/len}; }
+          if (engData.shape === 'BOW') { const rx = stopPoint.x - bowCX; const ry = stopPoint.y - bowCY; const rlen = Math.sqrt(rx*rx + ry*ry) || 1; outVec = isLeft ? {x: ry/rlen, y: -rx/rlen} : {x: -ry/rlen, y: rx/rlen}; }
+          const arcCX = stopPoint.x + norm.x * r; const arcCY = stopPoint.y + norm.y * r; const arcEndX = arcCX + outVec.x * r; const arcEndY = arcCY + outVec.y * r; const sweep = isLeft ? 1 : 0; const wallX = arcEndX + norm.x * (projPx - r); const wallY = arcEndY + norm.y * (projPx - r);
           if (forceFlatten) return <line x1={stopPoint.x} y1="0" x2={stopPoint.x} y2="-15" stroke="#d4af37" strokeWidth="8" />;
-          return (
-              <g>
-                  <path d={`M ${stopPoint.x} ${stopPoint.y} A ${r} ${r} 0 0 ${sweep} ${arcEndX} ${arcEndY}`} fill="none" stroke="#d4af37" strokeWidth="1.5" />
-                  {projPx > r && <line x1={arcEndX} y1={arcEndY} x2={wallX} y2={wallY} stroke="#d4af37" strokeWidth="1.5" />}
-              </g>
-          );
+          return ( <g><path d={`M ${stopPoint.x} ${stopPoint.y} A ${r} ${r} 0 0 ${sweep} ${arcEndX} ${arcEndY}`} fill="none" stroke="#d4af37" strokeWidth="1.5" />{projPx > r && <line x1={arcEndX} y1={arcEndY} x2={wallX} y2={wallY} stroke="#d4af37" strokeWidth="1.5" />}</g> );
       }
       return null;
-  }
+  };
 
-  // --- FRONT ELEVATION PROJECTION (For Visual Overlay) ---
-  const renderFrontElevation = () => {
-      const eHSx = drawHS.x - perspectiveStretch.L;
-      const eHEx = drawHE.x + perspectiveStretch.R;
-      
+  const renderHardwareElevation = () => {
+      const eHSx = drawHS.x - perspectiveStretch.L; const eHEx = drawHE.x + perspectiveStretch.R;
       return (
           <g>
               {engData.shape === 'STRAIGHT' && <line x1={eHSx} y1="0" x2={eHEx} y2="0" stroke="#d4af37" strokeWidth="8" />}
-              {engData.shape === 'MITERED' && (
-                  <g>
-                     <polyline points={`${eHSx},0 ${HC1.x},0 ${HC2.x},0 ${eHEx},0`} fill="none" stroke="#d4af37" strokeWidth="8" strokeLinejoin="miter" />
-                     <line x1={HC1.x} y1="-5" x2={HC1.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" />
-                     <line x1={HC2.x} y1="-5" x2={HC2.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" />
-                  </g>
-              )}
+              {engData.shape === 'MITERED' && ( <g><polyline points={`${eHSx},0 ${HC1.x},0 ${HC2.x},0 ${eHEx},0`} fill="none" stroke="#d4af37" strokeWidth="8" strokeLinejoin="miter" /><line x1={HC1.x} y1="-5" x2={HC1.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" /><line x1={HC2.x} y1="-5" x2={HC2.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" /></g> )}
               {engData.shape === 'BOW' && <line x1={eHSx} y1="0" x2={eHEx} y2="0" stroke="#d4af37" strokeWidth="8" />}
-
               {attachments.filter(a => a.type === 'bracket').map(att => {
                   let seg = null;
                   if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2 }; }
@@ -365,20 +192,11 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
                       if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2, isBow: true };
                   }
                   if (!seg) return null;
-                  const distFromA = att.ref === 'START' ? att.distInches : (seg.len - att.distInches);
-                  const t = distFromA / seg.len;
-                  let bx = 0;
-                  if (seg.isBow) {
-                      const angle = bowStartAngle + t * (bowEndAngle - bowStartAngle);
-                      bx = bowCX + (bowHW_R*S) * Math.cos(angle); 
-                  } else {
-                      bx = seg.pA.x + t * (seg.pB.x - seg.pA.x);
-                      if (att.segId === 1) bx -= perspectiveStretch.L * (1-t);
-                      if (att.segId === 3) bx += perspectiveStretch.R * t;
-                  }
+                  const distFromA = att.ref === 'START' ? att.distInches : (seg.len - att.distInches); const t = distFromA / seg.len; let bx = 0;
+                  if (seg.isBow) { const angle = bowStartAngle + t * (bowEndAngle - bowStartAngle); bx = bowCX + (bowHW_R*S) * Math.cos(angle); } 
+                  else { bx = seg.pA.x + t * (seg.pB.x - seg.pA.x); if (att.segId === 1) bx -= perspectiveStretch.L * (1-t); if (att.segId === 3) bx += perspectiveStretch.R * t; }
                   return <line key={att.id} x1={bx} y1="-12" x2={bx} y2="12" stroke="#666" strokeWidth="4" />;
               })}
-
               <g transform={`translate(${-perspectiveStretch.L}, 0)`}>{renderEndTreatment(true, true)}</g>
               <g transform={`translate(${perspectiveStretch.R}, 0)`}>{renderEndTreatment(false, true)}</g>
           </g>
@@ -386,9 +204,7 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
   };
 
   const renderDimLine = (pA, pB, offsetDir, offsetDist, label) => {
-      const ox = offsetDir.x * offsetDist; const oy = offsetDir.y * offsetDist;
-      const sp = { x: pA.x + ox, y: pA.y + oy }; const ep = { x: pB.x + ox, y: pB.y + oy };
-      const mid = { x: (sp.x + ep.x)/2, y: (sp.y + ep.y)/2 };
+      const ox = offsetDir.x * offsetDist; const oy = offsetDir.y * offsetDist; const sp = { x: pA.x + ox, y: pA.y + oy }; const ep = { x: pB.x + ox, y: pB.y + oy }; const mid = { x: (sp.x + ep.x)/2, y: (sp.y + ep.y)/2 };
       return (
           <g>
               <line x1={pA.x + offsetDir.x*2} y1={pA.y + offsetDir.y*2} x2={sp.x + offsetDir.x*2} y2={sp.y + offsetDir.y*2} stroke="#ccc" strokeWidth="0.5" />
@@ -396,12 +212,11 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
               <line x1={sp.x} y1={sp.y} x2={ep.x} y2={ep.y} stroke="#007bff" strokeWidth="0.5" strokeDasharray="2,2" />
               <line x1={sp.x - 2 + offsetDir.x*2} y1={sp.y - 2 + offsetDir.y*2} x2={sp.x + 2 - offsetDir.x*2} y2={sp.y + 2 - offsetDir.y*2} stroke="#007bff" strokeWidth="1" />
               <line x1={ep.x - 2 + offsetDir.x*2} y1={ep.y - 2 + offsetDir.y*2} x2={ep.x + 2 - offsetDir.x*2} y2={ep.y + 2 - offsetDir.y*2} stroke="#007bff" strokeWidth="1" />
-              {/* WIDENED BACKGROUND BADGE */}
               <rect x={mid.x - 25} y={mid.y - 7} width="50" height="14" fill="#f8f9fa" />
               <text x={mid.x} y={mid.y + 3} fill="#007bff" fontSize="6" fontWeight="bold" textAnchor="middle">{label}</text>
           </g>
       );
-  }
+  };
 
   // --- SVG EVENT HANDLERS ---
   const handleUpdateAttachmentDist = (id, newDist) => { setAttachments(atts => atts.map(a => a.id === id ? { ...a, distInches: parseFloat(newDist) || 0 } : a)); };
@@ -417,15 +232,11 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
 
   const onPointerDown = (e) => {
     e.target.setPointerCapture(e.pointerId);
-    const activeTool = viewMode === 'VISUAL' ? visualTool : engTool;
-
-    if (activeTool === "pan") {
-      setIsPanning(true); setPanStart({ clientX: e.clientX, clientY: e.clientY }); return;
-    }
+    if (viewMode === 'VISUAL' && visualTool === "pan") { setIsPanning(true); setPanStart({ clientX: e.clientX, clientY: e.clientY }); return; }
+    if (viewMode === 'ENGINEERING' && engTool === "pan") { setIsPanning(true); setPanStart({ clientX: e.clientX, clientY: e.clientY }); return; }
 
     const pt = getAdjustedSvgPoint(e.clientX, e.clientY);
 
-    // VISUAL CALIBRATION
     if (viewMode === 'VISUAL' && visualTool === "calibrate") {
       if (calPoints.length >= 2) { setCalPoints([pt]); setIsCalibrated(false); } 
       else {
@@ -433,60 +244,48 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
         if (updatedPoints.length === 2) { 
            const pxDist = Math.sqrt(Math.pow(updatedPoints[1].x - updatedPoints[0].x, 2) + Math.pow(updatedPoints[1].y - updatedPoints[0].y, 2));
            const val = parseFloat(realInches) || 0;
-           if (val > 0) {
-               setPixelsPerInch(pxDist / val); 
-               setEngData(prev => ({ ...prev, w2: val })); 
-           }
+           if (val > 0) { setPixelsPerInch(pxDist / val); setEngData(prev => ({ ...prev, w2: val })); }
            setIsCalibrated(true); setVisualTool("pan"); 
         }
       }
       return;
     }
 
-    if (engTool === 'note') {
-        setShopNotes([...shopNotes, { id: Date.now(), x: pt.x, y: pt.y, text: '' }]);
-        setEngTool('pan'); return;
-    }
-
-    if (engTool === 'bracket' || engTool === 'splice') {
-        const hwSegments = [];
-        if (engData.shape === 'STRAIGHT') {
-            hwSegments.push({ id: 2, pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" });
-        } else if (engData.shape === 'MITERED') {
-            hwSegments.push({ id: 1, pA: HS, pB: HC1, len: pole1, norm: nL, nA: "L.Edge", nB: "L.Miter" });
-            hwSegments.push({ id: 2, pA: HC1, pB: HC2, len: pole2, norm: {x:0, y:-1}, nA: "L.Miter", nB: "R.Miter" });
-            hwSegments.push({ id: 3, pA: HC2, pB: HE, len: pole3, norm: nR, nA: "R.Miter", nB: "R.Edge" });
-        } else if (engData.shape === 'BOW') {
-            hwSegments.push({ id: 2, pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge", isBow: true });
-        }
-
-        let closestSeg = null; let minDist = Infinity; let distFromA = 0;
-        hwSegments.forEach(seg => {
-            const dx = seg.pB.x - seg.pA.x; const dy = seg.pB.y - seg.pA.y;
-            const lenSq = dx*dx + dy*dy; if (lenSq === 0) return;
-            const t = Math.max(0, Math.min(1, ((pt.x - seg.pA.x)*dx + (pt.y - seg.pA.y)*dy) / lenSq));
-            const px = seg.pA.x + t * dx; const py = seg.pA.y + t * dy;
-            const dSq = Math.pow(pt.x - px, 2) + Math.pow(pt.y - py, 2);
-            if (dSq < minDist) { minDist = dSq; closestSeg = seg; distFromA = t * seg.len; }
-        });
-
-        if (closestSeg) {
-            let finalDist = distFromA;
-            if (engTool === 'splice') {
-                const center = closestSeg.len / 2;
-                if (Math.abs(finalDist - center) < (closestSeg.len * 0.15)) finalDist = center; 
+    if (viewMode === 'ENGINEERING') {
+        if (engTool === 'note') { setShopNotes([...shopNotes, { id: Date.now(), x: pt.x, y: pt.y, text: '' }]); setEngTool('pan'); return; }
+        if (engTool === 'bracket' || engTool === 'splice') {
+            const hwSegments = [];
+            if (engData.shape === 'STRAIGHT') {
+                hwSegments.push({ id: 2, pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" });
+            } else if (engData.shape === 'MITERED') {
+                hwSegments.push({ id: 1, pA: HS, pB: HC1, len: pole1, norm: nL, nA: "L.Edge", nB: "L.Miter" });
+                hwSegments.push({ id: 2, pA: HC1, pB: HC2, len: pole2, norm: {x:0, y:-1}, nA: "L.Miter", nB: "R.Miter" });
+                hwSegments.push({ id: 3, pA: HC2, pB: HE, len: pole3, norm: nR, nA: "R.Miter", nB: "R.Edge" });
+            } else if (engData.shape === 'BOW') {
+                hwSegments.push({ id: 2, pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge", isBow: true });
             }
-            let ref = 'START'; let displayDist = finalDist;
-            if (finalDist > closestSeg.len / 2) { ref = 'END'; displayDist = closestSeg.len - finalDist; }
-
-            setAttachments([...attachments, { id: Date.now(), type: engTool, segId: closestSeg.id, distInches: displayDist, ref: ref, note: '' }]);
+            let closestSeg = null; let minDist = Infinity; let distFromA = 0;
+            hwSegments.forEach(seg => {
+                const dx = seg.pB.x - seg.pA.x; const dy = seg.pB.y - seg.pA.y;
+                const lenSq = dx*dx + dy*dy; if (lenSq === 0) return;
+                const t = Math.max(0, Math.min(1, ((pt.x - seg.pA.x)*dx + (pt.y - seg.pA.y)*dy) / lenSq));
+                const px = seg.pA.x + t * dx; const py = seg.pA.y + t * dy;
+                const dSq = Math.pow(pt.x - px, 2) + Math.pow(pt.y - py, 2);
+                if (dSq < minDist) { minDist = dSq; closestSeg = seg; distFromA = t * seg.len; }
+            });
+            if (closestSeg) {
+                let finalDist = distFromA;
+                if (engTool === 'splice') { const center = closestSeg.len / 2; if (Math.abs(finalDist - center) < (closestSeg.len * 0.15)) finalDist = center; }
+                let ref = 'START'; let displayDist = finalDist;
+                if (finalDist > closestSeg.len / 2) { ref = 'END'; displayDist = closestSeg.len - finalDist; }
+                setAttachments([...attachments, { id: Date.now(), type: engTool, segId: closestSeg.id, distInches: displayDist, ref: ref, note: '' }]);
+            }
         }
     }
   };
 
   const onPointerMove = (e) => {
-    const activeTool = viewMode === 'VISUAL' ? visualTool : engTool;
-    if (activeTool === "pan" && isPanning && panStart) {
+    if (isPanning && panStart) {
       const svg = svgRef.current; if (!svg) return;
       const ptC = svg.createSVGPoint(); ptC.x = e.clientX; ptC.y = e.clientY;
       const ptS = svg.createSVGPoint(); ptS.x = panStart.clientX; ptS.y = panStart.clientY;
@@ -500,37 +299,26 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
       setPanStart({ clientX: e.clientX, clientY: e.clientY });
     }
   };
+
   const onPointerUp = () => setIsPanning(false);
 
-  // Phase 1 Drop Handlers
+  // --- ACTIONS ---
   const handleFileUpload = (e) => {
     if (e.target.files[0]) {
       setActiveBg({ name: e.target.files[0].name, url: URL.createObjectURL(e.target.files[0]) });
       setPlacedItems([]); setCalPoints([]); setIsCalibrated(false); 
-      setVisScale(1); setVisPan({ x: 0, y: 0 }); 
-      setVisualTool("calibrate"); 
+      setVisScale(1); setVisPan({ x: 0, y: 0 }); setVisualTool("calibrate"); 
     }
   };
   
   const handleDropConfig = () => {
-    const config = MOCK_SAVED_CONFIGS.find(c => c.id === selectedConfigId);
+    const config = visionConfigs.find(c => c.id === selectedConfigId);
     if (!config || !isCalibrated) return;
-    const itemWidthPx = config.realWidthInches * pixelsPerInch; const itemHeightPx = config.realHeightInches * pixelsPerInch;
-    setPlacedItems([...placedItems, { id: `PLACED-${Date.now()}`, configId: config.id, name: config.name, x: 500 - itemWidthPx/2, y: 400 - itemHeightPx/2, width: itemWidthPx, height: itemHeightPx, color: config.color, label: config.label, realWidth: config.realWidthInches }]);
+    const realWidthInches = config.specs?.w2 || config.specs?.width || 80;
+    const realHeightInches = 6; 
+    const itemWidthPx = realWidthInches * pixelsPerInch; const itemHeightPx = realHeightInches * pixelsPerInch;
+    setPlacedItems([...placedItems, { id: `PLACED-${Date.now()}`, configId: config.id, name: config.jobName || config.sidemark || config.id, x: 500 - itemWidthPx/2, y: 400 - itemHeightPx/2, width: itemWidthPx, height: itemHeightPx, color: '#007bff', label: config.sidemark || "Configured Assembly", realWidth: realWidthInches }]);
     setVisualTool("pan"); 
-  };
-
-  const handlePushToVisual = () => {
-      if (!isCalibrated) { alert("Please upload a photo and calibrate the scale on the VISUAL OVERLAY tab first."); return; }
-      setShowEngOverlay(true); 
-      setViewMode('VISUAL'); 
-      setVisualTool('pan');
-      // AUTO SELECT TO REVEAL SLIDERS
-      setActivePlacedId('ENG_OVERLAY');
-  };
-
-  const handleSaveToCPQ = () => {
-      alert(`Configuration successfully saved to CPQ!\n\nJob: ${engData.jobName || 'Unnamed'}\nShape: ${engData.shape}\nInventory parameters will automatically pull down when modified.`);
   };
 
   const moveItem = (dir) => {
@@ -538,16 +326,22 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
     let nx = 0; let ny = 0;
     if (dir === 'up') ny -= 2; if (dir === 'down') ny += 2;
     if (dir === 'left') nx -= 2; if (dir === 'right') nx += 2;
-
     if (activePlacedId === 'ENG_OVERLAY') { setEngOverlayPos(prev => ({ x: prev.x + nx, y: prev.y + ny })); return; }
-    setPlacedItems(placedItems.map(item => {
-      if (item.id !== activePlacedId) return item; return { ...item, x: item.x + nx, y: item.y + ny };
-    }));
+    setPlacedItems(placedItems.map(item => { if (item.id !== activePlacedId) return item; return { ...item, x: item.x + nx, y: item.y + ny }; }));
   };
 
   const removeItem = (id) => { 
       if (id === 'ENG_OVERLAY') { setShowEngOverlay(false); setActivePlacedId(null); setPerspectiveStretch({L:0, R:0}); return; }
       setPlacedItems(placedItems.filter(i => i.id !== id)); if (activePlacedId === id) setActivePlacedId(null); 
+  };
+
+  const handlePushToCPQ = async () => {
+      setIsPushingToCPQ(true);
+      const draftId = `DRAFT-${Date.now()}`;
+      const payload = { id: draftId, brandId: activeBrand, category: 'HARDWARE', status: 'DRAFT_FROM_VISION', specs: { ...engData, attachments, shopNotes }, author: currentUser, createdAt: serverTimestamp() };
+      try { await setDoc(doc(db, "cpq_drafts", draftId), payload); alert("✅ Configuration pushed to CPQ Cart!"); } 
+      catch (e) { console.error(e); alert("Error pushing to CPQ."); } 
+      finally { setIsPushingToCPQ(false); }
   };
 
   return (
@@ -557,20 +351,17 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
         <div>
           <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>9. Client Vision System</h2>
-          <span style={{ fontSize: '0.7rem', color: '#666' }}>SPATIAL OVERLAY & ENGINEERING CUT-LIST</span>
+          <span style={{ fontSize: '0.7rem', color: '#666' }}>DRAPERY HARDWARE ENGINE</span>
         </div>
         <div style={{ display: 'flex', gap: '10px', background: '#eee', padding: '5px', border: '2px solid #000' }}>
           <button onClick={() => setViewMode('VISUAL')} style={{ padding: '10px 20px', background: viewMode === 'VISUAL' ? '#007bff' : 'transparent', color: viewMode === 'VISUAL' ? '#fff' : '#666', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>🖼️ VISUAL OVERLAY</button>
           <button onClick={() => setViewMode('ENGINEERING')} style={{ padding: '10px 20px', background: viewMode === 'ENGINEERING' ? '#d9534f' : 'transparent', color: viewMode === 'ENGINEERING' ? '#fff' : '#666', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>📐 TOP-DOWN BOM</button>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
-            <button onClick={handleSaveToCPQ} style={{ padding: '10px 20px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', borderRadius: '4px' }}>💾 SAVE TO CPQ</button>
-        </div>
+        <button onClick={handlePushToCPQ} disabled={isPushingToCPQ} style={{ padding: '10px 20px', background: isPushingToCPQ ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: isPushingToCPQ ? 'not-allowed' : 'pointer', borderRadius: '4px' }}>
+            {isPushingToCPQ ? "SAVING..." : "💾 PUSH TO CPQ"}
+        </button>
       </div>
 
-      {/* ============================================================ */}
-      {/* MODE 1: VISUAL OVERLAY (SALES/ELEVATION)                     */}
-      {/* ============================================================ */}
       {viewMode === 'VISUAL' && (
         <div style={{ display: 'flex', gap: '20px', alignItems: 'stretch' }}>
           <div style={{ width: '340px', display: 'flex', flexDirection: 'column', gap: '15px', flexShrink: 0 }}>
@@ -593,7 +384,7 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
                              const val = e.target.value; setRealInches(val); 
                              if(calPoints.length===2 && parseFloat(val) > 0) {
                                  setPixelsPerInch(Math.sqrt(Math.pow(calPoints[1].x - calPoints[0].x, 2) + Math.pow(calPoints[1].y - calPoints[0].y, 2)) / parseFloat(val));
-                                 setEngData(prev => ({ ...prev, w2: parseFloat(val) }));
+                                 setEngData(prev => ({ ...prev, w2: val }));
                              }
                          }} 
                          disabled={!activeBg} style={{ width: '100%', padding: '8px', border: '2px solid #000', fontWeight: 'bold', fontSize: '1rem', background: activeBg ? '#fff' : '#eee', boxSizing: 'border-box' }} />
@@ -612,10 +403,11 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
             <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', opacity: isCalibrated ? 1 : 0.5 }}>
               <div style={{ padding: '10px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>STEP 2: DROP CPQ CONFIG</div>
               <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <select value={selectedConfigId} onChange={(e) => setSelectedConfigId(e.target.value)} disabled={!isCalibrated} style={{ width: '100%', padding: '10px', border: '2px solid #000', fontWeight: 'bold', background: isCalibrated ? '#fff' : '#eee', boxSizing: 'border-box' }}>
-                  {MOCK_SAVED_CONFIGS.map(cfg => <option key={cfg.id} value={cfg.id}>{cfg.name} ({cfg.realWidthInches}")</option>)}
+                <select value={selectedConfigId} onChange={(e) => setSelectedConfigId(e.target.value)} disabled={!isCalibrated || visionConfigs.length === 0} style={{ width: '100%', padding: '10px', border: '2px solid #000', fontWeight: 'bold', background: isCalibrated ? '#fff' : '#eee', boxSizing: 'border-box' }}>
+                  {visionConfigs.length === 0 && <option value="">No configs found.</option>}
+                  {visionConfigs.map(cfg => <option key={cfg.id} value={cfg.id}>{cfg.jobName || cfg.sidemark || cfg.id}</option>)}
                 </select>
-                <button onClick={handleDropConfig} disabled={!isCalibrated} style={{ width: '100%', padding: '12px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: isCalibrated ? 'pointer' : 'not-allowed', opacity: isCalibrated ? 1 : 0.5 }}>➕ DROP CONFIG ON CANVAS</button>
+                <button onClick={handleDropConfig} disabled={!isCalibrated || visionConfigs.length === 0} style={{ width: '100%', padding: '12px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: isCalibrated && visionConfigs.length > 0 ? 'pointer' : 'not-allowed', opacity: isCalibrated && visionConfigs.length > 0 ? 1 : 0.5 }}>➕ PLACE IN ROOM</button>
               </div>
             </div>
 
@@ -634,27 +426,17 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
                 {activePlacedId === 'ENG_OVERLAY' && (
                     <div style={{ marginTop: '10px', borderTop: '1px solid #eee', paddingTop: '10px' }}>
                         <div style={{ fontSize: '0.65rem', fontWeight: 'bold', marginBottom: '5px', color: '#007bff' }}>PERSPECTIVE TWEAKS (VISUAL ONLY)</div>
-                        <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                            <span style={{ fontSize: '0.6rem', width: '40px' }}>L-POLE:</span>
-                            <input type="range" min="-150" max="150" value={perspectiveStretch.L} onChange={(e) => setPerspectiveStretch(prev => ({...prev, L: parseInt(e.target.value)}))} style={{ flex: 1 }} />
-                        </div>
-                        <div style={{ display: 'flex', gap: '5px', alignItems: 'center', marginTop: '5px' }}>
-                            <span style={{ fontSize: '0.6rem', width: '40px' }}>R-POLE:</span>
-                            <input type="range" min="-150" max="150" value={perspectiveStretch.R} onChange={(e) => setPerspectiveStretch(prev => ({...prev, R: parseInt(e.target.value)}))} style={{ flex: 1 }} />
-                        </div>
+                        <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}><span style={{ fontSize: '0.6rem', width: '40px' }}>L-POLE:</span><input type="range" min="-150" max="150" value={perspectiveStretch.L} onChange={(e) => setPerspectiveStretch(prev => ({...prev, L: parseInt(e.target.value)}))} style={{ flex: 1 }} /></div>
+                        <div style={{ display: 'flex', gap: '5px', alignItems: 'center', marginTop: '5px' }}><span style={{ fontSize: '0.6rem', width: '40px' }}>R-POLE:</span><input type="range" min="-150" max="150" value={perspectiveStretch.R} onChange={(e) => setPerspectiveStretch(prev => ({...prev, R: parseInt(e.target.value)}))} style={{ flex: 1 }} /></div>
                     </div>
                 )}
-
                 <button onClick={() => removeItem(activePlacedId)} style={{ width: '100%', padding: '6px', background: '#fff', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.7rem', marginTop: '5px' }}>REMOVE SELECTED</button>
               </div>
             )}
           </div>
 
           <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '10px 10px 0 #000' }}>
-            <div style={{ padding: '10px', background: '#f8d7da', color: '#721c24', fontWeight: 'bold', fontSize: '0.75rem', textAlign: 'center', borderBottom: '2px solid #000' }}>
-              ⚠️ FOR VISUAL REPRESENTATION ONLY. REFER TO ENGINEERING TAB FOR ACTUAL CONFIRMED MEASUREMENTS.
-            </div>
-            
+            <div style={{ padding: '10px', background: '#f8d7da', color: '#721c24', fontWeight: 'bold', fontSize: '0.75rem', textAlign: 'center', borderBottom: '2px solid #000' }}>⚠️ FOR VISUAL REPRESENTATION ONLY. REFER TO ENGINEERING TAB FOR ACTUAL CONFIRMED MEASUREMENTS.</div>
             <div style={{ padding: '10px 15px', background: '#f4f4f4', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <button onClick={() => setVisualTool("pan")} style={{ padding: '6px 12px', background: visualTool === "pan" ? '#000' : '#fff', color: visualTool === "pan" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>✋ PAN VIEWPORT</button>
               <div style={{ display: 'flex', gap: '5px' }}>
@@ -663,18 +445,13 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
                 <button onClick={() => { setVisScale(1); setVisPan({x:0, y:0}); }} style={{ padding: '4px 10px', cursor: 'pointer', fontSize: '0.7rem' }}>RESET</button>
               </div>
             </div>
-
             <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: '#1e1e1e', minHeight: '650px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {!activeBg ? (
-                <div style={{ color: '#666', textAlign: 'center' }}>
-                  <div style={{ fontSize: '3rem', marginBottom: '10px' }}>🖼️</div><h3 style={{ margin: 0, color: '#999' }}>NO PLAN LOADED</h3>
-                  <p style={{ fontSize: '0.8rem', marginTop: '5px' }}>Upload a front elevation photo to begin.</p>
-                </div>
+                <div style={{ color: '#666', textAlign: 'center' }}><div style={{ fontSize: '3rem', marginBottom: '10px' }}>🖼️</div><h3 style={{ margin: 0, color: '#999' }}>NO PLAN LOADED</h3></div>
               ) : (
                 <svg ref={svgRef} viewBox="0 0 1000 800" style={{ width: '100%', height: '100%', display: 'block', cursor: visualTool === 'pan' ? (isPanning ? 'grabbing' : 'grab') : 'crosshair', touchAction: 'none' }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
                   <g ref={innerGroupRef} transform={`translate(${visPan.x}, ${visPan.y}) translate(500, 400) scale(${visScale}) translate(-500, -400)`}>
                     <image href={activeBg.url} x="0" y="0" width="1000" height="800" preserveAspectRatio="xMidYMid slice" opacity="0.85" />
-                    
                     {calPoints.map((pt, i) => (
                       <g key={`cal-${i}`} transform={`translate(${pt.x}, ${pt.y})`}>
                         <circle cx="0" cy="0" r="1.5" fill="#007bff" />
@@ -698,16 +475,12 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
                         </g>
                       );
                     })()}
-
                     {showEngOverlay && (
-                       <g transform={`translate(${engOverlayPos.x}, ${engOverlayPos.y}) scale(${pixelsPerInch / S}) translate(-500, 0)`}
-                          onClick={(e) => { e.stopPropagation(); setActivePlacedId('ENG_OVERLAY'); }}
-                          style={{ cursor: 'move' }}>
+                       <g transform={`translate(${engOverlayPos.x}, ${engOverlayPos.y}) scale(${pixelsPerInch / S}) translate(-500, 0)`} onClick={(e) => { e.stopPropagation(); setActivePlacedId('ENG_OVERLAY'); }} style={{ cursor: 'move' }}>
                           <rect x="0" y="-30" width="1000" height="60" fill="transparent" stroke={activePlacedId === 'ENG_OVERLAY' ? '#fff' : 'none'} strokeWidth="2" strokeDasharray="4,4" />
-                          {renderFrontElevation()}
+                          {renderHardwareElevation()}
                        </g>
                     )}
-
                     {placedItems.map(item => {
                       const isSelected = item.id === activePlacedId;
                       return (
@@ -732,72 +505,41 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
         </div>
       )}
 
-      {/* ============================================================ */}
-      {/* MODE 2: ENGINEERING TOP-DOWN CUT LIST                        */}
-      {/* ============================================================ */}
       {viewMode === 'ENGINEERING' && (
         <div style={{ display: 'flex', gap: '20px', alignItems: 'stretch' }}>
           
-          {/* LEFT PANEL: CONFIGURATION & LEDGERS */}
           <div style={{ width: '480px', display: 'flex', flexDirection: 'column', gap: '15px', flexShrink: 0 }}>
-            
-            {/* 1. ON-SITE PARAMETERS */}
             <div style={{ background: '#fff', border: '2px solid #000' }}>
               <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
-                 <span>1. ON-SITE PARAMETERS</span>
-                 <select value={engData.inputMode} onChange={e => setEngData({...engData, inputMode: e.target.value})} style={{ fontSize: '0.65rem', background: '#444', color: '#fff', border: 'none', outline: 'none' }}>
-                    <option value="ORDERING">USE ORDERING LENGTH (POLE)</option>
-                    <option value="WALL">USE WALL DIMENSIONS</option>
-                 </select>
+                 <span>1. SPATIAL PARAMETERS</span>
+                 <select value={engData.inputMode} onChange={e => setEngData({...engData, inputMode: e.target.value})} style={{ fontSize: '0.65rem', background: '#444', color: '#fff', border: 'none', outline: 'none' }}><option value="ORDERING">USE ORDERING LENGTH (POLE)</option><option value="WALL">USE WALL DIMENSIONS</option></select>
               </div>
               <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <div style={{ display: 'flex', gap: '10px' }}>
                    <div style={{ flex: 1 }}>
                      <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BAY CONFIGURATION:</label>
-                     <select value={engData.shape} onChange={e => setEngData({...engData, shape: e.target.value})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }}>
-                        <option value="STRAIGHT">STRAIGHT POLE</option>
-                        <option value="MITERED">MITERED BAY (3-SEG)</option>
-                        <option value="BOW">CURVED BOW</option>
-                     </select>
+                     <select value={engData.shape} onChange={e => setEngData({...engData, shape: e.target.value})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }}><option value="STRAIGHT">STRAIGHT POLE</option><option value="MITERED">MITERED BAY (3-SEG)</option><option value="BOW">CURVED BOW</option></select>
                    </div>
                    <div style={{ flex: 1 }}>
                      <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d9534f' }}>MOUNT (WALL/WALL):</label>
                      {engData.shape === 'STRAIGHT' ? (
                         <div style={{ display: 'flex', gap: '5px' }}>
-                           <select value={engData.mountLeft} onChange={e => setEngData({...engData, mountLeft: e.target.value})} style={{ flex: 1, padding: '6px', border: '1px solid #d9534f' }}>
-                             <option value="OPEN">L: OPEN</option><option value="INSIDE">L: INSIDE</option>
-                           </select>
-                           <select value={engData.mountRight} onChange={e => setEngData({...engData, mountRight: e.target.value})} style={{ flex: 1, padding: '6px', border: '1px solid #d9534f' }}>
-                             <option value="OPEN">R: OPEN</option><option value="INSIDE">R: INSIDE</option>
-                           </select>
+                           <select value={engData.mountLeft} onChange={e => setEngData({...engData, mountLeft: e.target.value})} style={{ flex: 1, padding: '6px', border: '1px solid #d9534f' }}><option value="OPEN">L: OPEN</option><option value="INSIDE">L: INSIDE</option></select>
+                           <select value={engData.mountRight} onChange={e => setEngData({...engData, mountRight: e.target.value})} style={{ flex: 1, padding: '6px', border: '1px solid #d9534f' }}><option value="OPEN">R: OPEN</option><option value="INSIDE">R: INSIDE</option></select>
                         </div>
                      ) : (
-                        <select value={engData.mountOuter} onChange={e => setEngData({...engData, mountOuter: e.target.value})} style={{ width: '100%', padding: '6px', border: '1px solid #d9534f', fontWeight: 'bold' }}>
-                           <option value="OPEN">OPEN ENDS (BRACKETS)</option>
-                           <option value="INSIDE">INSIDE (WALL TO WALL)</option>
-                        </select>
+                        <select value={engData.mountOuter} onChange={e => setEngData({...engData, mountOuter: e.target.value})} style={{ width: '100%', padding: '6px', border: '1px solid #d9534f', fontWeight: 'bold' }}><option value="OPEN">OPEN ENDS (BRACKETS)</option><option value="INSIDE">INSIDE (WALL TO WALL)</option></select>
                      )}
                    </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: '5px' }}>
                    {engData.shape === 'MITERED' && (
-                     <div style={{ flex: 1 }}>
-                        <label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>{engData.inputMode === 'ORDERING' ? 'L ORDERING (IN):' : 'LEFT WALL (IN):'}</label>
-                        <input type="number" value={engData.w1} onChange={e => setEngData({...engData, w1: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
-                     </div>
+                     <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>{engData.inputMode === 'ORDERING' ? 'L ORDERING (IN):' : 'LEFT WALL (IN):'}</label><input type="number" value={engData.w1} onChange={e => setEngData({...engData, w1: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
                    )}
-                   <div style={{ flex: 1 }}>
-                     <label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>
-                        {engData.shape === 'BOW' ? 'CHORD W:' : (engData.inputMode === 'ORDERING' ? 'C ORDERING (IN):' : 'CENTER WALL (IN):')}
-                     </label>
-                     <input type="number" value={engData.w2} onChange={e => setEngData({...engData, w2: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
-                   </div>
+                   <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>{engData.shape === 'BOW' ? 'CHORD W:' : (engData.inputMode === 'ORDERING' ? 'C ORDERING (IN):' : 'CENTER WALL (IN):')}</label><input type="number" value={engData.w2} onChange={e => setEngData({...engData, w2: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
                    {engData.shape === 'MITERED' && (
-                     <div style={{ flex: 1 }}>
-                        <label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>{engData.inputMode === 'ORDERING' ? 'R ORDERING (IN):' : 'RIGHT WALL (IN):'}</label>
-                        <input type="number" value={engData.w3} onChange={e => setEngData({...engData, w3: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
-                     </div>
+                     <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>{engData.inputMode === 'ORDERING' ? 'R ORDERING (IN):' : 'RIGHT WALL (IN):'}</label><input type="number" value={engData.w3} onChange={e => setEngData({...engData, w3: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
                    )}
                    {engData.shape === 'BOW' && (
                      <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>BOW DEPTH:</label><input type="number" value={engData.bowDepth} onChange={e => setEngData({...engData, bowDepth: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
@@ -813,105 +555,66 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
               </div>
             </div>
 
-            {/* 2. FABRICATION SETTINGS */}
             <div style={{ background: '#fff', border: '2px solid #000' }}>
               <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>2. FABRICATION SETTINGS</div>
               <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <div style={{ display: 'flex', gap: '10px' }}>
-                    <div style={{ flex: 1 }}>
-                       <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>PROJECTION (IN):</label>
-                       <input type="number" step="0.125" value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box' }} />
-                    </div>
+                    <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>PROJECTION (IN):</label><input type="number" step="0.125" value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box' }} /></div>
                     <div style={{ flex: 1 }}>
                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>END STYLE:</label>
-                       <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }}>
-                          <option value="FLUSH">FLUSH CUT</option>
-                          <option value="FINIAL">FINIALS</option>
-                          <option value="RETURN_MITER">MITER RETURN</option>
-                          <option value="RETURN_BEND">BENT RETURN (FR)</option>
-                       </select>
+                       <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }}><option value="FLUSH">FLUSH CUT</option><option value="FINIAL">FINIALS</option><option value="RETURN_MITER">MITER RETURN</option><option value="RETURN_BEND">BENT RETURN (FR)</option></select>
                     </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: '5px', background: '#f9f9f9', padding: '10px', border: '1px solid #eee' }}>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>BRACKET W. (IN):</label>
-                      <input type="number" step="0.125" value={engData.bracketW} onChange={e => setEngData({...engData, bracketW: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>BRACKET THICK. (IN):</label>
-                      <input type="number" step="0.125" value={engData.bracketThickness} onChange={e => setEngData({...engData, bracketThickness: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>POLE DIA. (IN):</label>
-                      <input type="number" step="0.125" value={engData.poleDiameter} onChange={e => setEngData({...engData, poleDiameter: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
-                    </div>
+                    <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>BRACKET W. (IN):</label><input type="number" step="0.125" value={engData.bracketW} onChange={e => setEngData({...engData, bracketW: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                    <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>BRACKET THICK. (IN):</label><input type="number" step="0.125" value={engData.bracketThickness} onChange={e => setEngData({...engData, bracketThickness: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                    <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>POLE DIA. (IN):</label><input type="number" step="0.125" value={engData.poleDiameter} onChange={e => setEngData({...engData, poleDiameter: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
                 </div>
 
                 <div style={{ display: 'flex', gap: '10px', background: '#f9f9f9', padding: '10px', border: '1px solid #eee' }}>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#d9534f' }}>BEND RADIUS (IN):</label>
-                      <input type="number" step="0.125" value={engData.returnRadius} onChange={e => setEngData({...engData, returnRadius: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ width: '100%', padding: '6px', border: '1px solid #d9534f', boxSizing: 'border-box', opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#d9534f' }}>GRIP ALLOWANCE (IN):</label>
-                      <input type="number" step="0.125" value={engData.gripAllowance} onChange={e => setEngData({...engData, gripAllowance: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ width: '100%', padding: '6px', border: '1px solid #d9534f', boxSizing: 'border-box', opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#888' }}>IM DEDUCT. (IN):</label>
-                      <input type="number" step="0.125" value={engData.insideMountDeduct} onChange={e => setEngData({...engData, insideMountDeduct: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #888', boxSizing: 'border-box' }} />
-                    </div>
+                    <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#d9534f' }}>BEND RADIUS (IN):</label><input type="number" step="0.125" value={engData.returnRadius} onChange={e => setEngData({...engData, returnRadius: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ width: '100%', padding: '6px', border: '1px solid #d9534f', boxSizing: 'border-box', opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
+                    <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#d9534f' }}>GRIP ALLOWANCE (IN):</label><input type="number" step="0.125" value={engData.gripAllowance} onChange={e => setEngData({...engData, gripAllowance: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ width: '100%', padding: '6px', border: '1px solid #d9534f', boxSizing: 'border-box', opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
+                    <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#888' }}>IM DEDUCT. (IN):</label><input type="number" step="0.125" value={engData.insideMountDeduct} onChange={e => setEngData({...engData, insideMountDeduct: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #888', boxSizing: 'border-box' }} /></div>
                 </div>
               </div>
             </div>
 
-            {/* 3. DUAL LEDGERS */}
             <div style={{ display: 'flex', gap: '10px', flex: 1 }}>
                 
-                {/* Client As-Built */}
                 <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column' }}>
                   <div style={{ padding: '8px', background: '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem' }}>CLIENT AS-BUILT (T.O.L)</div>
                   <div style={{ padding: '10px', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                      
-                     {/* LEFT POLE */}
                      {engData.shape === 'MITERED' && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderBottom: '1px dotted #ccc', paddingBottom: '6px' }}>
                            <div style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>LEFT POLE (A)</div>
                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}><span>Ordering Length:</span><span>{orderL.toFixed(2)}"</span></div>
                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: '#666' }}><span>C-to-C Dim:</span><span>{pole1.toFixed(2)}"</span></div>
                            {(engData.endStyle !== 'FLUSH' && !isLeftInside) && (
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}>
-                                 <span>{engData.endStyle === 'FINIAL' ? 'Finial Add:' : 'Bracket Overhang:'}</span><span>+{addL_TOL.toFixed(2)}"</span>
-                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}><span>{engData.endStyle === 'FINIAL' ? 'Finial Add:' : 'Bracket Overhang:'}</span><span>+{addL_TOL.toFixed(2)}"</span></div>
                            )}
                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}><span>True T.O.L:</span><span>{tolLeft.toFixed(2)}"</span></div>
                         </div>
                      )}
 
-                     {/* CENTER POLE */}
                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderBottom: '1px dotted #ccc', paddingBottom: '6px' }}>
                         <div style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>{engData.shape === 'STRAIGHT' || engData.shape === 'BOW' ? 'MAIN POLE (B)' : 'CENTER POLE (B)'}</div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}><span>Ordering Length:</span><span>{orderC.toFixed(2)}"</span></div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: '#666' }}><span>C-to-C Dim:</span><span>{pole2.toFixed(2)}"</span></div>
-                        
                         {(engData.shape === 'STRAIGHT' || engData.shape === 'BOW') && (engData.endStyle !== 'FLUSH') && (
-                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}>
-                              <span>{engData.endStyle === 'FINIAL' ? 'Finial Add (L+R):' : 'Bracket Overhang (L+R):'}</span><span>+{(addL_TOL + addR_TOL).toFixed(2)}"</span>
-                           </div>
+                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}><span>{engData.endStyle === 'FINIAL' ? 'Finial Add (L+R):' : 'Bracket Overhang (L+R):'}</span><span>+{(addL_TOL + addR_TOL).toFixed(2)}"</span></div>
                         )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}><span>True T.O.L:</span><span>{tolCenter.toFixed(2)}"</span></div>
                      </div>
 
-                     {/* RIGHT POLE */}
                      {engData.shape === 'MITERED' && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderBottom: '1px dotted #ccc', paddingBottom: '6px' }}>
                            <div style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>RIGHT POLE (C)</div>
                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}><span>Ordering Length:</span><span>{orderR.toFixed(2)}"</span></div>
                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: '#666' }}><span>C-to-C Dim:</span><span>{pole3.toFixed(2)}"</span></div>
                            {(engData.endStyle !== 'FLUSH' && !isRightInside) && (
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}>
-                                 <span>{engData.endStyle === 'FINIAL' ? 'Finial Add:' : 'Bracket Overhang:'}</span><span>+{addR_TOL.toFixed(2)}"</span>
-                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}><span>{engData.endStyle === 'FINIAL' ? 'Finial Add:' : 'Bracket Overhang:'}</span><span>+{addR_TOL.toFixed(2)}"</span></div>
                            )}
                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}><span>True T.O.L:</span><span>{tolRight.toFixed(2)}"</span></div>
                         </div>
@@ -920,7 +623,6 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
                   </div>
                 </div>
 
-                {/* Shop Raw BOM */}
                 <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column' }}>
                   <div style={{ padding: '8px', background: '#d9534f', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem' }}>SHOP RAW B.O.M</div>
                   <div style={{ padding: '10px', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -956,28 +658,19 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
                      )}
                   </div>
                 </div>
-
             </div>
           </div>
 
-          {/* RIGHT PANEL: SVG MATH CANVAS */}
           <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '10px 10px 0 #000' }}>
             <div style={{ padding: '10px 15px', background: '#e9ecef', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                
-               {/* PROJECT DETAILS INPUTS */}
                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>JOB:</label>
-                    <input type="text" value={engData.jobName} onChange={e => setEngData({...engData, jobName: e.target.value})} style={{ width: '120px', padding: '4px', fontSize: '0.7rem', border: '1px solid #ccc' }} />
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>SIDEMARK:</label>
-                    <input type="text" value={engData.sidemark} onChange={e => setEngData({...engData, sidemark: e.target.value})} style={{ width: '120px', padding: '4px', fontSize: '0.7rem', border: '1px solid #ccc' }} />
-                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>JOB:</label><input type="text" value={engData.jobName} onChange={e => setEngData({...engData, jobName: e.target.value})} style={{ width: '120px', padding: '4px', fontSize: '0.7rem', border: '1px solid #ccc' }} /></div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>SIDEMARK:</label><input type="text" value={engData.sidemark} onChange={e => setEngData({...engData, sidemark: e.target.value})} style={{ width: '120px', padding: '4px', fontSize: '0.7rem', border: '1px solid #ccc' }} /></div>
                </div>
 
                <div style={{ display: 'flex', gap: '10px' }}>
-                 <button onClick={handlePushToVisual} style={{ padding: '6px 12px', background: '#007bff', color: '#fff', border: '1px solid #0056b3', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>🚀 PUSH TO VISUAL</button>
+                 <button onClick={() => { setShowEngOverlay(true); setViewMode('VISUAL'); setVisualTool('pan'); setActivePlacedId('ENG_OVERLAY'); }} style={{ padding: '6px 12px', background: '#007bff', color: '#fff', border: '1px solid #0056b3', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>🚀 PUSH TO VISUAL</button>
                </div>
             </div>
 
@@ -1000,7 +693,6 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
             <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: '#f8f9fa', minHeight: '650px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                <svg ref={svgRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} viewBox="0 0 1000 600" style={{ width: '100%', height: '100%', display: 'block', cursor: engTool === 'pan' ? (isPanning?'grabbing':'crosshair') : 'crosshair' }}>
                   
-                  {/* STATIC CANVAS LABELS (For Export/Screenshots) */}
                   <text x="15" y="25" fill="#000" fontSize="16" fontWeight="bold">JOB: {engData.jobName || 'UNNAMED'}</text>
                   <text x="15" y="45" fill="#666" fontSize="12" fontWeight="bold">SIDEMARK: {engData.sidemark || 'N/A'}</text>
 
@@ -1020,13 +712,10 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
                     {engData.shape === 'MITERED' && (
                         <g>
                            <polyline points={`${P1.x},${P1.y} ${P2.x},${P2.y} ${P3.x},${P3.y} ${P4.x},${P4.y}`} fill="none" stroke="#aaa" strokeWidth="3" />
-                           
                            <text x={500} y={P2.y - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text>
                            <text x={500} y={HC1.y + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text>
-                           
                            <text x={(P1.x+P2.x)/2 - 10} y={(P1.y+P2.y)/2 - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">WALL A: {wall1.toFixed(1)}"</text>
                            <text x={(HS.x+HC1.x)/2 + 10} y={(HS.y+HC1.y)/2 + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE A CUT: {rawLeft.toFixed(2)}"</text>
-
                            <text x={(P3.x+P4.x)/2 + 10} y={(P3.y+P4.y)/2 - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">WALL C: {wall3.toFixed(1)}"</text>
                            <text x={(HC2.x+HE.x)/2 - 10} y={(HC2.y+HE.y)/2 + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE C CUT: {rawRight.toFixed(2)}"</text>
                         </g>
@@ -1054,7 +743,7 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
                     {engData.shape === 'MITERED' && <polyline points={`${drawHS.x},${drawHS.y} ${HC1.x},${HC1.y} ${HC2.x},${HC2.y} ${drawHE.x},${drawHE.y}`} fill="none" stroke="#d4af37" strokeWidth="1.5" />}
                     {engData.shape === 'BOW' && bowHWPath && <path d={bowHWPath} fill="none" stroke="#d4af37" strokeWidth="1.5" />}
 
-                    {/* MITER CALLOUTS (Adjusted offsets - pushed significantly down and inward) */}
+                    {/* MITER CALLOUTS */}
                     {engData.shape === 'MITERED' && sawAngle1 > 0 && (
                         <g>
                            <line x1={HC1.x} y1={HC1.y + 15} x2={HC1.x + 60} y2={HC1.y + 100} stroke="#666" strokeWidth="1" strokeDasharray="2,2" />
@@ -1108,7 +797,7 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
                                     </g>
                                 )}
                                 
-                                {/* LEADER LINE & EDITABLE CALLOUT (Pushed significantly higher) */}
+                                {/* LEADER LINE & EDITABLE CALLOUT */}
                                 <line x1={x} y1={y-5} x2={x} y2={y-80} stroke={att.type==='bracket'?'#28a745':'#d9534f'} strokeWidth="1" strokeDasharray="2,2" />
                                 <foreignObject x={x - 45} y={y - 125} width="90" height="45" style={{ overflow: 'visible' }}>
                                     <div style={{ background: '#fff', border: `1px solid ${att.type==='bracket'?'#28a745':'#d9534f'}`, display: 'flex', flexDirection: 'column', padding: '3px', borderRadius: '4px', boxShadow: '0 2px 5px rgba(0,0,0,0.3)' }}>
@@ -1142,8 +831,9 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
           </div>
         </div>
       )}
+
     </div>
   );
 };
 
-export default ClientVisionTab;
+export default VisionHardware;

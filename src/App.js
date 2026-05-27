@@ -3,9 +3,9 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
 // Import our core applications
 import LandingPage from './LandingPage';
-import HQ from './HQ';
-import ShopFloor from './ShopFloor';
-import FinishingFloor from './FinishingFloor';
+import HQ from './components/HQ/HQ';
+import ShopFloor from './components/ShopFloor/ShopFloor';
+import FinishingFloor from './components/FinishingFloor/FinishingFloor';
 
 const App = () => {
   return (

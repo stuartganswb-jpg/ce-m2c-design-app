@@ -1,0 +1,987 @@
+import React, { useState, useEffect } from 'react';
+import { db, storage } from '../../firebase';
+import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
+
+const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
+  const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
+  
+  const [users, setUsers] = useState([]);
+  const [dynamicRoles, setDynamicRoles] = useState(['admin', 'executive', 'design_team', 'sales_rep']);
+  const [adminForm, setAdminForm] = useState({ uName: '', uPin: '', uRole: 'sales_rep', oldId: '' });
+  const [newRole, setNewRole] = useState('');
+
+  const [cpqFlows, setCpqFlows] = useState([]);
+  const [activeFlowId, setActiveFlowId] = useState(null);
+  const [globalLists, setGlobalLists] = useState({});
+  const [allApprovedDesigns, setAllApprovedDesigns] = useState([]); 
+  const [linkedBomPins, setLinkedBomPins] = useState([]); 
+  
+  const [customDataWindows, setCustomDataWindows] = useState([]);
+  
+  const [globalFinishes, setGlobalFinishes] = useState([]);
+  const [outsourceFinishes, setOutsourceFinishes] = useState([]);
+  const [dynamicAssets, setDynamicAssets] = useState([]);
+  const [libraryParts, setLibraryParts] = useState([]);
+
+  const [newStep, setNewStep] = useState({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [] });
+
+  const [newFlowName, setNewFlowName] = useState("");
+  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '' });
+  const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
+
+  const [inspectedNodes, setInspectedNodes] = useState([]);
+  const [isInspecting, setIsInspecting] = useState(false);
+
+  const [customSchema, setCustomSchema] = useState([]);
+  const [cpqRules, setCpqRules] = useState([]);
+  const [newRule, setNewRule] = useState({ name: '', conditionField: '', conditionOp: 'EQUALS', conditionVal: '', effectField: '', effectVal: '' });
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+
+  const [brandLogos, setBrandLogos] = useState({});
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const [formTemplates, setFormTemplates] = useState({});
+  const [activeFormType, setActiveFormType] = useState('QUOTE');
+  const [formEditor, setFormEditor] = useState({ header: '', footer: '', terms: '' });
+
+  const DOCUMENT_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE'];
+  const BRANDS_LIST = ['m2c', 'uniquity', 'ce', 'leyla']; 
+
+  useEffect(() => {
+      const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubRoles = onSnapshot(doc(db, "hq_config", "roles"), (docSnap) => { if (docSnap.exists() && docSnap.data().list) setDynamicRoles(docSnap.data().list); });
+      const unsubSchema = onSnapshot(doc(db, "system", "master_schema"), (docSnap) => { if (docSnap.exists() && docSnap.data().inventoryFields) setCustomSchema(docSnap.data().inventoryFields); });
+      const unsubRules = onSnapshot(doc(db, "system", "cpq_rules"), (docSnap) => { if (docSnap.exists() && docSnap.data().rules) setCpqRules(docSnap.data().rules); });
+      const unsubFlows = onSnapshot(collection(db, "cpq_flows"), (snap) => setCpqFlows(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { if (docSnap.exists()) setGlobalLists(docSnap.data()); });
+      
+      const unsubAssemblies = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
+          const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          setAllApprovedDesigns(docs);
+          setLibraryParts(docs.filter(d => d.partClass === 'Inventory'));
+      });
+
+      const unsubWindowConfig = onSnapshot(doc(db, "system", "window_config"), (docSnap) => {
+          if (docSnap.exists() && docSnap.data().custom) {
+              setCustomDataWindows(docSnap.data().custom);
+          }
+      });
+
+      const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (snap) => { if(snap.exists() && snap.data().finishes) setGlobalFinishes(snap.data().finishes); });
+      const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+      const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+
+      const unsubLogos = onSnapshot(doc(db, "hq_config", "brand_logos"), (docSnap) => { if (docSnap.exists()) setBrandLogos(docSnap.data()); });
+      const unsubForms = onSnapshot(doc(db, "hq_config", "form_templates"), (docSnap) => { 
+          if (docSnap.exists()) {
+              setFormTemplates(docSnap.data());
+          }
+      });
+
+      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubLogos(); unsubForms(); };
+  }, [activeBrand]);
+
+  useEffect(() => {
+      if (formTemplates[activeFormType]) {
+          setFormEditor(formTemplates[activeFormType]);
+      } else {
+          setFormEditor({ header: '', footer: '', terms: '' });
+      }
+  }, [activeFormType, formTemplates]);
+
+  const masterAssemblies = allApprovedDesigns.filter(d => {
+      const isBrandMatch = d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand));
+      if (!isBrandMatch) return false;
+
+      const rType = (d.routingType || "").toUpperCase();
+      const cpqTypes = (globalLists.cpqRoutingTypes || []).map(t => t.toUpperCase());
+
+      return d.partClass === 'Master Assembly' || 
+             cpqTypes.includes(rType) || 
+             rType === 'MASTER' || 
+             rType === 'MAIN' ||
+             rType.includes('CPQ');
+  });
+
+  useEffect(() => {
+      if (activeFlowId && cpqFlows.length > 0) {
+          const flow = cpqFlows.find(f => f.id === activeFlowId);
+          if (flow) {
+              setFlowSettings({ 
+                  name: flow.name || '', 
+                  legacyErpId: flow.legacyErpId || '', 
+                  basePrice: flow.basePrice || '',
+                  linkedAssemblyId: flow.linkedAssemblyId || ''
+              });
+              setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [] });
+          }
+      }
+      setInspectedNodes([]); 
+  }, [activeFlowId, cpqFlows]);
+
+  useEffect(() => {
+      if (!flowSettings.linkedAssemblyId) { setLinkedBomPins([]); return; }
+      const linkedAsm = masterAssemblies.find(a => a.id === flowSettings.linkedAssemblyId);
+      if(!linkedAsm) return;
+      
+      const unsub = onSnapshot(collection(db, "assembly_pins"), (snap) => {
+          const pins = snap.docs.map(d => d.data()).filter(p => p.assemblyId === linkedAsm.itemId);
+          setLinkedBomPins(pins);
+      });
+      return () => unsub();
+  }, [flowSettings.linkedAssemblyId, masterAssemblies]);
+
+  const handleInspectNodes = () => {
+      if (!flowSettings.linkedAssemblyId) return alert("Please link a Master Assembly to this CPQ Flow first.");
+      const linkedAsm = masterAssemblies.find(a => a.id === flowSettings.linkedAssemblyId);
+      if (!linkedAsm || !linkedAsm.manufacturingSpecs?.cadUrl) return alert("The linked Master Assembly does not have a 3D CAD (.glb) file attached.");
+
+      setIsInspecting(true);
+      const loader = new GLTFLoader();
+      loader.load(
+          linkedAsm.manufacturingSpecs.cadUrl, 
+          (gltf) => {
+              const nodes = [];
+              gltf.scene.traverse((child) => {
+                  if (child.isMesh) {
+                      nodes.push(child.name);
+                  }
+              });
+              if (nodes.length === 0) alert("No meshes found in this file.");
+              else setInspectedNodes(nodes);
+              setIsInspecting(false);
+          },
+          undefined,
+          (error) => {
+              console.error(error);
+              alert("Failed to load 3D file for inspection.");
+              setIsInspecting(false);
+          }
+      );
+  };
+
+  const handleAddRole = async () => {
+      if (!newRole.trim()) return alert("Role name required.");
+      const safeRole = newRole.toLowerCase().replace(/[^a-z0-9]/g, "_");
+      if (dynamicRoles.includes(safeRole)) return alert("Role already exists.");
+      await setDoc(doc(db, "hq_config", "roles"), { list: [...dynamicRoles, safeRole] }, { merge: true });
+      setNewRole('');
+  };
+  const handleDeleteRole = async (role) => {
+      if (!window.confirm(`Delete role: ${role}?`)) return;
+      await setDoc(doc(db, "hq_config", "roles"), { list: dynamicRoles.filter(r => r !== role) }, { merge: true });
+  };
+  const handlePermToggle = (role, tab) => {
+      const rolePerms = perms[role] || [];
+      const newPerms = rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab];
+      setPerms({ ...perms, [role]: newPerms });
+  };
+  const handleSavePermissions = async () => { await setDoc(doc(db, "hq_config", "permissions"), perms); alert("Matrix Saved!"); };
+  const handleSaveUser = async () => {
+      if(!adminForm.uName || !adminForm.uPin) return alert("Name and PIN are required.");
+      if (adminForm.oldId && adminForm.oldId !== adminForm.uPin) await deleteDoc(doc(db, "hq_users", adminForm.oldId));
+      await setDoc(doc(db, "hq_users", adminForm.uPin), { name: adminForm.uName, pin: adminForm.uPin, role: adminForm.uRole });
+      setAdminForm({ uName: '', uPin: '', uRole: dynamicRoles[0] || 'operator', oldId: '' });
+  };
+  const handleDeleteUser = async (u) => { if(!window.confirm(`Terminate ${u.name}?`)) return; await deleteDoc(doc(db, "hq_users", u.id)); };
+
+  const handleCreateNewFlow = async () => {
+      if (!newFlowName.trim()) return alert("Please enter a flow name (e.g., CUSTOM PILLOW)");
+      const flowId = `FLOW-${Date.now()}`;
+      try {
+          await setDoc(doc(db, "cpq_flows", flowId), { id: flowId, brandId: activeBrand, name: newFlowName.toUpperCase(), legacyErpId: 'PENDING', basePrice: 0, steps: [] });
+          setNewFlowName(""); setActiveFlowId(flowId);
+      } catch (err) { console.error("Error creating flow:", err); alert("Database Error. Check Firestore Rules."); }
+  };
+
+  const handleSaveFlowSettings = async () => {
+      if (!activeFlowId) return;
+      setIsSavingFlowSettings(true);
+      try {
+          const formattedName = flowSettings.name.toUpperCase();
+          const formattedErpId = (flowSettings.legacyErpId || 'PENDING').toUpperCase();
+
+          await setDoc(doc(db, "cpq_flows", activeFlowId), { ...flowSettings, name: formattedName, legacyErpId: formattedErpId }, { merge: true });
+          
+          if (flowSettings.linkedAssemblyId) {
+              await updateDoc(doc(db, "Approved_Designs", flowSettings.linkedAssemblyId), {
+                  linkedCpqFlowId: activeFlowId,
+                  legacyErpId: formattedErpId,
+                  "manufacturingSpecs.basePrice": parseFloat(flowSettings.basePrice) || 0
+              });
+          }
+
+          setTimeout(() => setIsSavingFlowSettings(false), 500);
+      } catch (err) {
+          console.error("Error saving flow settings:", err);
+          setIsSavingFlowSettings(false);
+          alert("Failed to sync settings with Master Assembly.");
+      }
+  };
+
+  const handleDeleteFlow = async () => {
+      if (!activeFlowId) return;
+      if (!window.confirm("Are you sure you want to delete this CPQ Flow? This will remove all configuration steps for this product.")) return;
+      
+      try {
+          if (flowSettings.linkedAssemblyId) {
+              await updateDoc(doc(db, "Approved_Designs", flowSettings.linkedAssemblyId), {
+                  linkedCpqFlowId: null
+              });
+          }
+          await deleteDoc(doc(db, "cpq_flows", activeFlowId));
+          setActiveFlowId(null);
+      } catch (err) {
+          console.error("Error deleting flow:", err);
+          alert("Failed to delete the CPQ Flow.");
+      }
+  };
+
+  const handleAutoCreateFlowForAssembly = async (asm) => {
+      const flowId = `FLOW-${Date.now()}`;
+      try {
+          await setDoc(doc(db, "cpq_flows", flowId), { 
+              id: flowId, 
+              brandId: activeBrand, 
+              name: `${asm.itemName} CONFIGURATOR`, 
+              legacyErpId: asm.legacyErpId !== 'PENDING' ? asm.legacyErpId : '', 
+              basePrice: asm.manufacturingSpecs?.basePrice || 0,
+              linkedAssemblyId: asm.id,
+              steps: [] 
+          });
+          await updateDoc(doc(db, "Approved_Designs", asm.id), { linkedCpqFlowId: flowId });
+          setActiveFlowId(flowId);
+      } catch (err) { console.error(err); alert("Error generating automated flow."); }
+  };
+
+  const handleAutoSyncBOM = async (flow) => {
+      if (linkedBomPins.length === 0) return alert("No BOM sub-assemblies found in this Master File Cabinet.");
+      if (!window.confirm("Auto-generate CPQ steps for all components mapped to this Master Assembly?")) return;
+      
+      try {
+          const generatedSteps = linkedBomPins.map((pin, idx) => ({
+              id: `STEP-AUTO-${Date.now()}-${idx}`,
+              title: `Select Finish for ${pin.partName}`,
+              type: 'DROPDOWN',
+              dataSource: 'master_finishes',
+              required: true,
+              priceMap: {},
+              geometryMap: {},
+              targetNodes: pin.targetNode || pin.partName, 
+              linkedPinId: pin.partId,
+              allowedOptions: [] 
+          }));
+
+          const updatedSteps = [...(flow.steps || []), ...generatedSteps];
+          await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps }, { merge: true });
+          alert(`✅ Successfully synced ${generatedSteps.length} configuration steps from the Master File Cabinet!`);
+      } catch (err) {
+          console.error("Auto-sync failed:", err);
+          alert("Failed to auto-generate steps.");
+      }
+  };
+
+  const handleAddStepToFlow = async (flow) => {
+      if (!newStep.title) return alert("Step title is required");
+      try {
+          let updatedSteps;
+          if (newStep.id) {
+              updatedSteps = flow.steps.map(s => s.id === newStep.id ? newStep : s);
+          } else {
+              updatedSteps = [...(flow.steps || []), { ...newStep, id: `STEP-${Date.now()}` }];
+          }
+          await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
+          setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [] });
+      } catch (err) { console.error("Error saving step:", err); alert("Database Error."); }
+  };
+
+  const handleDeleteStep = async (flow, stepId) => {
+      if (!window.confirm("Delete this configuration step?")) return;
+      try {
+          const updatedSteps = flow.steps.filter(s => s.id !== stepId);
+          await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
+      } catch (err) { console.error("Error deleting step:", err); }
+  };
+
+  const handleMoveStep = async (flow, index, direction) => {
+      const updatedSteps = [...flow.steps];
+      if (direction === 'UP' && index > 0) {
+          [updatedSteps[index - 1], updatedSteps[index]] = [updatedSteps[index], updatedSteps[index - 1]];
+      } else if (direction === 'DOWN' && index < updatedSteps.length - 1) {
+          [updatedSteps[index + 1], updatedSteps[index]] = [updatedSteps[index], updatedSteps[index + 1]];
+      }
+      await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
+  };
+
+  const handleSeedPillowFlow = async () => {
+      const flowId = `FLOW-${Date.now()}`;
+      const pillowFlow = {
+          id: flowId, brandId: activeBrand, name: "CUSTOM PILLOW ASSEMBLY", legacyErpId: "ASM-PILLOW-001", basePrice: 0,
+          steps: [
+              { id: `STEP-${Date.now()}-1`, title: 'Select Pillow Size', type: 'DROPDOWN', dataSource: 'pillowSizes', required: true, priceMap: { '12x20 Lumbar': 10, '18x18 Square': 15, '20x20 Square': 20 }, allowedOptions: [] },
+              { id: `STEP-${Date.now()}-2`, title: 'Select Fill Material', type: 'DROPDOWN', dataSource: 'fillTypes', required: true, priceMap: { 'DOWN': 35, 'POLY': 10 }, allowedOptions: [] },
+              { id: `STEP-${Date.now()}-3`, title: 'Select Main Fabric', type: 'VISUAL_GRID', dataSource: 'master_fabrics', required: true, allowedOptions: [] }
+          ]
+      };
+      try {
+          await setDoc(doc(db, "cpq_flows", flowId), pillowFlow);
+          alert("✅ Demo Flow Seeded Successfully!");
+          setActiveFlowId(flowId);
+      } catch (err) { console.error(err); }
+  };
+
+  // 🚀 RESTORED: CPQ Rules Engine Functions
+  const handleAddRule = async () => {
+      if (!newRule.name || !newRule.conditionField || !newRule.effectField) return alert("Fill in required fields.");
+      const updatedRules = [...cpqRules, { id: `RULE-${Date.now()}`, ...newRule }];
+      await setDoc(doc(db, "system", "cpq_rules"), { rules: updatedRules }, { merge: true });
+      setNewRule({ name: '', conditionField: '', conditionOp: 'EQUALS', conditionVal: '', effectField: '', effectVal: '' });
+  };
+
+  const handleDeleteRule = async (ruleId) => {
+      const updatedRules = cpqRules.filter(r => r.id !== ruleId);
+      await setDoc(doc(db, "system", "cpq_rules"), { rules: updatedRules }, { merge: true });
+  };
+
+  const handleAiGenerateRule = () => {
+      if (!aiPrompt) return;
+      setIsGeneratingAi(true);
+      setTimeout(() => {
+          let generatedRule = { name: `AI: ${aiPrompt.substring(0, 30)}...`, conditionField: '', conditionOp: 'EQUALS', conditionVal: '', effectField: '', effectVal: '' };
+          const txt = aiPrompt.toLowerCase();
+
+          if (txt.includes("light") && (txt.includes("fabric") || txt.includes("weight"))) { 
+              generatedRule.conditionField = "customData.weightClass"; generatedRule.conditionVal = "LIGHTWEIGHT"; 
+              generatedRule.effectField = "UI.disableStep"; generatedRule.effectVal = "Select Trim / Fringe";
+          } else if (txt.includes("heavy") || txt.includes("weight")) { 
+              generatedRule.conditionField = "customData.weightClass"; generatedRule.conditionVal = "HEAVY"; 
+              generatedRule.effectField = "MATH.maxBracketSpacing"; generatedRule.effectVal = "30";
+          }
+
+          setNewRule(generatedRule); setAiPrompt(""); setIsGeneratingAi(false);
+          alert("✨ AI successfully parsed your request and pre-filled the rule parameters!");
+      }, 1000);
+  };
+
+  const handleNukeJobs = async () => {
+      const promptStr = window.prompt('Type "DELETE ALL JOBS" to confirm this permanent wipeout:');
+      if (promptStr === "DELETE ALL JOBS") {
+          try {
+              const jobsSnap = await getDocs(collection(db, "jobs"));
+              const draftsSnap = await getDocs(collection(db, "cpq_drafts"));
+              await Promise.all([...jobsSnap.docs.map(d => deleteDoc(doc(db, "jobs", d.id))), ...draftsSnap.docs.map(d => deleteDoc(doc(db, "cpq_drafts", d.id)))]);
+              alert("✅ ALL PIPELINE JOBS AND DRAFTS HAVE BEEN NUKED.");
+          } catch(e) { console.error(e); }
+      }
+  };
+
+  const handleNukeAssemblies = async () => { 
+      const promptStr = window.prompt('Type "DELETE ALL ASSEMBLIES" to confirm:'); 
+      if (promptStr === "DELETE ALL ASSEMBLIES") {
+          try {
+              const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "in", ["Assembly", "Master Assembly"])));
+              await Promise.all(snap.docs.map(d => deleteDoc(doc(db, "Approved_Designs", d.id))));
+              alert("✅ ALL ASSEMBLIES NUKED.");
+          } catch(e) { console.error(e); }
+      }
+  };
+  
+  const handleNukeLibrary = async () => { 
+      const promptStr = window.prompt('Type "DELETE MASTER LIBRARY" to confirm:'); 
+      if (promptStr === "DELETE MASTER LIBRARY") {
+          try {
+              const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "==", "Inventory")));
+              await Promise.all(snap.docs.map(d => deleteDoc(doc(db, "Approved_Designs", d.id))));
+              alert("✅ MASTER INVENTORY NUKED.");
+          } catch(e) { console.error(e); }
+      }
+  };
+
+  const handleLogoUpload = async (e, brandKey) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (file.type !== "image/svg+xml" && file.type !== "image/png") {
+          return alert("Please upload an SVG or PNG file. SVG is highly recommended for documents.");
+      }
+      setIsUploadingLogo(true);
+      try {
+          const logoRef = ref(storage, `brand_logos/${brandKey}_logo_${Date.now()}.${file.name.split('.').pop()}`);
+          await uploadBytes(logoRef, file);
+          const dlUrl = await getDownloadURL(logoRef);
+          
+          await setDoc(doc(db, "hq_config", "brand_logos"), { [brandKey]: dlUrl }, { merge: true });
+          alert(`✅ Logo updated for ${brandKey.toUpperCase()}`);
+      } catch (err) {
+          console.error(err);
+          alert("Failed to upload logo.");
+      }
+      setIsUploadingLogo(false);
+  };
+
+  const handleSaveFormTemplate = async () => {
+      try {
+          await setDoc(doc(db, "hq_config", "form_templates"), {
+              [activeFormType]: formEditor
+          }, { merge: true });
+          alert(`✅ Template saved for ${activeFormType.replace('_', ' ')}`);
+      } catch (err) {
+          console.error(err);
+          alert("Failed to save template.");
+      }
+  };
+
+  const getDataSourceItems = (source) => {
+      if (!source) return [];
+      if (source === 'master_finishes') {
+          return [
+              ...globalFinishes.map(f => ({ id: f.id, name: f.name })), 
+              ...outsourceFinishes.map(f => ({ id: f.id, name: f.name }))
+          ];
+      }
+      const customAssets = dynamicAssets.filter(a => a.windowId === source);
+      if (customAssets.length > 0) return customAssets.map(a => ({ id: a.id, name: a.name }));
+      if (globalLists[source]) return globalLists[source].map(v => ({ id: v, name: v }));
+      if (source === 'master_fabrics') return libraryParts.filter(p => ['TEXTILE', 'FABRIC', 'RAW MATERIAL'].includes(p.manufacturingSpecs?.productType)).map(p => ({ id: p.id, name: p.itemName }));
+      if (source === 'master_trims') return libraryParts.filter(p => ['TRIMMING', 'COMPONENT'].includes(p.manufacturingSpecs?.productType)).map(p => ({ id: p.id, name: p.itemName }));
+      return [];
+  };
+
+  const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
+  const orphanedAssemblies = masterAssemblies.filter(asm => !cpqFlows.some(flow => flow.linkedAssemblyId === asm.id));
+  const availableSourceItems = getDataSourceItems(newStep.dataSource);
+  const linkedAsm = masterAssemblies.find(a => a.id === flowSettings.linkedAssemblyId);
+
+  const optionsToMap = (newStep.allowedOptions && newStep.allowedOptions.length > 0) 
+      ? availableSourceItems.filter(opt => newStep.allowedOptions.includes(opt.id)) 
+      : availableSourceItems;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+        <div><h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem' }}>11. System Administration</h2><span style={{ fontSize: '0.7rem', color: '#666' }}>SUPERUSER ACCESS GRANTED: {currentUser}</span></div>
+      </div>
+
+      <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+        <div style={{ width: '250px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000', flexShrink: 0 }}>
+          <div style={{ padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold' }}>SYSTEM CONTROLS</div>
+          <button onClick={() => setActiveSection("CPQ_FLOWS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "CPQ_FLOWS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "CPQ_FLOWS" ? '4px solid #007bff' : '4px solid transparent' }}>⚙️ CPQ FLOW BUILDER</button>
+          <button onClick={() => setActiveSection("RULES")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "RULES" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "RULES" ? '4px solid #007bff' : '4px solid transparent' }}>📐 CPQ LOGIC ENGINE</button>
+          <button onClick={() => setActiveSection("FORMS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "FORMS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "FORMS" ? '4px solid #28a745' : '4px solid transparent' }}>📝 FORM TEMPLATES</button>
+          <button onClick={() => setActiveSection("USERS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "USERS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "USERS" ? '4px solid #007bff' : '4px solid transparent' }}>👥 USER MATRIX</button>
+          <button onClick={() => setActiveSection("DANGER")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "DANGER" ? '#ffebee' : '#fff', color: '#d9534f', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "DANGER" ? '4px solid #d9534f' : '4px solid transparent' }}>⚠️ DANGER ZONE</button>
+        </div>
+
+        <div style={{ flex: 1, background: '#fff', border: '2px solid #000', minHeight: '600px', boxShadow: '10px 10px 0 #000' }}>
+          
+          {/* FLOW BUILDER */}
+          {activeSection === "CPQ_FLOWS" && (
+            <div style={{ display: 'flex', flex: 1, height: '100%' }}>
+                
+                {/* FLOW SELECTOR */}
+                <div style={{ width: '350px', borderRight: '2px solid #000', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px', background: '#f8f9fa' }}>
+                    <h3 style={{ margin: 0, color: '#007bff' }}>ACTIVE CPQ FLOWS</h3>
+                    
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                        <input value={newFlowName} onChange={e => setNewFlowName(e.target.value)} placeholder="e.g., CHANDELIER CONFIG" style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }} />
+                        <button onClick={handleCreateNewFlow} style={{ background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', padding: '0 15px' }}>ADD</button>
+                    </div>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px', overflowY: 'auto', flex: 1 }}>
+                        {cpqFlows.filter(f => f.brandId === activeBrand).length === 0 && <div style={{color: '#999', fontStyle: 'italic', fontSize: '0.8rem'}}>No flows exist. Create one above!</div>}
+                        {cpqFlows.filter(f => f.brandId === activeBrand).map(flow => (
+                            <div key={flow.id} onClick={() => setActiveFlowId(flow.id)} style={{ padding: '15px', border: `2px solid ${activeFlowId === flow.id ? '#007bff' : '#ccc'}`, background: activeFlowId === flow.id ? '#e6f2ff' : '#fff', cursor: 'pointer', fontWeight: 'bold', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <span>{flow.name}</span>
+                                    <span style={{ color: '#007bff' }}>{flow.steps?.length || 0} Steps</span>
+                                </div>
+                                {flow.legacyErpId && <div style={{ fontSize: '0.65rem', color: '#666' }}>ERP ID: {flow.legacyErpId}</div>}
+                            </div>
+                        ))}
+                    </div>
+
+                    {orphanedAssemblies.length > 0 && (
+                        <div style={{ marginTop: '20px', borderTop: '2px solid #ccc', paddingTop: '15px' }}>
+                            <h4 style={{ margin: '0 0 10px 0', color: '#e83e8c', fontSize: '0.85rem' }}>⚠️ PENDING CPQ SETUP</h4>
+                            <div style={{ fontSize: '0.7rem', color: '#666', marginBottom: '10px' }}>These assemblies were flagged for CPQ routing but don't have a flow yet.</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {orphanedAssemblies.map(asm => (
+                                    <button 
+                                        key={asm.id}
+                                        onClick={() => handleAutoCreateFlowForAssembly(asm)}
+                                        style={{ padding: '10px', background: '#e83e8c', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', textAlign: 'left', fontSize: '0.75rem', boxShadow: '2px 2px 0 rgba(0,0,0,0.2)' }}
+                                    >
+                                        + CREATE FLOW: {asm.itemName}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* FLOW EDITOR */}
+                <div style={{ flex: 1, padding: '20px', overflowY: 'auto' }}>
+                    {!activeFlow ? (
+                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999', fontWeight: 'bold', height: '100%' }}>SELECT OR CREATE A FLOW TO EDIT</div>
+                    ) : (
+                        <div>
+                            <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '15px', marginBottom: '20px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #28a745', paddingBottom: '10px', marginBottom: '15px' }}>
+                                    <h4 style={{ margin: '0', color: '#1e7e34' }}>🗄️ FILE CABINET LINK (MASTER ASSEMBLY)</h4>
+                                </div>
+                                
+                                <div style={{ marginBottom: '15px' }}>
+                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#333' }}>LINK TO MASTER ASSEMBLY (FROM TAB 2):</label>
+                                    <select 
+                                        value={flowSettings.linkedAssemblyId || ""} 
+                                        onChange={(e) => {
+                                            const asm = masterAssemblies.find(a => a.id === e.target.value);
+                                            setFlowSettings({
+                                                ...flowSettings, 
+                                                linkedAssemblyId: e.target.value, 
+                                                legacyErpId: asm?.legacyErpId || '', 
+                                                name: asm?.itemName || flowSettings.name, 
+                                                basePrice: asm?.manufacturingSpecs?.basePrice || flowSettings.basePrice 
+                                            });
+                                        }}
+                                        style={{ width: '100%', padding: '10px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold', background: '#fff' }}
+                                    >
+                                        <option value="">-- UNLINKED (STANDALONE FLOW) --</option>
+                                        {masterAssemblies.map(a => <option key={a.id} value={a.id}>{a.itemName} {a.legacyErpId && `[${a.legacyErpId}]`}</option>)}
+                                    </select>
+                                </div>
+
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <div style={{ flex: 2 }}>
+                                        <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#333' }}>CPQ FLOW NAME:</label>
+                                        <input value={flowSettings.name} onChange={e => setFlowSettings({...flowSettings, name: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#007bff' }}>ERP ITEM ID:</label>
+                                        <input value={flowSettings.legacyErpId} onChange={e => setFlowSettings({...flowSettings, legacyErpId: e.target.value})} placeholder="e.g. ASM-1234" style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box' }} />
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#CC6600' }}>BASE PRICE ($):</label>
+                                        <input type="number" step="0.01" value={flowSettings.basePrice} onChange={e => setFlowSettings({...flowSettings, basePrice: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '2px solid #CC6600', boxSizing: 'border-box' }} />
+                                    </div>
+                                </div>
+                                
+                                <div style={{ display: 'flex', gap: '10px', marginTop: '15px' }}>
+                                    <button onClick={handleSaveFlowSettings} style={{ flex: 2, padding: '10px 20px', background: isSavingFlowSettings ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>
+                                        {isSavingFlowSettings ? "SYNCING TO DATABASE..." : "💾 SAVE AND CASCADE TO MASTER ASSEMBLY"}
+                                    </button>
+                                    <button onClick={handleDeleteFlow} style={{ flex: 1, padding: '10px 20px', background: '#d9534f', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>
+                                        🗑️ DELETE FLOW
+                                    </button>
+                                </div>
+                            </div>
+
+                            <h3 style={{ margin: '0 0 15px 0', color: '#000', borderBottom: '2px solid #eee', paddingBottom: '10px' }}>CONFIGURE CONFIGURATOR STEPS</h3>
+                            
+                            {flowSettings.linkedAssemblyId && (
+                                <div style={{ background: '#f0f8ff', padding: '15px', border: '2px dashed #007bff', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div>
+                                        <h4 style={{ margin: '0 0 5px 0', color: '#007bff' }}>⚡ AUTO-SYNC AVAILABLE</h4>
+                                        <span style={{ fontSize: '0.8rem', color: '#666' }}>Detected <strong>{linkedBomPins.length} Sub-Assemblies/Components</strong> in the Master File Cabinet.</span>
+                                    </div>
+                                    <button onClick={() => handleAutoSyncBOM(activeFlow)} style={{ padding: '10px 20px', background: '#007bff', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', boxShadow: '2px 2px 0 rgba(0,0,0,0.2)' }}>
+                                        AUTO-GENERATE STEPS ➔
+                                    </button>
+                                </div>
+                            )}
+
+                            <div style={{ background: newStep.id ? '#fff3cd' : '#f8f9fa', padding: '15px', border: newStep.id ? '2px dashed #ffc107' : '1px solid #ccc', marginBottom: '20px' }}>
+                                <h4 style={{ margin: '0 0 10px 0', color: newStep.id ? '#856404' : '#000' }}>
+                                    {newStep.id ? "✏️ EDIT STEP" : "+ MANUAL STEP BUILDER"}
+                                </h4>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    <input value={newStep.title} onChange={e => setNewStep({...newStep, title: e.target.value})} placeholder="Step Title (e.g. Select Bracket Style)" style={{ padding: '8px', border: '1px solid #ccc' }} />
+                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                        <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }}>
+                                            <option value="DROPDOWN">Dropdown List</option>
+                                            <option value="VISUAL_GRID">Visual Grid (Images/Textures)</option>
+                                        </select>
+                                        
+                                        <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} style={{ flex: 1, padding: '8px', border: '2px solid #007bff', fontWeight: 'bold' }}>
+                                            <option value="">-- SELECT DATA SOURCE --</option>
+                                            <optgroup label="Core Libraries">
+                                                <option value="master_finishes">Master Finishes (In-House & Outsource)</option>
+                                            </optgroup>
+                                            {customDataWindows.length > 0 && (
+                                                <optgroup label="CPQ Asset Dictionaries (Tab 4)">
+                                                    {customDataWindows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                                                </optgroup>
+                                            )}
+                                            <optgroup label="Simple Lists (Tab 4)">
+                                                <option value="uom">UOMs</option>
+                                                <option value="pillowSizes">Pillow Sizes</option>
+                                                <option value="fillTypes">Fill Types</option>
+                                                <option value="flangeStyles">Edge / Flange Styles</option>
+                                                <option value="stitchTypes">Stitch Routing</option>
+                                                <option value="seamCounts">Seam Counts</option>
+                                            </optgroup>
+                                        </select>
+                                    </div>
+
+                                    {newStep.dataSource && availableSourceItems.length > 0 && (
+                                        <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>🔍 RESTRICT AVAILABLE OPTIONS (Leave empty to allow all):</span>
+                                                <span style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>{newStep.allowedOptions?.length || 0} Restricted Selected</span>
+                                            </div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px', maxHeight: '150px', overflowY: 'auto', background: '#f8f9fa', padding: '10px', border: '1px solid #eee' }}>
+                                                {availableSourceItems.map(item => (
+                                                    <label key={item.id} style={{ fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer' }}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={(newStep.allowedOptions || []).includes(item.id)}
+                                                            onChange={(e) => {
+                                                                const curr = newStep.allowedOptions || [];
+                                                                if (e.target.checked) setNewStep({...newStep, allowedOptions: [...curr, item.id]});
+                                                                else setNewStep({...newStep, allowedOptions: curr.filter(id => id !== item.id)});
+                                                            }}
+                                                        />
+                                                        {item.name}
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                    
+                                    <div style={{ background: '#e3f2fd', padding: '10px', border: '1px solid #007bff' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>🎯 TARGET 3D MESH/NODE NAME (FOR GLOBAL TEXTURE CHANGES)</label>
+                                            <button 
+                                                onClick={handleInspectNodes} 
+                                                disabled={isInspecting}
+                                                style={{ padding: '3px 8px', background: '#fff', color: '#007bff', border: '1px solid #007bff', fontSize: '0.65rem', fontWeight: 'bold', cursor: isInspecting ? 'wait' : 'pointer' }}
+                                            >
+                                                {isInspecting ? 'SCANNING...' : '🔍 INSPECT 3D NODES'}
+                                            </button>
+                                        </div>
+
+                                        {linkedAsm?.nodeClusters?.length > 0 && (
+                                            <div style={{ marginBottom: '10px', background: '#eafaf1', border: '1px solid #28a745', padding: '10px' }}>
+                                                <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34', marginBottom: '5px' }}>📦 SAVED SUB-ASSEMBLIES (FROM TAB 3):</div>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                                                    {linkedAsm.nodeClusters.map(cluster => (
+                                                        <span 
+                                                            key={cluster.id} 
+                                                            onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${cluster.meshes.join(', ')}` : cluster.meshes.join(', ')}))} 
+                                                            style={{ background: '#28a745', color: '#fff', padding: '4px 8px', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}
+                                                        >
+                                                            {cluster.name} ({cluster.meshes.length} Meshes)
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                        
+                                        {inspectedNodes.length > 0 && (
+                                            <div style={{ marginBottom: '10px', background: '#fff', border: '1px solid #ccc', padding: '5px', maxHeight: '100px', overflowY: 'auto' }}>
+                                                <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', marginBottom: '5px' }}>AVAILABLE MESHES IN FILE:</div>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                                                    {inspectedNodes.map((node, i) => (
+                                                        <span key={i} onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${node}` : node}))} style={{ background: '#eee', padding: '2px 5px', fontSize: '0.65rem', cursor: 'pointer', border: '1px solid #ccc' }}>
+                                                            {node}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <input value={newStep.targetNodes || ''} onChange={e => setNewStep({...newStep, targetNodes: e.target.value})} placeholder="e.g., Pole_Top, Bracket_Base" style={{ width: '100%', padding: '8px', border: '1px solid #007bff', boxSizing: 'border-box' }} />
+                                        <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>If this is a "Finish" step, it applies the texture to these meshes. Comma separate for multiple.</span>
+                                    </div>
+                                    
+                                    {optionsToMap.length > 0 && optionsToMap.length < 100 && (
+                                        <div style={{ background: '#fff', padding: '10px', border: '1px solid #007bff' }}>
+                                            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff', marginBottom: '10px' }}>OPTION PROPERTIES: COST UPCHARGES & GEOMETRY SWAPPING</div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: '10px', maxHeight: '250px', overflowY: 'auto' }}>
+                                                <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>OPTION NAME</div>
+                                                <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>PRICE UPCHARGE ($)</div>
+                                                <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>ASSOC. MESH (VISIBILITY)</div>
+                                                
+                                                {optionsToMap.map(opt => (
+                                                    <React.Fragment key={opt.id}>
+                                                        <div style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{opt.name}</div>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                                            <span style={{ fontWeight: 'bold' }}>+$</span>
+                                                            <input type="number" step="0.5" value={newStep.priceMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, priceMap: { ...prev.priceMap, [opt.id]: parseFloat(e.target.value) || 0 } }))} placeholder="0.00" style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }} />
+                                                        </div>
+                                                        <div>
+                                                            <input value={newStep.geometryMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, geometryMap: { ...prev.geometryMap, [opt.id]: e.target.value } }))} placeholder="Mesh to Show (e.g. Bracket_Deluxe)" style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }} />
+                                                        </div>
+                                                    </React.Fragment>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <label style={{ fontSize: '0.8rem', display: 'flex', gap: '10px' }}>
+                                        <input type="checkbox" checked={newStep.required} onChange={e => setNewStep({...newStep, required: e.target.checked})} /> Required Step
+                                    </label>
+                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={!newStep.dataSource} style={{ flex: 1, padding: '10px', background: newStep.id ? '#ffc107' : '#000', color: newStep.id ? '#000' : '#fff', fontWeight: 'bold', border: newStep.id ? '2px solid #856404' : 'none', cursor: newStep.dataSource ? 'pointer' : 'not-allowed', opacity: newStep.dataSource ? 1 : 0.5 }}>
+                                            {newStep.id ? "💾 SAVE EDITS TO STEP" : "➕ MANUAL ADD STEP"}
+                                        </button>
+                                        {newStep.id && (
+                                            <button onClick={() => setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [] })} style={{ padding: '10px 20px', background: '#fff', color: '#333', border: '2px solid #ccc', fontWeight: 'bold', cursor: 'pointer' }}>
+                                                CANCEL EDIT
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {(activeFlow.steps || []).map((step, idx) => (
+                                    <div key={step.id} style={{ padding: '15px', background: '#fff', border: '2px solid #ccc', borderLeft: '6px solid #28a745', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>Step {idx + 1}: {step.title}</div>
+                                            <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>
+                                                Type: {step.type} | Data: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{step.dataSource}</span> | Required: {step.required ? 'Yes' : 'No'}
+                                            </div>
+                                            {step.allowedOptions && step.allowedOptions.length > 0 && (
+                                                <div style={{ fontSize: '0.65rem', color: '#CC6600', marginTop: '3px', fontWeight: 'bold' }}>🔍 RESTRICTED TO: {step.allowedOptions.length} specific options.</div>
+                                            )}
+                                            {step.targetNodes && <div style={{ fontSize: '0.65rem', color: '#e83e8c', marginTop: '3px', fontWeight: 'bold' }}>🎨 APPLYING TEXTURES TO: {step.targetNodes.substring(0, 30)}{step.targetNodes.length > 30 ? '...' : ''}</div>}
+                                            {step.geometryMap && Object.values(step.geometryMap).some(Boolean) && <div style={{ fontSize: '0.65rem', color: '#28a745', marginTop: '3px', fontWeight: 'bold' }}>🧊 GEOMETRY SWAPPING ACTIVE</div>}
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '5px' }}>
+                                            <button onClick={() => handleMoveStep(activeFlow, idx, 'UP')} disabled={idx === 0} style={{ padding: '5px', cursor: idx === 0 ? 'not-allowed' : 'pointer', background: '#f4f4f4', border: '1px solid #ccc' }}>⬆️</button>
+                                            <button onClick={() => handleMoveStep(activeFlow, idx, 'DOWN')} disabled={idx === activeFlow.steps.length - 1} style={{ padding: '5px', cursor: idx === activeFlow.steps.length - 1 ? 'not-allowed' : 'pointer', background: '#f4f4f4', border: '1px solid #ccc' }}>⬇️</button>
+                                            <button onClick={() => setNewStep(step)} style={{ padding: '5px 15px', background: '#007bff', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', marginLeft: '10px' }}>EDIT</button>
+                                            <button onClick={() => handleDeleteStep(activeFlow, step.id)} style={{ padding: '5px 15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>DEL</button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+          )}
+
+          {/* DYNAMIC CPQ RULES ENGINE */}
+          {activeSection === "RULES" && (
+            <div style={{ padding: '30px' }}>
+              <h3 style={{ margin: '0 0 5px 0', borderBottom: '2px solid #000', paddingBottom: '10px', color: '#007bff', textTransform: 'uppercase' }}>Dynamic CPQ Rules Engine</h3>
+              <p style={{ color: '#666', fontSize: '0.85rem', marginBottom: '20px' }}>Define conditional logic using the dynamic attributes built in Tab 4. These rules actively dictate CPQ behaviors and UI filters in Tab 8.</p>
+              
+              <div style={{ background: '#f0f8ff', border: '2px dashed #007bff', padding: '15px', marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff', display: 'flex', alignItems: 'center', gap: '5px' }}>✨ AI ASSIST: DESCRIBE YOUR RULE</label>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                      <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="e.g. 'If weight class is light, disable the trim step'" style={{ flex: 1, padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                      <button onClick={handleAiGenerateRule} disabled={isGeneratingAi || !aiPrompt} style={{ padding: '10px 20px', background: isGeneratingAi ? '#ccc' : '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: isGeneratingAi ? 'wait' : 'pointer' }}>{isGeneratingAi ? 'GENERATING...' : 'GENERATE PARAMETERS'}</button>
+                  </div>
+              </div>
+
+              <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '20px', marginBottom: '30px' }}>
+                  <h4 style={{ margin: '0 0 15px 0', color: '#28a745' }}>+ MANUAL RULE BUILDER</h4>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                      <div style={{ gridColumn: 'span 2' }}>
+                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>RULE NAME / DESCRIPTION:</label>
+                          <input value={newRule.name} onChange={e => setNewRule({...newRule, name: e.target.value})} placeholder="e.g. Light Fabrics Cannot Have Trim" style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                      </div>
+                      
+                      <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
+                          <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff', marginBottom: '10px' }}>IF SELECTION CONDITION:</div>
+                          <select value={newRule.conditionField} onChange={e => setNewRule({...newRule, conditionField: e.target.value})} style={{ width: '100%', padding: '8px', marginBottom: '10px', border: '1px solid #ccc' }}>
+                              <option value="">-- Select Trigger Attribute --</option>
+                              <optgroup label="Core Specs">
+                                  <option value="productType">Product Type</option>
+                              </optgroup>
+                              <optgroup label="Dynamic Schema (Tab 4)">
+                                  {customSchema.map(f => <option key={f.key} value={`customData.${f.key}`}>{f.label}</option>)}
+                              </optgroup>
+                          </select>
+                          <div style={{ display: 'flex', gap: '10px' }}>
+                              <select value={newRule.conditionOp} onChange={e => setNewRule({...newRule, conditionOp: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }}>
+                                  <option value="EQUALS">EQUALS</option><option value="NOT_EQUALS">NOT EQUALS</option><option value="CONTAINS">CONTAINS</option>
+                              </select>
+                              <input value={newRule.conditionVal} onChange={e => setNewRule({...newRule, conditionVal: e.target.value})} placeholder="Value (e.g. LIGHTWEIGHT)" style={{ flex: 2, padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                          </div>
+                      </div>
+
+                      <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
+                          <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#CC6600', marginBottom: '10px' }}>THEN EFFECT:</div>
+                          <select value={newRule.effectField} onChange={e => setNewRule({...newRule, effectField: e.target.value})} style={{ width: '100%', padding: '8px', marginBottom: '10px', border: '1px solid #ccc' }}>
+                              <option value="">-- Select Target System Rule --</option>
+                              <option value="UI.disableStep">DISABLE Step (Name)</option>
+                              <option value="UI.hideFinishes">HIDE Specific Finishes</option>
+                              <option value="MATH.maxBracketSpacing">SET Max Bracket Spacing (in)</option>
+                          </select>
+                          <input value={newRule.effectVal} onChange={e => setNewRule({...newRule, effectVal: e.target.value})} placeholder="Effect Value (e.g. Select Trim / Fringe)" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                      </div>
+                  </div>
+                  <button onClick={handleAddRule} style={{ width: '100%', padding: '12px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', marginTop: '15px' }}>➕ INJECT RULE INTO CPQ</button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {cpqRules.length === 0 && <div style={{ padding: '20px', background: '#f8f9fa', fontStyle: 'italic', color: '#666', border: '1px dashed #ccc' }}>No dynamic rules configured yet.</div>}
+                  {cpqRules.map(rule => (
+                      <div key={rule.id} style={{ background: '#fff', border: '2px solid #333', borderLeft: '6px solid #28a745', padding: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '4px 4px 0 rgba(0,0,0,0.05)' }}>
+                          <div>
+                              <div style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#333' }}>{rule.name}</div>
+                              <div style={{ fontSize: '0.8rem', marginTop: '5px', display: 'flex', gap: '15px', color: '#555' }}>
+                                  <span><strong style={{color:'#007bff'}}>IF:</strong> {rule.conditionField.replace('customData.', '')} {rule.conditionOp} "{rule.conditionVal}"</span>
+                                  <span><strong style={{color:'#CC6600'}}>THEN:</strong> {rule.effectField} = "{rule.effectVal}"</span>
+                              </div>
+                          </div>
+                          <button onClick={() => handleDeleteRule(rule.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                      </div>
+                  ))}
+              </div>
+            </div>
+          )}
+
+          {/* FORMS & BRANDING VIEW */}
+          {activeSection === "FORMS" && (
+            <div style={{ padding: '30px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px' }}>
+                <h3 style={{ margin: 0 }}>📝 DOCUMENT TEMPLATES & BRANDING</h3>
+              </div>
+              
+              <div style={{ display: 'flex', gap: '20px' }}>
+                  {/* LOGO MANAGER */}
+                  <div style={{ flex: 1, background: '#f8f9fa', border: '1px solid #ccc', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                      <h4 style={{ margin: 0, color: '#007bff' }}>1. BRAND LOGO MANAGER</h4>
+                      <p style={{ fontSize: '0.8rem', color: '#666', margin: 0 }}>Upload SVG files for infinitely scalable, high-resolution document branding.</p>
+                      
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                          {BRANDS_LIST.map(bKey => (
+                              <div key={bKey} style={{ background: '#fff', border: '2px solid #000', padding: '15px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                  <strong style={{ textTransform: 'uppercase' }}>{bKey}</strong>
+                                  <div style={{ height: '80px', background: '#eee', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed #ccc' }}>
+                                      {brandLogos[bKey] ? <img src={brandLogos[bKey]} alt={bKey} style={{ maxWidth: '100%', maxHeight: '100%' }} /> : <span style={{ fontSize: '0.7rem', color: '#999' }}>NO LOGO UPLOADED</span>}
+                                  </div>
+                                  <label style={{ background: isUploadingLogo ? '#ccc' : '#000', color: '#fff', padding: '8px', fontSize: '0.7rem', fontWeight: 'bold', cursor: isUploadingLogo ? 'wait' : 'pointer' }}>
+                                      {isUploadingLogo ? 'UPLOADING...' : 'UPLOAD SVG LOGO'}
+                                      <input type="file" accept=".svg,.png" style={{ display: 'none' }} onChange={(e) => handleLogoUpload(e, bKey)} disabled={isUploadingLogo} />
+                                  </label>
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+
+                  {/* FORM BUILDER */}
+                  <div style={{ flex: 1.5, background: '#fff', border: '2px solid #000', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                      <h4 style={{ margin: 0, color: '#28a745' }}>2. DOCUMENT TEMPLATE CONFIGURATOR</h4>
+                      <p style={{ fontSize: '0.8rem', color: '#666', margin: 0 }}>Define the standard text blocks that will appear on generated PDFs.</p>
+                      
+                      <div>
+                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>DOCUMENT TYPE:</label>
+                          <select value={activeFormType} onChange={(e) => setActiveFormType(e.target.value)} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold' }}>
+                              {DOCUMENT_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
+                          </select>
+                      </div>
+
+                      <div>
+                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>GLOBAL HEADER NOTES:</label>
+                          <textarea value={formEditor.header} onChange={e => setFormEditor({...formEditor, header: e.target.value})} placeholder="e.g. Thank you for your business!" rows={3} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box', fontFamily: 'sans-serif' }} />
+                      </div>
+
+                      <div>
+                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>GLOBAL FOOTER NOTES:</label>
+                          <textarea value={formEditor.footer} onChange={e => setFormEditor({...formEditor, footer: e.target.value})} placeholder="e.g. Please remit payment within 30 days." rows={3} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box', fontFamily: 'sans-serif' }} />
+                      </div>
+
+                      <div>
+                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>TERMS & CONDITIONS (Fine Print):</label>
+                          <textarea value={formEditor.terms} onChange={e => setFormEditor({...formEditor, terms: e.target.value})} placeholder="Standard legal terms..." rows={5} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.75rem', fontFamily: 'sans-serif' }} />
+                      </div>
+
+                      <button onClick={handleSaveFormTemplate} style={{ width: '100%', padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', marginTop: '10px' }}>
+                          💾 SAVE {activeFormType.replace('_', ' ')} TEMPLATE
+                      </button>
+                  </div>
+              </div>
+            </div>
+          )}
+
+          {/* USERS VIEW */}
+          {activeSection === "USERS" && (
+            <div style={{ padding: '30px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px' }}>
+                <h3 style={{ margin: 0 }}>USER DIRECTORY & ACCESS MATRIX</h3>
+              </div>
+              <div style={{ background: '#f8f9fa', border: '1px solid #ccc', padding: '15px', marginBottom: '20px' }}>
+                <h4 style={{ margin: '0 0 10px 0', color: '#007bff' }}>1. SYSTEM ROLES</h4>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                  {dynamicRoles.map(role => (
+                    <span key={role} style={{ background: '#000', color: '#fff', padding: '5px 10px', fontSize: '0.8rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {role.toUpperCase().replace(/_/g, ' ')}
+                      {role !== 'admin' && <button onClick={() => handleDeleteRole(role)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0, fontWeight: 'bold' }}>✖</button>}
+                    </span>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <input value={newRole} onChange={e => setNewRole(e.target.value)} placeholder="New Role (e.g. Sales Rep)" style={{ padding: '8px', border: '1px solid #ccc', width: '250px' }} />
+                  <button onClick={handleAddRole} style={{ padding: '8px 15px', background: '#007bff', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>+ ADD ROLE</button>
+                </div>
+              </div>
+              <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', marginBottom: '20px', overflowX: 'auto' }}>
+                <h4 style={{ margin: '0 0 10px 0' }}>2. PERMISSIONS MATRIX</h4>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'center' }}>
+                  <thead style={{ background: '#333', color: '#fff' }}><tr><th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #000' }}>TAB</th>{dynamicRoles.map(r => (<th key={r} style={{ padding: '10px', borderLeft: '1px solid #555' }}>{r.toUpperCase().replace(/_/g, ' ')}</th>))}</tr></thead>
+                  <tbody>
+                    {TABS.map(tab => (
+                      <tr key={tab} style={{ borderBottom: '1px solid #eee' }}><td style={{ padding: '10px', textAlign: 'left', fontWeight: 'bold', borderRight: '2px solid #333' }}>{tab}</td>{dynamicRoles.map(role => (<td key={role} style={{ padding: '10px', borderLeft: '1px solid #eee' }}><input type="checkbox" checked={perms[role]?.includes(tab) || false} onChange={() => handlePermToggle(role, tab)} style={{ cursor: 'pointer', transform: 'scale(1.3)' }} /></td>))}</tr>
+                    ))}
+                  </tbody>
+                </table>
+                <button onClick={handleSavePermissions} style={{ width: '100%', padding: '10px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', marginTop: '15px' }}>💾 SAVE MATRIX CONFIGURATION</button>
+              </div>
+              <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
+                <h4 style={{ margin: '0 0 10px 0' }}>3. USER DIRECTORY</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '10px', marginBottom: '10px' }}>
+                  <input value={adminForm.uName} onChange={e => setAdminForm({...adminForm, uName: e.target.value})} placeholder="User Name" disabled={!!adminForm.oldId} style={{ padding: '8px', border: '1px solid #ccc', background: adminForm.oldId ? '#eee' : '#fff' }} />
+                  <input value={adminForm.uPin} onChange={e => setAdminForm({...adminForm, uPin: e.target.value})} placeholder="4-Digit PIN" maxLength="4" style={{ padding: '8px', border: '1px solid #ccc' }} />
+                  <select value={adminForm.uRole} onChange={e => setAdminForm({...adminForm, uRole: e.target.value})} style={{ padding: '8px', border: '1px solid #ccc' }}>{dynamicRoles.map(r => <option key={r} value={r}>{r.toUpperCase().replace(/_/g, ' ')}</option>)}</select>
+                </div>
+                <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+                  <button onClick={handleSaveUser} style={{ flex: 1, padding: '10px', background: adminForm.oldId ? '#007bff' : '#000', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>{adminForm.oldId ? 'UPDATE USER' : '+ ADD USER'}</button>
+                  {adminForm.oldId && <button onClick={() => setAdminForm({ uName: '', uPin: '', uRole: dynamicRoles[0], oldId: '' })} style={{ padding: '10px', background: '#888', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>CANCEL</button>}
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+                  <thead style={{ background: '#eee' }}><tr><th style={{ padding: '10px', borderBottom: '2px solid #000' }}>NAME</th><th style={{ padding: '10px', borderBottom: '2px solid #000' }}>ROLE</th><th style={{ padding: '10px', borderBottom: '2px solid #000', textAlign: 'right' }}>ACTIONS</th></tr></thead>
+                  <tbody>{users.map(u => (<tr key={u.id} style={{ borderBottom: '1px solid #eee' }}><td style={{ padding: '10px', fontWeight: 'bold' }}>{u.name}</td><td style={{ padding: '10px', color: '#666' }}>{u.role?.toUpperCase().replace(/_/g, ' ')}</td><td style={{ padding: '10px', textAlign: 'right' }}><button onClick={() => setAdminForm({ uName: u.name, uPin: u.pin || '', uRole: u.role || dynamicRoles[0], oldId: u.id })} style={{ background: '#fff', border: '1px solid #007bff', color: '#007bff', padding: '4px 8px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', marginRight: '5px' }}>EDIT</button><button onClick={() => handleDeleteUser(u)} style={{ background: '#fff0f0', border: '1px solid #ffcccc', color: '#d9534f', padding: '4px 8px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>DEL</button></td></tr>))}</tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* DANGER ZONE VIEW */}
+          {activeSection === "DANGER" && (
+            <div style={{ padding: '30px' }}>
+              <h3 style={{ marginTop: 0, borderBottom: '2px solid #d9534f', paddingBottom: '10px', color: '#d9534f' }}>⚠️ DANGER ZONE (DATAFLASH)</h3>
+              <p style={{ color: '#000', fontWeight: 'bold', background: '#ffc107', padding: '10px' }}>ACTIONS TAKEN HERE ARE PERMANENT.</p>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginTop: '30px' }}>
+                <div style={{ border: '2px solid #d9534f', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div><h4 style={{ margin: '0 0 5px 0' }}>WIPE ALL JOBS, DRAFTS, & PIPELINE</h4><div style={{fontSize:'0.8rem', color:'#666'}}>Clears all Sales Orders, Work Orders, and CPQ quotes.</div></div>
+                  <button onClick={handleNukeJobs} style={{ padding: '15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>NUKE PIPELINE</button>
+                </div>
+                
+                <div style={{ border: '2px solid #d9534f', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div><h4 style={{ margin: '0 0 5px 0' }}>WIPE ALL MASTER ASSEMBLIES</h4><div style={{fontSize:'0.8rem', color:'#666'}}>Deletes all BOMs and Top-Level Configurations.</div></div>
+                  <button onClick={handleNukeAssemblies} style={{ padding: '15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>NUKE ASSEMBLIES</button>
+                </div>
+                
+                <div style={{ border: '2px solid #d9534f', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div><h4 style={{ margin: '0 0 5px 0' }}>WIPE MASTER INVENTORY LIBRARY</h4><div style={{fontSize:'0.8rem', color:'#666'}}>Deletes all raw materials, components, and hardware.</div></div>
+                  <button onClick={handleNukeLibrary} style={{ padding: '15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>NUKE INVENTORY</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default AdminTab;

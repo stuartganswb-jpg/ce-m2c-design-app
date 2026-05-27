@@ -3,7 +3,7 @@ import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import { getAuth } from "firebase/auth";
 
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+// 1. Single source of truth for your project
 const firebaseConfig = {
   apiKey: "AIzaSyBnWGjqZXzwMUlRp-8uikDJYW7S9kje5HE",
   authDomain: "ce-m2c-design-collab.firebaseapp.com",
@@ -14,10 +14,15 @@ const firebaseConfig = {
   measurementId: "G-2QQPTMWPFB"
 };
 
-// Initialize the "Engine"
+// 2. Initialize the app once
 const app = initializeApp(firebaseConfig);
 
-// Export the specific tools we need for the shop app
-export const db = getFirestore(app);      // The Database (Pins/Chat)
-export const storage = getStorage(app);    // The Vault (Sketches/PDFs)
-export const auth = getAuth(app);          // The Gatekeeper (Logins)
+// 3. Export tools
+export const db = getFirestore(app);
+export const storage = getStorage(app);
+export const auth = getAuth(app);
+
+// 4. Aliases (So your Finishing Floor code keeps working 
+// without needing to be rewritten to point to the new 'db')
+export const finishingDb = db; 
+export const finishingAuth = auth;
