@@ -11,8 +11,8 @@ import Management from './Management';
 import Summary from './Summary';
 import { MixModal, QcModal } from './Modals';
 
-// 🚀 SHARED DIGITAL ASSET MANAGER
-import AssetGalleryTab from '../Shared/AssetGalleryTab';
+// 🚀 NEW: FLOOR-OPTIMIZED VISUAL DICTIONARY (Replaces HQ AssetGalleryTab)
+import FloorAssetViewer from './FloorAssetViewer';
 
 const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'MESSAGING', 'ASSET GALLERY', 'MANAGEMENT', 'DAILY SUMMARY'];
 
@@ -130,8 +130,8 @@ return (
           {activeTab === 'MANAGEMENT' && <Management sysConfig={sysConfig} users={users} logs={logs} writeLog={writeLog} user={user} perms={perms} setPerms={setPerms} db={db} TABS={TABS} />}
           {activeTab === 'DAILY SUMMARY' && <Summary workOrders={workOrders} />}
           
-          {/* 🚀 NEW ASSET GALLERY ROUTE */}
-          {activeTab === 'ASSET GALLERY' && <AssetGalleryTab currentUser={user.name} activeBrand={null} />}
+          {/* 🚀 NEW ASSET GALLERY ROUTE FOR THE FLOOR */}
+          {activeTab === 'ASSET GALLERY' && <FloorAssetViewer activeBrand={null} />}
         </div>
       </main>
       
