@@ -100,9 +100,23 @@ const FloorAssetViewer = ({ activeBrand }) => {
                     ) : (
                         filteredAssets.slice(0, 100).map(asset => (
                             <div key={asset.id} onClick={() => openModal(asset)} style={{ border: '2px solid #ccc', borderRadius: '8px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', background: '#f8f9fa' }} onMouseOver={e => e.currentTarget.style.borderColor = '#CC6600'} onMouseOut={e => e.currentTarget.style.borderColor = '#ccc'}>
+                                
                                 <div style={{ position: 'relative', width: '100%', height: '220px', background: '#e5e5e5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                     {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'2rem'}}>🖼️</span>}
+                                    
+                                    {/* 🚀 ADDED TO FINISHING VIEWER: THE BOTTOM-LEFT WATERMARK BADGE */}
+                                    <div style={{ position: 'absolute', bottom: '8px', left: '8px', color: '#333', fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 'bold', background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #ccc', zIndex: 2 }}>
+                                        {String(asset.patternId || '')}{asset.finishId ? `/${String(asset.finishId)}` : ''}
+                                    </div>
+                                    
+                                    {/* Overlay Customer ID Badge */}
+                                    {(asset.clientSku || asset.customerPartId) && (
+                                        <div style={{ position: 'absolute', top: '8px', right: '8px', color: '#fff', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 'bold', background: '#28a745', padding: '2px 6px', borderRadius: '4px', zIndex: 2 }}>
+                                            CUST: {String(asset.clientSku || asset.customerPartId)}
+                                        </div>
+                                    )}
                                 </div>
+
                                 <div style={{ padding: '12px', background: '#fff', borderTop: '1px solid #ccc' }}>
                                     <div style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#000' }}>{asset.finishId || 'NO FINISH ID'}</div>
                                     <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '4px' }}>PART: {asset.patternId || 'N/A'}</div>
