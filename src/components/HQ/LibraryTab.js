@@ -147,6 +147,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const matchesSearch = part.itemName?.toLowerCase().includes(term) || 
                           (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term)) || 
                           (part.itemId && part.itemId.toLowerCase().includes(term)) ||
+                          (part.manufacturingSpecs?.binLocation && part.manufacturingSpecs.binLocation.toLowerCase().includes(term)) || // 🚀 Search by Bin
                           (part.clientPricing && part.clientPricing.some(cp => 
                               (cp.clientSku && cp.clientSku.toLowerCase().includes(term)) || 
                               (cp.customerId && cp.customerId.toLowerCase().includes(term))
@@ -178,6 +179,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         tempName: part.itemName, 
         tempLegacyId: part.legacyErpId === "PENDING" ? "" : part.legacyErpId,
         clientPricing: part.clientPricing || [], 
+        binLocation: baseSpecs.binLocation || "", // 🚀 NATIVE BIN LOCATION
         project: part.project || "",
         collection: part.collection || "",
         routingType: part.routingType || "",
@@ -197,6 +199,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         tempName: prev.tempName, 
         tempLegacyId: prev.tempLegacyId, 
         clientPricing: prev.clientPricing, 
+        binLocation: prev.binLocation, // Keep bin location isolated
         pdfUrl: prev.pdfUrl, 
         cadUrl: prev.cadUrl 
     }));
@@ -246,7 +249,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const newId = `${activeBrand.toUpperCase()}-${actualClass === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
     
     setActivePart({ isNew: true, id: newId, itemId: newId, legacyErpId: "PENDING", itemName: `NEW ${actualClass.toUpperCase()}`, brandId: activeBrand, partClass: actualClass });
-    setEditSpecs({ productType: "", uom: "EA", finishDetail: "", collection: "N/A", project: "", routingType: "", assemblyType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], isInHouse: true, programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" }, isProjectManaged: false }); 
+    setEditSpecs({ productType: "", uom: "EA", finishDetail: "", collection: "N/A", project: "", routingType: "", assemblyType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], binLocation: "", isInHouse: true, programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" }, isProjectManaged: false }); 
     setPdfFile(null); setCadFile(null); setCloneSourceId("");
   };
 
@@ -540,6 +543,11 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                           {part.clientPricing.length} CLIENT MAPPING(S)
                       </div>
                   )}
+                  {part.manufacturingSpecs?.binLocation && (
+                      <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', marginBottom: '2px' }}>
+                          BIN: {part.manufacturingSpecs.binLocation}
+                      </div>
+                  )}
 
                   <div style={{ fontSize: '0.85rem', fontWeight: 'bold', lineHeight: '1.2', flex: 1 }}>{part.itemName}</div>
                   
@@ -646,20 +654,19 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 
               <div>
                  <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>IDENTIFICATION</h4>
-                 <div style={{ display: 'flex', gap: '10px' }}>
-                   <div style={{ flex: 2 }}>
-                       <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>RECORD NAME / DESCRIPTION:</label>
-                       <input name="tempName" value={editSpecs.tempName !== undefined ? editSpecs.tempName : activePart.itemName} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }} />
-                   </div>
-                 </div>
                  
-                 <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                 <div style={{ display: 'flex', gap: '10px' }}>
+                     <div style={{ flex: 2 }}>
+                         <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>RECORD NAME / DESCRIPTION:</label>
+                         <input name="tempName" value={editSpecs.tempName !== undefined ? editSpecs.tempName : activePart.itemName} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                     </div>
                      <div style={{ flex: 1 }}>
                          <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff' }}>ERP LEGACY ID (Internal):</label>
                          <input name="tempLegacyId" value={editSpecs.tempLegacyId !== undefined ? editSpecs.tempLegacyId : (activePart.legacyErpId === "PENDING" ? "" : activePart.legacyErpId)} onChange={handleSpecChange} placeholder="e.g. P-1234" style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box', textTransform: 'uppercase' }} />
                      </div>
                  </div>
 
+                 {/* 🚀 NEW: MULTI-CLIENT PRICING MATRIX */}
                  <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', marginTop: '15px' }}>
                     <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
                     
@@ -745,38 +752,58 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                  </div>
               </div>
 
-              {/* SOURCING */}
+              {/* SOURCING & WAREHOUSE */}
               {activePart.partClass === 'Inventory' && (
                   <div>
                     <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px', color: '#007bff' }}>LOGISTICS & SOURCING</h4>
+                    
+                    {/* 🚀 NEW: WAREHOUSE BIN LOCATION */}
+                    <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '15px', marginBottom: '15px' }}>
+                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px' }}>
+                            📍 WAREHOUSE BIN LOCATION (BARCODE/REF)
+                        </label>
+                        <input 
+                            name="binLocation" 
+                            value={editSpecs.binLocation || ""} 
+                            onChange={handleSpecChange} 
+                            placeholder="e.g. A1-B2-04" 
+                            style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', boxSizing: 'border-box', textTransform: 'uppercase', fontWeight: 'bold', fontSize: '1.1rem' }} 
+                        />
+                        <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '5px', fontStyle: 'italic' }}>
+                            Used by the Pick/Pack App to guide operators to the physical item location.
+                        </div>
+                    </div>
+
                     <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}><button onClick={() => setEditSpecs({...editSpecs, isInHouse: true})} style={{ flex: 1, padding: '10px', background: editSpecs.isInHouse ? '#000' : '#eee', color: editSpecs.isInHouse ? '#fff' : '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer' }}>IN-HOUSE</button><button onClick={() => setEditSpecs({...editSpecs, isInHouse: false})} style={{ flex: 1, padding: '10px', background: !editSpecs.isInHouse ? '#000' : '#eee', color: !editSpecs.isInHouse ? '#fff' : '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer' }}>OUTSOURCED</button></div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                       {editSpecs.isInHouse ? (
                         <>
                           <div style={{ display: 'flex', gap: '10px' }}>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROGRAM #:</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>RAW MAT:</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE PRICE ($):</label><input name="basePrice" type="number" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
+                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROGRAM #:</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
+                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>RAW MAT:</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
+                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE PRICE ($):</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
+                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE COST ($):</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
                           </div>
                         </>
                       ) : (
                         <>
                           <div style={{ display: 'flex', gap: '10px' }}>
                             {windowConfig.system.vendors?.includes(activeBrand) ? (
-                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}><option value="">SELECT VENDOR...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
+                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT VENDOR...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
                             ) : (
-                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><input name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
+                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><input name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
                             )}
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR ID:</label><input name="vendorId" value={editSpecs.vendorId || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
+                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff' }}>VENDOR PART # / SKU:</label><input name="vendorId" value={editSpecs.vendorId || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box' }} /></div>
                           </div>
                           <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between' }}>PURCHASE LINK (URL): {editSpecs.vendorUrl && <a href={editSpecs.vendorUrl.startsWith('http') ? editSpecs.vendorUrl : `https://${editSpecs.vendorUrl}`} target="_blank" rel="noreferrer" style={{color: '#007bff', textDecoration: 'none'}}>Open ↗</a>}</label><input name="vendorUrl" value={editSpecs.vendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between' }}>ALT ITEM LINK (URL): {editSpecs.altVendorUrl && <a href={editSpecs.altVendorUrl.startsWith('http') ? editSpecs.altVendorUrl : `https://${editSpecs.altVendorUrl}`} target="_blank" rel="noreferrer" style={{color: '#007bff', textDecoration: 'none'}}>Open ↗</a>}</label><input name="altVendorUrl" value={editSpecs.altVendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
+                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between' }}>PURCHASE LINK (URL): {editSpecs.vendorUrl && <a href={editSpecs.vendorUrl.startsWith('http') ? editSpecs.vendorUrl : `https://${editSpecs.vendorUrl}`} target="_blank" rel="noreferrer" style={{color: '#007bff', textDecoration: 'none'}}>Open ↗</a>}</label><input name="vendorUrl" value={editSpecs.vendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
+                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between' }}>ALT ITEM LINK (URL): {editSpecs.altVendorUrl && <a href={editSpecs.altVendorUrl.startsWith('http') ? editSpecs.altVendorUrl : `https://${editSpecs.altVendorUrl}`} target="_blank" rel="noreferrer" style={{color: '#007bff', textDecoration: 'none'}}>Open ↗</a>}</label><input name="altVendorUrl" value={editSpecs.altVendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
                           </div>
                           <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE COST ($):</label><input name="cost" type="number" value={editSpecs.cost || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>MOQ:</label><input name="moq" type="number" value={editSpecs.moq || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>LEAD (DAYS):</label><input name="leadTime" type="number" value={editSpecs.leadTime || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
+                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE PRICE ($):</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
+                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE COST ($):</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
+                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>MOQ:</label><input name="moq" type="number" value={editSpecs.moq || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
+                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>LEAD (DAYS):</label><input name="leadTime" type="number" value={editSpecs.leadTime || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
                           </div>
                         </>
                       )}
