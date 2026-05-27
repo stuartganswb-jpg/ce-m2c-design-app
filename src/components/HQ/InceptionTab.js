@@ -95,7 +95,8 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
           if (docSnap.exists()){
             const data = docSnap.data();
             if (data.collections) setDynamicCollections(data.collections);
-            if (data.productTypes) setDynamicProductTypes(data.productTypes);
+            // 🚀 FIX: Map exactly to "prodTypes" from the Master Library Database
+            if (data.prodTypes) setDynamicProductTypes(data.prodTypes);
           }
       });
       return () => unsubLists();
@@ -185,16 +186,17 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
 
   const toggleGroup = (groupName) => setExpandedGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }));
 
+  // 🚀 FIX: Automatically select the first item from the new dynamic array instead of hardcoded default
   const openEditor = (assembly = null) => {
     if (assembly) {
       setFormData({
         itemName: assembly.itemName || "", legacyErpId: assembly.legacyErpId === "PENDING" ? "" : (assembly.legacyErpId || ""),
-        collection: assembly.collection || "N/A", productType: assembly.productType || DEFAULT_PRODUCT_TYPES[0],
+        collection: assembly.collection || "N/A", productType: assembly.productType || dynamicProductTypes[0] || DEFAULT_PRODUCT_TYPES[0],
         project: assembly.project || "", description: assembly.description || ""
       });
       setActiveAssembly(assembly);
     } else {
-      setFormData({ itemName: "", legacyErpId: "", collection: "N/A", productType: DEFAULT_PRODUCT_TYPES[0], project: "", description: "" });
+      setFormData({ itemName: "", legacyErpId: "", collection: "N/A", productType: dynamicProductTypes[0] || DEFAULT_PRODUCT_TYPES[0], project: "", description: "" });
       setActiveAssembly(null);
     }
     setImageFile(null); setImageMode("UPLOAD"); setSelectedExistingImage(""); setIsEditing(true);
@@ -217,7 +219,8 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
     if (isAddingNewProductType && newProductTypeName.trim()){
         finalProductType = newProductTypeName.trim().toUpperCase();
         const updatedTypes = [...new Set([...dynamicProductTypes, finalProductType])];
-        setDoc(doc(db, "system", "master_lists"), { productTypes: updatedTypes }, { merge: true });
+        // 🚀 FIX: Save directly back to the database as "prodTypes"
+        setDoc(doc(db, "system", "master_lists"), { prodTypes: updatedTypes }, { merge: true });
     }
 
     let finalProject = formData.project;
@@ -295,7 +298,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
     } catch (err) { console.error(err); alert("Save failed."); }
   };
 
-  // --- 🚀 FIXED: TARGETS THE <canvas> INSIDE THE R3F CONTAINER ---
   const handleCaptureThumbnail = async () => {
       setIsCapturing(true);
       try {
@@ -684,7 +686,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                         )}
                         
                         {isCurrent3D && (
-                            <button onClick={handleCaptureThumbnail} disabled={isCapturing} style={{ padding: '8px 15px', background: '#ffc107', color: '#000', border: 'none', borderRadius: '20px', fontWeight: 'bold', cursor: isCapturing ? 'wait' : 'pointer', marginRight: '10px' }}>{isCapturing ? '📸 SAVING...' : '📸 CAPTURE THUMBNAIL'}</button>
+                            <button onClick={handleCaptureThumbnail} disabled={isCapturing} style={{ padding: '8px 15px', background: '#ffc107', color: '#000', border: 'none', borderRadius: '20px', fontWeight: 'bold', cursor: isCapturing ? 'wait' : 'marginRight: 10px' }}>{isCapturing ? '📸 SAVING...' : '📸 CAPTURE THUMBNAIL'}</button>
                         )}
                         <button onClick={() => { setIsCanvasMaximized(false); setIsAddingCallout(false); }} style={{ padding: '8px 20px', background: '#28a745', color: '#fff', border: 'none', borderRadius: '20px', fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer' }}>✅ DONE COMMENTING</button>
                      </div>
