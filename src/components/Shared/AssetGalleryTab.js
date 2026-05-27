@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, query, addDoc, doc, updateDoc, deleteDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import { ref, uploadBytesResumable, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [assets, setAssets] = useState([]);
@@ -11,17 +11,19 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);
     const [inhouseFinishes, setInhouseFinishes] = useState([]);
 
-    const [globalLists, setGlobalLists] = useState({ collections: [], prodTypes: [] });
+    const [globalLists, setGlobalLists] = useState({ collections: [], prodTypes: [], customers: [] });
     const [searchQuery, setSearchQuery] = useState('');
     
     const [activeAsset, setActiveAsset] = useState(null); 
     const [isUploading, setIsUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
 
-    // 🚀 NEW: Added customerPartId state
-    const [metaForm, setMetaForm] = useState({ name: '', collection: '', productType: '', patternId: '', finishId: '', customerPartId: '', notes: '', associatedParts: [], associatedFinishes: [] });
+    // 🚀 NEW: Replaced single customer string with dynamic mapping
+    const [metaForm, setMetaForm] = useState({ name: '', collection: '', productType: '', patternId: '', finishId: '', customerId: '', clientSku: '', notes: '', associatedParts: [], associatedFinishes: [] });
     const [uploadFile, setUploadFile] = useState(null);
     const fileInputRef = useRef(null);
+
+    const [downloadSku, setDownloadSku] = useState("");
 
     useEffect(() => {
         let unsub = null;
@@ -30,7 +32,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 if (docSnap.exists()) {
                     setGlobalLists({
                         collections: docSnap.data().collections || [],
-                        prodTypes: docSnap.data().prodTypes || []
+                        prodTypes: docSnap.data().prodTypes || [],
+                        customers: docSnap.data().customers || []
                     });
                     setMetaForm(prev => ({ 
                         ...prev, 
@@ -50,11 +53,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             unsub = onSnapshot(q, (snap) => {
                 if (!snap || !snap.docs) return;
                 let fetchedAssets = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
-                fetchedAssets.sort((a, b) => {
-                    const timeA = a.createdAt?.seconds || 0;
-                    const timeB = b.createdAt?.seconds || 0;
-                    return timeB - timeA; 
-                });
+                fetchedAssets.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
                 setAssets(fetchedAssets);
             });
         } catch (err) { console.error("Asset DB Error:", err); }
@@ -91,6 +90,37 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const safeAssets = Array.isArray(assets) ? assets : [];
     const allFinishes = [...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(outsourceFinishes)?outsourceFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])];
     
+    // 🚀 NEW: Aggregate Client SKUs dynamically from associated parts in the CPQ
+    const getAssetClientSKUs = (asset) => {
+        if (!asset) return [];
+        const skus = [];
+        
+        if (asset.customerId || asset.clientSku) {
+            skus.push({ customerId: asset.customerId || 'UNKNOWN', clientSku: asset.clientSku || asset.customerPartId || '' });
+        } else if (asset.customerPartId) { 
+            skus.push({ customerId: 'CLIENT', clientSku: asset.customerPartId });
+        }
+        
+        if (Array.isArray(asset.associatedParts)) {
+            asset.associatedParts.forEach(pId => {
+                const part = safeHqParts.find(p => p.id === pId);
+                if (part && Array.isArray(part.clientPricing)) {
+                    part.clientPricing.forEach(cp => {
+                        skus.push({ customerId: cp.customerId, clientSku: cp.clientSku });
+                    });
+                }
+            });
+        }
+        
+        const unique = [];
+        skus.forEach(s => {
+            if(s.clientSku && !unique.find(u => u.clientSku === s.clientSku && u.customerId === s.customerId)) {
+                unique.push(s);
+            }
+        });
+        return unique;
+    };
+
     const filteredAssets = safeAssets.filter(asset => {
         if (!searchQuery) return true;
         const q = String(searchQuery).toLowerCase();
@@ -98,7 +128,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
         const n = String(asset?.name || "").toLowerCase();
         const p = String(asset?.patternId || "").toLowerCase();
         const f = String(asset?.finishId || "").toLowerCase();
-        const custId = String(asset?.customerPartId || "").toLowerCase(); // 🚀 INDEX CUSTOMER ID
+        const custId = String(asset?.customerId || "").toLowerCase(); 
+        const sku = String(asset?.clientSku || asset?.customerPartId || "").toLowerCase(); 
         const c = String(asset?.collection || asset?.category || "").toLowerCase();
         const t = String(asset?.productType || "").toLowerCase();
         const notes = String(asset?.notes || "").toLowerCase();
@@ -109,13 +140,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             return JSON.stringify(partObj).toLowerCase().includes(q);
         });
 
-        const matchFinishes = Array.isArray(asset?.associatedFinishes) && asset.associatedFinishes.some(finishId => {
-            const finObj = allFinishes.find(fin => fin.id === finishId);
-            if (!finObj) return String(finishId).toLowerCase().includes(q);
-            return JSON.stringify(finObj).toLowerCase().includes(q);
-        });
-
-        return n.includes(q) || p.includes(q) || f.includes(q) || custId.includes(q) || c.includes(q) || t.includes(q) || notes.includes(q) || matchParts || matchFinishes;
+        return n.includes(q) || p.includes(q) || f.includes(q) || custId.includes(q) || sku.includes(q) || c.includes(q) || t.includes(q) || notes.includes(q) || matchParts;
     });
 
     const MAX_DISPLAY = 100;
@@ -127,23 +152,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             const img = new Image();
             img.onload = () => {
                 try {
-                    const hiCanvas = document.createElement('canvas');
-                    const hiCtx = hiCanvas.getContext('2d');
-                    hiCanvas.width = img.width;
-                    hiCanvas.height = img.height;
-                    hiCtx.drawImage(img, 0, 0);
-
-                    // 1. Burn Internal Watermark Bottom Left
-                    const hiFontSize = Math.max(16, Math.floor(img.height * 0.03)); 
-                    hiCtx.font = `bold ${hiFontSize}px monospace`;
-                    const hiPad = hiFontSize * 0.4;
-                    const hiTxtW = hiCtx.measureText(textStr).width;
-                    hiCtx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-                    hiCtx.fillRect(hiPad, img.height - hiFontSize - hiPad * 3, hiTxtW + hiPad * 2, hiFontSize + hiPad * 2);
-                    hiCtx.fillStyle = '#333333';
-                    hiCtx.textBaseline = 'top';
-                    hiCtx.fillText(textStr, hiPad * 2, img.height - hiFontSize - hiPad * 1.5);
-
+                    // 🚀 The Hi-Res file stays completely clean and untouched
+                    
                     const thCanvas = document.createElement('canvas');
                     const thCtx = thCanvas.getContext('2d');
                     thCanvas.width = 250;
@@ -153,11 +163,24 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                     const sy = (img.height - minDim) / 2;
                     thCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 250, 250);
 
-                    hiCanvas.toBlob((hiBlob) => {
-                        thCanvas.toBlob((thBlob) => {
-                            resolve({ hiResBlob: hiBlob, thumbBlob: thBlob });
-                        }, 'image/png', 0.9);
-                    }, 'image/png', 1.0);
+                    // 🚀 Burn Internal Watermark into LOWER RIGHT of Thumbnail
+                    const thFontSize = 14;
+                    thCtx.font = `bold ${thFontSize}px monospace`;
+                    const thPad = thFontSize * 0.4;
+                    const thTxtW = thCtx.measureText(textStr).width;
+                    
+                    const thBoxX = 250 - thTxtW - thPad * 3;
+                    const thBoxY = 250 - thFontSize - thPad * 3;
+
+                    thCtx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+                    thCtx.fillRect(thBoxX, thBoxY, thTxtW + thPad * 2, thFontSize + thPad * 2);
+                    thCtx.fillStyle = '#333333';
+                    thCtx.textBaseline = 'top';
+                    thCtx.fillText(textStr, thBoxX + thPad, thBoxY + thPad * 1.5);
+
+                    thCanvas.toBlob((thBlob) => {
+                        resolve({ hiResBlob: file, thumbBlob: thBlob });
+                    }, 'image/png', 0.9);
 
                 } catch (err) { resolve({ hiResBlob: file, thumbBlob: null }); }
             };
@@ -166,9 +189,9 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
         });
     };
 
-    // 🚀 NEW: DYNAMIC CLIENT WATERMARK ENGINE (Bottom Right Corner)
-    const downloadClientWatermark = (url, clientText) => {
-        if (!clientText) return alert("No Customer Part ID mapped to this asset.");
+    // 🚀 NEW: DYNAMIC ON-THE-FLY DOWNLOAD WATERMARK
+    const handleDynamicDownload = (url, textStr, color = '#333333', prefix = 'HQ') => {
+        if (!textStr) return alert("Missing ID or SKU for watermark.");
         
         const img = new Image();
         img.crossOrigin = "anonymous";
@@ -180,32 +203,31 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 cvs.height = img.height;
                 ctx.drawImage(img, 0, 0);
 
-                const fontSize = Math.max(16, Math.floor(img.height * 0.03));
+                const fontSize = Math.max(18, Math.floor(img.height * 0.035));
                 ctx.font = `bold ${fontSize}px monospace`;
                 const pad = fontSize * 0.4;
-                const txtW = ctx.measureText(clientText).width;
+                const txtW = ctx.measureText(textStr).width;
 
-                // Place in Bottom Right Corner so it doesn't overlap the internal ID
                 const boxX = img.width - txtW - pad * 3;
                 const boxY = img.height - fontSize - pad * 3;
 
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
                 ctx.fillRect(boxX, boxY, txtW + pad * 2, fontSize + pad * 2);
-                ctx.fillStyle = '#007bff'; // Client Blue
+                ctx.fillStyle = color;
                 ctx.textBaseline = 'top';
-                ctx.fillText(clientText, boxX + pad, boxY + pad * 1.5);
+                ctx.fillText(textStr, boxX + pad, boxY + pad * 1.5);
 
                 cvs.toBlob(blob => {
                     const a = document.createElement('a');
                     a.href = URL.createObjectURL(blob);
-                    a.download = `${clientText.replace(/[^A-Za-z0-9]/g, '_')}_CLIENT_VIEW.png`;
+                    a.download = `${prefix}_${textStr.replace(/[^A-Za-z0-9]/g, '_')}.png`;
                     a.click();
                 }, 'image/png', 1.0);
             } catch (err) {
-                alert("Canvas Error. Try downloading the original instead.");
+                alert("Canvas Error. Image might be too large or blocked. Right-click and save original instead.");
             }
         };
-        img.onerror = () => alert("CORS Security blocked this download. Please right-click the image and save.");
+        img.onerror = () => alert("Security blocked this download. Please right-click the image and save.");
         img.src = url;
     };
 
@@ -258,7 +280,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 productType: metaForm.productType,
                 patternId: String(metaForm.patternId).toUpperCase(),
                 finishId: String(metaForm.finishId).toUpperCase(),
-                customerPartId: String(metaForm.customerPartId).toUpperCase(), // 🚀 NEW
+                customerId: metaForm.customerId || '',
+                clientSku: String(metaForm.clientSku).toUpperCase(),
                 notes: metaForm.notes,
                 associatedParts: Array.isArray(metaForm.associatedParts) ? metaForm.associatedParts : [],
                 associatedFinishes: Array.isArray(metaForm.associatedFinishes) ? metaForm.associatedFinishes : [],
@@ -271,7 +294,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             }, { merge: true });
 
             setUploadProgress(100);
-            setMetaForm({ name: '', collection: globalLists.collections[0]||'', productType: globalLists.prodTypes[0]||'', patternId: '', finishId: '', customerPartId: '', notes: '', associatedParts: [], associatedFinishes: [] });
+            setMetaForm({ name: '', collection: globalLists.collections[0]||'', productType: globalLists.prodTypes[0]||'', patternId: '', finishId: '', customerId: '', clientSku: '', notes: '', associatedParts: [], associatedFinishes: [] });
             setUploadFile(null);
             if (fileInputRef.current) fileInputRef.current.value = '';
             setTimeout(() => { setIsUploading(false); setUploadProgress(0); }, 500);
@@ -288,7 +311,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 productType: metaForm.productType,
                 patternId: String(metaForm.patternId).toUpperCase(),
                 finishId: String(metaForm.finishId).toUpperCase(),
-                customerPartId: String(metaForm.customerPartId).toUpperCase(), // 🚀 NEW
+                customerId: metaForm.customerId || '',
+                clientSku: String(metaForm.clientSku).toUpperCase(),
                 notes: metaForm.notes,
                 associatedParts: Array.isArray(metaForm.associatedParts) ? metaForm.associatedParts : [],
                 associatedFinishes: Array.isArray(metaForm.associatedFinishes) ? metaForm.associatedFinishes : []
@@ -316,17 +340,17 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             productType: asset?.productType || globalLists.prodTypes[0] || '',
             patternId: asset?.patternId || '',
             finishId: asset?.finishId || '',
-            customerPartId: asset?.customerPartId || '', // 🚀 NEW
+            customerId: asset?.customerId || '',
+            clientSku: asset?.clientSku || asset?.customerPartId || '',
             notes: asset?.notes || '',
             associatedParts: Array.isArray(asset?.associatedParts) ? asset.associatedParts : [],
             associatedFinishes: Array.isArray(asset?.associatedFinishes) ? asset.associatedFinishes : []
         });
         setActiveAsset(asset);
-    };
-
-    const renderSafeDate = (asset) => {
-        if (!asset || !asset.createdAt || !asset.createdAt.seconds) return 'Unknown Date';
-        return new Date(asset.createdAt.seconds * 1000).toLocaleDateString();
+        
+        const skus = getAssetClientSKUs(asset);
+        if(skus.length > 0) setDownloadSku(skus[0].clientSku);
+        else setDownloadSku('');
     };
 
     return (
@@ -370,9 +394,18 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                         </div>
                     </div>
 
-                    <div>
-                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CUSTOMER PART ID (Optional Client Code)</label>
-                        <input type="text" placeholder="e.g. CUST-999" value={metaForm.customerPartId} onChange={e => setMetaForm({...metaForm, customerPartId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box' }} />
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                        <div style={{ flex: 1 }}>
+                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CUSTOMER</label>
+                            <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold' }}>
+                                <option value="">Select...</option>
+                                {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CLIENT SKU</label>
+                            <input type="text" placeholder="e.g. CUST-999" value={metaForm.clientSku || ''} onChange={e => setMetaForm({...metaForm, clientSku: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box' }} />
+                        </div>
                     </div>
 
                     <div style={{ display: 'flex', gap: '10px' }}>
@@ -475,20 +508,19 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                             displayAssets.map(asset => (
                                 <div key={asset.id} onClick={() => openModal(asset)} style={{ border: '2px solid #ccc', borderRadius: '8px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', background: '#f8f9fa' }} onMouseOver={e => e.currentTarget.style.borderColor = '#6f42c1'} onMouseOut={e => e.currentTarget.style.borderColor = '#ccc'}>
                                     
-                                    {/* The CSS Tag acts as a fallback for legacy assets, but new ones have it burned directly into the image */}
                                     <div style={{ position: 'relative', width: '100%', height: '200px', background: '#e5e5e5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                         {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'2rem'}}>🖼️</span>}
                                         
                                         {/* Fallback label if burning failed */}
                                         {(!asset.thumbnailUrl || !asset.url) && (
-                                            <div style={{ position: 'absolute', bottom: '8px', left: '8px', color: '#333', fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 'bold', background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #ccc', zIndex: 2 }}>
+                                            <div style={{ position: 'absolute', bottom: '8px', right: '8px', color: '#333', fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 'bold', background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #ccc', zIndex: 2 }}>
                                                 {String(asset.patternId || '')}{asset.finishId ? `/${String(asset.finishId)}` : ''}
                                             </div>
                                         )}
                                         {/* Overlay Customer ID Badge */}
-                                        {asset.customerPartId && (
+                                        {(asset.clientSku || asset.customerPartId) && (
                                             <div style={{ position: 'absolute', top: '8px', right: '8px', color: '#fff', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 'bold', background: '#28a745', padding: '2px 6px', borderRadius: '4px', zIndex: 2 }}>
-                                                CUST: {String(asset.customerPartId)}
+                                                CUST: {String(asset.clientSku || asset.customerPartId)}
                                             </div>
                                         )}
                                     </div>
@@ -507,99 +539,133 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             </div>
 
             {/* HIGH-RES VIEW & METADATA MODAL */}
-            {activeAsset && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-                    <div style={{ background: '#fff', border: '4px solid #000', width: '90%', maxWidth: '1200px', height: '90vh', display: 'flex', boxShadow: '20px 20px 0 #000', overflow: 'hidden' }}>
-                        
-                        <div style={{ flex: 2, background: '#e5e5e5', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-                            <div style={{ flex: 1, position: 'relative', overflow: 'auto', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <img src={activeAsset.originalUrl || activeAsset.url} alt={activeAsset.patternId} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }} />
-                            </div>
+            {activeAsset && (() => {
+                const availableClientSKUs = getAssetClientSKUs(activeAsset);
+
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                        <div style={{ background: '#fff', border: '4px solid #000', width: '90%', maxWidth: '1400px', height: '90vh', display: 'flex', boxShadow: '20px 20px 0 #000', overflow: 'hidden' }}>
                             
-                            {/* 🚀 DYNAMIC DOWNLOAD BAR */}
-                            <div style={{ padding: '15px', background: '#000', display: 'flex', gap: '15px', justifyContent: 'center' }}>
-                                <button onClick={() => window.open(activeAsset.originalUrl || activeAsset.url, '_blank')} style={{ padding: '10px 20px', background: '#fff', color: '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer', borderRadius: '4px' }}>
-                                    📥 DL ORIGINAL (PLM ID)
-                                </button>
-                                <button 
-                                    onClick={() => downloadClientWatermark(activeAsset.originalUrl || activeAsset.url, activeAsset.customerPartId || activeAsset.patternId)} 
-                                    style={{ padding: '10px 20px', background: '#007bff', color: '#fff', border: '2px solid #0056b3', fontWeight: 'bold', cursor: 'pointer', borderRadius: '4px' }}
-                                >
-                                    📥 DL CUSTOMER (CUST ID WATERMARK)
-                                </button>
-                            </div>
-                        </div>
-
-                        <div style={{ flex: 1, borderLeft: '4px solid #000', padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa', overflowY: 'auto' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '15px' }}>
-                                <h2 style={{ margin: 0, color: '#6f42c1' }}>ASSET METADATA</h2>
-                                <button onClick={() => setActiveAsset(null)} style={{ background: 'none', border: 'none', fontSize: '2rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
-                            </div>
-
-                            <div style={{ display: 'flex', gap: '10px' }}>
-                                <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>PATTERN ID</label>
-                                    <input type="text" value={metaForm.patternId} onChange={e => setMetaForm({...metaForm, patternId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase' }} />
+                            <div style={{ flex: 2, background: '#e5e5e5', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+                                <div style={{ flex: 1, position: 'relative', overflow: 'auto', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <img src={activeAsset.originalUrl || activeAsset.url} alt={activeAsset.patternId} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }} />
                                 </div>
-                                <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>FINISH ID</label>
-                                    <input type="text" value={metaForm.finishId} onChange={e => setMetaForm({...metaForm, finishId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase' }} />
-                                </div>
-                            </div>
-                            
-                            <div>
-                                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#28a745' }}>CUSTOMER PART ID (Client Facing)</label>
-                                <input type="text" value={metaForm.customerPartId} onChange={e => setMetaForm({...metaForm, customerPartId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase' }} />
-                            </div>
+                                
+                                {/* 🚀 DYNAMIC DOWNLOAD BAR */}
+                                <div style={{ padding: '15px', background: '#000', display: 'flex', gap: '15px', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <button onClick={() => window.open(activeAsset.originalUrl || activeAsset.url, '_blank')} style={{ padding: '10px 15px', background: '#fff', color: '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer', borderRadius: '4px' }}>
+                                        📥 DL ORIGINAL (CLEAN)
+                                    </button>
+                                    
+                                    <button 
+                                        onClick={() => handleDynamicDownload(activeAsset.originalUrl || activeAsset.url, `${activeAsset.patternId || 'UNKNOWN'}${activeAsset.finishId ? `/${activeAsset.finishId}` : ''}`, '#333333', 'HQ')} 
+                                        style={{ padding: '10px 15px', background: '#f39c12', color: '#fff', border: '2px solid #e67e22', fontWeight: 'bold', cursor: 'pointer', borderRadius: '4px' }}
+                                    >
+                                        📥 DL HQ (BURN ID)
+                                    </button>
 
-                            <div style={{ display: 'flex', gap: '10px' }}>
-                                <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>COLLECTION</label>
-                                    <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }}>
-                                        {globalLists.collections.map(c => <option key={c} value={c}>{c}</option>)}
-                                    </select>
-                                </div>
-                                <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>PROD TYPE</label>
-                                    <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }}>
-                                        {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div>
-                                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>SEARCHABLE OPEN NOTES</label>
-                                <textarea value={metaForm.notes} onChange={e => setMetaForm({...metaForm, notes: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', minHeight: '80px', fontFamily: 'monospace', boxSizing: 'border-box' }} />
-                            </div>
-
-                            <div>
-                                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>MASTER LIBRARY ASSOCIATIONS</label>
-                                {metaForm.associatedParts.length === 0 ? (
-                                    <div style={{ fontSize: '0.8rem', color: '#999', fontStyle: 'italic', padding: '10px 0' }}>No parts linked.</div>
-                                ) : (
-                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', padding: '10px 0' }}>
-                                        {metaForm.associatedParts.map(partId => (
-                                            <span key={partId} style={{ background: '#007bff', color: '#fff', padding: '4px 8px', fontSize: '0.8rem', borderRadius: '4px', fontWeight: 'bold' }}>
-                                                {String(safeHqParts.find(p => p.id === partId)?.itemName || partId)}
-                                                <span onClick={() => setMetaForm(prev => ({...prev, associatedParts: prev.associatedParts.filter(id => id !== partId)}))} style={{ cursor: 'pointer', marginLeft: '5px' }}>×</span>
-                                            </span>
-                                        ))}
+                                    <div style={{ display: 'flex', border: '2px solid #007bff', borderRadius: '4px', overflow: 'hidden' }}>
+                                        <select 
+                                            value={downloadSku} 
+                                            onChange={e => setDownloadSku(e.target.value)}
+                                            style={{ padding: '10px', border: 'none', outline: 'none', fontWeight: 'bold', background: '#e9ecef', maxWidth: '250px', cursor: 'pointer' }}
+                                        >
+                                            {availableClientSKUs.length === 0 && <option value="">-- No Linked Client SKUs --</option>}
+                                            {availableClientSKUs.map(s => <option key={s.clientSku} value={s.clientSku}>{s.customerId}: {s.clientSku}</option>)}
+                                        </select>
+                                        <button 
+                                            onClick={() => {
+                                                if(!downloadSku) return alert("Select a Client SKU from the dropdown first.");
+                                                handleDynamicDownload(activeAsset.originalUrl || activeAsset.url, downloadSku, '#007bff', 'CLIENT');
+                                            }} 
+                                            style={{ padding: '10px 15px', background: '#007bff', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}
+                                        >
+                                            📥 DL CLIENT SKU
+                                        </button>
                                     </div>
-                                )}
-                            </div>
-
-                            <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                <div style={{ fontSize: '0.7rem', color: '#999', textAlign: 'center' }}>
-                                    Uploaded by {String(activeAsset?.uploadedBy || 'Unknown')} on {new Date(activeAsset?.createdAt?.seconds * 1000).toLocaleDateString()}
                                 </div>
-                                <button onClick={handleUpdateMetadata} style={{ padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '1rem', border: '2px solid #000', cursor: 'pointer', boxShadow: '3px 3px 0 #000' }}>💾 SAVE METADATA CHANGES</button>
-                                <button onClick={() => handleDeleteAsset(activeAsset)} style={{ padding: '15px', background: 'transparent', color: '#d9534f', fontWeight: 'bold', fontSize: '1rem', border: '2px solid #d9534f', cursor: 'pointer' }}>🗑️ PERMANENTLY DELETE ASSET</button>
                             </div>
-                        </div>
 
+                            <div style={{ flex: 1, borderLeft: '4px solid #000', padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa', overflowY: 'auto' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '15px' }}>
+                                    <h2 style={{ margin: 0, color: '#6f42c1' }}>ASSET METADATA</h2>
+                                    <button onClick={() => setActiveAsset(null)} style={{ background: 'none', border: 'none', fontSize: '2rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                                </div>
+
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>PATTERN ID</label>
+                                        <input type="text" value={metaForm.patternId} onChange={e => setMetaForm({...metaForm, patternId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase' }} />
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>FINISH ID</label>
+                                        <input type="text" value={metaForm.finishId} onChange={e => setMetaForm({...metaForm, finishId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase' }} />
+                                    </div>
+                                </div>
+                                
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#28a745' }}>CUSTOMER</label>
+                                        <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold' }}>
+                                            <option value="">Select...</option>
+                                            {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#28a745' }}>CLIENT SKU</label>
+                                        <input type="text" value={metaForm.clientSku || ''} onChange={e => setMetaForm({...metaForm, clientSku: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase' }} />
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>COLLECTION</label>
+                                        <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                            {globalLists.collections.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>PROD TYPE</label>
+                                        <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                            {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>SEARCHABLE OPEN NOTES</label>
+                                    <textarea value={metaForm.notes} onChange={e => setMetaForm({...metaForm, notes: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', minHeight: '80px', fontFamily: 'monospace', boxSizing: 'border-box' }} />
+                                </div>
+
+                                <div>
+                                    <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>MASTER LIBRARY ASSOCIATIONS</label>
+                                    {metaForm.associatedParts.length === 0 ? (
+                                        <div style={{ fontSize: '0.8rem', color: '#999', fontStyle: 'italic', padding: '10px 0' }}>No parts linked.</div>
+                                    ) : (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', padding: '10px 0' }}>
+                                            {metaForm.associatedParts.map(partId => (
+                                                <span key={partId} style={{ background: '#007bff', color: '#fff', padding: '4px 8px', fontSize: '0.8rem', borderRadius: '4px', fontWeight: 'bold' }}>
+                                                    {String(safeHqParts.find(p => p.id === partId)?.itemName || partId)}
+                                                    <span onClick={() => setMetaForm(prev => ({...prev, associatedParts: prev.associatedParts.filter(id => id !== partId)}))} style={{ cursor: 'pointer', marginLeft: '5px' }}>×</span>
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    <div style={{ fontSize: '0.7rem', color: '#999', textAlign: 'center' }}>
+                                        Uploaded by {String(activeAsset?.uploadedBy || 'Unknown')} on {new Date(activeAsset?.createdAt?.seconds * 1000).toLocaleDateString()}
+                                    </div>
+                                    <button onClick={handleUpdateMetadata} style={{ padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '1rem', border: '2px solid #000', cursor: 'pointer', boxShadow: '3px 3px 0 #000' }}>💾 SAVE METADATA CHANGES</button>
+                                    <button onClick={() => handleDeleteAsset(activeAsset)} style={{ padding: '15px', background: 'transparent', color: '#d9534f', fontWeight: 'bold', fontSize: '1rem', border: '2px solid #d9534f', cursor: 'pointer' }}>🗑️ PERMANENTLY DELETE ASSET</button>
+                                </div>
+                            </div>
+
+                        </div>
                     </div>
-                </div>
-            )}
+                );
+            })()}
 
         </div>
     );
