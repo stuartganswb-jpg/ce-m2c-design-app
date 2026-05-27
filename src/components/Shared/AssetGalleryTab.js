@@ -511,12 +511,11 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                     <div style={{ position: 'relative', width: '100%', height: '200px', background: '#e5e5e5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                         {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'2rem'}}>🖼️</span>}
                                         
-                                        {/* Fallback label if burning failed */}
-                                        {(!asset.thumbnailUrl || !asset.url) && (
-                                            <div style={{ position: 'absolute', bottom: '8px', right: '8px', color: '#333', fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 'bold', background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #ccc', zIndex: 2 }}>
-                                                {String(asset.patternId || '')}{asset.finishId ? `/${String(asset.finishId)}` : ''}
-                                            </div>
-                                        )}
+                                        {/* 🚀 THE FIX: ALWAYS SHOW PATTERN/FINISH ID ON BOTTOM LEFT FOR ALL IMAGES */}
+                                        <div style={{ position: 'absolute', bottom: '8px', left: '8px', color: '#333', fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 'bold', background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #ccc', zIndex: 2 }}>
+                                            {String(asset.patternId || '')}{asset.finishId ? `/${String(asset.finishId)}` : ''}
+                                        </div>
+                                        
                                         {/* Overlay Customer ID Badge */}
                                         {(asset.clientSku || asset.customerPartId) && (
                                             <div style={{ position: 'absolute', top: '8px', right: '8px', color: '#fff', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 'bold', background: '#28a745', padding: '2px 6px', borderRadius: '4px', zIndex: 2 }}>
