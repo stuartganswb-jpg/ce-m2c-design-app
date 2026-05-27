@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot } from "firebase/firestore";
 
 const FloorAssetViewer = ({ activeBrand }) => {
     const [assets, setAssets] = useState([]);
@@ -8,8 +8,7 @@ const FloorAssetViewer = ({ activeBrand }) => {
     const [searchQuery, setSearchQuery] = useState('');
     
     const [activeAsset, setActiveAsset] = useState(null);
-    const [instructions, setInstructions] = useState('');
-    const [isSaving, setIsSaving] = useState(false);
+    const [isZoomed, setIsZoomed] = useState(false); // 🚀 NEW: Image Zoom state
 
     // 1. Fetch all Global Assets (Read-Only)
     useEffect(() => {
@@ -44,28 +43,8 @@ const FloorAssetViewer = ({ activeBrand }) => {
     });
 
     const openModal = (asset) => {
+        setIsZoomed(false); // Reset zoom when opening a new image
         setActiveAsset(asset);
-        // Find the matching recipe based on the asset's finish ID
-        const linkedRecipe = recipes.find(r => r.code === asset.finishId);
-        // Load existing instructions if they exist, otherwise blank
-        setInstructions(linkedRecipe?.instructions || '');
-    };
-
-    const handleSaveInstructions = async () => {
-        const linkedRecipe = recipes.find(r => r.code === activeAsset.finishId);
-        if (!linkedRecipe) {
-            return alert("No recipe built for this Finish ID yet. Please build the recipe first in the 'Recipes' tab.");
-        }
-        
-        setIsSaving(true);
-        try {
-            await updateDoc(doc(db, "fin_recipes", linkedRecipe.code), { instructions });
-            setTimeout(() => setIsSaving(false), 800);
-        } catch (error) {
-            console.error("Failed to save instructions:", error);
-            alert("Error saving instructions.");
-            setIsSaving(false);
-        }
     };
 
     return (
@@ -104,7 +83,7 @@ const FloorAssetViewer = ({ activeBrand }) => {
                                 <div style={{ position: 'relative', width: '100%', height: '220px', background: '#e5e5e5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                     {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'2rem'}}>🖼️</span>}
                                     
-                                    {/* 🚀 ADDED TO FINISHING VIEWER: THE BOTTOM-LEFT WATERMARK BADGE */}
+                                    {/* 🚀 THE BOTTOM-LEFT WATERMARK BADGE */}
                                     <div style={{ position: 'absolute', bottom: '8px', left: '8px', color: '#333', fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 'bold', background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #ccc', zIndex: 2 }}>
                                         {String(asset.patternId || '')}{asset.finishId ? `/${String(asset.finishId)}` : ''}
                                     </div>
@@ -135,9 +114,25 @@ const FloorAssetViewer = ({ activeBrand }) => {
                     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
                         <div style={{ background: '#fff', border: '4px solid #000', width: '95%', maxWidth: '1400px', height: '90vh', display: 'flex', boxShadow: '20px 20px 0 #000', overflow: 'hidden' }}>
                             
-                            {/* LEFT: FULL SIZE IMAGE */}
-                            <div style={{ flex: 1.5, background: '#e5e5e5', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-                                <img src={activeAsset.originalUrl || activeAsset.url} alt="Master Reference" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 10px 30px rgba(0,0,0,0.3)', border: '2px solid #ccc' }} />
+                            {/* 🚀 LEFT: FULL SIZE IMAGE (NOW WITH ZOOM CROP) */}
+                            <div 
+                                style={{ flex: 1.5, background: '#e5e5e5', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', position: 'relative', overflow: 'hidden', cursor: isZoomed ? 'zoom-out' : 'zoom-in' }}
+                                onClick={() => setIsZoomed(!isZoomed)}
+                            >
+                                <img 
+                                    src={activeAsset.originalUrl || activeAsset.url} 
+                                    alt="Master Reference" 
+                                    style={{ 
+                                        maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 10px 30px rgba(0,0,0,0.3)', border: '2px solid #ccc',
+                                        transform: isZoomed ? 'scale(2)' : 'scale(1)', transition: 'transform 0.25s ease-in-out'
+                                    }} 
+                                />
+                                
+                                {!isZoomed && (
+                                    <div style={{ position: 'absolute', top: '20px', right: '20px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '8px 12px', borderRadius: '4px', fontSize: '0.9rem', fontWeight: 'bold', pointerEvents: 'none' }}>
+                                        🔍 CLICK TO CROP / ZOOM
+                                    </div>
+                                )}
                             </div>
 
                             {/* RIGHT: RECIPE & INSTRUCTIONS PANEL */}
@@ -147,7 +142,7 @@ const FloorAssetViewer = ({ activeBrand }) => {
                                         <h2 style={{ margin: 0, color: '#CC6600', fontSize: '2rem' }}>{activeAsset.finishId || 'NO FINISH ID'}</h2>
                                         <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#666', marginTop: '5px' }}>REFERENCE PART: {activeAsset.patternId || 'N/A'}</div>
                                     </div>
-                                    <button onClick={() => setActiveAsset(null)} style={{ background: '#000', color: '#fff', border: 'none', fontSize: '1.5rem', fontWeight: 'bold', width: '40px', height: '40px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+                                    <button onClick={() => { setActiveAsset(null); setIsZoomed(false); }} style={{ background: '#000', color: '#fff', border: 'none', fontSize: '1.5rem', fontWeight: 'bold', width: '40px', height: '40px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
                                 </div>
 
                                 {/* RECIPE DATA */}
@@ -170,27 +165,15 @@ const FloorAssetViewer = ({ activeBrand }) => {
                                     )}
                                 </div>
 
-                                {/* FLOOR INSTRUCTIONS (SOP) */}
-                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                                    <h3 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #ccc', paddingBottom: '5px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <span>📋 APPLICATION INSTRUCTIONS</span>
+                                {/* 🚀 UPDATED: FLOOR INSTRUCTIONS (MASSIVE READ-ONLY VIEW) */}
+                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#fff', border: '2px solid #ccc', padding: '20px' }}>
+                                    <h3 style={{ margin: '0 0 15px 0', borderBottom: '2px solid #ccc', paddingBottom: '10px', color: '#000', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        📋 APPLICATION INSTRUCTIONS
                                     </h3>
                                     
-                                    <textarea 
-                                        value={instructions}
-                                        onChange={(e) => setInstructions(e.target.value)}
-                                        placeholder={linkedRecipe ? "Type step-by-step application instructions here (e.g. 'Scuff sand with 400 grit before applying S2...')" : "Create a recipe profile before adding instructions."}
-                                        disabled={!linkedRecipe}
-                                        style={{ flex: 1, padding: '15px', border: '2px solid #000', fontSize: '1rem', fontFamily: 'monospace', resize: 'none', background: !linkedRecipe ? '#eee' : '#fff', boxSizing: 'border-box' }}
-                                    />
-                                    
-                                    <button 
-                                        onClick={handleSaveInstructions} 
-                                        disabled={!linkedRecipe}
-                                        style={{ marginTop: '15px', padding: '15px', background: isSaving ? '#28a745' : (linkedRecipe ? '#000' : '#ccc'), color: '#fff', border: 'none', fontSize: '1.2rem', fontWeight: 'bold', cursor: linkedRecipe ? 'pointer' : 'not-allowed', transition: '0.2s', boxShadow: '4px 4px 0 rgba(0,0,0,0.2)' }}
-                                    >
-                                        {isSaving ? '✓ SAVED' : '💾 SAVE INSTRUCTIONS'}
-                                    </button>
+                                    <div style={{ flex: 1, fontSize: '1.1rem', fontFamily: 'monospace', whiteSpace: 'pre-wrap', overflowY: 'auto', color: linkedRecipe?.instructions ? '#000' : '#888', lineHeight: '1.6' }}>
+                                        {linkedRecipe?.instructions || "No finishing instructions have been saved for this recipe yet. Instructions are entered via the Master Recipe Builder tab."}
+                                    </div>
                                 </div>
 
                             </div>

@@ -9,6 +9,7 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
         {step:1, color:'', app:'Sprayed'}, {step:2, color:'', app:'None'}, 
         {step:3, color:'', app:'None'}, {step:4, color:'', app:'None'}, {step:5, color:'', app:'None'}
     ]);
+    const [instructions, setInstructions] = useState(""); // 🚀 NEW: Instructions state
     const [base, setBase] = useState("");
     const [cat, setCat] = useState("");
     const [rBase, setRBase] = useState("");
@@ -23,14 +24,17 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
         if(activeSteps.length === 0) return alert("You must define at least one step and select a color.");
         
         const cleanedSteps = activeSteps.map((s, idx) => ({ ...s, step: idx + 1 }));
-        await setDoc(doc(db, "fin_recipes", safeCode), { code: safeCode, steps: cleanedSteps });
+        // 🚀 Save instructions to the database payload
+        await setDoc(doc(db, "fin_recipes", safeCode), { code: safeCode, steps: cleanedSteps, instructions });
         if (writeLog) writeLog(`Updated Recipe: ${safeCode}`, 'recipes');
         setRCode(""); 
+        setInstructions(""); 
         setSteps([{step:1, color:'', app:'Sprayed'}, {step:2, color:'', app:'None'}, {step:3, color:'', app:'None'}, {step:4, color:'', app:'None'}, {step:5, color:'', app:'None'}]);
     };
 
     const handleEditRecipe = (r) => {
         setRCode(r.code);
+        setInstructions(r.instructions || ""); // 🚀 Load existing instructions
         let loadedSteps = r.steps?.map(s => ({ ...s })) || [];
         while (loadedSteps.length < 5) loadedSteps.push({ step: loadedSteps.length + 1, color: '', app: 'None' });
         setSteps(loadedSteps);
@@ -44,7 +48,6 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
         setBase(""); setCat(""); setRBase(""); setRCat("");
     };
 
-    // NEW: Handle Editing Paint Profiles
     const handleEditProfile = (p) => {
         setBase(p.base || "");
         setCat(p.cat || "");
@@ -87,6 +90,18 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
                         ))}
                     </div>
                     <button onClick={addStepRow} style={{ width: '100%', padding: '10px', background: '#f4f4f4', color: '#666', fontWeight: 'bold', border: '2px dashed #ccc', marginTop: '15px', cursor: 'pointer' }}>+ ADD ANOTHER STEP</button>
+                    
+                    {/* 🚀 NEW: Instructions Input Block */}
+                    <div style={{ marginTop: '15px', borderTop: '2px solid #eee', paddingTop: '15px' }}>
+                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#CC6600', display: 'block', marginBottom: '5px' }}>📋 FLOOR APPLICATION INSTRUCTIONS</label>
+                        <textarea 
+                            value={instructions} 
+                            onChange={e => setInstructions(e.target.value)} 
+                            placeholder="Type step-by-step physical SOP instructions here (e.g. Scuff sand with 400 grit before applying step 2...)" 
+                            style={{ width: '100%', padding: '10px', boxSizing: 'border-box', border: '1px solid #ccc', minHeight: '80px', fontFamily: 'monospace', resize: 'vertical' }}
+                        />
+                    </div>
+
                     <button onClick={handleSaveRecipe} style={{ ...btnStyle, width: '100%', marginTop: '15px' }}>SAVE RECIPE</button>
                 </div>
 
@@ -128,6 +143,13 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
                                         <b>S{st.step}:</b> {st.color} <span style={{ background: st.app === 'Sprayed' ? '#007bff' : '#ffc107', color: st.app === 'Sprayed' ? '#fff' : '#000', padding: '2px 6px', borderRadius: '12px', fontSize: '0.7rem', marginLeft: '10px', fontWeight: 'bold' }}>{st.app}</span>
                                     </div>
                                 ))}
+                                
+                                {/* 🚀 NEW: Indicator that instructions exist */}
+                                {r.instructions && (
+                                    <div style={{ fontSize: '0.75rem', color: '#CC6600', marginTop: '10px', padding: '5px', background: '#fffdf5', border: '1px solid #ffeeba', fontWeight: 'bold' }}>
+                                        📋 Includes Floor Instructions
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>

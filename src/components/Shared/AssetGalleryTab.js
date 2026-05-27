@@ -15,10 +15,10 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [searchQuery, setSearchQuery] = useState('');
     
     const [activeAsset, setActiveAsset] = useState(null); 
+    const [isZoomed, setIsZoomed] = useState(false); // 🚀 NEW: Zoom State
     const [isUploading, setIsUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
 
-    // 🚀 NEW: Replaced single customer string with dynamic mapping
     const [metaForm, setMetaForm] = useState({ name: '', collection: '', productType: '', patternId: '', finishId: '', customerId: '', clientSku: '', notes: '', associatedParts: [], associatedFinishes: [] });
     const [uploadFile, setUploadFile] = useState(null);
     const fileInputRef = useRef(null);
@@ -90,7 +90,6 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const safeAssets = Array.isArray(assets) ? assets : [];
     const allFinishes = [...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(outsourceFinishes)?outsourceFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])];
     
-    // 🚀 NEW: Aggregate Client SKUs dynamically from associated parts in the CPQ
     const getAssetClientSKUs = (asset) => {
         if (!asset) return [];
         const skus = [];
@@ -152,8 +151,6 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             const img = new Image();
             img.onload = () => {
                 try {
-                    // 🚀 The Hi-Res file stays completely clean and untouched
-                    
                     const thCanvas = document.createElement('canvas');
                     const thCtx = thCanvas.getContext('2d');
                     thCanvas.width = 250;
@@ -163,7 +160,6 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                     const sy = (img.height - minDim) / 2;
                     thCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 250, 250);
 
-                    // 🚀 Burn Internal Watermark into LOWER RIGHT of Thumbnail
                     const thFontSize = 14;
                     thCtx.font = `bold ${thFontSize}px monospace`;
                     const thPad = thFontSize * 0.4;
@@ -189,7 +185,6 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
         });
     };
 
-    // 🚀 NEW: DYNAMIC ON-THE-FLY DOWNLOAD WATERMARK
     const handleDynamicDownload = (url, textStr, color = '#333333', prefix = 'HQ') => {
         if (!textStr) return alert("Missing ID or SKU for watermark.");
         
@@ -334,6 +329,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     };
 
     const openModal = (asset) => {
+        setIsZoomed(false); // 🚀 Reset zoom
         setMetaForm({
             name: asset?.name || '',
             collection: asset?.collection || asset?.category || globalLists.collections[0] || '',
@@ -511,12 +507,10 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                     <div style={{ position: 'relative', width: '100%', height: '200px', background: '#e5e5e5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                         {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'2rem'}}>🖼️</span>}
                                         
-                                        {/* 🚀 THE FIX: ALWAYS SHOW PATTERN/FINISH ID ON BOTTOM LEFT FOR ALL IMAGES */}
                                         <div style={{ position: 'absolute', bottom: '8px', left: '8px', color: '#333', fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 'bold', background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #ccc', zIndex: 2 }}>
                                             {String(asset.patternId || '')}{asset.finishId ? `/${String(asset.finishId)}` : ''}
                                         </div>
                                         
-                                        {/* Overlay Customer ID Badge */}
                                         {(asset.clientSku || asset.customerPartId) && (
                                             <div style={{ position: 'absolute', top: '8px', right: '8px', color: '#fff', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 'bold', background: '#28a745', padding: '2px 6px', borderRadius: '4px', zIndex: 2 }}>
                                                 CUST: {String(asset.clientSku || asset.customerPartId)}
@@ -545,13 +539,29 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
                         <div style={{ background: '#fff', border: '4px solid #000', width: '90%', maxWidth: '1400px', height: '90vh', display: 'flex', boxShadow: '20px 20px 0 #000', overflow: 'hidden' }}>
                             
-                            <div style={{ flex: 2, background: '#e5e5e5', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-                                <div style={{ flex: 1, position: 'relative', overflow: 'auto', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                    <img src={activeAsset.originalUrl || activeAsset.url} alt={activeAsset.patternId} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }} />
+                            {/* 🚀 LEFT: FULL SIZE IMAGE (NOW WITH ZOOM CROP) */}
+                            <div 
+                                style={{ flex: 2, background: '#e5e5e5', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden', cursor: isZoomed ? 'zoom-out' : 'zoom-in' }}
+                                onClick={() => setIsZoomed(!isZoomed)}
+                            >
+                                <div style={{ flex: 1, position: 'relative', overflow: 'hidden', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <img 
+                                        src={activeAsset.originalUrl || activeAsset.url} 
+                                        alt={activeAsset.patternId} 
+                                        style={{ 
+                                            maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
+                                            transform: isZoomed ? 'scale(2)' : 'scale(1)', transition: 'transform 0.25s ease-in-out'
+                                        }} 
+                                    />
                                 </div>
+
+                                {!isZoomed && (
+                                    <div style={{ position: 'absolute', top: '20px', left: '20px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '8px 12px', borderRadius: '4px', fontSize: '0.9rem', fontWeight: 'bold', pointerEvents: 'none' }}>
+                                        🔍 CLICK TO CROP / ZOOM
+                                    </div>
+                                )}
                                 
-                                {/* 🚀 DYNAMIC DOWNLOAD BAR */}
-                                <div style={{ padding: '15px', background: '#000', display: 'flex', gap: '15px', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <div style={{ padding: '15px', background: '#000', display: 'flex', gap: '15px', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap', zIndex: 10 }} onClick={e => e.stopPropagation()}>
                                     <button onClick={() => window.open(activeAsset.originalUrl || activeAsset.url, '_blank')} style={{ padding: '10px 15px', background: '#fff', color: '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer', borderRadius: '4px' }}>
                                         📥 DL ORIGINAL (CLEAN)
                                     </button>
@@ -588,7 +598,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                             <div style={{ flex: 1, borderLeft: '4px solid #000', padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa', overflowY: 'auto' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '15px' }}>
                                     <h2 style={{ margin: 0, color: '#6f42c1' }}>ASSET METADATA</h2>
-                                    <button onClick={() => setActiveAsset(null)} style={{ background: 'none', border: 'none', fontSize: '2rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                                    <button onClick={() => { setActiveAsset(null); setIsZoomed(false); }} style={{ background: 'none', border: 'none', fontSize: '2rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
                                 </div>
 
                                 <div style={{ display: 'flex', gap: '10px' }}>
