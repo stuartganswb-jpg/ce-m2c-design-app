@@ -588,7 +588,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       {!isCanvasMaximized && (
           <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
             <div>
-              <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem' }}>1. Master Product Hub</h2>
+            <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem' }}>1. PRODUCT INCEPTION HUB</h2>
               <span style={{ fontSize: '0.7rem', color: '#666' }}>{assemblies.length} ASSEMBLIES IN PORTFOLIO</span>
             </div>
             <button onClick={() => openEditor()} style={{ padding: '10px 20px', background: '#000', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ INITIATE NEW PRODUCT</button>
