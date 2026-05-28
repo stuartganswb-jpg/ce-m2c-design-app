@@ -75,10 +75,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [isCanvasMaximized, setIsCanvasMaximized] = useState(false);
   const [isCanvasLocked, setIsCanvasLocked] = useState(true); 
 
-  // 🚀 UNIFIED FREEZE STATE
   const [isFrozen, setIsFrozen] = useState(false);
 
-  // 📸 CROP STUDIO STATE
   const [cropState, setCropState] = useState(null); 
   const [isProcessingCrop, setIsProcessingCrop] = useState(false);
 
@@ -401,7 +399,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               ctx.fillRect(0, 0, targetSize, targetSize);
               ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetSize, targetSize);
           } 
-          // 🖼️ 2D CROP LOGIC (MATH TRANSLATION)
+          // 🖼️ 2D CROP LOGIC (MATH TRANSLATION FIX)
           else {
               const container = document.getElementById('canvas-container');
               const rect = container.getBoundingClientRect();
@@ -414,26 +412,33 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               ctx.fillStyle = '#ffffff';
               ctx.fillRect(0, 0, targetSize, targetSize);
 
-              // Map crop box to the target canvas
+              // 1. Map Canvas coordinates to Screen/Container coordinates
               ctx.scale(targetSize / cropState.w, targetSize / cropState.h);
               ctx.translate(-cropState.x, -cropState.y);
 
-              // SVG container is always 1000x1000 mapped to the rect
-              const svgRatioX = rect.width / 1000;
-              const svgRatioY = rect.height / 1000;
-              const cx = 500 * svgRatioX;
-              const cy = 500 * svgRatioY;
-              const panPx = (pan.x || 0) * svgRatioX;
-              const panPy = (pan.y || 0) * svgRatioY;
+              // 2. Map Container coordinates to SVG 'viewBox' coordinates
+              const scaleFit = Math.min(rect.width / 1000, rect.height / 1000);
+              const svgOffsetX = (rect.width - (1000 * scaleFit)) / 2;
+              const svgOffsetY = (rect.height - (1000 * scaleFit)) / 2;
+              
+              ctx.translate(svgOffsetX, svgOffsetY);
+              ctx.scale(scaleFit, scaleFit);
 
-              // Apply the user's pan and scale
-              ctx.translate(panPx, panPy);
-              ctx.translate(cx, cy);
-              ctx.scale(scale, scale);
-              ctx.translate(-cx, -cy);
+              // 3. Map SVG coordinates to <g> coordinates (Applies your Pan & Zoom)
+              ctx.translate(pan.x || 0, pan.y || 0);
+              ctx.translate(500, 500);
+              ctx.scale(scale || 1, scale || 1);
+              ctx.translate(-500, -500);
 
-              // Draw the image exactly where the SVG placed it
-              ctx.drawImage(img, 100 * svgRatioX, 100 * svgRatioY, 800 * svgRatioX, 800 * svgRatioY);
+              // 4. Map <g> coordinates to original Image dimensions
+              // The SVG <image> tag acts as preserveAspectRatio="xMidYMid meet" within an 800x800 box.
+              const imgScaleFit = Math.min(800 / img.width, 800 / img.height);
+              const imgDrawW = img.width * imgScaleFit;
+              const imgDrawH = img.height * imgScaleFit;
+              const imgOffsetX = 100 + (800 - imgDrawW) / 2;
+              const imgOffsetY = 100 + (800 - imgDrawH) / 2;
+
+              ctx.drawImage(img, imgOffsetX, imgOffsetY, imgDrawW, imgDrawH);
           }
 
           // 💾 UPLOAD TO STORAGE
@@ -481,7 +486,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
   const showLockOverlay = isCanvasLocked && !isCanvasMaximized;
 
-  // Generic Button Styling
   const getToolStyle = (mode) => ({
       padding: '8px 15px',
       background: interactionMode === mode ? '#28a745' : '#fff',
@@ -562,6 +566,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                               <>
                                   <button onClick={handleZoomIn} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }}>➕</button>
                                   <button onClick={handleZoomOut} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }}>➖</button>
+                                  <button onClick={handleZoomReset} style={{ padding: '8px 15px', background: '#eee', border: 'none', borderRadius: '20px', fontWeight: 'bold', cursor: 'pointer' }}>🔄 RESET</button>
                                   <div style={{ width: '1px', background: '#ccc', margin: '0 5px' }}></div>
                               </>
                           )}
@@ -670,7 +675,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                     />
                                 </Bounds>
 
-                                {/* Hide pins if cropping to keep the image clean */}
                                 {!cropState && visiblePins.map(pin => {
                                     if (pin.imageUrl !== '3D_CAD' || pin.z === undefined) return null;
                                     const boxColor = pin.isExistingLibraryPart ? '#007bff' : '#d9534f';
