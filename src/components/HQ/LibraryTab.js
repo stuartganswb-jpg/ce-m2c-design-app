@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, doc, deleteDoc, updateDoc, setDoc } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
 const AVAILABLE_BRANDS = [
@@ -98,12 +98,19 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
       if (docSnap.exists()) {
           const data = docSnap.data();
+          let types = data.assemblyTypes || [];
+          types = types.filter(t => !t.toUpperCase().includes('INSTRUCT'));
+          
+          const uppercaseTypes = types.map(t => t.toUpperCase());
+          if (!uppercaseTypes.includes("MASTER")) types.unshift("MASTER");
+          if (!uppercaseTypes.includes("STANDARD")) types.unshift("STANDARD");
+
           setGlobalLists({ 
               uom: data.uom || [], prodTypes: data.prodTypes || [], collections: data.collections || [], 
               watchLists: data.watchLists || [], vendors: data.vendors || [], outsourceActions: data.outsourceActions || [],
               pillowSizes: data.pillowSizes || [], fillTypes: data.fillTypes || [], flangeStyles: data.flangeStyles || [], 
               stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || ['0 Seams', '1 Seam', '2 Seams', '3 Seams', '4 Seams'],
-              assemblyTypes: data.assemblyTypes || [],
+              assemblyTypes: types,
               cpqRoutingTypes: data.cpqRoutingTypes || [],
               customers: data.customers || [] 
           });
@@ -144,17 +151,32 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 
   const filteredInventory = inventory.filter(part => {
     const term = searchTerm.toLowerCase();
+    const specs = part.manufacturingSpecs || {};
+
     const matchesSearch = part.itemName?.toLowerCase().includes(term) || 
                           (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term)) || 
                           (part.itemId && part.itemId.toLowerCase().includes(term)) ||
-                          (part.manufacturingSpecs?.binLocation && part.manufacturingSpecs.binLocation.toLowerCase().includes(term)) || // 🚀 Search by Bin
+                          (specs.binLocation && specs.binLocation.toLowerCase().includes(term)) || 
                           (part.clientPricing && part.clientPricing.some(cp => 
                               (cp.clientSku && cp.clientSku.toLowerCase().includes(term)) || 
                               (cp.customerId && cp.customerId.toLowerCase().includes(term))
                           ));
     
-    const matchesType = typeFilter === "" || part.manufacturingSpecs?.productType === typeFilter;
-    const matchesClass = partClassFilter === "ALL" || part.partClass === partClassFilter;
+    let matchesType = typeFilter === "" || specs.productType === typeFilter;
+    let matchesClass = true;
+
+    // 🚀 FILTER ENGINE
+    if (partClassFilter !== "ALL") {
+        if (partClassFilter === "INVENTORY") {
+            matchesClass = part.partClass === "Inventory" && specs.isInHouse !== false;
+        } else if (partClassFilter === "OUTSOURCED") {
+            matchesClass = part.partClass === "Inventory" && specs.isInHouse === false;
+        } else if (partClassFilter === "UNASSIGNED") {
+            matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && (!part.routingType || part.routingType === "UNASSIGNED");
+        } else {
+            matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && part.routingType?.toUpperCase() === partClassFilter.toUpperCase();
+        }
+    }
     
     return matchesSearch && matchesType && matchesClass;
   });
@@ -179,7 +201,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         tempName: part.itemName, 
         tempLegacyId: part.legacyErpId === "PENDING" ? "" : part.legacyErpId,
         clientPricing: part.clientPricing || [], 
-        binLocation: baseSpecs.binLocation || "", // 🚀 NATIVE BIN LOCATION
+        binLocation: baseSpecs.binLocation || "", 
         project: part.project || "",
         collection: part.collection || "",
         routingType: part.routingType || "",
@@ -199,7 +221,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         tempName: prev.tempName, 
         tempLegacyId: prev.tempLegacyId, 
         clientPricing: prev.clientPricing, 
-        binLocation: prev.binLocation, // Keep bin location isolated
+        binLocation: prev.binLocation, 
         pdfUrl: prev.pdfUrl, 
         cadUrl: prev.cadUrl 
     }));
@@ -245,11 +267,11 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   };
 
   const handleCreateNewPart = () => {
-    const actualClass = partClassFilter === 'ALL' ? 'Inventory' : partClassFilter;
+    const actualClass = partClassFilter === 'ALL' || partClassFilter === 'INVENTORY' || partClassFilter === 'OUTSOURCED' ? 'Inventory' : 'Assembly';
     const newId = `${activeBrand.toUpperCase()}-${actualClass === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
     
     setActivePart({ isNew: true, id: newId, itemId: newId, legacyErpId: "PENDING", itemName: `NEW ${actualClass.toUpperCase()}`, brandId: activeBrand, partClass: actualClass });
-    setEditSpecs({ productType: "", uom: "EA", finishDetail: "", collection: "N/A", project: "", routingType: "", assemblyType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], binLocation: "", isInHouse: true, programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" }, isProjectManaged: false }); 
+    setEditSpecs({ productType: "", uom: "EA", finishDetail: "", collection: "N/A", project: "", routingType: "", assemblyType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" }, isProjectManaged: false }); 
     setPdfFile(null); setCadFile(null); setCloneSourceId("");
   };
 
@@ -487,11 +509,17 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         </div>
         <div style={{ display: 'flex', gap: '15px', width: '75%', alignItems: 'center' }}>
           
-          <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} style={{ padding: '10px', border: '2px solid #007bff', fontWeight: 'bold', background: '#eafaf1', color: '#007bff', minWidth: '150px' }}>
+          {/* 🚀 NEW DYNAMIC FILTER DROPDOWN */}
+          <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} style={{ padding: '10px', border: '2px solid #007bff', fontWeight: 'bold', background: '#eafaf1', color: '#007bff', minWidth: '150px', textTransform: 'uppercase' }}>
               <option value="ALL">ALL CLASSES</option>
-              <option value="Inventory">STANDALONE INVENTORY ITEMS</option>
-              <option value="Assembly">SUB-ASSEMBLIES (BOM)</option>
-              <option value="Master Assembly">TOP-LEVEL MASTER ASSEMBLIES</option>
+              <option value="INVENTORY">RAW MAT / COMPONENTS (IN-HOUSE)</option>
+              <option value="OUTSOURCED">OUTSOURCED COMPONENTS</option>
+              <optgroup label="ASSEMBLIES & KITS">
+                  <option value="UNASSIGNED">UNASSIGNED / PENDING</option>
+                  {(globalLists.assemblyTypes || []).map(type => (
+                      <option key={type} value={type}>{type}</option>
+                  ))}
+              </optgroup>
           </select>
           
           <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px', background: '#ffeeba', padding: '5px 10px', border: '1px solid #856404' }}>
@@ -507,7 +535,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               </select>
           )}
 
-          <input placeholder="🔍 Search by Name, ERP ID, or Cust ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ flex: 2, padding: '10px', border: '2px solid #000', fontWeight: 'bold', fontSize: '1rem' }} />
+          {/* 🚀 ADDED BIN SEARCH SUPPORT TO PLACEHOLDER */}
+          <input placeholder="🔍 Search by Name, ERP, Bin, or Cust ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ flex: 2, padding: '10px', border: '2px solid #000', fontWeight: 'bold', fontSize: '1rem' }} />
         </div>
       </div>
 
@@ -543,15 +572,15 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                           {part.clientPricing.length} CLIENT MAPPING(S)
                       </div>
                   )}
-                  {part.manufacturingSpecs?.binLocation && (
+                  {/* 🚀 NEW: BIN LOCATION RENDER */}
+                  {specs.binLocation && (
                       <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', marginBottom: '2px' }}>
-                          BIN: {part.manufacturingSpecs.binLocation}
+                          BIN: {specs.binLocation}
                       </div>
                   )}
 
                   <div style={{ fontSize: '0.85rem', fontWeight: 'bold', lineHeight: '1.2', flex: 1 }}>{part.itemName}</div>
                   
-                  {/* Show specific details based on class */}
                   {part.partClass === "Inventory" ? (
                     <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #eee', paddingTop: '10px', marginTop: '10px' }}>
                       <span style={{ fontSize: '0.65rem', background: '#eee', padding: '3px 6px', borderRadius: '3px', border: '1px solid #ccc' }}>{specs.productType || "NO TYPE"}</span>
@@ -666,7 +695,15 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                      </div>
                  </div>
 
-                 {/* 🚀 NEW: MULTI-CLIENT PRICING MATRIX */}
+                 {/* 🚀 NEW: WAREHOUSE BIN LOCATION INTEGRATION */}
+                 <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '10px', marginTop: '15px' }}>
+                     <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>📍 WAREHOUSE BIN LOCATION (BARCODE/REF)</label>
+                     <input name="binLocation" value={editSpecs.binLocation || ''} onChange={handleSpecChange} placeholder="e.g. A1-B2-04" style={{ width: '100%', padding: '10px', border: '1px solid #6f42c1', boxSizing: 'border-box', textTransform: 'uppercase', fontWeight: 'bold', fontSize: '1.1rem' }} />
+                     <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '5px', fontStyle: 'italic' }}>
+                         Used by the Pick/Pack App to guide operators to the physical item location.
+                     </div>
+                 </div>
+
                  <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', marginTop: '15px' }}>
                     <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
                     
@@ -742,10 +779,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label><select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}><option value="">SELECT...</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                    )}
 
-                   {windowConfig.system.assemblyTypes?.includes(activeBrand) && (
-                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>ASSEMBLY TYPE:</label><select name="assemblyType" value={editSpecs.assemblyType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}><option value="">SELECT...</option>{(globalLists.assemblyTypes || []).map(at => <option key={at} value={at}>{at}</option>)}</select></div>
-                   )}
-
                    {windowConfig.system.watchLists?.includes(activeBrand) && (
                        <div style={{ gridColumn: 'span 2', background: '#fff3cd', border: '2px solid #ffc107', padding: '10px' }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: editSpecs.watchList !== "NONE" ? '#d9534f' : '#000' }}>ASSIGN TO WATCHLIST:</label><select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', fontWeight: 'bold' }}>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}</select></div>
                    )}
@@ -757,23 +790,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                   <div>
                     <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px', color: '#007bff' }}>LOGISTICS & SOURCING</h4>
                     
-                    {/* 🚀 NEW: WAREHOUSE BIN LOCATION */}
-                    <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '15px', marginBottom: '15px' }}>
-                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px' }}>
-                            📍 WAREHOUSE BIN LOCATION (BARCODE/REF)
-                        </label>
-                        <input 
-                            name="binLocation" 
-                            value={editSpecs.binLocation || ""} 
-                            onChange={handleSpecChange} 
-                            placeholder="e.g. A1-B2-04" 
-                            style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', boxSizing: 'border-box', textTransform: 'uppercase', fontWeight: 'bold', fontSize: '1.1rem' }} 
-                        />
-                        <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '5px', fontStyle: 'italic' }}>
-                            Used by the Pick/Pack App to guide operators to the physical item location.
-                        </div>
-                    </div>
-
                     <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}><button onClick={() => setEditSpecs({...editSpecs, isInHouse: true})} style={{ flex: 1, padding: '10px', background: editSpecs.isInHouse ? '#000' : '#eee', color: editSpecs.isInHouse ? '#fff' : '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer' }}>IN-HOUSE</button><button onClick={() => setEditSpecs({...editSpecs, isInHouse: false})} style={{ flex: 1, padding: '10px', background: !editSpecs.isInHouse ? '#000' : '#eee', color: !editSpecs.isInHouse ? '#fff' : '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer' }}>OUTSOURCED</button></div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                       {editSpecs.isInHouse ? (

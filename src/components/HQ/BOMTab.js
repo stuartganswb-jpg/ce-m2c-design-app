@@ -27,7 +27,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [assemblyDetails, setAssemblyDetails] = useState({
       itemName: "", legacyErpId: "", productType: "", collection: "", routingType: "UNASSIGNED",
       basePrice: "", cost: "", pdfUrl: "", cadUrl: "",
-      isProjectManaged: false 
+      isProjectManaged: false,
+      binLocation: "" // 🚀 NEW: Parent Assembly Bin Location
   });
 
   // File Upload State
@@ -105,7 +106,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               cost: selectedAssemblyData.manufacturingSpecs?.cost || "",
               pdfUrl: selectedAssemblyData.manufacturingSpecs?.pdfUrl || "",
               cadUrl: selectedAssemblyData.manufacturingSpecs?.cadUrl || "",
-              isProjectManaged: selectedAssemblyData.manufacturingSpecs?.isProjectManaged || false
+              isProjectManaged: selectedAssemblyData.manufacturingSpecs?.isProjectManaged || false,
+              binLocation: selectedAssemblyData.manufacturingSpecs?.binLocation || "" // 🚀 NEW: Load Bin
           });
       }
   }, [selectedAssemblyData]);
@@ -172,7 +174,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                   cost: assemblyDetails.cost,
                   pdfUrl: finalPdfUrl,
                   cadUrl: finalCadUrl,
-                  isProjectManaged: assemblyDetails.isProjectManaged
+                  isProjectManaged: assemblyDetails.isProjectManaged,
+                  binLocation: assemblyDetails.binLocation // 🚀 NEW: Save Bin
               },
               updatedAt: new Date().toISOString()
           });
@@ -336,13 +339,26 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ fontSize: '0.7rem', color: '#666' }}>Checking this box ensures that when this product is quoted/ordered, it routes to the Project Management dashboard for multi-WO/PO dissection.</div>
                                         </div>
                                     </div>
-                                    
+
                                     <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '15px' }}>
                                         <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ASSEMBLY NAME:</label><input value={assemblyDetails.itemName} onChange={e => setAssemblyDetails({...assemblyDetails, itemName: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontWeight: 'bold' }} /></div>
                                         <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>ERP ID:</label><input value={assemblyDetails.legacyErpId} onChange={e => setAssemblyDetails({...assemblyDetails, legacyErpId: e.target.value})} placeholder="PENDING" style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box', textTransform: 'uppercase' }} /></div>
                                     </div>
 
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                    {/* 🚀 NEW: WAREHOUSE BIN LOCATION FOR PARENT ASSEMBLY */}
+                                    <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '10px', marginTop: '10px' }}>
+                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px' }}>
+                                            📍 WAREHOUSE BIN LOCATION (BARCODE/REF)
+                                        </label>
+                                        <input 
+                                            value={assemblyDetails.binLocation} 
+                                            onChange={e => setAssemblyDetails({...assemblyDetails, binLocation: e.target.value})} 
+                                            placeholder="e.g. KIT-SHELF-B" 
+                                            style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', boxSizing: 'border-box', textTransform: 'uppercase', fontWeight: 'bold', fontSize: '1.1rem' }} 
+                                        />
+                                    </div>
+
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginTop: '5px' }}>
                                         <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PRODUCT TYPE:</label><select value={assemblyDetails.productType} onChange={e => setAssemblyDetails({...assemblyDetails, productType: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
                                         <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>COLLECTION:</label><select value={assemblyDetails.collection} onChange={e => setAssemblyDetails({...assemblyDetails, collection: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }}><option value="">SELECT...</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                                     </div>
@@ -366,8 +382,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             {assemblyDetails.pdfUrl && <a href={assemblyDetails.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>[View Current PDF]</a>}
                                             <input type="file" accept="application/pdf" onChange={(e) => setAssemblyPdfFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
                                         </div>
-                                        
-                                        {/* 🚀 FIXED CAD UPLOAD DISPLAY */}
                                         <div style={{ flex: 1, borderLeft: '1px solid #28a745', paddingLeft: '15px' }}>
                                             <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>MASTER 3D CAD (.GLB):</label>
                                             {assemblyDetails.cadUrl ? (
@@ -398,6 +412,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                     </div>
                 ) : (
                     <>
+                        {/* --- COMPONENT EDITOR --- */}
+
                         <div style={{ background: '#f0f8ff', border: '2px dashed #007bff', padding: '15px' }}>
                             <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #007bff', paddingBottom: '5px', color: '#007bff', display: 'flex', justifyContent: 'space-between' }}>
                                 <span>🔗 CPQ CONFIGURATION MAPPING</span>
@@ -422,8 +438,25 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
+                        {/* 🚀 UNIVERSAL WAREHOUSE BIN LOCATION */}
+                        <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '15px', marginTop: '10px' }}>
+                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px' }}>
+                                📍 WAREHOUSE BIN LOCATION (BARCODE/REF)
+                            </label>
+                            <input 
+                                name="binLocation" 
+                                value={editSpecs.binLocation || ""} 
+                                onChange={handleSpecChange} 
+                                placeholder="e.g. A1-B2-04" 
+                                style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', boxSizing: 'border-box', textTransform: 'uppercase', fontWeight: 'bold', fontSize: '1.1rem' }} 
+                            />
+                            <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '5px', fontStyle: 'italic' }}>
+                                Used by the Pick/Pack App to guide operators to the physical item location.
+                            </div>
+                        </div>
+
                         <div>
-                            <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>CORE STATIC ATTRIBUTES</h4>
+                            <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px', marginTop: '15px' }}>CORE STATIC ATTRIBUTES</h4>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                                 
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
@@ -488,8 +521,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     <input type="file" accept="application/pdf" onChange={(e) => setPdfFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
                                     {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
                                 </div>
-                                
-                                {/* 🚀 FIXED COMPONENT CAD UPLOAD DISPLAY */}
                                 <div style={{ flex: 1, borderLeft: '1px solid #eee', paddingLeft: '15px' }}>
                                     <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>3D CAD MODEL (.GLB):</label>
                                     {editSpecs.cadUrl ? (
