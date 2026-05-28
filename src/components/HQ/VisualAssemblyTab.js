@@ -5,6 +5,26 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 
+class ErrorBoundary extends React.Component {
+    constructor(props) { super(props); this.state = { hasError: false }; }
+    static getDerivedStateFromError(error) { return { hasError: true }; }
+    componentDidCatch(error, errorInfo) { console.error("3D Render Error:", error); }
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px', background: '#fff', border: '2px dashed #d9534f' }}>
+                    <div style={{ textAlign: 'center', color: '#d9534f' }}>
+                        <h3 style={{ fontSize: '2rem', margin: '0 0 10px 0' }}>⚠️ 3D RENDER FAILED</h3>
+                        <p style={{ fontWeight: 'bold' }}>The uploaded 3D file is corrupted, missing .bin buffer data, or is an unsupported format.</p>
+                        <p style={{ color: '#000' }}>Please use the <b>UPLOAD</b> button in Tab 1 to replace this with a valid <b>.glb</b> file.</p>
+                    </div>
+                </div>
+            );
+        }
+        return this.props.children; 
+    }
+}
+
 const SnapshotModel = ({ url, interactionMode, onMeshClick, isFrozen }) => {
     const { scene } = useGLTF(url);
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
@@ -47,7 +67,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [pins, setPins] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
   const [assemblyTypesList, setAssemblyTypesList] = useState(["STANDARD", "MASTER", "OUTSOURCE KIT"]); 
-  const [cpqRoutingTypes, setCpqRoutingTypes] = useState([]); 
   
   const [drawerOpen, setDrawerOpen] = useState(false);
   
@@ -95,7 +114,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               if (!uppercaseTypes.includes("STANDARD")) types.unshift("STANDARD");
               
               setAssemblyTypesList(types);
-              setCpqRoutingTypes(data.cpqRoutingTypes || []); 
           }
       });
       return () => unsubLists();
@@ -334,7 +352,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   };
 
   // =====================================
-  // 📸 UNIVERSAL 2D & 3D CROP LOGIC
+  // 📸 FIXED UNIVERSAL 2D & 3D CROP LOGIC
   // =====================================
   const onCropPointerDown = (e, actionType) => {
       e.stopPropagation();
@@ -350,7 +368,10 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       if (cropState.action === 'MOVE') {
           setCropState(prev => ({ ...prev, x: prev.origX + dx, y: prev.origY + dy }));
       } else if (cropState.action === 'RESIZE') {
-          setCropState(prev => ({ ...prev, w: Math.max(80, prev.origW + dx), h: Math.max(80, prev.origH + dy) }));
+          // 🚀 FIX 1: Lock the crop box so it only scales as a perfect square!
+          const sizeDelta = Math.max(dx, dy); 
+          const newSize = Math.max(80, prev.origW + sizeDelta);
+          setCropState(prev => ({ ...prev, w: newSize, h: newSize }));
       }
   };
 
@@ -399,7 +420,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               ctx.fillRect(0, 0, targetSize, targetSize);
               ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetSize, targetSize);
           } 
-          // 🖼️ 2D CROP LOGIC (MATH TRANSLATION FIX)
+          // 🖼️ 2D CROP LOGIC (ALGEBRAIC REVERSE ENGINEERING)
           else {
               const container = document.getElementById('canvas-container');
               const rect = container.getBoundingClientRect();
@@ -407,38 +428,33 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               const img = new Image();
               img.crossOrigin = "Anonymous";
               img.src = activeImageUrl;
-              await new Promise(r => img.onload = r);
+              await new Promise(r => { img.onload = r; img.onerror = r; });
 
               ctx.fillStyle = '#ffffff';
               ctx.fillRect(0, 0, targetSize, targetSize);
 
-              // 1. Map Canvas coordinates to Screen/Container coordinates
-              ctx.scale(targetSize / cropState.w, targetSize / cropState.h);
-              ctx.translate(-cropState.x, -cropState.y);
+              // 🚀 FIX 2: Algebraic mapping to reverse-engineer the SVG Letterbox, Pan, and Zoom
+              const Ssvg = Math.min(rect.width / 1000, rect.height / 1000);
+              const OffsetXsvg = (rect.width - 1000 * Ssvg) / 2;
+              const OffsetYsvg = (rect.height - 1000 * Ssvg) / 2;
 
-              // 2. Map Container coordinates to SVG 'viewBox' coordinates
-              const scaleFit = Math.min(rect.width / 1000, rect.height / 1000);
-              const svgOffsetX = (rect.width - (1000 * scaleFit)) / 2;
-              const svgOffsetY = (rect.height - (1000 * scaleFit)) / 2;
-              
-              ctx.translate(svgOffsetX, svgOffsetY);
-              ctx.scale(scaleFit, scaleFit);
+              const Vx = (cropState.x - OffsetXsvg) / Ssvg;
+              const Vy = (cropState.y - OffsetYsvg) / Ssvg;
 
-              // 3. Map SVG coordinates to <g> coordinates (Applies your Pan & Zoom)
-              ctx.translate(pan.x || 0, pan.y || 0);
-              ctx.translate(500, 500);
-              ctx.scale(scale || 1, scale || 1);
-              ctx.translate(-500, -500);
+              const Gx = 500 + (Vx - (pan.x || 0) - 500) / (scale || 1);
+              const Gy = 500 + (Vy - (pan.y || 0) - 500) / (scale || 1);
 
-              // 4. Map <g> coordinates to original Image dimensions
-              // The SVG <image> tag acts as preserveAspectRatio="xMidYMid meet" within an 800x800 box.
-              const imgScaleFit = Math.min(800 / img.width, 800 / img.height);
-              const imgDrawW = img.width * imgScaleFit;
-              const imgDrawH = img.height * imgScaleFit;
-              const imgOffsetX = 100 + (800 - imgDrawW) / 2;
-              const imgOffsetY = 100 + (800 - imgDrawH) / 2;
+              const Simg = Math.min(800 / img.width, 800 / img.height);
+              const ImgOffsetX = 100 + (800 - img.width * Simg) / 2;
+              const ImgOffsetY = 100 + (800 - img.height * Simg) / 2;
 
-              ctx.drawImage(img, imgOffsetX, imgOffsetY, imgDrawW, imgDrawH);
+              const Px = (Gx - ImgOffsetX) / Simg;
+              const Py = (Gy - ImgOffsetY) / Simg;
+
+              const Pw = cropState.w / (Ssvg * (scale || 1) * Simg);
+              const Ph = cropState.h / (Ssvg * (scale || 1) * Simg);
+
+              ctx.drawImage(img, Px, Py, Pw, Ph, 0, 0, targetSize, targetSize);
           }
 
           // 💾 UPLOAD TO STORAGE
@@ -657,40 +673,42 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                 {!activeAssembly ? ( <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}><h3>NO ASSEMBLY SELECTED</h3><p>Create a Master Assembly in Tab 1 first.</p></div> ) : 
                  
                  viewMode === '3D' ? (
-                    <React.Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', fontWeight: 'bold', color: '#007bff' }}>⏳ LOADING 3D ENGINE...</div>}>
-                        <div id="r3f-canvas-tab2" style={{ width: '100%', height: '100%' }}>
-                            <Canvas gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, 5, 5], fov: 50 }}>
-                                <ambientLight intensity={0.5} />
-                                <directionalLight position={[10, 10, 5]} intensity={1} />
-                                
-                                <OrbitControls makeDefault enabled={!isFrozen && interactionMode === 'pan' && !isCanvasLocked && !cropState} />
-                                <CameraController zoomTrigger={zoomTrigger} />
-                                
-                                <Bounds fit clip margin={1.2}>
-                                    <SnapshotModel 
-                                        url={activeAssembly.manufacturingSpecs.cadUrl} 
-                                        interactionMode={interactionMode}
-                                        onMeshClick={handle3DMeshClick} 
-                                        isFrozen={isFrozen}
-                                    />
-                                </Bounds>
+                    <ErrorBoundary>
+                        <React.Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', fontWeight: 'bold', color: '#007bff' }}>⏳ LOADING 3D ENGINE...</div>}>
+                            <div id="r3f-canvas-tab2" style={{ width: '100%', height: '100%' }}>
+                                <Canvas gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, 5, 5], fov: 50 }}>
+                                    <ambientLight intensity={0.5} />
+                                    <directionalLight position={[10, 10, 5]} intensity={1} />
+                                    
+                                    <OrbitControls makeDefault enabled={!isFrozen && interactionMode === 'pan' && !isCanvasLocked && !cropState} />
+                                    <CameraController zoomTrigger={zoomTrigger} />
+                                    
+                                    <Bounds fit clip margin={1.2}>
+                                        <SnapshotModel 
+                                            url={activeAssembly.manufacturingSpecs.cadUrl} 
+                                            interactionMode={interactionMode}
+                                            onMeshClick={handle3DMeshClick} 
+                                            isFrozen={isFrozen}
+                                        />
+                                    </Bounds>
 
-                                {!cropState && visiblePins.map(pin => {
-                                    if (pin.imageUrl !== '3D_CAD' || pin.z === undefined) return null;
-                                    const boxColor = pin.isExistingLibraryPart ? '#007bff' : '#d9534f';
-                                    return (
-                                        <Html key={pin.id} position={[pin.x, pin.y, pin.z]} zIndexRange={[100, 0]}>
-                                            <div 
-                                                onClick={(e) => { e.stopPropagation(); handlePinClick(e, pin.id); }}
-                                                style={{ width: '15px', height: '15px', background: boxColor, borderRadius: '50%', border: '2px solid #fff', cursor: 'pointer', transform: 'translate(-50%, -50%)', boxShadow: '0 0 5px rgba(0,0,0,0.5)' }} 
-                                                title={`${pin.partName} (${pin.targetNode})`}
-                                            />
-                                        </Html>
-                                    )
-                                })}
-                            </Canvas>
-                        </div>
-                    </React.Suspense>
+                                    {!cropState && visiblePins.map(pin => {
+                                        if (pin.imageUrl !== '3D_CAD' || pin.z === undefined) return null;
+                                        const boxColor = pin.isExistingLibraryPart ? '#007bff' : '#d9534f';
+                                        return (
+                                            <Html key={pin.id} position={[pin.x, pin.y, pin.z]} zIndexRange={[100, 0]}>
+                                                <div 
+                                                    onClick={(e) => { e.stopPropagation(); handlePinClick(e, pin.id); }}
+                                                    style={{ width: '15px', height: '15px', background: boxColor, borderRadius: '50%', border: '2px solid #fff', cursor: 'pointer', transform: 'translate(-50%, -50%)', boxShadow: '0 0 5px rgba(0,0,0,0.5)' }} 
+                                                    title={`${pin.partName} (${pin.targetNode})`}
+                                                />
+                                            </Html>
+                                        )
+                                    })}
+                                </Canvas>
+                            </div>
+                        </React.Suspense>
+                    </ErrorBoundary>
                  ) : (
                   <svg ref={svgRef} viewBox="0 0 1000 1000" style={{ width: '100%', height: '100%', display: 'block', cursor: canvasCursor, touchAction: 'none' }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
                     <g ref={innerGroupRef} transform={`translate(${pan.x || 0}, ${pan.y || 0}) translate(500, 500) scale(${scale || 1}) translate(-500, -500)`}>
@@ -739,7 +757,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                         
-                                        {/* 🚀 QUICK CROP SHORTCUT: Auto-freezes and pre-selects the part! */}
                                         <button 
                                             onClick={() => { setIsFrozen(true); setInteractionMode('crop'); setCropState({ pinId: pin.id, x: 50, y: 50, w: 250, h: 250, action: null }); }} 
                                             style={{ background: '#fff', border: '2px solid #007bff', color: '#007bff', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px' }}
