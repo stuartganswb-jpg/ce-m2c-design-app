@@ -7,9 +7,10 @@ import './shopStyles.css';
 
 // IMPORT THE COMPONENTS
 import ShopEngineering from './ShopEngineering';
-
-// 🚀 SHARED DIGITAL ASSET MANAGER
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
+
+// 🚀 NEW: Import the Shared App
+import SharedMessaging from '../Shared/SharedMessaging';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
 
@@ -36,7 +37,6 @@ const ShopFloor = () => {
     const [materials, setMaterials] = useState([]);
     const [customOrders, setCustomOrders] = useState([]);
     const [matHistory, setMatHistory] = useState([]);
-    const [messaging, setMessaging] = useState([]);
     const [failures, setFailures] = useState([]);
     const [livio, setLivio] = useState([]);
     const [users, setUsers] = useState([]);
@@ -51,7 +51,6 @@ const ShopFloor = () => {
     const [millForm, setMillForm] = useState({ partNum: '', woNum: '', soNum: '', item: '', qty: '', reqDate: '', phosphate: 'No', file: null });
     const [dispatchForm, setDispatchForm] = useState({ op: '', routingId: '', woNum: '', targetQty: '', estStart: '', estFinish: '', estHrs: '', notes: '', phosphate: 'No' });
     const [livioForm, setLivioForm] = useState({ desc: '', reqDate: '', file: null });
-    const [msgBody, setMsgBody] = useState('');
 
     // MODALS
     const [activeModal, setActiveModal] = useState(null); 
@@ -99,7 +98,6 @@ const ShopFloor = () => {
             onSnapshot(shopDb.collection("materials"), s => setMaterials(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("custom_orders"), s => setCustomOrders(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(query(shopDb.collection("material_history"), orderBy("t", "desc"), limit(50)), s => setMatHistory(s.docs.map(d=>({id: d.id, ...d.data()})))),
-            onSnapshot(query(shopDb.collection("messaging"), orderBy("t", "desc"), limit(50)), s => setMessaging(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(query(shopDb.collection("shop_failures"), orderBy("timestamp", "desc")), s => setFailures(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("livio"), s => setLivio(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("directory"), s => setUsers(s.docs.map(d=>({id: d.id, ...d.data()}))))
@@ -250,7 +248,9 @@ const ShopFloor = () => {
             let imgUrl = null; 
             if(qcForm.failImg) { const fRef = ref(storage, `fails/${Date.now()}.jpg`); await uploadBytesResumable(fRef, qcForm.failImg); imgUrl = await getDownloadURL(fRef); }
             await addDoc(shopDb.collection("shop_failures"), { machine: task.mach, program: prog.name, operator: user.name, reason: qcForm.failReason, notes: qcForm.failNotes, status: 'Open', timestamp: serverTimestamp() });
-            await addDoc(shopDb.collection("messaging"), { u: user.name, msg: `⚠️ FAILURE: ${prog.name}. ${qcForm.failNotes}`, img: imgUrl, t: serverTimestamp() });
+            
+            // 🚀 NEW: Auto-post Failure to Shared Message Board
+            await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `⚠️ MACHINING FAILURE: ${prog.name} on ${task.mach}. Reason: ${qcForm.failReason}. \nNotes: ${qcForm.failNotes}`, t: serverTimestamp(), readBy: [], isSystem: true });
         }
 
         const hrsWorked = (Date.now() - (task.actualStart?.toMillis ? task.actualStart.toMillis() : Date.now()) - (task.totalPausedMs || 0)) / 3600000; 
@@ -277,8 +277,11 @@ const ShopFloor = () => {
         await updateDoc(doc(shopDb.collection("custom_orders"), order.id), { status: 'Completed', completedAt: serverTimestamp(), completedBy: user.name });
         const pendingForSO = customOrders.filter(o => o.soNum === order.soNum && o.status !== 'Completed' && o.id !== order.id);
         if (pendingForSO.length === 0) {
-            await setDoc(doc(shopDb.collection("finishing_alerts"), order.soNum), { soNum: order.soNum, msg: `Custom parts for SO ${order.soNum} complete! Ready for Finishing!`, t: serverTimestamp(), read: false });
-            alert(`Part marked complete! Finishing Floor alerted.`);
+            
+            // 🚀 NEW: Auto-post Custom Order alert to Shared Message Board
+            await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `✅ CUSTOM ORDER READY: All custom parts for SO ${order.soNum} have finished machining and are ready for the Finishing Floor!`, t: serverTimestamp(), readBy: [], isSystem: true });
+
+            alert(`Part marked complete! Shared Message Board alerted.`);
         } else { alert(`Part complete. SO ${order.soNum} still has ${pendingForSO.length} parts pending.`); }
     };
 
@@ -385,7 +388,8 @@ const ShopFloor = () => {
                         const mJobs = activeJobs.filter(j => j.mach === m.name);
                         const isSetup = mJobs.some(j => j.status === 'Setup');
                         return (
-                            <div key={m.id} style={{ background: '#fff', border: mJobs.length > 0 ? (isSetup ? '3px solid #0056b3' : '3px solid #f39c12') : '2px solid #ccc', borderRadius: '8px', padding: '20px', textAlign: 'center', cursor: 'pointer', transition: '0.2s' }} onClick={() => setActiveTab('scheduler')}>
+                            // 🚀 ADJUSTED: Border reduced from 3px/2px to 1px/2px for lighter aesthetic
+                            <div key={m.id} style={{ background: '#fff', border: mJobs.length > 0 ? (isSetup ? '2px solid #0056b3' : '2px solid #f39c12') : '1px solid #ccc', borderRadius: '8px', padding: '20px', textAlign: 'center', cursor: 'pointer', transition: '0.2s' }} onClick={() => setActiveTab('scheduler')}>
                                 <h3 style={{ margin: '0 0 10px 0', fontSize: '22px' }}>{m.name}</h3>
                                 {mJobs.length > 0 ? (
                                     <div style={{ background: isSetup ? '#eef5ff' : '#fffdf5', padding: '10px', borderRadius: '6px', textAlign: 'left' }}>
@@ -622,29 +626,6 @@ const ShopFloor = () => {
         );
     };
 
-    const renderMessagingTab = () => {
-        return (
-            <div>
-                <h2 style={{ color: '#0056b3' }}>Shop Messaging</h2>
-                <div style={{ background: '#fff', border: '1px solid #0056b3', padding: '20px', borderRadius: '10px', marginBottom: '25px' }}>
-                    <textarea value={msgBody} onChange={e => setMsgBody(e.target.value)} placeholder="Broadcast a shop message..." style={{ width: '100%', boxSizing: 'border-box', padding: '10px', minHeight: '80px', borderRadius: '6px', border: '1px solid #ccc' }}></textarea>
-                    <button onClick={async () => { if(!msgBody) return; await addDoc(shopDb.collection("messaging"), { u: user.name, msg: msgBody, t: serverTimestamp() }); setMsgBody(''); }} style={{ background: '#0056b3', color: '#fff', border: 'none', padding: '10px', marginTop: '10px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer', width: '100%' }}>POST MESSAGE</button>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                    {messaging.map(m => {
-                        const dateStr = m.t?.toDate ? m.t.toDate().toLocaleString() : '-';
-                        return (
-                        <div key={m.id} style={{ background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
-                            {['admin'].includes(safeUserRole) && <button onClick={() => handleDelete('messaging', m.id)} style={{ float: 'right', background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer' }}>✖</button>}
-                            <div style={{ fontWeight: 'bold' }}>{m.u} <span style={{ color: '#888', fontSize: '12px', fontWeight: 'normal', marginLeft: '10px' }}>{dateStr}</span></div>
-                            <div style={{ margin: '10px 0', whiteSpace: 'pre-wrap' }}>{m.msg}</div>
-                        </div>
-                    )})}
-                </div>
-            </div>
-        );
-    };
-
     const renderReportsTab = () => (
         <div>
             <h2 style={{ color: '#0056b3' }}>Visual Failure Reports</h2>
@@ -686,11 +667,10 @@ const ShopFloor = () => {
         </div>
     );
 
-    // 🚀 NEW: UPDATED LOGIN SCREEN TO MATCH HQ AESTHETIC
     if (!user) {
         return (
             <div style={{ position: 'fixed', inset: 0, background: '#e5e5e5', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace' }}>
-                <div style={{ background: '#fff', padding: '40px', border: '4px solid #000', boxShadow: '15px 15px 0 #000', width: '350px', textAlign: 'center' }}>
+                <div style={{ background: '#fff', padding: '40px', border: '2px solid #000', boxShadow: '15px 15px 0 #000', width: '350px', textAlign: 'center' }}>
                     <h2 style={{ color: '#0056b3', margin: '0 0 20px 0', fontSize: '2rem', textTransform: 'uppercase' }}>SHOP COMMAND</h2>
                     <form onSubmit={attemptLogin}>
                         <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{ textAlign: 'center', fontSize: '24px', width: '100%', padding: '15px', margin: '8px 0 20px 0', border: '2px solid #000', boxSizing: 'border-box', fontFamily: 'monospace', fontWeight: 'bold' }} />
@@ -702,25 +682,25 @@ const ShopFloor = () => {
         );
     }
 
-    // 🚀 NEW: UPDATED MASTER WRAPPER & NAV BAR TO MATCH HQ/FINISHING AESTHETIC
     return (
         <div style={{ background: '#f8f9fa', color: '#333', minHeight: '100vh', fontFamily: 'monospace' }}>
             
-            <nav style={{ background: '#fff', padding: '20px 30px', borderBottom: '4px solid #000', display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
-                <div style={{ fontWeight: 900, color: '#0056b3', fontSize: '2rem', textTransform: 'uppercase', letterSpacing: '1px', textShadow: '2px 2px 0px rgba(0,0,0,0.1)' }}>FAB-OS</div>
+            {/* 🚀 NAV BAR: Reduced font-weight from 900 to bold, and border from 4px to 2px */}
+            <nav style={{ background: '#fff', padding: '20px 30px', borderBottom: '2px solid #000', display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 'bold', color: '#0056b3', fontSize: '1.8rem', textTransform: 'uppercase', letterSpacing: '1px', textShadow: '2px 2px 0px rgba(0,0,0,0.1)' }}>FAB-OS</div>
                 
                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', flex: 1 }}>
                     {TABS.filter(t => myTabs.includes(t)).map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)} style={{ 
                             background: activeTab === tab ? '#0056b3' : '#fff', 
                             color: activeTab === tab ? '#fff' : '#000', 
-                            border: '2px solid #000', 
+                            border: '1px solid #000', 
                             padding: '10px 20px', 
                             fontWeight: 'bold', 
                             fontSize: '0.9rem', 
                             cursor: 'pointer', 
                             textTransform: 'uppercase',
-                            boxShadow: activeTab === tab ? 'inset 3px 3px 0 rgba(0,0,0,0.2)' : '3px 3px 0 #000',
+                            boxShadow: activeTab === tab ? 'inset 3px 3px 0 rgba(0,0,0,0.2)' : '2px 2px 0 #000',
                             transition: '0.1s'
                         }}>
                             {tab}
@@ -728,7 +708,7 @@ const ShopFloor = () => {
                     ))}
                 </div>
 
-                <button onClick={() => navigate('/')} style={{ color: '#d9534f', background: '#fff', border: '2px solid #d9534f', padding: '10px 20px', cursor: 'pointer', fontWeight: 'bold', boxShadow: '3px 3px 0 #d9534f', fontSize: '0.9rem', textTransform: 'uppercase', transition: '0.1s' }}>🏠 HUB / LOGOUT</button>
+                <button onClick={() => navigate('/')} style={{ color: '#d9534f', background: '#fff', border: '1px solid #d9534f', padding: '10px 20px', cursor: 'pointer', fontWeight: 'bold', boxShadow: '2px 2px 0 #d9534f', fontSize: '0.9rem', textTransform: 'uppercase', transition: '0.1s' }}>🏠 HUB / LOGOUT</button>
             </nav>
 
             <main style={{ padding: '30px', maxWidth: '1400px', margin: 'auto' }}>
@@ -747,11 +727,12 @@ const ShopFloor = () => {
                         {activeTab === 'custom' && renderCustomTab()}
                         {activeTab === 'export' && renderExportTab()}
                         {activeTab === 'logs' && renderLogsTab()}
-                        {activeTab === 'messaging' && renderMessagingTab()}
                         {activeTab === 'livio' && renderLivioTab()}
                         {activeTab === 'reports' && renderReportsTab()}
                         
+                        {/* 🚀 SHARED APPS */}
                         {activeTab === 'assets' && <AssetGalleryTab currentUser={user.name} activeBrand={null} />}
+                        {activeTab === 'messaging' && <SharedMessaging currentUser={user.name} currentApp="SHOP" writeLog={writeLog} />}
                     </>
                 )}
             </main>
