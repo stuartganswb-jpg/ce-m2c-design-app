@@ -5,35 +5,94 @@ import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds } from '@react-three/drei';
 
+// --- RECURSIVE SCENE GRAPH EXPLORER ---
+const SceneNodeTree = ({ node, level = 0, selectedNodes, hiddenNodes, onToggleSelect, onToggleHide }) => {
+    const [isExpanded, setIsExpanded] = useState(level < 2); // Auto-expand first 2 levels
+
+    if (!node) return null;
+    
+    // Ignore purely structural root nodes that clutter the UI
+    if (node.name === 'Scene' || node.name === 'RootNode') {
+        return <>{node.children.map(c => <SceneNodeTree key={c.uuid} node={c} level={level} selectedNodes={selectedNodes} hiddenNodes={hiddenNodes} onToggleSelect={onToggleSelect} onToggleHide={onToggleHide} />)}</>;
+    }
+
+    const isSelected = selectedNodes.includes(node.name);
+    const isHidden = hiddenNodes.includes(node.name);
+    const hasChildren = node.children && node.children.length > 0;
+    const hasName = !!node.name;
+
+    return (
+        <div style={{ paddingLeft: `${level * 12}px`, marginBottom: '2px', fontFamily: 'monospace' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: isSelected ? '#e6f2ff' : 'transparent', padding: '4px', border: isSelected ? '1px solid #007bff' : '1px solid transparent', borderRadius: '4px' }}>
+                
+                {hasChildren ? (
+                    <button onClick={() => setIsExpanded(!isExpanded)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.7rem', width: '15px' }}>{isExpanded ? '▼' : '▶'}</button>
+                ) : <div style={{ width: '15px' }} />}
+
+                <button onClick={() => hasName && onToggleHide(node.name)} disabled={!hasName} style={{ background: 'none', border: 'none', cursor: hasName ? 'pointer' : 'not-allowed', fontSize: '0.9rem', opacity: hasName ? 1 : 0.3 }}>
+                    {isHidden ? '👁️‍🗨️' : '👁️'}
+                </button>
+
+                <div onClick={() => hasName && onToggleSelect(node.name)} style={{ cursor: hasName ? 'pointer' : 'not-allowed', fontWeight: node.type === 'Group' ? 'bold' : 'normal', color: hasName ? (isSelected ? '#007bff' : '#333') : '#aaa', fontSize: '0.75rem', flex: 1, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    {node.type === 'Mesh' ? '🧊' : '📁'} 
+                    {hasName ? node.name : <span style={{ fontStyle: 'italic' }}>Unnamed {node.type}</span>}
+                </div>
+            </div>
+            
+            {isExpanded && hasChildren && (
+                <div style={{ borderLeft: '1px dashed #ccc', marginLeft: '6px', paddingTop: '2px' }}>
+                    {node.children.map(c => (
+                        <SceneNodeTree key={c.uuid} node={c} level={level + 1} selectedNodes={selectedNodes} hiddenNodes={hiddenNodes} onToggleSelect={onToggleSelect} onToggleHide={onToggleHide} />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
 // --- 3D INTERACTIVE HIGHLIGHT & VISIBILITY MODEL ---
-const SelectableModel = ({ url, selectedMeshes, existingClusters, hiddenMeshes, onMeshClick, onLoaded }) => {
+const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, onMeshClick, onLoaded }) => {
     const { scene } = useGLTF(url);
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
+    // Build the hierarchical tree data for the UI Panel
     useEffect(() => {
-        const meshes = [];
-        clonedScene.traverse(c => {
-            if (c.isMesh) meshes.push(c.name);
+        const buildTree = (node) => ({
+            uuid: node.uuid,
+            name: node.name,
+            type: node.type,
+            children: node.children ? node.children.map(buildTree) : []
         });
-        if (onLoaded) onLoaded(meshes);
+        if (onLoaded) onLoaded(buildTree(clonedScene));
     }, [clonedScene, onLoaded]);
 
     useMemo(() => {
+        // Helper to check if an object is a descendant of any named node in a list
+        const isDescendantOf = (child, nodeNameList) => {
+            let curr = child;
+            while (curr) {
+                if (curr.name && nodeNameList.includes(curr.name)) return true;
+                curr = curr.parent;
+            }
+            return false;
+        };
+
         clonedScene.traverse((child) => {
             if (child.isMesh) {
-                // Handle Visibility
-                if (hiddenMeshes.includes(child.name)) {
+                // 1. Handle Visibility (Inherits from Parent Groups)
+                if (isDescendantOf(child, hiddenNodes)) {
                     child.visible = false;
-                    return; // Skip material assignment if hidden
+                    return; 
                 }
                 child.visible = true;
 
-                // Handle Materials
+                // 2. Handle Materials
                 if (!child.userData.originalMaterial) child.userData.originalMaterial = child.material;
                 
-                const isClustered = existingClusters.some(cl => cl.meshes.includes(child.name));
+                const isSelected = isDescendantOf(child, selectedNodes);
+                const isClustered = existingClusters.some(cl => isDescendantOf(child, cl.nodes));
 
-                if (selectedMeshes.includes(child.name)) {
+                if (isSelected) {
                     child.material = new THREE.MeshStandardMaterial({ color: '#007bff', emissive: '#007bff', emissiveIntensity: 0.5, transparent: true, opacity: 0.9 });
                 } else if (isClustered) {
                     child.material = new THREE.MeshStandardMaterial({ color: '#28a745', emissive: '#28a745', emissiveIntensity: 0.2, transparent: true, opacity: 0.9 });
@@ -42,14 +101,19 @@ const SelectableModel = ({ url, selectedMeshes, existingClusters, hiddenMeshes, 
                 }
             }
         });
-    }, [clonedScene, selectedMeshes, existingClusters, hiddenMeshes]);
+    }, [clonedScene, selectedNodes, existingClusters, hiddenNodes]);
 
     return (
         <primitive 
             object={clonedScene} 
             onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'crosshair'; }}
             onPointerOut={(e) => { e.stopPropagation(); document.body.style.cursor = 'auto'; }}
-            onClick={(e) => { e.stopPropagation(); onMeshClick(e.object.name); }} 
+            onClick={(e) => { 
+                e.stopPropagation(); 
+                // If the mesh has no name, try to select its parent group
+                const targetName = e.object.name || (e.object.parent && e.object.parent.name);
+                if (targetName) onMeshClick(targetName); 
+            }} 
         />
     );
 };
@@ -57,7 +121,7 @@ const SelectableModel = ({ url, selectedMeshes, existingClusters, hiddenMeshes, 
 const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [masterAssemblies, setMasterAssemblies] = useState([]);
     const [activeAssembly, setActiveAssembly] = useState(null);
-    const [allMeshes, setAllMeshes] = useState([]);
+    const [sceneGraph, setSceneGraph] = useState(null);
     
     // Search & Filter State
     const [searchQuery, setSearchQuery] = useState("");
@@ -65,14 +129,12 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [statusFilter, setStatusFilter] = useState("ALL");
     const [availableProjects, setAvailableProjects] = useState([]);
 
-    const [bomPins, setBomPins] = useState([]);
-    const [selectedPinId, setSelectedPinId] = useState("");
+    const [newClusterName, setNewClusterName] = useState("");
+    const [selectedNodes, setSelectedNodes] = useState([]);
     
-    const [selectedMeshes, setSelectedMeshes] = useState([]);
-    
-    // 🚀 NEW: Visibility & Interaction State
+    // Visibility & Interaction State
     const [interactionMode, setInteractionMode] = useState("select"); // 'select', 'hide'
-    const [hiddenMeshes, setHiddenMeshes] = useState([]);
+    const [hiddenNodes, setHiddenNodes] = useState([]);
 
     useEffect(() => {
         if (!activeBrand) return;
@@ -95,19 +157,6 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         return () => unsubscribe();
     }, [activeBrand, activeAssembly?.id]);
 
-    useEffect(() => {
-        if (!activeAssembly) {
-            setBomPins([]);
-            return;
-        }
-        const q = query(collection(db, "assembly_pins"), where("assemblyId", "==", activeAssembly.itemId));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            setBomPins(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        });
-        return () => unsubscribe();
-    }, [activeAssembly]);
-
-    // 🚀 NEW: Filter Logic
     const filteredAssemblies = masterAssemblies.filter(asm => {
         const matchesSearch = (asm.itemName || "").toLowerCase().includes(searchQuery.toLowerCase()) || 
                               (asm.legacyErpId || "").toLowerCase().includes(searchQuery.toLowerCase());
@@ -128,45 +177,47 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         return matchesSearch && matchesProject && matchesStatus;
     });
 
-    const handleMeshClick = (meshName) => {
-        if (interactionMode === "hide") {
-            setHiddenMeshes(prev => [...prev, meshName]);
-            // If we hide it, we should also deselect it if it was selected
-            setSelectedMeshes(prev => prev.filter(m => m !== meshName));
-        } else {
-            setSelectedMeshes(prev => prev.includes(meshName) ? prev.filter(m => m !== meshName) : [...prev, meshName]);
-        }
+    const handleToggleSelect = (nodeName) => {
+        setSelectedNodes(prev => prev.includes(nodeName) ? prev.filter(n => n !== nodeName) : [...prev, nodeName]);
+    };
+
+    const handleToggleHide = (nodeName) => {
+        setHiddenNodes(prev => {
+            if (prev.includes(nodeName)) return prev.filter(n => n !== nodeName);
+            // If we hide it, deselect it automatically to prevent confusion
+            setSelectedNodes(curr => curr.filter(n => n !== nodeName));
+            return [...prev, nodeName];
+        });
+    };
+
+    const handleMeshClick = (nodeName) => {
+        if (interactionMode === "hide") handleToggleHide(nodeName);
+        else handleToggleSelect(nodeName);
     };
 
     const handleSaveCluster = async () => {
-        if (!selectedPinId) return alert("Please select a BOM Component from the dropdown.");
-        if (selectedMeshes.length === 0) return alert("Please select at least one 3D mesh.");
-
-        const selectedPin = bomPins.find(p => p.id === selectedPinId);
-        if (!selectedPin) return;
+        if (!newClusterName.trim()) return alert("Please enter a name for this Sub-Assembly/Cluster.");
+        if (selectedNodes.length === 0) return alert("Please select at least one 3D Node or Mesh.");
 
         const currentClusters = activeAssembly.nodeClusters || [];
         
         const newCluster = {
-            id: selectedPin.id,
-            partId: selectedPin.partId, 
-            name: selectedPin.partName,
-            legacyErpId: selectedPin.legacyErpId || "N/A",
-            meshes: selectedMeshes
+            id: `CLUSTER-${Date.now()}`,
+            name: newClusterName.toUpperCase().trim(),
+            nodes: selectedNodes // Using 'nodes' to encompass both Groups and Meshes
         };
 
-        const updatedClusters = currentClusters.filter(c => c.id !== selectedPin.id);
-        updatedClusters.push(newCluster);
+        const updatedClusters = [...currentClusters, newCluster];
 
         try {
             await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updatedClusters });
-            setSelectedPinId("");
-            setSelectedMeshes([]);
+            setNewClusterName("");
+            setSelectedNodes([]);
         } catch (err) { console.error(err); alert("Failed to save cluster."); }
     };
 
     const handleDeleteCluster = async (clusterId) => {
-        if (!window.confirm("Delete this grouping? The meshes will return to being individual parts.")) return;
+        if (!window.confirm("Delete this grouping? The meshes will return to being unassigned.")) return;
         const updatedClusters = (activeAssembly.nodeClusters || []).filter(c => c.id !== clusterId);
         try {
             await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updatedClusters });
@@ -182,30 +233,30 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
             <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', gap: '15px', boxShadow: '5px 5px 0 #000' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div>
-                        <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#6f42c1' }}>2.5 Node Grouping Studio</h2>
-                        <span style={{ fontSize: '0.7rem', color: '#666' }}>BIND 3D MESHES TO BOM COMPONENTS</span>
+                        <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#6f42c1' }}>1.5 Node Grouping Studio</h2>
+                        <span style={{ fontSize: '0.7rem', color: '#666' }}>EXTRACT SUB-ASSEMBLIES DIRECTLY FROM CAD NATIVE DATA</span>
                     </div>
                 </div>
                 
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center', background: '#f8f9fa', padding: '10px', border: '1px solid #ccc' }}>
                     <div style={{ flex: 1 }}>
                         <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block' }}>SEARCH:</label>
-                        <input type="text" placeholder="Search Assembly Name or ID..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                        <input type="text" placeholder="Search Assembly Name or ID..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }} />
                     </div>
                     <div style={{ flex: 1 }}>
                         <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block' }}>PROJECT:</label>
-                        <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                        <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
                             <option value="ALL">ALL PROJECTS</option>
                             {availableProjects.map(p => <option key={p} value={p}>{p}</option>)}
                         </select>
                     </div>
                     <div style={{ flex: 1 }}>
                         <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block' }}>STATUS:</label>
-                        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
                             <option value="ALL">ALL STATUSES</option>
                             <option value="NO_CAD">⚠️ AWAITING CAD</option>
                             <option value="NEEDS_CLUSTERING">⚙️ NEEDS CLUSTERING</option>
-                            <option value="CLUSTERED">✅ CLUSTERED</option>
+                            <option value="CLUSTERED">✅ FULLY CLUSTERED</option>
                         </select>
                     </div>
                 </div>
@@ -228,7 +279,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                         }
 
                         return (
-                            <div key={asm.id} onClick={() => { setActiveAssembly(asm); setSelectedMeshes([]); setAllMeshes([]); setSelectedPinId(""); setHiddenMeshes([]); }} style={{ background: activeAssembly?.id === asm.id ? '#e6e6fa' : '#fff', border: activeAssembly?.id === asm.id ? '3px solid #6f42c1' : '2px solid #ccc', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', boxShadow: activeAssembly?.id === asm.id ? '5px 5px 0 #6f42c1' : 'none' }}>
+                            <div key={asm.id} onClick={() => { setActiveAssembly(asm); setSelectedNodes([]); setSceneGraph(null); setHiddenNodes([]); }} style={{ background: activeAssembly?.id === asm.id ? '#e6e6fa' : '#fff', border: activeAssembly?.id === asm.id ? '3px solid #6f42c1' : '2px solid #ccc', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', boxShadow: activeAssembly?.id === asm.id ? '5px 5px 0 #6f42c1' : 'none' }}>
                                 <div style={{ padding: '5px 10px', background: statusColor, color: '#fff', fontSize: '0.65rem', fontWeight: 'bold', textAlign: 'center' }}>
                                     {statusText}
                                 </div>
@@ -246,16 +297,15 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                     <div style={{ flex: 1, display: 'flex', gap: '20px', minHeight: '600px' }}>
                         
                         {/* 3D VIEWER */}
-                        <div style={{ flex: 2, background: '#fff', border: '3px solid #000', boxShadow: '10px 10px 0 #000', position: 'relative' }}>
+                        <div style={{ flex: 1.5, background: '#fff', border: '3px solid #000', boxShadow: '10px 10px 0 #000', position: 'relative' }}>
                             <div style={{ position: 'absolute', top: '15px', left: '15px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '10px', border: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>🟦 CLICK TO SELECT</div>
-                                <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#28a745' }}>🟩 ALREADY CLUSTERED</div>
+                                <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>🟦 CURRENT SELECTION</div>
+                                <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#28a745' }}>🟩 CLUSTERED / BOUND</div>
                                 <div style={{ fontSize: '0.65rem', color: '#666', borderTop: '1px dotted #ccc', paddingTop: '5px', marginTop: '2px' }}>
                                     <i>Tip: Right-click & drag to pan.</i>
                                 </div>
                             </div>
 
-                            {/* 🚀 NEW: VISIBILITY CONTROLS */}
                             <div style={{ position: 'absolute', top: '15px', right: '15px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '10px', border: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end' }}>
                                 <div style={{ display: 'flex', gap: '5px' }}>
                                     <button 
@@ -271,12 +321,12 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         👁️‍🗨️ HIDE PARTS
                                     </button>
                                 </div>
-                                {hiddenMeshes.length > 0 && (
+                                {hiddenNodes.length > 0 && (
                                     <button 
-                                        onClick={() => setHiddenMeshes([])}
+                                        onClick={() => setHiddenNodes([])}
                                         style={{ padding: '6px 12px', background: '#ffc107', color: '#000', fontWeight: 'bold', border: '1px solid #000', cursor: 'pointer', fontSize: '0.75rem', width: '100%' }}
                                     >
-                                        👁️ SHOW ALL ({hiddenMeshes.length} HIDDEN)
+                                        👁️ SHOW ALL ({hiddenNodes.length} HIDDEN)
                                     </button>
                                 )}
                             </div>
@@ -284,46 +334,65 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                             <Canvas camera={{ position: [5, 5, 5], fov: 50 }}>
                                 <ambientLight intensity={0.5} />
                                 <directionalLight position={[10, 10, 5]} intensity={1} />
-                                {/* 🚀 FIX: enablePan=true (Default behavior for OrbitControls allows right-click panning) */}
                                 <OrbitControls makeDefault enablePan={true} />
                                 <Bounds fit clip observe margin={1.2}>
                                     <SelectableModel 
                                         url={activeAssembly.manufacturingSpecs.cadUrl} 
-                                        selectedMeshes={selectedMeshes} 
+                                        selectedNodes={selectedNodes} 
                                         existingClusters={existingClusters}
-                                        hiddenMeshes={hiddenMeshes}
+                                        hiddenNodes={hiddenNodes}
                                         onMeshClick={handleMeshClick} 
-                                        onLoaded={setAllMeshes}
+                                        onLoaded={setSceneGraph}
                                     />
                                 </Bounds>
                             </Canvas>
                         </div>
 
-                        {/* CLUSTER MANAGER */}
+                        {/* RIGHT: TREE & CLUSTER MANAGER */}
                         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                            <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', boxShadow: '5px 5px 0 #6f42c1' }}>
-                                <h3 style={{ margin: '0 0 15px 0', color: '#6f42c1' }}>BIND MESHES TO BOM</h3>
-                                <div style={{ background: '#e6f2ff', padding: '10px', border: '1px solid #007bff', marginBottom: '15px', fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff' }}>
-                                    {selectedMeshes.length} Meshes Selected
+                            
+                            {/* SCENE GRAPH EXPLORER */}
+                            <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', height: '350px', boxShadow: '5px 5px 0 #17a2b8' }}>
+                                <div style={{ padding: '10px 15px', background: '#17a2b8', color: '#fff', fontWeight: 'bold', fontSize: '1rem', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span>🌲 NATIVE CAD HIERARCHY</span>
                                 </div>
-                                
-                                <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>LINK TO BOM COMPONENT:</label>
-                                <select 
-                                    value={selectedPinId} 
-                                    onChange={e => setSelectedPinId(e.target.value)} 
-                                    style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', marginBottom: '15px', fontWeight: 'bold', textTransform: 'uppercase' }}
-                                >
-                                    <option value="">-- SELECT FROM BOM --</option>
-                                    {bomPins.map(pin => (
-                                        <option key={pin.id} value={pin.id}>
-                                            {pin.legacyErpId !== "PENDING" && pin.legacyErpId !== "N/A" ? `[${pin.legacyErpId}] ` : ''}{pin.partName}
-                                        </option>
-                                    ))}
-                                </select>
-                                
-                                <button onClick={handleSaveCluster} style={{ width: '100%', padding: '15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>💾 SAVE BINDING</button>
+                                <div style={{ flex: 1, overflowY: 'auto', padding: '15px', background: '#f8f9fa' }}>
+                                    {!sceneGraph ? (
+                                        <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem' }}>Parsing GLTF Nodes...</div>
+                                    ) : (
+                                        <SceneNodeTree 
+                                            node={sceneGraph} 
+                                            selectedNodes={selectedNodes} 
+                                            hiddenNodes={hiddenNodes} 
+                                            onToggleSelect={handleToggleSelect} 
+                                            onToggleHide={handleToggleHide} 
+                                        />
+                                    )}
+                                </div>
                             </div>
 
+                            {/* CLUSTER SAVER */}
+                            <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', boxShadow: '5px 5px 0 #6f42c1', display: 'flex', flexDirection: 'column' }}>
+                                <h3 style={{ margin: '0 0 15px 0', color: '#6f42c1' }}>CREATE SUB-ASSEMBLY</h3>
+                                <div style={{ background: '#e6f2ff', padding: '10px', border: '1px solid #007bff', marginBottom: '15px', fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff' }}>
+                                    {selectedNodes.length} Nodes / Groups Selected
+                                </div>
+                                
+                                <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>NAME THIS CLUSTER:</label>
+                                <input 
+                                    value={newClusterName} 
+                                    onChange={e => setNewClusterName(e.target.value)} 
+                                    placeholder="e.g. UPPER EXTENSION POLE"
+                                    style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', marginBottom: '15px', fontWeight: 'bold', textTransform: 'uppercase' }}
+                                />
+                                
+                                <button onClick={handleSaveCluster} style={{ width: '100%', padding: '15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>💾 SAVE TO MASTER FILE CABINET</button>
+                                <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '10px', textAlign: 'center' }}>
+                                    Saving this cluster makes it instantly available to the BOM Engine in Tab 2.
+                                </div>
+                            </div>
+
+                            {/* SAVED CLUSTERS */}
                             <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', flex: 1, overflowY: 'auto' }}>
                                 <h3 style={{ margin: '0 0 15px 0' }}>SAVED BOM BINDINGS ({existingClusters.length})</h3>
                                 {existingClusters.length === 0 && <div style={{ color: '#666', fontStyle: 'italic', fontSize: '0.8rem' }}>No meshes bound to BOM components yet.</div>}
@@ -332,8 +401,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         <div key={cl.id} style={{ border: '2px solid #28a745', padding: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#eafaf1' }}>
                                             <div>
                                                 <div style={{ fontWeight: 'bold', color: '#1e7e34' }}>{cl.name}</div>
-                                                <div style={{ fontSize: '0.65rem', color: '#555', fontWeight: 'bold' }}>{cl.legacyErpId}</div>
-                                                <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '4px' }}>{cl.meshes.length} Meshes Attached</div>
+                                                <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '4px' }}>{cl.nodes?.length || 0} Nodes Attached</div>
                                             </div>
                                             <button onClick={() => handleDeleteCluster(cl.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
                                         </div>
@@ -345,7 +413,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                     </div>
                 ) : activeAssembly && (
                     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: '3px dashed #ccc' }}>
-                        <div style={{ color: '#999', fontWeight: 'bold', fontSize: '1.2rem' }}>Please upload a 3D CAD model to manage nodes.</div>
+                        <div style={{ color: '#999', fontWeight: 'bold', fontSize: '1.2rem' }}>Please upload a 3D CAD model in Tab 1 to manage nodes.</div>
                     </div>
                 )}
             </div>
