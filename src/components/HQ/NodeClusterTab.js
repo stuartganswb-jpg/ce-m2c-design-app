@@ -5,10 +5,9 @@ import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds } from '@react-three/drei';
 
-// --- 3D INTERACTIVE HIGHLIGHT MODEL ---
-const SelectableModel = ({ url, selectedMeshes, existingClusters, onMeshClick, onLoaded }) => {
+// --- 3D INTERACTIVE HIGHLIGHT & VISIBILITY MODEL ---
+const SelectableModel = ({ url, selectedMeshes, existingClusters, hiddenMeshes, onMeshClick, onLoaded }) => {
     const { scene } = useGLTF(url);
-    // 🚀 DEEP CLONE FIX: Prevents the green material from polluting the global GLTF cache
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
     useEffect(() => {
@@ -22,6 +21,14 @@ const SelectableModel = ({ url, selectedMeshes, existingClusters, onMeshClick, o
     useMemo(() => {
         clonedScene.traverse((child) => {
             if (child.isMesh) {
+                // Handle Visibility
+                if (hiddenMeshes.includes(child.name)) {
+                    child.visible = false;
+                    return; // Skip material assignment if hidden
+                }
+                child.visible = true;
+
+                // Handle Materials
                 if (!child.userData.originalMaterial) child.userData.originalMaterial = child.material;
                 
                 const isClustered = existingClusters.some(cl => cl.meshes.includes(child.name));
@@ -35,7 +42,7 @@ const SelectableModel = ({ url, selectedMeshes, existingClusters, onMeshClick, o
                 }
             }
         });
-    }, [clonedScene, selectedMeshes, existingClusters]);
+    }, [clonedScene, selectedMeshes, existingClusters, hiddenMeshes]);
 
     return (
         <primitive 
@@ -52,11 +59,20 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [activeAssembly, setActiveAssembly] = useState(null);
     const [allMeshes, setAllMeshes] = useState([]);
     
-    // 🚀 NEW: Store the BOM components pulled from Tab 2
+    // Search & Filter State
+    const [searchQuery, setSearchQuery] = useState("");
+    const [projectFilter, setProjectFilter] = useState("ALL");
+    const [statusFilter, setStatusFilter] = useState("ALL");
+    const [availableProjects, setAvailableProjects] = useState([]);
+
     const [bomPins, setBomPins] = useState([]);
     const [selectedPinId, setSelectedPinId] = useState("");
     
     const [selectedMeshes, setSelectedMeshes] = useState([]);
+    
+    // 🚀 NEW: Visibility & Interaction State
+    const [interactionMode, setInteractionMode] = useState("select"); // 'select', 'hide'
+    const [hiddenMeshes, setHiddenMeshes] = useState([]);
 
     useEffect(() => {
         if (!activeBrand) return;
@@ -67,6 +83,10 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
             docs.sort((a, b) => (a.itemName || "").localeCompare(b.itemName || ""));
             setMasterAssemblies(docs);
             
+            // Extract unique projects for the filter
+            const projects = [...new Set(docs.map(d => d.project).filter(Boolean))].sort();
+            setAvailableProjects(projects);
+
             if (activeAssembly) {
                 const updated = docs.find(d => d.id === activeAssembly.id);
                 if (updated) setActiveAssembly(updated);
@@ -75,7 +95,6 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         return () => unsubscribe();
     }, [activeBrand, activeAssembly?.id]);
 
-    // 🚀 NEW: Fetch the actual BOM components for the active assembly
     useEffect(() => {
         if (!activeAssembly) {
             setBomPins([]);
@@ -88,8 +107,35 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         return () => unsubscribe();
     }, [activeAssembly]);
 
+    // 🚀 NEW: Filter Logic
+    const filteredAssemblies = masterAssemblies.filter(asm => {
+        const matchesSearch = (asm.itemName || "").toLowerCase().includes(searchQuery.toLowerCase()) || 
+                              (asm.legacyErpId || "").toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesProject = projectFilter === "ALL" || asm.project === projectFilter;
+        
+        let matchesStatus = true;
+        const hasCAD = !!asm.manufacturingSpecs?.cadUrl;
+        const clusterCount = asm.nodeClusters?.length || 0;
+        
+        if (statusFilter === "NO_CAD") {
+            matchesStatus = !hasCAD;
+        } else if (statusFilter === "NEEDS_CLUSTERING") {
+            matchesStatus = hasCAD && clusterCount === 0;
+        } else if (statusFilter === "CLUSTERED") {
+            matchesStatus = hasCAD && clusterCount > 0;
+        }
+
+        return matchesSearch && matchesProject && matchesStatus;
+    });
+
     const handleMeshClick = (meshName) => {
-        setSelectedMeshes(prev => prev.includes(meshName) ? prev.filter(m => m !== meshName) : [...prev, meshName]);
+        if (interactionMode === "hide") {
+            setHiddenMeshes(prev => [...prev, meshName]);
+            // If we hide it, we should also deselect it if it was selected
+            setSelectedMeshes(prev => prev.filter(m => m !== meshName));
+        } else {
+            setSelectedMeshes(prev => prev.includes(meshName) ? prev.filter(m => m !== meshName) : [...prev, meshName]);
+        }
     };
 
     const handleSaveCluster = async () => {
@@ -101,16 +147,14 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
 
         const currentClusters = activeAssembly.nodeClusters || [];
         
-        // 🚀 BIND THE CLUSTER DIRECTLY TO THE BOM ID
         const newCluster = {
-            id: selectedPin.id, // Lock the cluster ID to the exact Pin ID
-            partId: selectedPin.partId, // The Master Library ID reference
+            id: selectedPin.id,
+            partId: selectedPin.partId, 
             name: selectedPin.partName,
             legacyErpId: selectedPin.legacyErpId || "N/A",
             meshes: selectedMeshes
         };
 
-        // If they update an existing linked component, replace the old cluster array
         const updatedClusters = currentClusters.filter(c => c.id !== selectedPin.id);
         updatedClusters.push(newCluster);
 
@@ -133,24 +177,60 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
-            <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
-                <div>
-                    <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#6f42c1' }}>2.5 Node Grouping Studio</h2>
-                    <span style={{ fontSize: '0.7rem', color: '#666' }}>BIND 3D MESHES TO BOM COMPONENTS</span>
+            
+            {/* HEADER & FILTERS */}
+            <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', gap: '15px', boxShadow: '5px 5px 0 #000' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                        <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#6f42c1' }}>2.5 Node Grouping Studio</h2>
+                        <span style={{ fontSize: '0.7rem', color: '#666' }}>BIND 3D MESHES TO BOM COMPONENTS</span>
+                    </div>
+                </div>
+                
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', background: '#f8f9fa', padding: '10px', border: '1px solid #ccc' }}>
+                    <div style={{ flex: 1 }}>
+                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block' }}>SEARCH:</label>
+                        <input type="text" placeholder="Search Assembly Name or ID..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block' }}>PROJECT:</label>
+                        <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                            <option value="ALL">ALL PROJECTS</option>
+                            {availableProjects.map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block' }}>STATUS:</label>
+                        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                            <option value="ALL">ALL STATUSES</option>
+                            <option value="NO_CAD">⚠️ AWAITING CAD</option>
+                            <option value="NEEDS_CLUSTERING">⚙️ NEEDS CLUSTERING</option>
+                            <option value="CLUSTERED">✅ CLUSTERED</option>
+                        </select>
+                    </div>
                 </div>
             </div>
 
             <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start', flex: 1 }}>
                 
                 {/* LEFT: ASSEMBLY SELECTOR */}
-                <div style={{ width: '300px', display: 'flex', flexDirection: 'column', gap: '15px', flexShrink: 0 }}>
-                    {masterAssemblies.map(asm => {
+                <div style={{ width: '300px', display: 'flex', flexDirection: 'column', gap: '15px', flexShrink: 0, maxHeight: '800px', overflowY: 'auto' }}>
+                    {filteredAssemblies.length === 0 && <div style={{ color: '#999', fontStyle: 'italic', padding: '10px' }}>No assemblies match criteria.</div>}
+                    {filteredAssemblies.map(asm => {
                         const hasCAD = !!asm.manufacturingSpecs?.cadUrl;
                         const clusterCount = asm.nodeClusters?.length || 0;
+                        
+                        let statusColor = '#666';
+                        let statusText = '⚠️ AWAITING CAD';
+                        if (hasCAD) {
+                            statusColor = clusterCount > 0 ? '#28a745' : '#6f42c1';
+                            statusText = clusterCount > 0 ? `✅ CLUSTERED (${clusterCount})` : '⚙️ NEEDS CLUSTERING';
+                        }
+
                         return (
-                            <div key={asm.id} onClick={() => { setActiveAssembly(asm); setSelectedMeshes([]); setAllMeshes([]); setSelectedPinId(""); }} style={{ background: activeAssembly?.id === asm.id ? '#e6e6fa' : '#fff', border: activeAssembly?.id === asm.id ? '3px solid #6f42c1' : '2px solid #ccc', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', boxShadow: activeAssembly?.id === asm.id ? '5px 5px 0 #6f42c1' : 'none' }}>
-                                <div style={{ padding: '5px 10px', background: hasCAD ? '#6f42c1' : '#666', color: '#fff', fontSize: '0.65rem', fontWeight: 'bold', textAlign: 'center' }}>
-                                    {hasCAD ? `⚙️ CAD: ${clusterCount} CLUSTERS` : '⚠️ NO CAD'}
+                            <div key={asm.id} onClick={() => { setActiveAssembly(asm); setSelectedMeshes([]); setAllMeshes([]); setSelectedPinId(""); setHiddenMeshes([]); }} style={{ background: activeAssembly?.id === asm.id ? '#e6e6fa' : '#fff', border: activeAssembly?.id === asm.id ? '3px solid #6f42c1' : '2px solid #ccc', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', boxShadow: activeAssembly?.id === asm.id ? '5px 5px 0 #6f42c1' : 'none' }}>
+                                <div style={{ padding: '5px 10px', background: statusColor, color: '#fff', fontSize: '0.65rem', fontWeight: 'bold', textAlign: 'center' }}>
+                                    {statusText}
                                 </div>
                                 <div style={{ padding: '15px' }}>
                                     <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#000' }}>{asm.legacyErpId !== "PENDING" ? asm.legacyErpId : asm.itemId}</div>
@@ -167,19 +247,51 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                         
                         {/* 3D VIEWER */}
                         <div style={{ flex: 2, background: '#fff', border: '3px solid #000', boxShadow: '10px 10px 0 #000', position: 'relative' }}>
-                            <div style={{ position: 'absolute', top: '15px', left: '15px', zIndex: 10, background: 'rgba(255,255,255,0.9)', padding: '10px', border: '2px solid #000' }}>
+                            <div style={{ position: 'absolute', top: '15px', left: '15px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '10px', border: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '5px' }}>
                                 <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>🟦 CLICK TO SELECT</div>
                                 <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#28a745' }}>🟩 ALREADY CLUSTERED</div>
+                                <div style={{ fontSize: '0.65rem', color: '#666', borderTop: '1px dotted #ccc', paddingTop: '5px', marginTop: '2px' }}>
+                                    <i>Tip: Right-click & drag to pan.</i>
+                                </div>
                             </div>
+
+                            {/* 🚀 NEW: VISIBILITY CONTROLS */}
+                            <div style={{ position: 'absolute', top: '15px', right: '15px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '10px', border: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end' }}>
+                                <div style={{ display: 'flex', gap: '5px' }}>
+                                    <button 
+                                        onClick={() => setInteractionMode('select')} 
+                                        style={{ padding: '6px 12px', background: interactionMode === 'select' ? '#007bff' : '#fff', color: interactionMode === 'select' ? '#fff' : '#000', fontWeight: 'bold', border: '1px solid #000', cursor: 'pointer', fontSize: '0.75rem' }}
+                                    >
+                                        🖱️ SELECT
+                                    </button>
+                                    <button 
+                                        onClick={() => setInteractionMode('hide')} 
+                                        style={{ padding: '6px 12px', background: interactionMode === 'hide' ? '#d9534f' : '#fff', color: interactionMode === 'hide' ? '#fff' : '#000', fontWeight: 'bold', border: '1px solid #000', cursor: 'pointer', fontSize: '0.75rem' }}
+                                    >
+                                        👁️‍🗨️ HIDE PARTS
+                                    </button>
+                                </div>
+                                {hiddenMeshes.length > 0 && (
+                                    <button 
+                                        onClick={() => setHiddenMeshes([])}
+                                        style={{ padding: '6px 12px', background: '#ffc107', color: '#000', fontWeight: 'bold', border: '1px solid #000', cursor: 'pointer', fontSize: '0.75rem', width: '100%' }}
+                                    >
+                                        👁️ SHOW ALL ({hiddenMeshes.length} HIDDEN)
+                                    </button>
+                                )}
+                            </div>
+
                             <Canvas camera={{ position: [5, 5, 5], fov: 50 }}>
                                 <ambientLight intensity={0.5} />
                                 <directionalLight position={[10, 10, 5]} intensity={1} />
-                                <OrbitControls makeDefault />
+                                {/* 🚀 FIX: enablePan=true (Default behavior for OrbitControls allows right-click panning) */}
+                                <OrbitControls makeDefault enablePan={true} />
                                 <Bounds fit clip observe margin={1.2}>
                                     <SelectableModel 
                                         url={activeAssembly.manufacturingSpecs.cadUrl} 
                                         selectedMeshes={selectedMeshes} 
                                         existingClusters={existingClusters}
+                                        hiddenMeshes={hiddenMeshes}
                                         onMeshClick={handleMeshClick} 
                                         onLoaded={setAllMeshes}
                                     />
@@ -195,7 +307,6 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                     {selectedMeshes.length} Meshes Selected
                                 </div>
                                 
-                                {/* 🚀 FIX: Dropdown mapped strictly to the current BOM Pins */}
                                 <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>LINK TO BOM COMPONENT:</label>
                                 <select 
                                     value={selectedPinId} 
