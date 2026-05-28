@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc } from "firebase/firestore";
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, setDoc, getDoc } from "firebase/firestore";
 
 // --- 🚀 NEW: INJECT PRINT CSS FOR PDF GENERATION ---
 const printStyles = `
@@ -12,7 +12,7 @@ const printStyles = `
   }
 `;
 
-// --- EXPANDED CRM MOCK DATA ---
+// --- EXPANDED CRM MOCK DATA (Merged with DB later) ---
 const INITIAL_CRM_DATA = {
     'CUST-882': { id: 'CUST-882', type: 'CUSTOMER', name: 'Smith Residence (Tier 1)', email: 'jane.smith@example.com', contact: 'Jane Smith', phone: '555-0192', terms: 'Net 30', ytd: 45200.00, mtd: 12500.00, openOrders: 3, notes: 'High priority client. Always wants expedited shipping on custom hardware.' },
     'CUST-310': { id: 'CUST-310', type: 'CUSTOMER', name: 'The Harrison Project', email: 'purchasing@harrisonproject.com', contact: 'Procurement Team', phone: '555-8831', terms: 'CIA', ytd: 120500.00, mtd: 0.00, openOrders: 1, notes: 'Strict delivery windows. Requires detailed BOMs before PO issuance.' },
@@ -31,6 +31,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [crmData, setCrmData] = useState(INITIAL_CRM_DATA);
   const [crmSearchQuery, setCrmSearchQuery] = useState('');
   const [activeCrmRecord, setActiveCrmRecord] = useState(null);
+  
+  // 🚀 NEW: CRM Quick-Create State
+  const [showNewCrmModal, setShowNewCrmModal] = useState(false);
+  const [newCrmForm, setNewCrmForm] = useState({ name: '', email: '', contact: '', phone: '', terms: 'Net 30' });
+  const [globalLists, setGlobalLists] = useState({ customers: [], vendors: [] });
 
   const [searchQuery, setSearchQuery] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -43,7 +48,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [activeCalloutId, setActiveCalloutId] = useState(null);
   const svgRef = useRef(null);
 
-  // 🚀 NEW STATE: FORMS & DOCUMENT STUDIO
+  // FORMS & DOCUMENT STUDIO
   const [formTemplates, setFormTemplates] = useState({});
   const [brandLogos, setBrandLogos] = useState({});
   const [libraryParts, setLibraryParts] = useState([]);
@@ -89,7 +94,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       return () => unsub();
   }, [activeModalJob, activeRevisionId]);
 
-  // 🚀 3. NEW LIVE FIREBASE LISTENER: Forms, Logos, and Parts Dictionary
+  // 3. LIVE FIREBASE LISTENER: Forms, Logos, and Parts Dictionary
   useEffect(() => {
       if (!activeBrand) return;
       const unsubForms = onSnapshot(doc(db, "hq_config", "form_templates"), (snap) => {
@@ -103,6 +108,65 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       });
       return () => { unsubForms(); unsubLogos(); unsubParts(); };
   }, [activeBrand]);
+
+  // 🚀 4. NEW LIVE FIREBASE LISTENER: Dynamic CRM Sync
+  useEffect(() => {
+      const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
+          const dbRecords = {};
+          snap.docs.forEach(d => dbRecords[d.id] = { id: d.id, ...d.data() });
+          setCrmData({ ...INITIAL_CRM_DATA, ...dbRecords });
+      });
+
+      const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (snap) => {
+          if (snap.exists()) {
+              const data = snap.data();
+              setGlobalLists({ customers: data.customers || [], vendors: data.vendors || [] });
+          }
+      });
+
+      return () => { unsubCrm(); unsubLists(); };
+  }, []);
+
+  // --- 🚀 NEW ACTION: Create CRM Record & Sync to Master Lists ---
+  const handleSaveNewCrm = async () => {
+      if (!newCrmForm.name.trim()) return alert("Entity Name is required.");
+      
+      const isCust = activeSubTab === 'CUSTOMERS';
+      const prefix = isCust ? 'CUST' : 'VEND';
+      const newId = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      const newRecord = {
+          id: newId,
+          type: isCust ? 'CUSTOMER' : 'VENDOR',
+          name: newCrmForm.name.trim(),
+          email: newCrmForm.email.trim(),
+          contact: newCrmForm.contact.trim(),
+          phone: newCrmForm.phone.trim(),
+          terms: newCrmForm.terms || 'Net 30',
+          ytd: 0, mtd: 0, openOrders: 0, notes: ''
+      };
+
+      try {
+          // 1. Save to the main CRM collection
+          await setDoc(doc(db, "crm_records", newId), newRecord);
+
+          // 2. Map dynamically back to Tab 3 and Tab 4 master lists
+          const listKey = isCust ? 'customers' : 'vendors';
+          const updatedList = [...new Set([...(globalLists[listKey] || []), newId])];
+          
+          await setDoc(doc(db, "system", "master_lists"), { [listKey]: updatedList }, { merge: true });
+
+          // 3. Reset UI and load the new record
+          setShowNewCrmModal(false);
+          setNewCrmForm({ name: '', email: '', contact: '', phone: '', terms: 'Net 30' });
+          setCrmSearchQuery('');
+          setActiveCrmRecord(newRecord);
+          
+      } catch (err) {
+          console.error(err);
+          alert("Failed to create the new CRM record.");
+      }
+  };
 
   // --- ACTION HANDLERS ---
   const handleEditJob = (job) => alert(`Loading ${job.jobId || job.id} into Global Context...\n\nRouting operator back to CPQ / Vision Tabs to configure physical inventory.`);
@@ -208,7 +272,10 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   // --- CRM SEARCH ENGINE ---
   const targetCrmType = activeSubTab === 'CUSTOMERS' ? 'CUSTOMER' : 'VENDOR';
   const activeCrmList = Object.values(crmData).filter(r => r.type === targetCrmType);
+  
+  // 🚀 UPDATED: Check for exact match
   const crmSearchResults = crmSearchQuery ? activeCrmList.filter(r => r.name.toLowerCase().includes(crmSearchQuery.toLowerCase()) || r.id.toLowerCase().includes(crmSearchQuery.toLowerCase())) : [];
+  const exactMatchExists = crmSearchResults.some(r => r.name.toLowerCase() === crmSearchQuery.toLowerCase());
 
   const getCrmPipeline = (id) => {
       const entityName = crmData[id]?.name || "";
@@ -219,7 +286,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       ).sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   };
 
-  // 🚀 HELPER FOR DOCUMENT GENERATOR
   const getPartName = (partId) => {
       const part = libraryParts.find(p => p.id === partId);
       return part ? part.itemName : partId;
@@ -242,30 +308,40 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
         </div>
       </div>
 
-      {/* CRM SEARCH BAR */}
+      {/* CRM SEARCH BAR & QUICK-CREATE TRIGGER */}
       <div className="no-print" style={{ background: '#f8f9fa', border: '2px solid #000', borderTop: 'none', padding: '15px', display: 'flex', alignItems: 'center', gap: '20px', boxShadow: '5px 5px 0 rgba(0,0,0,0.05)' }}>
           <strong style={{ color: activeSubTab === 'CUSTOMERS' ? '#007bff' : '#fd7e14', fontSize: '0.9rem', whiteSpace: 'nowrap' }}>🔍 {activeSubTab} CRM DIRECTORY:</strong>
           <div style={{ position: 'relative', flex: 1 }}>
               <input 
                   type="text" 
-                  placeholder={`Search ${activeSubTab.toLowerCase()} by name or ID to view relationship profile...`} 
+                  placeholder={`Search ${activeSubTab.toLowerCase()} by name or ID...`} 
                   value={crmSearchQuery} 
                   onChange={e => setCrmSearchQuery(e.target.value)} 
                   style={{ width: '100%', padding: '12px', fontSize: '1rem', border: `2px solid ${activeSubTab === 'CUSTOMERS' ? '#007bff' : '#fd7e14'}`, boxSizing: 'border-box', outline: 'none', fontWeight: 'bold' }} 
               />
-              {crmSearchQuery && crmSearchResults.length > 0 && (
+              {crmSearchQuery && (
                   <div style={{ position: 'absolute', top: '100%', left: 0, width: '100%', background: '#fff', border: '2px solid #000', borderTop: 'none', zIndex: 1000, maxHeight: '250px', overflowY: 'auto', boxShadow: '4px 4px 0 rgba(0,0,0,0.2)' }}>
+                      
                       {crmSearchResults.map(record => (
                           <div key={record.id} onClick={() => { setActiveCrmRecord(record); setCrmSearchQuery(''); }} style={{ padding: '15px', borderBottom: '1px solid #eee', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onMouseOver={(e) => e.currentTarget.style.background = '#f4f4f4'} onMouseOut={(e) => e.currentTarget.style.background = '#fff'}>
                               <span style={{ fontWeight: 'bold', fontSize: '1rem' }}>{record.name}</span>
                               <span style={{ fontSize: '0.75rem', color: '#fff', background: '#333', padding: '4px 8px', borderRadius: '3px' }}>{record.id}</span>
                           </div>
                       ))}
-                  </div>
-              )}
-              {crmSearchQuery && crmSearchResults.length === 0 && (
-                  <div style={{ position: 'absolute', top: '100%', left: 0, width: '100%', background: '#fff', border: '2px solid #000', borderTop: 'none', zIndex: 1000, padding: '15px', color: '#999', fontStyle: 'italic', fontSize: '0.9rem' }}>
-                      No matching {activeSubTab.toLowerCase()} found in CRM database.
+
+                      {/* 🚀 QUICK CREATE BUTTON IN DROPDOWN */}
+                      {!exactMatchExists && (
+                          <div 
+                              onClick={() => {
+                                  setNewCrmForm(prev => ({ ...prev, name: crmSearchQuery }));
+                                  setShowNewCrmModal(true);
+                              }} 
+                              style={{ padding: '15px', background: '#eafaf1', color: '#28a745', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px', borderTop: '2px dashed #28a745' }}
+                          >
+                              <span style={{ fontSize: '1.2rem' }}>+</span> 
+                              ADD AS NEW {targetCrmType}: "{crmSearchQuery}"
+                          </div>
+                      )}
                   </div>
               )}
           </div>
@@ -294,7 +370,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                     <div style={{ display: 'flex', gap: '10px', borderTop: '1px dotted #eee', paddingTop: '10px', marginTop: '5px' }}>
                         <button onClick={() => setActiveModalJob(job)} style={{ flex: 1.5, padding: '8px 10px', background: '#000', color: '#fff', border: 'none', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>💬 OPEN INCEPTION WINDOW</button>
                         <button onClick={() => handleEditJob(job)} style={{ flex: 1, padding: '8px 10px', background: '#fff', border: '1px solid #007bff', color: '#007bff', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>⚙️ START CPQ</button>
-                        {/* 🚀 NEW DOC GENERATOR BUTTON */}
                         <button onClick={() => setActiveDocJob(job)} style={{ padding: '8px 10px', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>📄 PDF DOC</button>
                     </div>
                  </div>
@@ -325,8 +400,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                         <button onClick={() => handleEditJob(job)} style={{ flex: 1, padding: '8px', background: '#fff', border: '2px solid #007bff', color: '#007bff', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✏️ EDIT</button>
                         <button onClick={() => handleEmailQuote(job)} style={{ flex: 1.5, padding: '8px', background: '#17a2b8', border: '2px solid #117a8b', color: '#fff', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📧 EMAIL QUOTE</button>
                         <button onClick={() => handleApproveJob(job.id)} style={{ flex: 1.5, padding: '8px', background: '#28a745', border: '2px solid #1e7e34', color: '#fff', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✅ APPROVE</button>
-                        
-                        {/* 🚀 NEW DOC GENERATOR BUTTON */}
                         <button onClick={() => setActiveDocJob(job)} style={{ flex: 1, padding: '8px', background: '#fff', border: '2px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📄 PDF DOC</button>
                     </div>
                  </div>
@@ -336,7 +409,45 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
         </div>
       </div>
 
-      {/* --- CRM MODAL --- */}
+      {/* --- 🚀 NEW: CRM QUICK-CREATE MODAL --- */}
+      {showNewCrmModal && (
+          <div className="no-print" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}>
+              <div style={{ background: '#fff', border: '4px solid #000', width: '500px', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #28a745' }}>
+                  <div style={{ padding: '20px', background: '#28a745', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <h2 style={{ margin: 0, fontSize: '1.2rem', textTransform: 'uppercase' }}>ADD NEW {targetCrmType}</h2>
+                      <button onClick={() => setShowNewCrmModal(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+                  </div>
+                  <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                      
+                      <div>
+                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ENTITY NAME:</label>
+                          <input value={newCrmForm.name} onChange={e => setNewCrmForm({...newCrmForm, name: e.target.value})} autoFocus style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PRIMARY CONTACT:</label><input value={newCrmForm.contact} onChange={e => setNewCrmForm({...newCrmForm, contact: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PAYMENT TERMS:</label><input value={newCrmForm.terms} onChange={e => setNewCrmForm({...newCrmForm, terms: e.target.value})} placeholder="e.g. Net 30" style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>EMAIL ADDRESS:</label><input value={newCrmForm.email} onChange={e => setNewCrmForm({...newCrmForm, email: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PHONE NUMBER:</label><input value={newCrmForm.phone} onChange={e => setNewCrmForm({...newCrmForm, phone: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                      </div>
+
+                      <div style={{ marginTop: '10px', background: '#eafaf1', border: '1px solid #28a745', padding: '10px', fontSize: '0.75rem', color: '#1e7e34', fontWeight: 'bold' }}>
+                          ✓ Saving this record will automatically sync it to the Master Library mapping dropdowns.
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                          <button onClick={handleSaveNewCrm} disabled={!newCrmForm.name.trim()} style={{ flex: 1, padding: '15px', background: newCrmForm.name.trim() ? '#28a745' : '#ccc', color: '#fff', fontWeight: 'bold', border: 'none', cursor: newCrmForm.name.trim() ? 'pointer' : 'not-allowed' }}>💾 SAVE {targetCrmType}</button>
+                          <button onClick={() => setShowNewCrmModal(false)} style={{ padding: '15px 20px', background: '#eee', color: '#333', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>CANCEL</button>
+                      </div>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* --- CRM VIEWER MODAL --- */}
       {activeCrmRecord && (
           <div className="no-print" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000 }}>
               <div style={{ background: '#fff', border: '4px solid #000', width: '900px', height: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
@@ -355,15 +466,15 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px' }}>
                           <div style={{ background: '#fff', padding: '15px', border: '2px solid #000', textAlign: 'center', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                               <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>OPEN / PENDING QUOTES</div>
-                              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#17a2b8' }}>{activeCrmRecord.openOrders}</div>
+                              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#17a2b8' }}>{activeCrmRecord.openOrders || 0}</div>
                           </div>
                           <div style={{ background: '#fff', padding: '15px', border: '2px solid #000', textAlign: 'center', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                               <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>INVOICED MTD</div>
-                              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>${activeCrmRecord.mtd.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>${(activeCrmRecord.mtd || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
                           </div>
                           <div style={{ background: '#fff', padding: '15px', border: '2px solid #000', textAlign: 'center', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                               <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>INVOICED YTD</div>
-                              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>${activeCrmRecord.ytd.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>${(activeCrmRecord.ytd || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
                           </div>
                       </div>
 
@@ -373,20 +484,21 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                               <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                                   <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>CONTACT PROFILE</h4>
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.85rem' }}>
-                                      <div><strong style={{ color: '#666' }}>POC:</strong> {activeCrmRecord.contact}</div>
-                                      <div><strong style={{ color: '#666' }}>EMAIL:</strong> {activeCrmRecord.email}</div>
-                                      <div><strong style={{ color: '#666' }}>PHONE:</strong> {activeCrmRecord.phone}</div>
-                                      <div><strong style={{ color: '#666' }}>TERMS:</strong> {activeCrmRecord.terms}</div>
+                                      <div><strong style={{ color: '#666' }}>POC:</strong> {activeCrmRecord.contact || 'N/A'}</div>
+                                      <div><strong style={{ color: '#666' }}>EMAIL:</strong> {activeCrmRecord.email || 'N/A'}</div>
+                                      <div><strong style={{ color: '#666' }}>PHONE:</strong> {activeCrmRecord.phone || 'N/A'}</div>
+                                      <div><strong style={{ color: '#666' }}>TERMS:</strong> {activeCrmRecord.terms || 'N/A'}</div>
                                   </div>
                               </div>
                               <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', flex: 1, display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                                   <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>RELATIONSHIP NOTES</h4>
                                   <textarea 
-                                      value={activeCrmRecord.notes}
+                                      value={activeCrmRecord.notes || ''}
                                       onChange={(e) => {
                                           const val = e.target.value;
                                           setActiveCrmRecord(prev => ({ ...prev, notes: val }));
-                                          setCrmData(prev => ({ ...prev, [activeCrmRecord.id]: { ...prev[activeCrmRecord.id], notes: val } }));
+                                          // 🚀 Also push to DB dynamically
+                                          updateDoc(doc(db, "crm_records", activeCrmRecord.id), { notes: val }).catch(()=>{});
                                       }}
                                       style={{ flex: 1, padding: '10px', border: '1px solid #ccc', outline: 'none', resize: 'none', fontFamily: 'monospace', fontSize: '0.85rem' }}
                                       placeholder="Add strategic notes, preferences, or warnings here..."

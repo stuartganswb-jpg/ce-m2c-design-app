@@ -25,7 +25,12 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
 
-  const [newStep, setNewStep] = useState({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [] });
+  // 🚀 NEW: Added useClientPricing, priceOverride, and partHandling to the step schema
+  const [newStep, setNewStep] = useState({ 
+      id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, 
+      priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [],
+      useClientPricing: false, priceOverride: '', partHandling: ''
+  });
 
   const [newFlowName, setNewFlowName] = useState("");
   const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '' });
@@ -115,7 +120,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   basePrice: flow.basePrice || '',
                   linkedAssemblyId: flow.linkedAssemblyId || ''
               });
-              setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [] });
+              setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '' });
           }
       }
       setInspectedNodes([]); 
@@ -271,7 +276,10 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               geometryMap: {},
               targetNodes: pin.targetNode || pin.partName, 
               linkedPinId: pin.partId,
-              allowedOptions: [] 
+              allowedOptions: [],
+              useClientPricing: false,
+              priceOverride: '',
+              partHandling: ''
           }));
 
           const updatedSteps = [...(flow.steps || []), ...generatedSteps];
@@ -293,7 +301,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               updatedSteps = [...(flow.steps || []), { ...newStep, id: `STEP-${Date.now()}` }];
           }
           await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
-          setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [] });
+          setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '' });
       } catch (err) { console.error("Error saving step:", err); alert("Database Error."); }
   };
 
@@ -315,36 +323,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
   };
 
-  const handleSeedPillowFlow = async () => {
-      const flowId = `FLOW-${Date.now()}`;
-      const pillowFlow = {
-          id: flowId, brandId: activeBrand, name: "CUSTOM PILLOW ASSEMBLY", legacyErpId: "ASM-PILLOW-001", basePrice: 0,
-          steps: [
-              { id: `STEP-${Date.now()}-1`, title: 'Select Pillow Size', type: 'DROPDOWN', dataSource: 'pillowSizes', required: true, priceMap: { '12x20 Lumbar': 10, '18x18 Square': 15, '20x20 Square': 20 }, allowedOptions: [] },
-              { id: `STEP-${Date.now()}-2`, title: 'Select Fill Material', type: 'DROPDOWN', dataSource: 'fillTypes', required: true, priceMap: { 'DOWN': 35, 'POLY': 10 }, allowedOptions: [] },
-              { id: `STEP-${Date.now()}-3`, title: 'Select Main Fabric', type: 'VISUAL_GRID', dataSource: 'master_fabrics', required: true, allowedOptions: [] }
-          ]
-      };
-      try {
-          await setDoc(doc(db, "cpq_flows", flowId), pillowFlow);
-          alert("✅ Demo Flow Seeded Successfully!");
-          setActiveFlowId(flowId);
-      } catch (err) { console.error(err); }
-  };
-
-  // 🚀 RESTORED: CPQ Rules Engine Functions
-  const handleAddRule = async () => {
-      if (!newRule.name || !newRule.conditionField || !newRule.effectField) return alert("Fill in required fields.");
-      const updatedRules = [...cpqRules, { id: `RULE-${Date.now()}`, ...newRule }];
-      await setDoc(doc(db, "system", "cpq_rules"), { rules: updatedRules }, { merge: true });
-      setNewRule({ name: '', conditionField: '', conditionOp: 'EQUALS', conditionVal: '', effectField: '', effectVal: '' });
-  };
-
-  const handleDeleteRule = async (ruleId) => {
-      const updatedRules = cpqRules.filter(r => r.id !== ruleId);
-      await setDoc(doc(db, "system", "cpq_rules"), { rules: updatedRules }, { merge: true });
-  };
-
   const handleAiGenerateRule = () => {
       if (!aiPrompt) return;
       setIsGeneratingAi(true);
@@ -363,6 +341,18 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           setNewRule(generatedRule); setAiPrompt(""); setIsGeneratingAi(false);
           alert("✨ AI successfully parsed your request and pre-filled the rule parameters!");
       }, 1000);
+  };
+
+  const handleAddRule = async () => {
+      if (!newRule.name || !newRule.conditionField || !newRule.effectField) return alert("Fill in required fields.");
+      const updatedRules = [...cpqRules, { id: `RULE-${Date.now()}`, ...newRule }];
+      await setDoc(doc(db, "system", "cpq_rules"), { rules: updatedRules }, { merge: true });
+      setNewRule({ name: '', conditionField: '', conditionOp: 'EQUALS', conditionVal: '', effectField: '', effectVal: '' });
+  };
+
+  const handleDeleteRule = async (ruleId) => {
+      const updatedRules = cpqRules.filter(r => r.id !== ruleId);
+      await setDoc(doc(db, "system", "cpq_rules"), { rules: updatedRules }, { merge: true });
   };
 
   const handleNukeJobs = async () => {
@@ -694,6 +684,37 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <input value={newStep.targetNodes || ''} onChange={e => setNewStep({...newStep, targetNodes: e.target.value})} placeholder="e.g., Pole_Top, Bracket_Base" style={{ width: '100%', padding: '8px', border: '1px solid #007bff', boxSizing: 'border-box' }} />
                                         <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>If this is a "Finish" step, it applies the texture to these meshes. Comma separate for multiple.</span>
                                     </div>
+
+                                    {/* 🚀 NEW: PART HANDLING ROUTING */}
+                                    <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', marginTop: '10px' }}>
+                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '5px' }}>
+                                            🛤️ PART HANDLING & ROUTING
+                                        </label>
+                                        <select value={newStep.partHandling || ''} onChange={e => setNewStep({...newStep, partHandling: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold', textTransform: 'uppercase' }}>
+                                            <option value="">-- SELECT HANDLING ROUTE (OPTIONAL) --</option>
+                                            {(globalLists.partHandling || ['Small Parts', 'Custom']).map(ph => (
+                                                <option key={ph} value={ph}>{ph.toUpperCase()}</option>
+                                            ))}
+                                        </select>
+                                        <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>Groups parts with identical handling together in production (e.g. Finishing vs Shop Floor). This list is managed in Tab 4 Master Lists.</span>
+                                    </div>
+
+                                    {/* 🚀 NEW: DYNAMIC PRICING ENGINE */}
+                                    <div style={{ background: '#fff3cd', padding: '10px', border: '1px solid #ffeeba', marginTop: '10px' }}>
+                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#856404', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '10px' }}>
+                                            💰 ADVANCED PRICING RULES
+                                        </label>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                            <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 'bold', color: '#856404' }}>
+                                                <input type="checkbox" checked={newStep.useClientPricing || false} onChange={e => setNewStep({...newStep, useClientPricing: e.target.checked})} style={{ transform: 'scale(1.2)' }} />
+                                                Enable Client-Specific Pricing (From Tab 3 Mapping)
+                                            </label>
+                                            <div>
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#dc3545', display: 'block', marginBottom: '4px' }}>FLAT PRICE OVERRIDE ($):</label>
+                                                <input type="number" step="0.01" value={newStep.priceOverride || ''} onChange={e => setNewStep({...newStep, priceOverride: e.target.value})} placeholder="Overrides all other pricing" style={{ width: '100%', padding: '8px', border: '1px solid #dc3545', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                                            </div>
+                                        </div>
+                                    </div>
                                     
                                     {optionsToMap.length > 0 && optionsToMap.length < 100 && (
                                         <div style={{ background: '#fff', padding: '10px', border: '1px solid #007bff' }}>
@@ -708,7 +729,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                         <div style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{opt.name}</div>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                                                             <span style={{ fontWeight: 'bold' }}>+$</span>
-                                                            <input type="number" step="0.5" value={newStep.priceMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, priceMap: { ...prev.priceMap, [opt.id]: parseFloat(e.target.value) || 0 } }))} placeholder="0.00" style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }} />
+                                                            <input type="number" step="0.5" value={newStep.priceMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, priceMap: { ...prev.priceMap, [opt.id]: parseFloat(e.target.value) || 0 } }))} placeholder="0.00" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold' }} disabled={newStep.useClientPricing || !!newStep.priceOverride} />
                                                         </div>
                                                         <div>
                                                             <input value={newStep.geometryMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, geometryMap: { ...prev.geometryMap, [opt.id]: e.target.value } }))} placeholder="Mesh to Show (e.g. Bracket_Deluxe)" style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }} />
@@ -727,7 +748,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             {newStep.id ? "💾 SAVE EDITS TO STEP" : "➕ MANUAL ADD STEP"}
                                         </button>
                                         {newStep.id && (
-                                            <button onClick={() => setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [] })} style={{ padding: '10px 20px', background: '#fff', color: '#333', border: '2px solid #ccc', fontWeight: 'bold', cursor: 'pointer' }}>
+                                            <button onClick={() => setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '' })} style={{ padding: '10px 20px', background: '#fff', color: '#333', border: '2px solid #ccc', fontWeight: 'bold', cursor: 'pointer' }}>
                                                 CANCEL EDIT
                                             </button>
                                         )}
@@ -748,6 +769,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             )}
                                             {step.targetNodes && <div style={{ fontSize: '0.65rem', color: '#e83e8c', marginTop: '3px', fontWeight: 'bold' }}>🎨 APPLYING TEXTURES TO: {step.targetNodes.substring(0, 30)}{step.targetNodes.length > 30 ? '...' : ''}</div>}
                                             {step.geometryMap && Object.values(step.geometryMap).some(Boolean) && <div style={{ fontSize: '0.65rem', color: '#28a745', marginTop: '3px', fontWeight: 'bold' }}>🧊 GEOMETRY SWAPPING ACTIVE</div>}
+                                            
+                                            {/* 🚀 Render Pricing and Routing flags on step list */}
+                                            {step.useClientPricing && <div style={{ fontSize: '0.65rem', color: '#856404', marginTop: '3px', fontWeight: 'bold' }}>💰 CLIENT PRICING ENABLED</div>}
+                                            {step.priceOverride && <div style={{ fontSize: '0.65rem', color: '#dc3545', marginTop: '3px', fontWeight: 'bold' }}>⚠️ PRICE OVERRIDE: ${step.priceOverride}</div>}
+                                            {step.partHandling && <div style={{ fontSize: '0.65rem', color: '#1e7e34', marginTop: '3px', fontWeight: 'bold' }}>🛤️ ROUTING: {step.partHandling}</div>}
                                         </div>
                                         <div style={{ display: 'flex', gap: '5px' }}>
                                             <button onClick={() => handleMoveStep(activeFlow, idx, 'UP')} disabled={idx === 0} style={{ padding: '5px', cursor: idx === 0 ? 'not-allowed' : 'pointer', background: '#f4f4f4', border: '1px solid #ccc' }}>⬆️</button>
