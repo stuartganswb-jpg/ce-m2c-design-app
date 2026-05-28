@@ -8,6 +8,27 @@ import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Html, Bounds } from '@react-three/drei';
 
+// 🚀 NEW: The Airbag. This prevents corrupted 3D models from white-screening the entire app.
+class ErrorBoundary extends React.Component {
+    constructor(props) { super(props); this.state = { hasError: false }; }
+    static getDerivedStateFromError(error) { return { hasError: true }; }
+    componentDidCatch(error, errorInfo) { console.error("3D Render Error:", error); }
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px', background: '#fff', border: '2px dashed #d9534f' }}>
+                    <div style={{ textAlign: 'center', color: '#d9534f' }}>
+                        <h3 style={{ fontSize: '2rem', margin: '0 0 10px 0' }}>⚠️ 3D RENDER FAILED</h3>
+                        <p style={{ fontWeight: 'bold' }}>The uploaded 3D file is corrupted, missing .bin buffer data, or is an unsupported format.</p>
+                        <p style={{ color: '#000' }}>Please use the <b>UPLOAD</b> button above to replace this with a valid <b>.glb</b> file.</p>
+                    </div>
+                </div>
+            );
+        }
+        return this.props.children; 
+    }
+}
+
 const DEFAULT_COLLECTIONS = ["HARLOW", "SIGNATURE", "COASTAL", "MODERN ARCHITECTURAL", "CUSTOM", "N/A"];
 const DEFAULT_PRODUCT_TYPES = ["FINIAL", "BRACKET", "POLE", "RING", "END CAP", "SWIVEL"];
 
@@ -95,7 +116,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
           if (docSnap.exists()){
             const data = docSnap.data();
             if (data.collections) setDynamicCollections(data.collections);
-            // 🚀 FIX: Map exactly to "prodTypes" from the Master Library Database
             if (data.prodTypes) setDynamicProductTypes(data.prodTypes);
           }
       });
@@ -186,7 +206,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
 
   const toggleGroup = (groupName) => setExpandedGroups(prev => ({ ...prev, [groupName]: !prev[groupName] }));
 
-  // 🚀 FIX: Automatically select the first item from the new dynamic array instead of hardcoded default
   const openEditor = (assembly = null) => {
     if (assembly) {
       setFormData({
@@ -219,7 +238,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
     if (isAddingNewProductType && newProductTypeName.trim()){
         finalProductType = newProductTypeName.trim().toUpperCase();
         const updatedTypes = [...new Set([...dynamicProductTypes, finalProductType])];
-        // 🚀 FIX: Save directly back to the database as "prodTypes"
         setDoc(doc(db, "system", "master_lists"), { prodTypes: updatedTypes }, { merge: true });
     }
 
@@ -549,7 +567,8 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                   
                   {imageMode === "UPLOAD" ? (
                       <>
-                          <input type="file" accept="image/*,.glb,.gltf" onChange={(e) => setImageFile(e.target.files[0])} style={{ width: '100%' }} />
+                          {/* 🚀 CHANGED TO ONLY ACCEPT .GLB */}
+                          <input type="file" accept="image/*,.glb" onChange={(e) => setImageFile(e.target.files[0])} style={{ width: '100%' }} />
                           {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
                       </>
                   ) : (
@@ -588,7 +607,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       {!isCanvasMaximized && (
           <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
             <div>
-            <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem' }}>1. PRODUCT INCEPTION HUB</h2>
+              <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem' }}>1. PRODUCT INCEPTION HUB</h2>
               <span style={{ fontSize: '0.7rem', color: '#666' }}>{assemblies.length} ASSEMBLIES IN PORTFOLIO</span>
             </div>
             <button onClick={() => openEditor()} style={{ padding: '10px 20px', background: '#000', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ INITIATE NEW PRODUCT</button>
@@ -726,7 +745,8 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                             )}
 
                             <div style={{ position: 'relative', marginRight: '10px' }}>
-                                <input type="file" accept="image/*,.glb,.gltf" onChange={handleRevisionUpload} style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} title="Upload 2D/3D Revision" />
+                                {/* 🚀 CHANGED TO ONLY ACCEPT .GLB */}
+                                <input type="file" accept="image/*,.glb" onChange={handleRevisionUpload} style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} title="Upload 2D/3D Revision" />
                                 <button style={{ padding: '5px 10px', background: '#fff', color: '#d9534f', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', pointerEvents: 'none' }}>⬆️ UPLOAD</button>
                             </div>
                             
@@ -767,47 +787,50 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                         {!currentRevisionObj?.url ? (
                             <div style={{ color: '#666', fontStyle: 'italic', padding: '40px', textAlign: 'center', fontSize: '0.8rem' }}>Upload an initial sketch or revision image using the "Upload Revision" button to start spatial notes.</div>
                         ) : isCurrent3D ? (
-                            <React.Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', fontWeight: 'bold', color: '#007bff' }}>⏳ LOADING 3D ENGINE...</div>}>
-                                <Canvas id="r3f-canvas-tab1" gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, 5, 5], fov: 50 }}>
-                                    <ambientLight intensity={0.5} />
-                                    <directionalLight position={[10, 10, 5]} intensity={1} />
-                                    <OrbitControls makeDefault enabled={!isCanvasLocked && !isAddingCallout} />
-                                    <Bounds fit clip margin={1.2}>
-                                        <ReviewModel url={currentRevisionObj.url} isAddingCallout={isAddingCallout} onMeshClick={handle3DViewerClick} />
-                                    </Bounds>
-                                    
-                                    {filteredCallouts.map(callout => {
-                                        const isActive = activeCalloutId === callout.id;
-                                        if (!callout.is3D) return null; 
-                                        return (
-                                            <Html key={callout.id} position={[callout.x, callout.y, callout.z]} zIndexRange={[100, 0]}>
-                                                <div style={{ position: 'relative' }}>
-                                                    <div 
-                                                        onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} 
-                                                        style={{ width: '15px', height: '15px', background: isActive ? '#007bff' : '#d9534f', borderRadius: '50%', border: '2px solid #fff', cursor: 'pointer', transform: 'translate(-50%, -50%)', boxShadow: '0 0 5px rgba(0,0,0,0.5)', position: 'absolute', zIndex: 2 }} 
-                                                    />
-                                                    
-                                                    <svg style={{ position: 'absolute', top: '-110px', left: '0px', width: '130px', height: '110px', pointerEvents: 'none', zIndex: 1, overflow: 'visible' }}>
-                                                        <line x1="0" y1="110" x2="130" y2="0" stroke={isActive ? '#007bff' : '#d9534f'} strokeWidth="2" strokeDasharray="4 4" />
-                                                    </svg>
+                            // 🚀 THE AIRBAG IS INSTALLED AROUND THE CANVAS
+                            <ErrorBoundary>
+                                <React.Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', fontWeight: 'bold', color: '#007bff' }}>⏳ LOADING 3D ENGINE...</div>}>
+                                    <Canvas id="r3f-canvas-tab1" gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, 5, 5], fov: 50 }}>
+                                        <ambientLight intensity={0.5} />
+                                        <directionalLight position={[10, 10, 5]} intensity={1} />
+                                        <OrbitControls makeDefault enabled={!isCanvasLocked && !isAddingCallout} />
+                                        <Bounds fit clip margin={1.2}>
+                                            <ReviewModel url={currentRevisionObj.url} isAddingCallout={isAddingCallout} onMeshClick={handle3DViewerClick} />
+                                        </Bounds>
+                                        
+                                        {filteredCallouts.map(callout => {
+                                            const isActive = activeCalloutId === callout.id;
+                                            if (!callout.is3D) return null; 
+                                            return (
+                                                <Html key={callout.id} position={[callout.x, callout.y, callout.z]} zIndexRange={[100, 0]}>
+                                                    <div style={{ position: 'relative' }}>
+                                                        <div 
+                                                            onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} 
+                                                            style={{ width: '15px', height: '15px', background: isActive ? '#007bff' : '#d9534f', borderRadius: '50%', border: '2px solid #fff', cursor: 'pointer', transform: 'translate(-50%, -50%)', boxShadow: '0 0 5px rgba(0,0,0,0.5)', position: 'absolute', zIndex: 2 }} 
+                                                        />
+                                                        
+                                                        <svg style={{ position: 'absolute', top: '-110px', left: '0px', width: '130px', height: '110px', pointerEvents: 'none', zIndex: 1, overflow: 'visible' }}>
+                                                            <line x1="0" y1="110" x2="130" y2="0" stroke={isActive ? '#007bff' : '#d9534f'} strokeWidth="2" strokeDasharray="4 4" />
+                                                        </svg>
 
-                                                    <div style={{ position: 'absolute', top: '-110px', left: '130px', width: '220px', background: '#fff', border: `2px solid ${isActive ? '#007bff' : '#d9534f'}`, padding: '5px', boxShadow: '2px 2px 5px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', zIndex: 3, transform: 'translateY(-50%)' }}>
-                                                        <div style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#666', borderBottom: '1px solid #eee', marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
-                                                            <span>{callout.user}</span>
-                                                            {isActive && <button onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0 }}>✖</button>}
+                                                        <div style={{ position: 'absolute', top: '-110px', left: '130px', width: '220px', background: '#fff', border: `2px solid ${isActive ? '#007bff' : '#d9534f'}`, padding: '5px', boxShadow: '2px 2px 5px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', zIndex: 3, transform: 'translateY(-50%)' }}>
+                                                            <div style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#666', borderBottom: '1px solid #eee', marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
+                                                                <span>{callout.user}</span>
+                                                                {isActive && <button onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0 }}>✖</button>}
+                                                            </div>
+                                                            {isActive ? (
+                                                                <textarea autoFocus placeholder="Type spatial note or RFI..." value={callout.text} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onBlur={saveCalloutTextToFirebase} style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} />
+                                                            ) : (
+                                                                <div onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} style={{ fontSize: '0.75rem', color: '#000', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px', cursor: 'pointer' }}>{callout.text || <span style={{color:'#ccc', fontStyle:'italic'}}>Empty Note</span>}</div>
+                                                            )}
                                                         </div>
-                                                        {isActive ? (
-                                                            <textarea autoFocus placeholder="Type spatial note or RFI..." value={callout.text} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onBlur={saveCalloutTextToFirebase} style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} />
-                                                        ) : (
-                                                            <div onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} style={{ fontSize: '0.75rem', color: '#000', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px', cursor: 'pointer' }}>{callout.text || <span style={{color:'#ccc', fontStyle:'italic'}}>Empty Note</span>}</div>
-                                                        )}
                                                     </div>
-                                                </div>
-                                            </Html>
-                                        )
-                                    })}
-                                </Canvas>
-                            </React.Suspense>
+                                                </Html>
+                                            )
+                                        })}
+                                    </Canvas>
+                                </React.Suspense>
+                            </ErrorBoundary>
                         ) : (
                             <UncontrolledReactSVGPanZoom
                                 ref={setReactSvgPanZoomRef} width={viewerSize.width} height={viewerSize.height}

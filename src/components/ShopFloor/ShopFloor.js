@@ -59,12 +59,9 @@ const ShopFloor = () => {
     const [qcForm, setQcForm] = useState({ good: 0, scrap: 0, failReason: 'Out of Tolerance', failNotes: '', failImg: null });
     const [shiftLogQty, setShiftLogQty] = useState(0);
 
-    // =========================================================
-    // 🚀 RESTORED MISSING VARIABLE DECLARATION
-    // =========================================================
     const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';
     
-    // 🚀 PERMISSIONS BYPASS: Admins ALWAYS see all tabs
+    // PERMISSIONS BYPASS: Admins ALWAYS see all tabs
     const myTabs = user?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
     const attemptLogin = async (e) => {
@@ -689,31 +686,49 @@ const ShopFloor = () => {
         </div>
     );
 
+    // 🚀 NEW: UPDATED LOGIN SCREEN TO MATCH HQ AESTHETIC
     if (!user) {
         return (
-            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <div style={{ background: '#fff', padding: '30px', borderRadius: '12px', width: '300px', textAlign: 'center' }}>
-                    <h2 style={{ color: '#0056b3', margin: '0 0 20px 0' }}>SHOP COMMAND</h2>
+            <div style={{ position: 'fixed', inset: 0, background: '#e5e5e5', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace' }}>
+                <div style={{ background: '#fff', padding: '40px', border: '4px solid #000', boxShadow: '15px 15px 0 #000', width: '350px', textAlign: 'center' }}>
+                    <h2 style={{ color: '#0056b3', margin: '0 0 20px 0', fontSize: '2rem', textTransform: 'uppercase' }}>SHOP COMMAND</h2>
                     <form onSubmit={attemptLogin}>
-                        <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{ textAlign: 'center', fontSize: '24px', width: '100%', padding: '10px', margin: '8px 0 20px 0', border: '2px solid #ccc', borderRadius: '6px', boxSizing: 'border-box' }} />
-                        <button type="submit" style={{ background: '#0056b3', color: '#fff', border: 'none', padding: '15px', width: '100%', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px', fontSize: '16px' }}>LOGIN</button>
+                        <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{ textAlign: 'center', fontSize: '24px', width: '100%', padding: '15px', margin: '8px 0 20px 0', border: '2px solid #000', boxSizing: 'border-box', fontFamily: 'monospace', fontWeight: 'bold' }} />
+                        <button type="submit" style={{ background: '#0056b3', color: '#fff', border: '2px solid #000', padding: '15px', width: '100%', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.2rem', boxShadow: '4px 4px 0 #000' }}>LOGIN</button>
                     </form>
-                    <button onClick={() => navigate('/')} style={{ marginTop: '20px', background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontWeight: 'bold' }}>← BACK TO HUB</button>
+                    <button onClick={() => navigate('/')} style={{ marginTop: '20px', background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem', textDecoration: 'underline' }}>← BACK TO HUB</button>
                 </div>
             </div>
         );
     }
 
+    // 🚀 NEW: UPDATED MASTER WRAPPER & NAV BAR TO MATCH HQ/FINISHING AESTHETIC
     return (
-        <div style={{ background: '#f8f9fa', color: '#333', minHeight: '100vh', fontFamily: 'Segoe UI, sans-serif' }}>
-            <nav style={{ background: '#fff', padding: '15px 25px', borderBottom: '1px solid #dee2e6', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                <div style={{ fontWeight: 900, color: '#0056b3', marginRight: '15px', fontSize: '20px' }}>FAB-OS</div>
-                {TABS.filter(t => myTabs.includes(t)).map(tab => (
-                    <button key={tab} onClick={() => setActiveTab(tab)} style={{ background: activeTab === tab ? '#0056b3' : '#f1f3f5', color: activeTab === tab ? '#fff' : '#333', border: `1px solid ${activeTab === tab ? '#0056b3' : '#dee2e6'}`, padding: '10px 15px', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer', textTransform: 'uppercase' }}>
-                        {tab}
-                    </button>
-                ))}
-                <button onClick={() => navigate('/')} style={{ marginLeft: 'auto', color: '#dc3545', background: 'none', border: '2px solid #dc3545', padding: '8px 15px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>🏠 HUB / LOGOUT</button>
+        <div style={{ background: '#f8f9fa', color: '#333', minHeight: '100vh', fontFamily: 'monospace' }}>
+            
+            <nav style={{ background: '#fff', padding: '20px 30px', borderBottom: '4px solid #000', display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 900, color: '#0056b3', fontSize: '2rem', textTransform: 'uppercase', letterSpacing: '1px', textShadow: '2px 2px 0px rgba(0,0,0,0.1)' }}>FAB-OS</div>
+                
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', flex: 1 }}>
+                    {TABS.filter(t => myTabs.includes(t)).map(tab => (
+                        <button key={tab} onClick={() => setActiveTab(tab)} style={{ 
+                            background: activeTab === tab ? '#0056b3' : '#fff', 
+                            color: activeTab === tab ? '#fff' : '#000', 
+                            border: '2px solid #000', 
+                            padding: '10px 20px', 
+                            fontWeight: 'bold', 
+                            fontSize: '0.9rem', 
+                            cursor: 'pointer', 
+                            textTransform: 'uppercase',
+                            boxShadow: activeTab === tab ? 'inset 3px 3px 0 rgba(0,0,0,0.2)' : '3px 3px 0 #000',
+                            transition: '0.1s'
+                        }}>
+                            {tab}
+                        </button>
+                    ))}
+                </div>
+
+                <button onClick={() => navigate('/')} style={{ color: '#d9534f', background: '#fff', border: '2px solid #d9534f', padding: '10px 20px', cursor: 'pointer', fontWeight: 'bold', boxShadow: '3px 3px 0 #d9534f', fontSize: '0.9rem', textTransform: 'uppercase', transition: '0.1s' }}>🏠 HUB / LOGOUT</button>
             </nav>
 
             <main style={{ padding: '30px', maxWidth: '1400px', margin: 'auto' }}>
@@ -736,7 +751,6 @@ const ShopFloor = () => {
                         {activeTab === 'livio' && renderLivioTab()}
                         {activeTab === 'reports' && renderReportsTab()}
                         
-                        {/* 🚀 ASSET GALLERY ROUTE */}
                         {activeTab === 'assets' && <AssetGalleryTab currentUser={user.name} activeBrand={null} />}
                     </>
                 )}
