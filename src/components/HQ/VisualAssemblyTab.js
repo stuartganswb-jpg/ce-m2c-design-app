@@ -69,7 +69,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [assemblyTypesList, setAssemblyTypesList] = useState(["STANDARD", "MASTER", "OUTSOURCE KIT"]); 
   
   // 🚀 NEW: Dynamic Dictionary States
-  const [globalLists, setGlobalLists] = useState({ prodTypes: [], collections: [], uom: [], partHandling: [] });
+  const [globalLists, setGlobalLists] = useState({ prodTypes: [], collections: [], uom: [], partHandling: [], inventoryTypes: [] });
   const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] });
   const [customSchema, setCustomSchema] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
@@ -80,9 +80,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [newPartName, setNewPartName] = useState("");
   const [newPartType, setNewPartType] = useState("Inventory"); 
-  const [newPartRouting, setNewPartRouting] = useState("");
+  const [newPartRouting, setNewPartRouting] = useState(""); // Powers BOTH Assembly Routing & Inventory Category
   
-  // 🚀 NEW: State for dynamically assigning Master Library fields on creation
   const [newPartSpecs, setNewPartSpecs] = useState({ productType: '', collection: '', uom: 'EA', partHandling: '', dynamicDicts: {}, customData: {} });
 
   const [viewMode, setViewMode] = useState("3D");
@@ -111,7 +110,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const svgRef = useRef(null);
   const innerGroupRef = useRef(null);
 
-  // 🚀 DYNAMIC DATA SUBSCRIPTIONS
   useEffect(() => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
           if (docSnap.exists()){
@@ -128,7 +126,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                   prodTypes: data.prodTypes || [],
                   collections: data.collections || [],
                   uom: data.uom || ['EA'],
-                  partHandling: data.partHandling || ['Small Parts', 'Custom']
+                  partHandling: data.partHandling || ['Small Parts', 'Custom'],
+                  inventoryTypes: data.inventoryTypes || [] // 🚀 NEW: Inventory Types
               });
           }
       });
@@ -317,7 +316,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       } catch (err) { console.error(err); setIsSavingRouting(false); alert("Failed to save routing."); }
   };
 
-  // 🚀 UPDATED DYNAMIC CHANGE HANDLERS
   const handleDictChange = (dictId, value) => { setNewPartSpecs(prev => ({ ...prev, dynamicDicts: { ...prev.dynamicDicts, [dictId]: value } })); };
   const handleCustomDataChange = (key, value) => { setNewPartSpecs(prev => ({ ...prev, customData: { ...prev.customData, [key]: value } })); };
   const handleNewSpecChange = (e) => { setNewPartSpecs(prev => ({ ...prev, [e.target.name]: e.target.value })); };
@@ -325,20 +323,22 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const saveNewCustomPart = async () => {
     if (!newPartName.trim()) return alert("Enter a name for the new entity.");
     if (newPartType === 'Assembly' && !newPartRouting) return alert("Please select a Routing Type for this Sub-Assembly.");
+    if (newPartType === 'Inventory' && !newPartRouting) return alert("Please select an Inventory Category.");
     if (!pendingPin) return;
 
     try {
       const newMasterId = `${activeBrand.toUpperCase()}-${newPartType === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
       
+      // 🚀 Routing Type is assigned natively to the parent object for BOTH Inventory and Assembly 
       const newDoc = {
           id: newMasterId, itemId: newMasterId, legacyErpId: "PENDING", itemName: newPartName.toUpperCase(),
           brandId: activeBrand, partClass: newPartType, sharedBrands: [activeBrand],
           collection: newPartSpecs.collection || activeAssembly?.collection || "N/A",
           productType: newPartSpecs.productType || "",
+          routingType: newPartRouting,
           createdAt: new Date().toISOString()
       };
 
-      // 🚀 INJECT DYNAMIC DATA
       const baseSpecs = {
           productType: newPartSpecs.productType || "",
           partHandling: newPartSpecs.partHandling || "",
@@ -352,7 +352,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       if (newPartType === 'Inventory') {
           newDoc.manufacturingSpecs = { ...baseSpecs };
       } else {
-          newDoc.routingType = newPartRouting;
           newDoc.project = activeAssembly?.project || "";
           newDoc.manufacturingSpecs = { ...baseSpecs, basePrice: 0, cost: 0 };
       }
@@ -365,7 +364,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
         y: viewMode === '3D' ? (pendingPin.y || 0) : pendingPin.pinY,
         z: viewMode === '3D' ? (pendingPin.z || 0) : null,
         targetNode: pendingPin.targetNode || "", 
-        clusterId: pendingPin.clusterId || null, // 🚀 LINK TO CLUSTER
+        clusterId: pendingPin.clusterId || null, 
         imageUrl: viewMode === '3D' ? '3D_CAD' : activeImageUrl,
         partName: newPartName.toUpperCase(), partId: newMasterId, legacyErpId: "PENDING",
         isExistingLibraryPart: false, status: "NEEDS_SPECS", author: currentUser, defaultQty: 1,
@@ -387,7 +386,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
         y: viewMode === '3D' ? (pendingPin.y || 0) : pendingPin.pinY,
         z: viewMode === '3D' ? (pendingPin.z || 0) : null,
         targetNode: pendingPin.targetNode || "", 
-        clusterId: pendingPin.clusterId || null, // 🚀 LINK TO CLUSTER
+        clusterId: pendingPin.clusterId || null, 
         imageUrl: viewMode === '3D' ? '3D_CAD' : activeImageUrl, 
         partName: part.itemName, partId: part.itemId, legacyErpId: part.legacyErpId || "N/A",
         isExistingLibraryPart: true, specs: part.manufacturingSpecs || {}, status: "SPECS_LOCKED", author: currentUser, defaultQty: 1,
@@ -532,7 +531,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       viewMode === '3D' ? p.imageUrl === '3D_CAD' : (p.imageUrl === activeImageUrl || (!p.imageUrl && activeImageUrl === activeAssembly?.finalImageUrl))
   );
 
-  // 🚀 FIND UNASSIGNED CLUSTERS FROM TAB 1.5
   const unassignedClusters = (activeAssembly?.nodeClusters || []).filter(cluster => {
       return !pins.some(pin => pin.clusterId === cluster.id || pin.targetNode === cluster.nodes?.join(', '));
   });
@@ -777,7 +775,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
         {!isCanvasMaximized && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
                 
-                {/* 🚀 NEW: UNASSIGNED CLUSTERS FROM TAB 1.5 */}
                 {viewMode === '3D' && unassignedClusters.length > 0 && (
                     <div style={{ background: '#fff3cd', border: '2px solid #ffc107', padding: '15px', boxShadow: '8px 8px 0 rgba(0,0,0,0.1)' }}>
                         <div style={{ fontWeight: 'bold', color: '#856404', fontSize: '0.9rem', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -821,7 +818,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                         <div>
                                             <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#000' }}>{pin.partName}</div>
                                             <div style={{ fontSize: '0.65rem', color: '#666' }}>{pin.legacyErpId}</div>
-                                            {/* 🚀 NEW: Cluster Badge */}
                                             {pin.clusterId ? (
                                                 <div style={{ fontSize: '0.6rem', color: '#fff', background: '#6f42c1', padding: '2px 4px', display: 'inline-block', borderRadius: '3px', fontWeight: 'bold', marginTop: '3px' }}>🔗 CLUSTERED 3D DATA</div>
                                             ) : pin.targetNode && (
@@ -904,7 +900,15 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                       </div>
                   </div>
 
-                  {newPartType === "Assembly" && (
+                  {newPartType === "Inventory" ? (
+                      <div style={{ marginBottom: '15px', background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
+                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#1e7e34' }}>INVENTORY CATEGORY:</label>
+                          <select value={newPartRouting} onChange={(e) => setNewPartRouting(e.target.value)} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold', textTransform: 'uppercase' }}>
+                              <option value="">-- SELECT CATEGORY --</option>
+                              {(globalLists.inventoryTypes || []).map(type => ( <option key={type} value={type}>{type}</option> ))}
+                          </select>
+                      </div>
+                  ) : (
                       <div style={{ marginBottom: '15px', background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
                           <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#1e7e34' }}>ROUTING CLASSIFICATION:</label>
                           <select value={newPartRouting} onChange={(e) => setNewPartRouting(e.target.value)} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold' }}>
@@ -917,7 +921,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>ENTER ENTITY NAME / DESCRIPTION:</label>
                   <input autoFocus value={newPartName} onChange={(e) => setNewPartName(e.target.value)} disabled={isProcessingCrop} placeholder="e.g. UPPER EXTENSION POLE" style={{ width: '100%', padding: '12px', border: '2px solid #000', boxSizing: 'border-box', marginBottom: '15px', textTransform: 'uppercase' }} />
                   
-                  {/* 🚀 NEW: DYNAMIC GLOBAL PROPERTY INJECTION */}
                   <div style={{ background: '#f8f9fa', padding: '15px', border: '1px solid #ccc', marginBottom: '15px' }}>
                       <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #ccc', paddingBottom: '5px' }}>GLOBAL MASTER PROPERTIES</h4>
                       
@@ -948,7 +951,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                           </div>
                       </div>
 
-                      {/* DYNAMIC DICTIONARIES */}
                       {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
                           <div key={w.id} style={{ marginBottom: '10px' }}>
                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c', textTransform: 'uppercase' }}>{w.name}:</label>
@@ -959,7 +961,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                           </div>
                       ))}
 
-                      {/* CUSTOM SCHEMA */}
                       {customSchema.map(field => (
                           <div key={field.key} style={{ marginBottom: '10px' }}>
                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff', textTransform: 'uppercase' }}>{field.label}:</label>
@@ -974,7 +975,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                       ))}
                   </div>
 
-                  <button onClick={saveNewCustomPart} disabled={isProcessingCrop || (newPartType === 'Assembly' && !newPartRouting)} style={{ width: '100%', padding: '15px', background: (isProcessingCrop || (newPartType === 'Assembly' && !newPartRouting)) ? '#ccc' : '#d9534f', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isProcessingCrop || (newPartType === 'Assembly' && !newPartRouting)) ? 'not-allowed' : 'pointer', transition: '0.2s' }}>
+                  <button onClick={saveNewCustomPart} disabled={isProcessingCrop || !newPartRouting} style={{ width: '100%', padding: '15px', background: (isProcessingCrop || !newPartRouting) ? '#ccc' : '#d9534f', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isProcessingCrop || !newPartRouting) ? 'not-allowed' : 'pointer', transition: '0.2s' }}>
                     SAVE & CREATE NEW {newPartType.toUpperCase()}
                   </button>
                 </div>

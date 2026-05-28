@@ -7,23 +7,18 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [assemblies, setAssemblies] = useState([]);
   const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
   
-  // Data Joins
   const [bomPins, setBomPins] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
   
-  // --- Dynamic Master Lists & Configs ---
-  const [globalLists, setGlobalLists] = useState({ uom: [], prodTypes: [], collections: [], watchLists: [], vendors: [], partHandling: [] }); // 🚀 NEW: Part Handling
-  const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] }); // Stores Custom Dictionaries for CPQ mapping
+  const [globalLists, setGlobalLists] = useState({ uom: [], prodTypes: [], collections: [], watchLists: [], vendors: [], partHandling: [], inventoryTypes: [] }); 
+  const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] }); 
   
-  // Master Schema Data
   const [customSchema, setCustomSchema] = useState([]);
 
-  // Editor State
   const [activeComponent, setActiveComponent] = useState(null);
   const [editSpecs, setEditSpecs] = useState({ customData: {}, cpqCategories: [] });
   const [isSaving, setIsSaving] = useState(false);
 
-  // --- Assembly Details State ---
   const [assemblyDetails, setAssemblyDetails] = useState({
       itemName: "", legacyErpId: "", productType: "", collection: "", routingType: "UNASSIGNED",
       basePrice: "", cost: "", pdfUrl: "", cadUrl: "",
@@ -31,7 +26,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       binLocation: "" 
   });
 
-  // File Upload State
   const [pdfFile, setPdfFile] = useState(null);
   const [cadFile, setCadFile] = useState(null); 
   const [assemblyPdfFile, setAssemblyPdfFile] = useState(null);
@@ -49,7 +43,9 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           setGlobalLists({
               uom: data.uom || [], prodTypes: data.prodTypes || [], collections: data.collections || [],
               watchLists: data.watchLists || [], vendors: data.vendors || [],
-              partHandling: data.partHandling || ['Small Parts', 'Custom'] // 🚀 NEW: Part Handling Fallback
+              partHandling: data.partHandling || ['Small Parts', 'Custom'],
+              inventoryTypes: data.inventoryTypes || [], // 🚀 NEW
+              assemblyTypes: data.assemblyTypes || []
           });
       }
     });
@@ -128,9 +124,17 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       const customData = baseSpecs.customData || {}; 
       const cpqCategories = baseSpecs.cpqCategories || []; 
       const isInHouse = baseSpecs.isInHouse !== undefined ? baseSpecs.isInHouse : true;
-      const partHandling = baseSpecs.partHandling || ""; // 🚀 NEW
+      const partHandling = baseSpecs.partHandling || ""; 
 
-      setEditSpecs({ ...baseSpecs, parametric: parametricData, customData, cpqCategories, isInHouse, partHandling });
+      setEditSpecs({ 
+          ...baseSpecs, 
+          parametric: parametricData, 
+          customData, 
+          cpqCategories, 
+          isInHouse, 
+          partHandling,
+          routingType: bomItem.masterPart.routingType || "" // 🚀 Added Routing Sync
+      });
   };
 
   const handleSpecChange = (e) => setEditSpecs({ ...editSpecs, [e.target.name]: e.target.value });
@@ -214,6 +218,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
       try {
           await updateDoc(doc(db, "Approved_Designs", activeComponent.masterPart.id), {
+              routingType: editSpecs.routingType || "", // 🚀 Sync Routing Root
               manufacturingSpecs: compiledSpecs,
               updatedAt: new Date().toISOString()
           });
@@ -225,6 +230,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   };
 
   const totalCost = populatedBOM.reduce((sum, item) => sum + ((item.masterPart?.manufacturingSpecs?.cost || item.masterPart?.manufacturingSpecs?.basePrice || 0) * (item.defaultQty || 1)), 0);
+
+  const isAssembly = activeComponent?.masterPart?.partClass === 'Assembly' || activeComponent?.masterPart?.partClass === 'Master Assembly';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
@@ -439,7 +446,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
-                        {/* 🚀 UNIVERSAL WAREHOUSE BIN LOCATION */}
                         <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '15px', marginTop: '10px' }}>
                             <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px' }}>
                                 📍 WAREHOUSE BIN LOCATION (BARCODE/REF)
@@ -462,9 +468,17 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
                                 
-                                {/* 🚀 NEW: PART HANDLING INTEGRATION */}
+                                {/* 🚀 NEW: CLASSIFICATION ROUTING INTEGRATION */}
+                                <div>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>{isAssembly ? 'ROUTING CLASSIFICATION:' : 'INVENTORY CATEGORY:'}</label>
+                                    <select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
+                                        <option value="">UNASSIGNED</option>
+                                        {(isAssembly ? (globalLists.assemblyTypes || []) : (globalLists.inventoryTypes || [])).map(t => <option key={t} value={t}>{t}</option>)}
+                                    </select>
+                                </div>
+
                                 {windowConfig.system.partHandling?.includes(activeBrand) && (
-                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label><select name="partHandling" value={editSpecs.partHandling || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold' }}><option value="">UNASSIGNED / STANDARD</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph.toUpperCase()}</option>)}</select></div>
+                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label><select name="partHandling" value={editSpecs.partHandling || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}><option value="">UNASSIGNED / STANDARD</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
                                 )}
 
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
@@ -504,11 +518,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 ) : (
                                     <>
                                         <div style={{ display: 'flex', gap: '10px' }}>
-                                            {windowConfig.system.vendors?.includes(activeBrand) ? (
-                                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT VENDOR...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
-                                            ) : (
-                                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><input name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                                            )}
+                                            <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }}><option value="">SELECT VENDOR...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
                                             <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff' }}>VENDOR PART # / SKU:</label><input name="vendorId" value={editSpecs.vendorId || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box' }} /></div>
                                         </div>
                                         <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>

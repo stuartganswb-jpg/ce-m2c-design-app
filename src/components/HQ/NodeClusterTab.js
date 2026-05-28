@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, updateDoc } from "firebase/firestore";
 import * as THREE from 'three';
@@ -8,6 +8,19 @@ import { useGLTF, OrbitControls, Bounds } from '@react-three/drei';
 // --- RECURSIVE SCENE GRAPH EXPLORER ---
 const SceneNodeTree = ({ node, level = 0, selectedNodes, hiddenNodes, onToggleSelect, onToggleHide }) => {
     const [isExpanded, setIsExpanded] = useState(level < 2); // Auto-expand first 2 levels
+    const nodeRef = useRef(null);
+
+    // 🚀 NEW: Check if any descendant of this folder is selected
+    const descendantSelected = useMemo(() => {
+        if (!node || !node.children || node.children.length === 0) return false;
+        const checkDescendant = (n) => selectedNodes.includes(n.name) || (n.children && n.children.some(checkDescendant));
+        return node.children.some(checkDescendant);
+    }, [node, selectedNodes]);
+
+    // 🚀 NEW: Auto-expand folder if a 3D click selects a child deep inside
+    useEffect(() => {
+        if (descendantSelected) setIsExpanded(true);
+    }, [descendantSelected]);
 
     if (!node) return null;
     
@@ -21,15 +34,23 @@ const SceneNodeTree = ({ node, level = 0, selectedNodes, hiddenNodes, onToggleSe
     const hasChildren = node.children && node.children.length > 0;
     const hasName = !!node.name;
 
+    // 🚀 NEW: Auto-scroll the tree list so the selected item jumps into view
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useEffect(() => {
+        if (isSelected && nodeRef.current) {
+            nodeRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }, [isSelected]);
+
     return (
-        <div style={{ paddingLeft: `${level * 12}px`, marginBottom: '2px', fontFamily: 'monospace' }}>
+        <div ref={nodeRef} style={{ paddingLeft: `${level * 12}px`, marginBottom: '2px', fontFamily: 'monospace' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: isSelected ? '#e6f2ff' : 'transparent', padding: '4px', border: isSelected ? '1px solid #007bff' : '1px solid transparent', borderRadius: '4px' }}>
                 
                 {hasChildren ? (
                     <button onClick={() => setIsExpanded(!isExpanded)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.7rem', width: '15px' }}>{isExpanded ? '▼' : '▶'}</button>
                 ) : <div style={{ width: '15px' }} />}
 
-                <button onClick={() => hasName && onToggleHide(node.name)} disabled={!hasName} style={{ background: 'none', border: 'none', cursor: hasName ? 'pointer' : 'not-allowed', fontSize: '0.9rem', opacity: hasName ? 1 : 0.3 }}>
+                <button onClick={() => hasName && onToggleHide(node.name)} disabled={!hasName} style={{ background: 'none', border: 'none', cursor: hasName ? 'pointer' : 'not-allowed', fontSize: '0.9rem', opacity: hasName ? 1 : 0.3 }} title="Toggle Visibility">
                     {isHidden ? '👁️‍🗨️' : '👁️'}
                 </button>
 
@@ -264,8 +285,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
 
             <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start', flex: 1 }}>
                 
-                {/* LEFT: ASSEMBLY SELECTOR */}
-                <div style={{ width: '300px', display: 'flex', flexDirection: 'column', gap: '15px', flexShrink: 0, maxHeight: '800px', overflowY: 'auto' }}>
+                {/* 🚀 FIXED: LEFT PANEL NARROWED TO 220px */}
+                <div style={{ width: '220px', display: 'flex', flexDirection: 'column', gap: '15px', flexShrink: 0, maxHeight: '800px', overflowY: 'auto' }}>
                     {filteredAssemblies.length === 0 && <div style={{ color: '#999', fontStyle: 'italic', padding: '10px' }}>No assemblies match criteria.</div>}
                     {filteredAssemblies.map(asm => {
                         const hasCAD = !!asm.manufacturingSpecs?.cadUrl;
@@ -296,8 +317,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                 {activeAssembly && activeAssembly.manufacturingSpecs?.cadUrl ? (
                     <div style={{ flex: 1, display: 'flex', gap: '20px', minHeight: '600px' }}>
                         
-                        {/* 3D VIEWER */}
-                        <div style={{ flex: 1.5, background: '#fff', border: '3px solid #000', boxShadow: '10px 10px 0 #000', position: 'relative' }}>
+                        {/* 🚀 FIXED: 3D VIEWER WIDENED TO flex: 1.8 */}
+                        <div style={{ flex: 1.8, background: '#fff', border: '3px solid #000', boxShadow: '10px 10px 0 #000', position: 'relative' }}>
                             <div style={{ position: 'absolute', top: '15px', left: '15px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '10px', border: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '5px' }}>
                                 <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>🟦 CURRENT SELECTION</div>
                                 <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#28a745' }}>🟩 CLUSTERED / BOUND</div>
@@ -348,8 +369,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                             </Canvas>
                         </div>
 
-                        {/* RIGHT: TREE & CLUSTER MANAGER */}
-                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        {/* 🚀 FIXED: TREE & CLUSTER MANAGER WIDENED TO flex: 1.2 */}
+                        <div style={{ flex: 1.2, display: 'flex', flexDirection: 'column', gap: '20px' }}>
                             
                             {/* SCENE GRAPH EXPLORER */}
                             <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', height: '350px', boxShadow: '5px 5px 0 #17a2b8' }}>

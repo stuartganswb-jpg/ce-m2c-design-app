@@ -25,7 +25,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
 
-  // 🚀 NEW: Added useClientPricing, priceOverride, and partHandling to the step schema
   const [newStep, setNewStep] = useState({ 
       id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, 
       priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [],
@@ -53,6 +52,27 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   const DOCUMENT_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE'];
   const BRANDS_LIST = ['m2c', 'uniquity', 'ce', 'leyla']; 
+
+  const DEFAULT_SYSTEM_WINDOWS = {
+      inHouseFinishes: ['ce', 'm2c'], outsourceFinishes: ['ce', 'm2c'],
+      prodTypes: ['ce', 'm2c', 'uniquity', 'leyla'], uom: ['ce', 'm2c', 'uniquity', 'leyla'],
+      collections: ['ce', 'm2c', 'uniquity', 'leyla'], watchLists: ['ce', 'm2c', 'uniquity', 'leyla'],
+      vendors: ['ce', 'm2c', 'uniquity', 'leyla'], outsourceActions: ['ce', 'm2c', 'uniquity', 'leyla'],
+      pillowSizes: ['uniquity'], fillTypes: ['uniquity'], flangeStyles: ['uniquity'], stitchTypes: ['uniquity'],
+      seamCounts: ['uniquity'], assemblyTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
+      customers: ['ce', 'm2c', 'uniquity', 'leyla'],
+      partHandling: ['ce', 'm2c', 'uniquity', 'leyla'],
+      inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'] // 🚀 NEW
+  };
+
+  const LIST_LABELS = {
+      prodTypes: 'PRODUCT TYPES', uom: 'UOMs', collections: 'COLLECTIONS',
+      watchLists: 'WATCHLISTS', vendors: 'APPROVED VENDORS', outsourceActions: 'OUTSOURCE ACTIONS',
+      pillowSizes: 'PILLOW SIZES', fillTypes: 'FILL TYPES', flangeStyles: 'EDGE / FLANGE STYLES', 
+      stitchTypes: 'STITCH ROUTING', seamCounts: 'SEAM COUNTS / UPCHARGES', assemblyTypes: 'ASSEMBLY TYPES',
+      customers: 'CUSTOMERS / DEALERS', partHandling: 'PART HANDLING & ROUTING',
+      inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS' // 🚀 NEW
+  };
 
   useEffect(() => {
       const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -469,7 +489,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           {activeSection === "CPQ_FLOWS" && (
             <div style={{ display: 'flex', flex: 1, height: '100%' }}>
                 
-                {/* FLOW SELECTOR */}
                 <div style={{ width: '350px', borderRight: '2px solid #000', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px', background: '#f8f9fa' }}>
                     <h3 style={{ margin: 0, color: '#007bff' }}>ACTIVE CPQ FLOWS</h3>
                     
@@ -510,7 +529,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                     )}
                 </div>
 
-                {/* FLOW EDITOR */}
                 <div style={{ flex: 1, padding: '20px', overflowY: 'auto' }}>
                     {!activeFlow ? (
                         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999', fontWeight: 'bold', height: '100%' }}>SELECT OR CREATE A FLOW TO EDIT</div>
