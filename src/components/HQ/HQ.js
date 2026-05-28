@@ -14,13 +14,16 @@ const PackagingTab = lazy(() => import('./PackagingTab'));
 const CPQTab = lazy(() => import('./CPQTab'));
 const ClientVisionTab = lazy(() => import('./ClientVisionTab')); 
 const ExternalCoopTab = lazy(() => import('./ExternalCoopTab'));
-const ProjectManagementTab = lazy(() => import('./ProjectManagementTab')); // 🚀 NEW
+const ProjectManagementTab = lazy(() => import('./ProjectManagementTab')); 
 const AdminTab = lazy(() => import('./AdminTab')); 
 const ERPPushPullTab = lazy(() => import('./ERPPushPullTab'));
 const RTGDispatchTab = lazy(() => import('./RTGDispatchTab'));
 
 const AssetGalleryTab = lazy(() => import('../Shared/AssetGalleryTab'));
 const BatchImageProcessor = lazy(() => import('../Shared/BatchImageProcessor'));
+
+// 🚀 NEW: Import Shared Messaging
+const SharedMessaging = lazy(() => import('../Shared/SharedMessaging'));
 
 const BRANDS = [
   { id: 'm2c', name: 'M2C Studio', focus: 'Lighting & Hardware', color: '#1A1A1A' }, 
@@ -29,11 +32,11 @@ const BRANDS = [
   { id: 'leyla', name: 'Leyla Gans LLC', focus: 'Fine Jewelry', color: '#C5A880' } 
 ];
 
-// 🚀 UPGRADED TABS ARRAY: Inserted 10.5
+// 🚀 ADDED 10.7 (HQ Shared Messaging)
 const TABS = [
   '1. Inception & Validation', '2. Visual Assembly', '2.5 Node Grouping', '3. BOM Engine', '4. Master Library',
   '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
-  '9. Client Vision', '10. External Co-Op', '10.5 Project Mgmt', '11. System Admin', '12. ERP Push / Pull', '13. RTG Dispatch',
+  '9. Client Vision', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '12. ERP Push / Pull', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor'
 ];
 
@@ -172,7 +175,7 @@ function HQ() {
       </nav>
 
       <main style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        <div style={{ backgroundColor: 'white', border: '2px solid #000', flex: 1, boxShadow: '8px 8px 0px rgba(0,0,0,0.1)', overflow: 'hidden', position: 'relative' }}>
+        <div style={{ backgroundColor: 'white', border: '2px solid #000', flex: 1, boxShadow: '8px 8px 0px rgba(0,0,0,0.1)', overflow: 'hidden', position: 'relative', padding: '20px' }}>
           
           <Suspense fallback={
             <div style={{ display: 'flex', height: '100%', justifyContent: 'center', alignItems: 'center', flexDirection: 'column', gap: '20px' }}>
@@ -190,15 +193,16 @@ function HQ() {
             {activeTab === TABS[8] && <CPQTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[9] && <ClientVisionTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[10] && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            
-            {/* 🚀 NEW: PROJECT MANAGEMENT TAB */}
             {activeTab === TABS[11] && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
             
-            {activeTab === TABS[12] && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} />}
-            {activeTab === TABS[13] && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[14] && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[15] && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[16] && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
+            {/* 🚀 NEW: HQ MESSAGING TAB */}
+            {activeTab === TABS[12] && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={null} />}
+            
+            {activeTab === TABS[13] && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} />}
+            {activeTab === TABS[14] && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[15] && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[16] && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[17] && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
           </Suspense>
 
         </div>

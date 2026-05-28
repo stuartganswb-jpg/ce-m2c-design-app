@@ -6,15 +6,15 @@ import SetupQueue from './SetupQueue';
 import ActiveFloor from './ActiveFloor';
 import Recipes from './Recipes';
 import Supplies from './Supplies';
-import Messaging from './Messaging';
 import Management from './Management';
 import Summary from './Summary';
 import { MixModal, QcModal } from './Modals';
 
-// 🚀 NEW: FLOOR-OPTIMIZED VISUAL DICTIONARY (Replaces HQ AssetGalleryTab)
+// 🚀 SHARED APPS
 import FloorAssetViewer from './FloorAssetViewer';
+import SharedMessaging from '../Shared/SharedMessaging';
 
-const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'MESSAGING', 'ASSET GALLERY', 'MANAGEMENT', 'DAILY SUMMARY'];
+const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'OS COMMS', 'ASSET GALLERY', 'MANAGEMENT', 'DAILY SUMMARY'];
 
 const FinishingFloor = () => {
   const navigate = useNavigate();
@@ -29,7 +29,6 @@ const FinishingFloor = () => {
   const [activePots, setActivePots] = useState({});
   const [supplies, setSupplies] = useState([]);
   const [users, setUsers] = useState([]);
-  const [messages, setMessages] = useState([]);
   const [logs, setLogs] = useState([]);
   const [sysConfig, setSysConfig] = useState({ setupSecs: 30, smallPartsBatchSize: 70, smallPartsBatchMinutes: 6, poleMinutesPerPiece: 3, potLifeMins: 180, recoatWindowMins: 90 });
   const [now, setNow] = useState(Date.now());
@@ -50,7 +49,6 @@ const FinishingFloor = () => {
       onSnapshot(collection(db, "fin_pots"), (snap) => { let pts = {}; snap.docs.forEach(d => pts[d.id] = d.data().mixedAt); setActivePots(pts); }),
       onSnapshot(collection(db, "fin_supplies"), (snap) => setSupplies(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(collection(db, "fin_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
-      onSnapshot(query(collection(db, "fin_messaging"), orderBy("t", "desc")), (snap) => setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(query(collection(db, "fin_logs"), orderBy("t", "desc"), limit(50)), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(doc(db, "fin_config", "settings"), (docSnap) => { if (docSnap.exists()) setSysConfig(prev => ({ ...prev, ...docSnap.data() })); })
     ];
@@ -87,7 +85,6 @@ const FinishingFloor = () => {
   };
 
   const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';
-  // 🚀 PERMISSIONS BYPASS: Admins ALWAYS see all tabs
   const myTabs = user?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
   if (!user) {
@@ -126,12 +123,12 @@ return (
           {activeTab === 'ACTIVE FLOOR' && <ActiveFloor workOrders={workOrders} recipes={recipes} activePots={activePots} sysConfig={sysConfig} setMixModal={setMixModal} now={now} user={user} setQcModal={setQcModal} users={users} />}
           {activeTab === 'FINISH RECIPES' && <Recipes recipes={recipes} paintProfiles={paintProfiles} supplies={supplies} writeLog={writeLog} user={user} />}
           {activeTab === 'SUPPLIES' && <Supplies supplies={supplies} writeLog={writeLog} user={user} />}
-          {activeTab === 'MESSAGING' && <Messaging messages={messages} user={user} />}
           {activeTab === 'MANAGEMENT' && <Management sysConfig={sysConfig} users={users} logs={logs} writeLog={writeLog} user={user} perms={perms} setPerms={setPerms} db={db} TABS={TABS} />}
           {activeTab === 'DAILY SUMMARY' && <Summary workOrders={workOrders} />}
           
-          {/* 🚀 NEW ASSET GALLERY ROUTE FOR THE FLOOR */}
+          {/* 🚀 SHARED APPS */}
           {activeTab === 'ASSET GALLERY' && <FloorAssetViewer activeBrand={null} />}
+          {activeTab === 'OS COMMS' && <SharedMessaging currentUser={user.name} currentApp="FINISHING" writeLog={writeLog} />}
         </div>
       </main>
       
