@@ -17,7 +17,8 @@ const DEFAULT_SYSTEM_WINDOWS = {
   vendors: ['ce', 'm2c', 'uniquity', 'leyla'], outsourceActions: ['ce', 'm2c', 'uniquity', 'leyla'],
   pillowSizes: ['uniquity'], fillTypes: ['uniquity'], flangeStyles: ['uniquity'], stitchTypes: ['uniquity'],
   seamCounts: ['uniquity'], assemblyTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
-  customers: ['ce', 'm2c', 'uniquity', 'leyla'] 
+  customers: ['ce', 'm2c', 'uniquity', 'leyla'],
+  partHandling: ['ce', 'm2c', 'uniquity', 'leyla'] // 🚀 NEW: Part Handling 
 };
 
 const LIST_LABELS = {
@@ -25,7 +26,8 @@ const LIST_LABELS = {
     watchLists: 'WATCHLISTS', vendors: 'APPROVED VENDORS', outsourceActions: 'OUTSOURCE ACTIONS',
     pillowSizes: 'PILLOW SIZES', fillTypes: 'FILL TYPES', flangeStyles: 'EDGE / FLANGE STYLES', 
     stitchTypes: 'STITCH ROUTING', seamCounts: 'SEAM COUNTS / UPCHARGES', assemblyTypes: 'ASSEMBLY TYPES',
-    customers: 'CUSTOMERS / DEALERS' 
+    customers: 'CUSTOMERS / DEALERS',
+    partHandling: 'PART HANDLING & ROUTING' // 🚀 NEW: Part Handling Label
 };
 
 const LibraryTab = ({ currentUser, activeBrand }) => {
@@ -46,7 +48,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [globalLists, setGlobalLists] = useState({ 
       uom: [], prodTypes: [], collections: [], watchLists: [], vendors: [], outsourceActions: [],
       pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], assemblyTypes: [],
-      cpqRoutingTypes: [], customers: [] 
+      cpqRoutingTypes: [], customers: [], partHandling: [] 
   });
   
   const [windowConfig, setWindowConfig] = useState({ system: DEFAULT_SYSTEM_WINDOWS, custom: [] });
@@ -112,7 +114,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || ['0 Seams', '1 Seam', '2 Seams', '3 Seams', '4 Seams'],
               assemblyTypes: types,
               cpqRoutingTypes: data.cpqRoutingTypes || [],
-              customers: data.customers || [] 
+              customers: data.customers || [],
+              partHandling: data.partHandling || ['Small Parts', 'Custom'] // 🚀 NEW
           });
       }
     });
@@ -165,7 +168,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     let matchesType = typeFilter === "" || specs.productType === typeFilter;
     let matchesClass = true;
 
-    // 🚀 FILTER ENGINE
     if (partClassFilter !== "ALL") {
         if (partClassFilter === "INVENTORY") {
             matchesClass = part.partClass === "Inventory" && specs.isInHouse !== false;
@@ -205,7 +207,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         project: part.project || "",
         collection: part.collection || "",
         routingType: part.routingType || "",
-        isProjectManaged: baseSpecs.isProjectManaged || false
+        isProjectManaged: baseSpecs.isProjectManaged || false,
+        partHandling: baseSpecs.partHandling || "" // 🚀 NEW
     });
   };
 
@@ -271,7 +274,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const newId = `${activeBrand.toUpperCase()}-${actualClass === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
     
     setActivePart({ isNew: true, id: newId, itemId: newId, legacyErpId: "PENDING", itemName: `NEW ${actualClass.toUpperCase()}`, brandId: activeBrand, partClass: actualClass });
-    setEditSpecs({ productType: "", uom: "EA", finishDetail: "", collection: "N/A", project: "", routingType: "", assemblyType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" }, isProjectManaged: false }); 
+    setEditSpecs({ productType: "", uom: "EA", finishDetail: "", collection: "N/A", project: "", routingType: "", assemblyType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" }, isProjectManaged: false, partHandling: "" }); 
     setPdfFile(null); setCadFile(null); setCloneSourceId("");
   };
 
@@ -509,7 +512,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         </div>
         <div style={{ display: 'flex', gap: '15px', width: '75%', alignItems: 'center' }}>
           
-          {/* 🚀 NEW DYNAMIC FILTER DROPDOWN */}
           <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} style={{ padding: '10px', border: '2px solid #007bff', fontWeight: 'bold', background: '#eafaf1', color: '#007bff', minWidth: '150px', textTransform: 'uppercase' }}>
               <option value="ALL">ALL CLASSES</option>
               <option value="INVENTORY">RAW MAT / COMPONENTS (IN-HOUSE)</option>
@@ -535,7 +537,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               </select>
           )}
 
-          {/* 🚀 ADDED BIN SEARCH SUPPORT TO PLACEHOLDER */}
           <input placeholder="🔍 Search by Name, ERP, Bin, or Cust ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ flex: 2, padding: '10px', border: '2px solid #000', fontWeight: 'bold', fontSize: '1rem' }} />
         </div>
       </div>
@@ -572,7 +573,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                           {part.clientPricing.length} CLIENT MAPPING(S)
                       </div>
                   )}
-                  {/* 🚀 NEW: BIN LOCATION RENDER */}
                   {specs.binLocation && (
                       <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', marginBottom: '2px' }}>
                           BIN: {specs.binLocation}
@@ -695,7 +695,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                      </div>
                  </div>
 
-                 {/* 🚀 NEW: WAREHOUSE BIN LOCATION INTEGRATION */}
                  <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '10px', marginTop: '15px' }}>
                      <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>📍 WAREHOUSE BIN LOCATION (BARCODE/REF)</label>
                      <input name="binLocation" value={editSpecs.binLocation || ''} onChange={handleSpecChange} placeholder="e.g. A1-B2-04" style={{ width: '100%', padding: '10px', border: '1px solid #6f42c1', boxSizing: 'border-box', textTransform: 'uppercase', fontWeight: 'bold', fontSize: '1.1rem' }} />
@@ -760,6 +759,11 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                    {windowConfig.system.prodTypes?.includes(activeBrand) && (
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
                    )}
+
+                   {/* 🚀 NEW: PART HANDLING INTEGRATION */}
+                   {windowConfig.system.partHandling?.includes(activeBrand) && (
+                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label><select name="partHandling" value={editSpecs.partHandling || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold' }}><option value="">UNASSIGNED / STANDARD</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph.toUpperCase()}</option>)}</select></div>
+                   )}
                    
                    {windowConfig.system.uom?.includes(activeBrand) && (
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
@@ -776,11 +780,11 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                    ))}
 
                    {windowConfig.system.collections?.includes(activeBrand) && (
-                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label><select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}><option value="">SELECT...</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label><select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}><option value="">SELECT...</option><option value="N/A">N/A</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                    )}
 
                    {windowConfig.system.watchLists?.includes(activeBrand) && (
-                       <div style={{ gridColumn: 'span 2', background: '#fff3cd', border: '2px solid #ffc107', padding: '10px' }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: editSpecs.watchList !== "NONE" ? '#d9534f' : '#000' }}>ASSIGN TO WATCHLIST:</label><select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', fontWeight: 'bold' }}>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}</select></div>
+                       <div style={{ gridColumn: 'span 2', background: '#fff3cd', border: '2px solid #ffc107', padding: '10px' }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: editSpecs.watchList !== "NONE" ? '#d9534f' : '#000' }}>ASSIGN TO WATCHLIST:</label><select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', fontWeight: 'bold' }}><option value="NONE">NONE</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}</select></div>
                    )}
                  </div>
               </div>
@@ -1185,3 +1189,4 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 };
 
 export default LibraryTab;
+}

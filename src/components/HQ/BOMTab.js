@@ -12,7 +12,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [libraryParts, setLibraryParts] = useState([]);
   
   // --- Dynamic Master Lists & Configs ---
-  const [globalLists, setGlobalLists] = useState({ uom: [], prodTypes: [], collections: [], watchLists: [], vendors: [] });
+  const [globalLists, setGlobalLists] = useState({ uom: [], prodTypes: [], collections: [], watchLists: [], vendors: [], partHandling: [] }); // 🚀 NEW: Part Handling
   const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] }); // Stores Custom Dictionaries for CPQ mapping
   
   // Master Schema Data
@@ -28,7 +28,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       itemName: "", legacyErpId: "", productType: "", collection: "", routingType: "UNASSIGNED",
       basePrice: "", cost: "", pdfUrl: "", cadUrl: "",
       isProjectManaged: false,
-      binLocation: "" // 🚀 NEW: Parent Assembly Bin Location
+      binLocation: "" 
   });
 
   // File Upload State
@@ -48,13 +48,14 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           const data = docSnap.data();
           setGlobalLists({
               uom: data.uom || [], prodTypes: data.prodTypes || [], collections: data.collections || [],
-              watchLists: data.watchLists || [], vendors: data.vendors || []
+              watchLists: data.watchLists || [], vendors: data.vendors || [],
+              partHandling: data.partHandling || ['Small Parts', 'Custom'] // 🚀 NEW: Part Handling Fallback
           });
       }
     });
     const unsubWindowConfig = onSnapshot(doc(db, "system", "window_config"), (docSnap) => {
       if (docSnap.exists()) {
-          setWindowConfig({ system: docSnap.data().system || {}, custom: docSnap.data().custom || [] });
+          setWindowConfig({ system: { partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
       }
     });
     return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); };
@@ -107,7 +108,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               pdfUrl: selectedAssemblyData.manufacturingSpecs?.pdfUrl || "",
               cadUrl: selectedAssemblyData.manufacturingSpecs?.cadUrl || "",
               isProjectManaged: selectedAssemblyData.manufacturingSpecs?.isProjectManaged || false,
-              binLocation: selectedAssemblyData.manufacturingSpecs?.binLocation || "" // 🚀 NEW: Load Bin
+              binLocation: selectedAssemblyData.manufacturingSpecs?.binLocation || "" 
           });
       }
   }, [selectedAssemblyData]);
@@ -127,8 +128,9 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       const customData = baseSpecs.customData || {}; 
       const cpqCategories = baseSpecs.cpqCategories || []; 
       const isInHouse = baseSpecs.isInHouse !== undefined ? baseSpecs.isInHouse : true;
-      
-      setEditSpecs({ ...baseSpecs, parametric: parametricData, customData, cpqCategories, isInHouse });
+      const partHandling = baseSpecs.partHandling || ""; // 🚀 NEW
+
+      setEditSpecs({ ...baseSpecs, parametric: parametricData, customData, cpqCategories, isInHouse, partHandling });
   };
 
   const handleSpecChange = (e) => setEditSpecs({ ...editSpecs, [e.target.name]: e.target.value });
@@ -175,7 +177,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                   pdfUrl: finalPdfUrl,
                   cadUrl: finalCadUrl,
                   isProjectManaged: assemblyDetails.isProjectManaged,
-                  binLocation: assemblyDetails.binLocation // 🚀 NEW: Save Bin
+                  binLocation: assemblyDetails.binLocation 
               },
               updatedAt: new Date().toISOString()
           });
@@ -327,7 +329,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         </span>
                                     </div>
 
-                                    <div style={{ background: '#fff3cd', border: '2px dashed #ffc107', padding: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <div style={{ background: '#fff3cd', border: '2px dashed #ffc107', padding: '10px', display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '15px' }}>
                                         <input 
                                             type="checkbox" 
                                             checked={assemblyDetails.isProjectManaged} 
@@ -345,7 +347,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>ERP ID:</label><input value={assemblyDetails.legacyErpId} onChange={e => setAssemblyDetails({...assemblyDetails, legacyErpId: e.target.value})} placeholder="PENDING" style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box', textTransform: 'uppercase' }} /></div>
                                     </div>
 
-                                    {/* 🚀 NEW: WAREHOUSE BIN LOCATION FOR PARENT ASSEMBLY */}
                                     <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '10px', marginTop: '10px' }}>
                                         <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px' }}>
                                             📍 WAREHOUSE BIN LOCATION (BARCODE/REF)
@@ -460,6 +461,12 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                                 
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
+                                
+                                {/* 🚀 NEW: PART HANDLING INTEGRATION */}
+                                {windowConfig.system.partHandling?.includes(activeBrand) && (
+                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label><select name="partHandling" value={editSpecs.partHandling || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold' }}><option value="">UNASSIGNED / STANDARD</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph.toUpperCase()}</option>)}</select></div>
+                                )}
+
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label><select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option><option value="N/A">N/A</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                                 <div style={{ background: '#fff3cd', border: '1px solid #ffeeba', padding: '5px 10px' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'block', marginBottom: '3px' }}>ASSIGN TO WATCHLIST:</label><select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', fontWeight: 'bold' }}><option value="NONE">NONE</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}</select></div>
@@ -497,7 +504,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 ) : (
                                     <>
                                         <div style={{ display: 'flex', gap: '10px' }}>
-                                            <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }}><option value="">SELECT VENDOR...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
+                                            {windowConfig.system.vendors?.includes(activeBrand) ? (
+                                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT VENDOR...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
+                                            ) : (
+                                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><input name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
+                                            )}
                                             <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff' }}>VENDOR PART # / SKU:</label><input name="vendorId" value={editSpecs.vendorId || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box' }} /></div>
                                         </div>
                                         <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
@@ -522,17 +533,9 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
                                 </div>
                                 <div style={{ flex: 1, borderLeft: '1px solid #eee', paddingLeft: '15px' }}>
-                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>3D CAD MODEL (.GLB):</label>
-                                    {editSpecs.cadUrl ? (
-                                        <div style={{ background: '#eafaf1', padding: '5px', border: '1px solid #28a745', borderRadius: '4px' }}>
-                                            <div style={{ fontSize: '0.7rem', color: '#28a745', fontWeight: 'bold' }}>✓ 3D MODEL ASSIGNED</div>
-                                            <a href={editSpecs.cadUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', margin: '5px 0', fontWeight: 'bold' }}>[Download Current .GLB]</a>
-                                            <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '8px', marginBottom: '3px' }}>Overwrite file (Optional):</div>
-                                            <input type="file" accept=".glb" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                                        </div>
-                                    ) : (
-                                        <input type="file" accept=".glb" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                                    )}
+                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>3D CAD MODEL (.GLB / .GLTF):</label>
+                                    {editSpecs.cadUrl && <div style={{ fontSize: '0.7rem', color: '#28a745', marginBottom: '5px', fontWeight: 'bold' }}>[✓ 3D Model Assigned]</div>}
+                                    <input type="file" accept=".glb,.gltf" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
                                     {cadUploadProgress > 0 && <progress value={cadUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
                                 </div>
                             </div>
