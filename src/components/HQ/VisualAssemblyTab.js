@@ -66,10 +66,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
   const [pins, setPins] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
-  const [assemblyTypesList, setAssemblyTypesList] = useState(["STANDARD", "MASTER", "OUTSOURCE KIT"]); 
   
-  // 🚀 NEW: Dynamic Dictionary States
-  const [globalLists, setGlobalLists] = useState({ prodTypes: [], collections: [], uom: [], partHandling: [], inventoryTypes: [] });
+  const [globalLists, setGlobalLists] = useState({ prodTypes: [], collections: [], uom: [], partHandling: [], inventoryTypes: [], assemblyTypes: [] }); // 🚀 NEW
   const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] });
   const [customSchema, setCustomSchema] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
@@ -80,7 +78,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [newPartName, setNewPartName] = useState("");
   const [newPartType, setNewPartType] = useState("Inventory"); 
-  const [newPartRouting, setNewPartRouting] = useState(""); // Powers BOTH Assembly Routing & Inventory Category
+  const [newPartRouting, setNewPartRouting] = useState(""); 
   
   const [newPartSpecs, setNewPartSpecs] = useState({ productType: '', collection: '', uom: 'EA', partHandling: '', dynamicDicts: {}, customData: {} });
 
@@ -114,20 +112,13 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
           if (docSnap.exists()){
               const data = docSnap.data();
-              let types = data.assemblyTypes || [];
-              types = types.filter(t => !t.toUpperCase().includes('INSTRUCT'));
-              
-              const uppercaseTypes = types.map(t => t.toUpperCase());
-              if (!uppercaseTypes.includes("MASTER")) types.unshift("MASTER");
-              if (!uppercaseTypes.includes("STANDARD")) types.unshift("STANDARD");
-              
-              setAssemblyTypesList(types);
               setGlobalLists({
                   prodTypes: data.prodTypes || [],
                   collections: data.collections || [],
                   uom: data.uom || ['EA'],
                   partHandling: data.partHandling || ['Small Parts', 'Custom'],
-                  inventoryTypes: data.inventoryTypes || [] // 🚀 NEW: Inventory Types
+                  inventoryTypes: data.inventoryTypes || [], // 🚀 SYNC INVENTORY CATS
+                  assemblyTypes: data.assemblyTypes || [] // 🚀 SYNC ASSEMBLY CATS
               });
           }
       });
@@ -329,7 +320,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     try {
       const newMasterId = `${activeBrand.toUpperCase()}-${newPartType === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
       
-      // 🚀 Routing Type is assigned natively to the parent object for BOTH Inventory and Assembly 
       const newDoc = {
           id: newMasterId, itemId: newMasterId, legacyErpId: "PENDING", itemName: newPartName.toUpperCase(),
           brandId: activeBrand, partClass: newPartType, sharedBrands: [activeBrand],
@@ -849,7 +839,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                         <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>CLASSIFY THIS ENTIRE IMAGE AS:</label>
                         <select value={routingType} onChange={(e) => setRoutingType(e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold', textTransform: 'uppercase' }}>
                             <option value="">-- SELECT ROUTING TYPE --</option>
-                            {assemblyTypesList.map(type => ( <option key={type} value={type}>{type}</option> ))}
+                            {(globalLists.assemblyTypes || []).map(type => ( <option key={type} value={type}>{type}</option> ))}
                         </select>
                         <button onClick={handleSaveRouting} disabled={!activeAssembly || !routingType} style={{ padding: '15px', background: isSavingRouting ? '#17a2b8' : '#000', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (activeAssembly && routingType) ? 'pointer' : 'not-allowed', fontSize: '1rem', marginTop: '5px' }}>{isSavingRouting ? "ROUTING SAVED ✓" : "💾 SAVE ROUTING TYPE"}</button>
                     </div>
@@ -913,7 +903,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                           <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#1e7e34' }}>ROUTING CLASSIFICATION:</label>
                           <select value={newPartRouting} onChange={(e) => setNewPartRouting(e.target.value)} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold' }}>
                               <option value="">-- SELECT ROUTING --</option>
-                              {assemblyTypesList.map(type => ( <option key={type} value={type}>{type}</option> ))}
+                              {(globalLists.assemblyTypes || []).map(type => ( <option key={type} value={type}>{type}</option> ))}
                           </select>
                       </div>
                   )}
@@ -928,25 +918,25 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                           <div>
                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label>
                               <select name="productType" value={newPartSpecs.productType} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc' }}>
-                                  <option value="">SELECT...</option>{globalLists.prodTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                                  <option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}
                               </select>
                           </div>
                           <div>
                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label>
-                              <select name="partHandling" value={newPartSpecs.partHandling} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold' }}>
-                                  <option value="">UNASSIGNED</option>{globalLists.partHandling.map(ph => <option key={ph} value={ph}>{ph.toUpperCase()}</option>)}
+                              <select name="partHandling" value={newPartSpecs.partHandling} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
+                                  <option value="">UNASSIGNED</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}
                               </select>
                           </div>
                           <div>
                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label>
                               <select name="uom" value={newPartSpecs.uom} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc' }}>
-                                  {globalLists.uom.map(u => <option key={u} value={u}>{u}</option>)}
+                                  {(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}
                               </select>
                           </div>
                           <div>
                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label>
                               <select name="collection" value={newPartSpecs.collection} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc' }}>
-                                  <option value="">SELECT...</option>{globalLists.collections.map(c => <option key={c} value={c}>{c}</option>)}
+                                  <option value="">SELECT...</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}
                               </select>
                           </div>
                       </div>
