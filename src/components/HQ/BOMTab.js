@@ -27,7 +27,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [assemblyDetails, setAssemblyDetails] = useState({
       itemName: "", legacyErpId: "", productType: "", collection: "", routingType: "UNASSIGNED",
       basePrice: "", cost: "", pdfUrl: "", cadUrl: "",
-      isProjectManaged: false // 🚀 NEW: Complex Project Flag
+      isProjectManaged: false 
   });
 
   // File Upload State
@@ -105,7 +105,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               cost: selectedAssemblyData.manufacturingSpecs?.cost || "",
               pdfUrl: selectedAssemblyData.manufacturingSpecs?.pdfUrl || "",
               cadUrl: selectedAssemblyData.manufacturingSpecs?.cadUrl || "",
-              isProjectManaged: selectedAssemblyData.manufacturingSpecs?.isProjectManaged || false // 🚀 NEW: Load state
+              isProjectManaged: selectedAssemblyData.manufacturingSpecs?.isProjectManaged || false
           });
       }
   }, [selectedAssemblyData]);
@@ -172,7 +172,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                   cost: assemblyDetails.cost,
                   pdfUrl: finalPdfUrl,
                   cadUrl: finalCadUrl,
-                  isProjectManaged: assemblyDetails.isProjectManaged // 🚀 NEW: Save state
+                  isProjectManaged: assemblyDetails.isProjectManaged
               },
               updatedAt: new Date().toISOString()
           });
@@ -200,7 +200,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
         await new Promise((resolve, reject) => { cadUploadTask.on("state_changed", (snap) => setCadUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)), (err) => reject(err), async () => { finalCadUrl = await getDownloadURL(cadUploadTask.snapshot.ref); resolve(); }); });
       }
 
-      // 🚀 Automatically clear the "NEEDS_SPECS" flag upon saving!
       const compiledSpecs = { 
           ...editSpecs, 
           pdfUrl: finalPdfUrl, 
@@ -325,7 +324,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         </span>
                                     </div>
 
-                                    {/* 🚀 NEW: PROJECT MANAGEMENT ROUTING FLAG */}
                                     <div style={{ background: '#fff3cd', border: '2px dashed #ffc107', padding: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
                                         <input 
                                             type="checkbox" 
@@ -368,10 +366,23 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             {assemblyDetails.pdfUrl && <a href={assemblyDetails.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>[View Current PDF]</a>}
                                             <input type="file" accept="application/pdf" onChange={(e) => setAssemblyPdfFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
                                         </div>
+                                        
+                                        {/* 🚀 FIXED CAD UPLOAD DISPLAY */}
                                         <div style={{ flex: 1, borderLeft: '1px solid #28a745', paddingLeft: '15px' }}>
-                                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>MASTER 3D CAD (.GLB / .GLTF):</label>
-                                            {assemblyDetails.cadUrl && <div style={{ fontSize: '0.7rem', color: '#28a745', marginBottom: '5px', fontWeight: 'bold' }}>[✓ 3D Model Assigned]</div>}
-                                            <input type="file" accept=".glb,.gltf" onChange={(e) => setAssemblyCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
+                                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>MASTER 3D CAD (.GLB):</label>
+                                            {assemblyDetails.cadUrl ? (
+                                                <div style={{ background: '#fff', padding: '8px', border: '1px solid #28a745', borderRadius: '4px' }}>
+                                                    <div style={{ fontSize: '0.7rem', color: '#28a745', fontWeight: 'bold' }}>✓ SYNCED FROM INCEPTION</div>
+                                                    <a href={assemblyDetails.cadUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', margin: '5px 0', fontWeight: 'bold' }}>[Download Current .GLB]</a>
+                                                    <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '8px', marginBottom: '3px' }}>Overwrite file (Optional):</div>
+                                                    <input type="file" accept=".glb" onChange={(e) => setAssemblyCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
+                                                </div>
+                                            ) : (
+                                                <div>
+                                                    <div style={{ fontSize: '0.7rem', color: '#d9534f', marginBottom: '5px', fontWeight: 'bold' }}>⚠️ NO 3D MODEL FOUND</div>
+                                                    <input type="file" accept=".glb" onChange={(e) => setAssemblyCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
 
@@ -387,8 +398,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                     </div>
                 ) : (
                     <>
-                        {/* --- COMPONENT EDITOR --- */}
-
                         <div style={{ background: '#f0f8ff', border: '2px dashed #007bff', padding: '15px' }}>
                             <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #007bff', paddingBottom: '5px', color: '#007bff', display: 'flex', justifyContent: 'space-between' }}>
                                 <span>🔗 CPQ CONFIGURATION MAPPING</span>
@@ -479,10 +488,20 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     <input type="file" accept="application/pdf" onChange={(e) => setPdfFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
                                     {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
                                 </div>
+                                
+                                {/* 🚀 FIXED COMPONENT CAD UPLOAD DISPLAY */}
                                 <div style={{ flex: 1, borderLeft: '1px solid #eee', paddingLeft: '15px' }}>
-                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>3D CAD MODEL (.GLB / .GLTF):</label>
-                                    {editSpecs.cadUrl && <div style={{ fontSize: '0.7rem', color: '#28a745', marginBottom: '5px', fontWeight: 'bold' }}>[✓ 3D Model Assigned]</div>}
-                                    <input type="file" accept=".glb,.gltf" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
+                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>3D CAD MODEL (.GLB):</label>
+                                    {editSpecs.cadUrl ? (
+                                        <div style={{ background: '#eafaf1', padding: '5px', border: '1px solid #28a745', borderRadius: '4px' }}>
+                                            <div style={{ fontSize: '0.7rem', color: '#28a745', fontWeight: 'bold' }}>✓ 3D MODEL ASSIGNED</div>
+                                            <a href={editSpecs.cadUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', margin: '5px 0', fontWeight: 'bold' }}>[Download Current .GLB]</a>
+                                            <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '8px', marginBottom: '3px' }}>Overwrite file (Optional):</div>
+                                            <input type="file" accept=".glb" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
+                                        </div>
+                                    ) : (
+                                        <input type="file" accept=".glb" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
+                                    )}
                                     {cadUploadProgress > 0 && <progress value={cadUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
                                 </div>
                             </div>
