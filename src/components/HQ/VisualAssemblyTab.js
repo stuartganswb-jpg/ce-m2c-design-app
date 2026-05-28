@@ -68,6 +68,12 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [libraryParts, setLibraryParts] = useState([]);
   const [assemblyTypesList, setAssemblyTypesList] = useState(["STANDARD", "MASTER", "OUTSOURCE KIT"]); 
   
+  // 🚀 NEW: Dynamic Dictionary States
+  const [globalLists, setGlobalLists] = useState({ prodTypes: [], collections: [], uom: [], partHandling: [] });
+  const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] });
+  const [customSchema, setCustomSchema] = useState([]);
+  const [dynamicAssets, setDynamicAssets] = useState([]);
+
   const [drawerOpen, setDrawerOpen] = useState(false);
   
   const [creationMode, setCreationMode] = useState("EXISTING"); 
@@ -76,6 +82,9 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [newPartType, setNewPartType] = useState("Inventory"); 
   const [newPartRouting, setNewPartRouting] = useState("");
   
+  // 🚀 NEW: State for dynamically assigning Master Library fields on creation
+  const [newPartSpecs, setNewPartSpecs] = useState({ productType: '', collection: '', uom: 'EA', partHandling: '', dynamicDicts: {}, customData: {} });
+
   const [viewMode, setViewMode] = useState("3D");
 
   const [pendingPin, setPendingPin] = useState(null); 
@@ -102,6 +111,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const svgRef = useRef(null);
   const innerGroupRef = useRef(null);
 
+  // 🚀 DYNAMIC DATA SUBSCRIPTIONS
   useEffect(() => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
           if (docSnap.exists()){
@@ -114,9 +124,25 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               if (!uppercaseTypes.includes("STANDARD")) types.unshift("STANDARD");
               
               setAssemblyTypesList(types);
+              setGlobalLists({
+                  prodTypes: data.prodTypes || [],
+                  collections: data.collections || [],
+                  uom: data.uom || ['EA'],
+                  partHandling: data.partHandling || ['Small Parts', 'Custom']
+              });
           }
       });
-      return () => unsubLists();
+      const unsubWin = onSnapshot(doc(db, "system", "window_config"), snap => {
+          if(snap.exists()) setWindowConfig({ system: snap.data().system || {}, custom: snap.data().custom || [] });
+      });
+      const unsubSchema = onSnapshot(doc(db, "system", "master_schema"), snap => {
+          if(snap.exists() && snap.data().inventoryFields) setCustomSchema(snap.data().inventoryFields);
+      });
+      const unsubDyn = onSnapshot(collection(db, "hq_dynamic_data"), snap => {
+          setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()})));
+      });
+      
+      return () => { unsubLists(); unsubWin(); unsubSchema(); unsubDyn(); };
   }, []);
 
   useEffect(() => {
@@ -267,6 +293,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           setPendingPin({ x: point3D.x, y: point3D.y, z: point3D.z, targetNode: meshName });
           setDrawerOpen(true);
           setSearchQuery(""); setNewPartName(""); setNewPartType("Inventory"); setNewPartRouting("");
+          setNewPartSpecs({ productType: '', collection: '', uom: 'EA', partHandling: '', dynamicDicts: {}, customData: {} });
       }
   };
 
@@ -290,6 +317,11 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       } catch (err) { console.error(err); setIsSavingRouting(false); alert("Failed to save routing."); }
   };
 
+  // 🚀 UPDATED DYNAMIC CHANGE HANDLERS
+  const handleDictChange = (dictId, value) => { setNewPartSpecs(prev => ({ ...prev, dynamicDicts: { ...prev.dynamicDicts, [dictId]: value } })); };
+  const handleCustomDataChange = (key, value) => { setNewPartSpecs(prev => ({ ...prev, customData: { ...prev.customData, [key]: value } })); };
+  const handleNewSpecChange = (e) => { setNewPartSpecs(prev => ({ ...prev, [e.target.name]: e.target.value })); };
+
   const saveNewCustomPart = async () => {
     if (!newPartName.trim()) return alert("Enter a name for the new entity.");
     if (newPartType === 'Assembly' && !newPartRouting) return alert("Please select a Routing Type for this Sub-Assembly.");
@@ -301,26 +333,39 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       const newDoc = {
           id: newMasterId, itemId: newMasterId, legacyErpId: "PENDING", itemName: newPartName.toUpperCase(),
           brandId: activeBrand, partClass: newPartType, sharedBrands: [activeBrand],
+          collection: newPartSpecs.collection || activeAssembly?.collection || "N/A",
+          productType: newPartSpecs.productType || "",
           createdAt: new Date().toISOString()
       };
 
+      // 🚀 INJECT DYNAMIC DATA
+      const baseSpecs = {
+          productType: newPartSpecs.productType || "",
+          partHandling: newPartSpecs.partHandling || "",
+          uom: newPartSpecs.uom || "EA",
+          dynamicDicts: newPartSpecs.dynamicDicts || {},
+          customData: newPartSpecs.customData || {},
+          isInHouse: true,
+          status: "NEEDS_SPECS"
+      };
+
       if (newPartType === 'Inventory') {
-          newDoc.manufacturingSpecs = { productType: "COMPONENT", uom: "EA", isInHouse: true, watchList: "NONE", status: "NEEDS_SPECS" };
+          newDoc.manufacturingSpecs = { ...baseSpecs };
       } else {
           newDoc.routingType = newPartRouting;
-          newDoc.manufacturingSpecs = { basePrice: 0, cost: 0, isInHouse: true };
-          newDoc.collection = activeAssembly?.collection || "N/A";
           newDoc.project = activeAssembly?.project || "";
+          newDoc.manufacturingSpecs = { ...baseSpecs, basePrice: 0, cost: 0 };
       }
 
       await setDoc(doc(db, "Approved_Designs", newMasterId), newDoc);
 
       await addDoc(collection(db, "assembly_pins"), {
         assemblyId: selectedAssemblyId, 
-        x: viewMode === '3D' ? pendingPin.x : pendingPin.pinX, 
-        y: viewMode === '3D' ? pendingPin.y : pendingPin.pinY,
-        z: viewMode === '3D' ? pendingPin.z : null,
+        x: viewMode === '3D' ? (pendingPin.x || 0) : pendingPin.pinX, 
+        y: viewMode === '3D' ? (pendingPin.y || 0) : pendingPin.pinY,
+        z: viewMode === '3D' ? (pendingPin.z || 0) : null,
         targetNode: pendingPin.targetNode || "", 
+        clusterId: pendingPin.clusterId || null, // 🚀 LINK TO CLUSTER
         imageUrl: viewMode === '3D' ? '3D_CAD' : activeImageUrl,
         partName: newPartName.toUpperCase(), partId: newMasterId, legacyErpId: "PENDING",
         isExistingLibraryPart: false, status: "NEEDS_SPECS", author: currentUser, defaultQty: 1,
@@ -328,6 +373,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       });
       
       setDrawerOpen(false); setPendingPin(null);
+      setNewPartSpecs({ productType: '', collection: '', uom: 'EA', partHandling: '', dynamicDicts: {}, customData: {} });
       setIsCanvasMaximized(false);
     } catch (err) { console.error(err); alert("Failed to create part."); }
   };
@@ -337,23 +383,22 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     try {
       await addDoc(collection(db, "assembly_pins"), {
         assemblyId: selectedAssemblyId, 
-        x: viewMode === '3D' ? pendingPin.x : pendingPin.pinX, 
-        y: viewMode === '3D' ? pendingPin.y : pendingPin.pinY,
-        z: viewMode === '3D' ? pendingPin.z : null,
+        x: viewMode === '3D' ? (pendingPin.x || 0) : pendingPin.pinX, 
+        y: viewMode === '3D' ? (pendingPin.y || 0) : pendingPin.pinY,
+        z: viewMode === '3D' ? (pendingPin.z || 0) : null,
         targetNode: pendingPin.targetNode || "", 
+        clusterId: pendingPin.clusterId || null, // 🚀 LINK TO CLUSTER
         imageUrl: viewMode === '3D' ? '3D_CAD' : activeImageUrl, 
         partName: part.itemName, partId: part.itemId, legacyErpId: part.legacyErpId || "N/A",
         isExistingLibraryPart: true, specs: part.manufacturingSpecs || {}, status: "SPECS_LOCKED", author: currentUser, defaultQty: 1,
         createdAt: serverTimestamp()
       });
       setDrawerOpen(false); setPendingPin(null);
+      setNewPartSpecs({ productType: '', collection: '', uom: 'EA', partHandling: '', dynamicDicts: {}, customData: {} });
       setIsCanvasMaximized(false);
     } catch (err) { console.error(err); }
   };
 
-  // =====================================
-  // 📸 FIXED UNIVERSAL 2D & 3D CROP LOGIC
-  // =====================================
   const onCropPointerDown = (e, actionType) => {
       e.stopPropagation();
       e.target.setPointerCapture(e.pointerId);
@@ -368,7 +413,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       if (cropState.action === 'MOVE') {
           setCropState(prev => ({ ...prev, x: prev.origX + dx, y: prev.origY + dy }));
       } else if (cropState.action === 'RESIZE') {
-          // 🚀 FIX 1: Lock the crop box so it only scales as a perfect square!
           const sizeDelta = Math.max(dx, dy); 
           const newSize = Math.max(80, prev.origW + sizeDelta);
           setCropState(prev => ({ ...prev, w: newSize, h: newSize }));
@@ -395,7 +439,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           cropCanvas.height = targetSize;
           const ctx = cropCanvas.getContext('2d');
 
-          // 🧊 3D CROP LOGIC
           if (viewMode === '3D') {
               const canvasElement = document.querySelector('#r3f-canvas-tab2 canvas');
               if (!canvasElement) throw new Error("Could not find 3D Canvas");
@@ -419,9 +462,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               ctx.fillStyle = '#ffffff';
               ctx.fillRect(0, 0, targetSize, targetSize);
               ctx.drawImage(img, sx, sy, sw, sh, 0, 0, targetSize, targetSize);
-          } 
-          // 🖼️ 2D CROP LOGIC (ALGEBRAIC REVERSE ENGINEERING)
-          else {
+          } else {
               const container = document.getElementById('canvas-container');
               const rect = container.getBoundingClientRect();
               
@@ -433,7 +474,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               ctx.fillStyle = '#ffffff';
               ctx.fillRect(0, 0, targetSize, targetSize);
 
-              // 🚀 FIX 2: Algebraic mapping to reverse-engineer the SVG Letterbox, Pan, and Zoom
               const Ssvg = Math.min(rect.width / 1000, rect.height / 1000);
               const OffsetXsvg = (rect.width - 1000 * Ssvg) / 2;
               const OffsetYsvg = (rect.height - 1000 * Ssvg) / 2;
@@ -457,7 +497,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               ctx.drawImage(img, Px, Py, Pw, Ph, 0, 0, targetSize, targetSize);
           }
 
-          // 💾 UPLOAD TO STORAGE
           cropCanvas.toBlob(async (blob) => {
               const thumbRef = ref(storage, `dynamic_assets/auto_crops/${targetPin.partId}_${Date.now()}.png`);
               await uploadBytes(thumbRef, blob);
@@ -492,6 +531,11 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const visiblePins = pins.filter(p => 
       viewMode === '3D' ? p.imageUrl === '3D_CAD' : (p.imageUrl === activeImageUrl || (!p.imageUrl && activeImageUrl === activeAssembly?.finalImageUrl))
   );
+
+  // 🚀 FIND UNASSIGNED CLUSTERS FROM TAB 1.5
+  const unassignedClusters = (activeAssembly?.nodeClusters || []).filter(cluster => {
+      return !pins.some(pin => pin.clusterId === cluster.id || pin.targetNode === cluster.nodes?.join(', '));
+  });
 
   const canvasContainerStyle = isCanvasMaximized ? {
       position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 9999, 
@@ -535,7 +579,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
         
         <div style={canvasContainerStyle} id="canvas-container">
           
-          {/* 📸 THE UNIVERSAL CROP STUDIO */}
           {cropState && (
               <div 
                   style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10000, overflow: 'hidden' }}
@@ -566,7 +609,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               </div>
           )}
 
-          {/* 🔲 MAXIMIZED TOOLBAR */}
           {isCanvasMaximized && (
               <div style={{ position: 'absolute', top: '15px', left: '50%', transform: 'translateX(-50%)', zIndex: 9990, background: '#fff', border: '2px solid #000', borderRadius: '30px', padding: '5px', display: 'flex', gap: '5px', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
                   <div style={{ display: 'flex', border: '2px solid #007bff', borderRadius: '20px', overflow: 'hidden', marginRight: '10px' }}>
@@ -601,7 +643,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               </div>
           )}
 
-          {/* 🔲 STANDARD TOOLBAR */}
           {!isCanvasMaximized && activeAssembly && (
             <div style={{ padding: '10px', background: '#f4f4f4', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
               <div style={{ display: 'flex', border: '2px solid #007bff', borderRadius: '4px', overflow: 'hidden' }}>
@@ -735,6 +776,34 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
         {!isCanvasMaximized && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                
+                {/* 🚀 NEW: UNASSIGNED CLUSTERS FROM TAB 1.5 */}
+                {viewMode === '3D' && unassignedClusters.length > 0 && (
+                    <div style={{ background: '#fff3cd', border: '2px solid #ffc107', padding: '15px', boxShadow: '8px 8px 0 rgba(0,0,0,0.1)' }}>
+                        <div style={{ fontWeight: 'bold', color: '#856404', fontSize: '0.9rem', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            ⚠️ UNASSIGNED CLUSTERS (TAB 1.5)
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: '#666', marginBottom: '10px' }}>These 3D groupings have not been converted into BOM items yet.</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {unassignedClusters.map(cl => (
+                                <button 
+                                    key={cl.id} 
+                                    onClick={() => {
+                                        setPendingPin({ x: 0, y: 0, z: 0, targetNode: cl.nodes?.join(', '), clusterId: cl.id });
+                                        setNewPartName(cl.name);
+                                        setDrawerOpen(true);
+                                        setCreationMode("NEW");
+                                    }}
+                                    style={{ padding: '10px', background: '#ffc107', color: '#000', border: '1px solid #d39e00', fontWeight: 'bold', fontSize: '0.75rem', cursor: 'pointer', textAlign: 'left', display: 'flex', justifyContent: 'space-between' }}
+                                >
+                                    <span>+ ASSIGN: {cl.name}</span>
+                                    <span style={{ opacity: 0.7 }}>({cl.nodes?.length || 0} nodes)</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
                 <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 rgba(0,0,0,0.1)' }}>
                     <div style={{ padding: '12px 15px', background: '#007bff', color: '#fff', borderBottom: '2px solid #000', fontWeight: 'bold' }}>📋 MASTER BOM ({pins.length} COMPONENTS)</div>
                     <div style={{ flex: 1, overflowY: 'auto', padding: '15px', background: '#f8f9fa' }}>
@@ -752,7 +821,12 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                         <div>
                                             <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#000' }}>{pin.partName}</div>
                                             <div style={{ fontSize: '0.65rem', color: '#666' }}>{pin.legacyErpId}</div>
-                                            {pin.targetNode && <div style={{ fontSize: '0.65rem', color: '#e83e8c', fontWeight: 'bold' }}>🎯 {pin.targetNode.substring(0, 20)}{pin.targetNode.length > 20 ? '...' : ''}</div>}
+                                            {/* 🚀 NEW: Cluster Badge */}
+                                            {pin.clusterId ? (
+                                                <div style={{ fontSize: '0.6rem', color: '#fff', background: '#6f42c1', padding: '2px 4px', display: 'inline-block', borderRadius: '3px', fontWeight: 'bold', marginTop: '3px' }}>🔗 CLUSTERED 3D DATA</div>
+                                            ) : pin.targetNode && (
+                                                <div style={{ fontSize: '0.65rem', color: '#e83e8c', fontWeight: 'bold' }}>🎯 {pin.targetNode.substring(0, 20)}{pin.targetNode.length > 20 ? '...' : ''}</div>
+                                            )}
                                         </div>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -804,33 +878,14 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               
               {pendingPin?.targetNode !== undefined && viewMode === '3D' && (
                   <div style={{ background: '#e3f2fd', border: '1px solid #007bff', padding: '10px', fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      
-                      {activeAssembly?.nodeClusters?.length > 0 && (
-                          <div style={{ marginBottom: '10px', background: '#eafaf1', border: '1px solid #28a745', padding: '10px' }}>
-                              <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34', marginBottom: '5px' }}>📦 PRE-DEFINED SUB-ASSEMBLIES (FROM TAB 2.5):</div>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                                  {activeAssembly.nodeClusters.map(cluster => (
-                                      <span 
-                                          key={cluster.id} 
-                                          onClick={() => setPendingPin(prev => ({...prev, targetNode: prev.targetNode ? `${prev.targetNode}, ${cluster.meshes.join(', ')}` : cluster.meshes.join(', ')}))} 
-                                          style={{ background: '#28a745', color: '#fff', padding: '4px 8px', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}
-                                      >
-                                          {cluster.name} ({cluster.meshes.length} Meshes)
-                                      </span>
-                                  ))}
-                              </div>
-                          </div>
-                      )}
-
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
                           <span style={{ fontSize: '1.5rem', marginTop: '2px' }}>🎯</span>
                           <div style={{ flex: 1 }}>
-                              <div style={{ color: '#000', fontSize: '0.9rem' }}>3D MESHES TARGETED</div>
-                              <div style={{ fontSize: '0.65rem', color: '#666', marginBottom: '5px' }}>Click other meshes on the model to add them to this group!</div>
+                              <div style={{ color: '#000', fontSize: '0.9rem' }}>{pendingPin.clusterId ? '3D CLUSTER ASSIGNED' : '3D MESHES TARGETED'}</div>
                               <input 
                                   value={pendingPin.targetNode} 
-                                  onChange={(e) => setPendingPin({...pendingPin, targetNode: e.target.value})}
-                                  style={{ width: '100%', padding: '8px', border: '1px solid #007bff', boxSizing: 'border-box', fontWeight: 'bold', fontFamily: 'monospace', color: '#000' }}
+                                  disabled
+                                  style={{ width: '100%', padding: '8px', border: '1px solid #007bff', boxSizing: 'border-box', fontWeight: 'bold', fontFamily: 'monospace', color: '#000', background: '#fff', marginTop: '5px' }}
                               />
                           </div>
                       </div>
@@ -839,7 +894,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
               {creationMode === "NEW" && (
                 <div style={{ padding: '20px', background: '#fff', border: '2px dashed #d9534f' }}>
-                  <h4 style={{ margin: '0 0 15px 0', color: '#d9534f' }}>WHAT DOES THIS SPECIFIC PIN REPRESENT?</h4>
+                  <h4 style={{ margin: '0 0 15px 0', color: '#d9534f' }}>WHAT DOES THIS COMPONENT REPRESENT?</h4>
                   
                   <div style={{ marginBottom: '15px' }}>
                       <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>ENTITY TYPE:</label>
@@ -862,6 +917,63 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>ENTER ENTITY NAME / DESCRIPTION:</label>
                   <input autoFocus value={newPartName} onChange={(e) => setNewPartName(e.target.value)} disabled={isProcessingCrop} placeholder="e.g. UPPER EXTENSION POLE" style={{ width: '100%', padding: '12px', border: '2px solid #000', boxSizing: 'border-box', marginBottom: '15px', textTransform: 'uppercase' }} />
                   
+                  {/* 🚀 NEW: DYNAMIC GLOBAL PROPERTY INJECTION */}
+                  <div style={{ background: '#f8f9fa', padding: '15px', border: '1px solid #ccc', marginBottom: '15px' }}>
+                      <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #ccc', paddingBottom: '5px' }}>GLOBAL MASTER PROPERTIES</h4>
+                      
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '15px' }}>
+                          <div>
+                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label>
+                              <select name="productType" value={newPartSpecs.productType} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc' }}>
+                                  <option value="">SELECT...</option>{globalLists.prodTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                              </select>
+                          </div>
+                          <div>
+                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label>
+                              <select name="partHandling" value={newPartSpecs.partHandling} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold' }}>
+                                  <option value="">UNASSIGNED</option>{globalLists.partHandling.map(ph => <option key={ph} value={ph}>{ph.toUpperCase()}</option>)}
+                              </select>
+                          </div>
+                          <div>
+                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label>
+                              <select name="uom" value={newPartSpecs.uom} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc' }}>
+                                  {globalLists.uom.map(u => <option key={u} value={u}>{u}</option>)}
+                              </select>
+                          </div>
+                          <div>
+                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label>
+                              <select name="collection" value={newPartSpecs.collection} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc' }}>
+                                  <option value="">SELECT...</option>{globalLists.collections.map(c => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                          </div>
+                      </div>
+
+                      {/* DYNAMIC DICTIONARIES */}
+                      {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
+                          <div key={w.id} style={{ marginBottom: '10px' }}>
+                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c', textTransform: 'uppercase' }}>{w.name}:</label>
+                              <select value={newPartSpecs.dynamicDicts[w.id] || ""} onChange={(e) => handleDictChange(w.id, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #e83e8c' }}>
+                                  <option value="">SELECT...</option><option value="N/A">N/A</option>
+                                  {dynamicAssets.filter(a => a.windowId === w.id).map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+                              </select>
+                          </div>
+                      ))}
+
+                      {/* CUSTOM SCHEMA */}
+                      {customSchema.map(field => (
+                          <div key={field.key} style={{ marginBottom: '10px' }}>
+                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff', textTransform: 'uppercase' }}>{field.label}:</label>
+                              {field.type === 'dropdown' ? (
+                                  <select value={newPartSpecs.customData[field.key] || ""} onChange={(e) => handleCustomDataChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #007bff' }}>
+                                      <option value="">Select...</option>{(field.options || "").split(',').map(opt => <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>)}
+                                  </select>
+                              ) : (
+                                  <input type={field.type} value={newPartSpecs.customData[field.key] || ""} onChange={(e) => handleCustomDataChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #007bff', boxSizing: 'border-box' }} />
+                              )}
+                          </div>
+                      ))}
+                  </div>
+
                   <button onClick={saveNewCustomPart} disabled={isProcessingCrop || (newPartType === 'Assembly' && !newPartRouting)} style={{ width: '100%', padding: '15px', background: (isProcessingCrop || (newPartType === 'Assembly' && !newPartRouting)) ? '#ccc' : '#d9534f', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isProcessingCrop || (newPartType === 'Assembly' && !newPartRouting)) ? 'not-allowed' : 'pointer', transition: '0.2s' }}>
                     SAVE & CREATE NEW {newPartType.toUpperCase()}
                   </button>
