@@ -52,8 +52,11 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [activeAssembly, setActiveAssembly] = useState(null);
     const [allMeshes, setAllMeshes] = useState([]);
     
+    // 🚀 NEW: Store the BOM components pulled from Tab 2
+    const [bomPins, setBomPins] = useState([]);
+    const [selectedPinId, setSelectedPinId] = useState("");
+    
     const [selectedMeshes, setSelectedMeshes] = useState([]);
-    const [clusterName, setClusterName] = useState("");
 
     useEffect(() => {
         if (!activeBrand) return;
@@ -72,26 +75,48 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         return () => unsubscribe();
     }, [activeBrand, activeAssembly?.id]);
 
+    // 🚀 NEW: Fetch the actual BOM components for the active assembly
+    useEffect(() => {
+        if (!activeAssembly) {
+            setBomPins([]);
+            return;
+        }
+        const q = query(collection(db, "assembly_pins"), where("assemblyId", "==", activeAssembly.itemId));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            setBomPins(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        });
+        return () => unsubscribe();
+    }, [activeAssembly]);
+
     const handleMeshClick = (meshName) => {
         setSelectedMeshes(prev => prev.includes(meshName) ? prev.filter(m => m !== meshName) : [...prev, meshName]);
     };
 
     const handleSaveCluster = async () => {
-        if (!clusterName.trim()) return alert("Please enter a name for this Sub-Assembly / Cluster.");
+        if (!selectedPinId) return alert("Please select a BOM Component from the dropdown.");
         if (selectedMeshes.length === 0) return alert("Please select at least one 3D mesh.");
 
+        const selectedPin = bomPins.find(p => p.id === selectedPinId);
+        if (!selectedPin) return;
+
         const currentClusters = activeAssembly.nodeClusters || [];
+        
+        // 🚀 BIND THE CLUSTER DIRECTLY TO THE BOM ID
         const newCluster = {
-            id: `CLUSTER-${Date.now()}`,
-            name: clusterName.toUpperCase(),
+            id: selectedPin.id, // Lock the cluster ID to the exact Pin ID
+            partId: selectedPin.partId, // The Master Library ID reference
+            name: selectedPin.partName,
+            legacyErpId: selectedPin.legacyErpId || "N/A",
             meshes: selectedMeshes
         };
 
-        const updatedClusters = [...currentClusters, newCluster];
+        // If they update an existing linked component, replace the old cluster array
+        const updatedClusters = currentClusters.filter(c => c.id !== selectedPin.id);
+        updatedClusters.push(newCluster);
 
         try {
             await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updatedClusters });
-            setClusterName("");
+            setSelectedPinId("");
             setSelectedMeshes([]);
         } catch (err) { console.error(err); alert("Failed to save cluster."); }
     };
@@ -110,8 +135,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
             <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
                 <div>
-                    <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#6f42c1' }}>3. Node Grouping Studio</h2>
-                    <span style={{ fontSize: '0.7rem', color: '#666' }}>DEFINE 3D SUB-ASSEMBLIES & CLUSTERS</span>
+                    <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#6f42c1' }}>2.5 Node Grouping Studio</h2>
+                    <span style={{ fontSize: '0.7rem', color: '#666' }}>BIND 3D MESHES TO BOM COMPONENTS</span>
                 </div>
             </div>
 
@@ -123,7 +148,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                         const hasCAD = !!asm.manufacturingSpecs?.cadUrl;
                         const clusterCount = asm.nodeClusters?.length || 0;
                         return (
-                            <div key={asm.id} onClick={() => { setActiveAssembly(asm); setSelectedMeshes([]); setAllMeshes([]); }} style={{ background: activeAssembly?.id === asm.id ? '#e6e6fa' : '#fff', border: activeAssembly?.id === asm.id ? '3px solid #6f42c1' : '2px solid #ccc', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', boxShadow: activeAssembly?.id === asm.id ? '5px 5px 0 #6f42c1' : 'none' }}>
+                            <div key={asm.id} onClick={() => { setActiveAssembly(asm); setSelectedMeshes([]); setAllMeshes([]); setSelectedPinId(""); }} style={{ background: activeAssembly?.id === asm.id ? '#e6e6fa' : '#fff', border: activeAssembly?.id === asm.id ? '3px solid #6f42c1' : '2px solid #ccc', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', boxShadow: activeAssembly?.id === asm.id ? '5px 5px 0 #6f42c1' : 'none' }}>
                                 <div style={{ padding: '5px 10px', background: hasCAD ? '#6f42c1' : '#666', color: '#fff', fontSize: '0.65rem', fontWeight: 'bold', textAlign: 'center' }}>
                                     {hasCAD ? `⚙️ CAD: ${clusterCount} CLUSTERS` : '⚠️ NO CAD'}
                                 </div>
@@ -165,23 +190,38 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                         {/* CLUSTER MANAGER */}
                         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
                             <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', boxShadow: '5px 5px 0 #6f42c1' }}>
-                                <h3 style={{ margin: '0 0 15px 0', color: '#6f42c1' }}>CREATE CLUSTER</h3>
+                                <h3 style={{ margin: '0 0 15px 0', color: '#6f42c1' }}>BIND MESHES TO BOM</h3>
                                 <div style={{ background: '#e6f2ff', padding: '10px', border: '1px solid #007bff', marginBottom: '15px', fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff' }}>
                                     {selectedMeshes.length} Meshes Selected
                                 </div>
-                                <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>SUB-ASSEMBLY NAME:</label>
-                                <input value={clusterName} onChange={e => setClusterName(e.target.value)} placeholder="e.g. Canopy Assembly" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', marginBottom: '15px', textTransform: 'uppercase' }} />
-                                <button onClick={handleSaveCluster} style={{ width: '100%', padding: '15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>💾 SAVE CLUSTER</button>
+                                
+                                {/* 🚀 FIX: Dropdown mapped strictly to the current BOM Pins */}
+                                <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>LINK TO BOM COMPONENT:</label>
+                                <select 
+                                    value={selectedPinId} 
+                                    onChange={e => setSelectedPinId(e.target.value)} 
+                                    style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', marginBottom: '15px', fontWeight: 'bold', textTransform: 'uppercase' }}
+                                >
+                                    <option value="">-- SELECT FROM BOM --</option>
+                                    {bomPins.map(pin => (
+                                        <option key={pin.id} value={pin.id}>
+                                            {pin.legacyErpId !== "PENDING" && pin.legacyErpId !== "N/A" ? `[${pin.legacyErpId}] ` : ''}{pin.partName}
+                                        </option>
+                                    ))}
+                                </select>
+                                
+                                <button onClick={handleSaveCluster} style={{ width: '100%', padding: '15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>💾 SAVE BINDING</button>
                             </div>
 
                             <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', flex: 1, overflowY: 'auto' }}>
-                                <h3 style={{ margin: '0 0 15px 0' }}>SAVED CLUSTERS ({existingClusters.length})</h3>
-                                {existingClusters.length === 0 && <div style={{ color: '#666', fontStyle: 'italic', fontSize: '0.8rem' }}>No sub-assemblies defined.</div>}
+                                <h3 style={{ margin: '0 0 15px 0' }}>SAVED BOM BINDINGS ({existingClusters.length})</h3>
+                                {existingClusters.length === 0 && <div style={{ color: '#666', fontStyle: 'italic', fontSize: '0.8rem' }}>No meshes bound to BOM components yet.</div>}
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                     {existingClusters.map(cl => (
                                         <div key={cl.id} style={{ border: '2px solid #28a745', padding: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#eafaf1' }}>
                                             <div>
                                                 <div style={{ fontWeight: 'bold', color: '#1e7e34' }}>{cl.name}</div>
+                                                <div style={{ fontSize: '0.65rem', color: '#555', fontWeight: 'bold' }}>{cl.legacyErpId}</div>
                                                 <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '4px' }}>{cl.meshes.length} Meshes Attached</div>
                                             </div>
                                             <button onClick={() => handleDeleteCluster(cl.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
