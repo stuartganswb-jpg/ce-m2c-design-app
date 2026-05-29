@@ -62,7 +62,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       seamCounts: ['uniquity'], assemblyTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
       customers: ['ce', 'm2c', 'uniquity', 'leyla'],
       partHandling: ['ce', 'm2c', 'uniquity', 'leyla'],
-      inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'] // 🚀 NEW
+      inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'] 
   };
 
   const LIST_LABELS = {
@@ -71,7 +71,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       pillowSizes: 'PILLOW SIZES', fillTypes: 'FILL TYPES', flangeStyles: 'EDGE / FLANGE STYLES', 
       stitchTypes: 'STITCH ROUTING', seamCounts: 'SEAM COUNTS / UPCHARGES', assemblyTypes: 'ASSEMBLY TYPES',
       customers: 'CUSTOMERS / DEALERS', partHandling: 'PART HANDLING & ROUTING',
-      inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS' // 🚀 NEW
+      inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS' 
   };
 
   useEffect(() => {
@@ -669,19 +669,23 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             </button>
                                         </div>
 
+                                        {/* 🚀 FIXED: Read nodes correctly from Tab 1.5 format */}
                                         {linkedAsm?.nodeClusters?.length > 0 && (
                                             <div style={{ marginBottom: '10px', background: '#eafaf1', border: '1px solid #28a745', padding: '10px' }}>
-                                                <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34', marginBottom: '5px' }}>📦 SAVED SUB-ASSEMBLIES (FROM TAB 3):</div>
+                                                <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34', marginBottom: '5px' }}>📦 SAVED SUB-ASSEMBLIES (FROM TAB 1.5):</div>
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                                                    {linkedAsm.nodeClusters.map(cluster => (
-                                                        <span 
-                                                            key={cluster.id} 
-                                                            onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${cluster.meshes.join(', ')}` : cluster.meshes.join(', ')}))} 
-                                                            style={{ background: '#28a745', color: '#fff', padding: '4px 8px', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}
-                                                        >
-                                                            {cluster.name} ({cluster.meshes.length} Meshes)
-                                                        </span>
-                                                    ))}
+                                                    {linkedAsm.nodeClusters.map(cluster => {
+                                                        const clusterNodes = cluster.nodes || cluster.meshes || [];
+                                                        return (
+                                                            <span 
+                                                                key={cluster.id} 
+                                                                onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${clusterNodes.join(', ')}` : clusterNodes.join(', ')}))} 
+                                                                style={{ background: '#28a745', color: '#fff', padding: '4px 8px', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}
+                                                            >
+                                                                {cluster.name} ({clusterNodes.length} Nodes)
+                                                            </span>
+                                                        );
+                                                    })}
                                                 </div>
                                             </div>
                                         )}
