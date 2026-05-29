@@ -328,28 +328,53 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       setEngineFlags(newFlags);
   }, [dynamicConfigParams, cpqRules, libraryParts, dynamicAssets, globalFinishes, outsourceFinishes]);
 
+  // 🚀 ADVANCED ENGINEERING MATH FOR FACTORY ROUTER
   const handleDimensionChange = (stepId, key, value, template) => {
       setDimensionInputs(prev => {
           const current = prev[stepId] || { length: '', type: 'O2O', wallA: '', wallB: '', wallC: '' };
           const updated = { ...current, [key]: value };
           
           let calculatedQty = 1;
+          let cutLength = 0;
+          let o2o = 0;
+          let c2c = 0;
           
           if (template === 'calc_french_return_1in') {
               let baseLength = parseFloat(updated.length) || 0;
-              if (updated.type === 'C2C') baseLength += 1; 
-              calculatedQty = Math.max(1, Math.ceil((baseLength + 17) / 12)); 
+              
+              // 1" French Return Logic
+              if (updated.type === 'C2C') {
+                  c2c = baseLength;
+                  o2o = baseLength + 1; // +1" to get O2O for 1" pole
+              } else {
+                  o2o = baseLength;
+                  c2c = baseLength - 1; 
+              }
+              
+              cutLength = o2o + 17; // Cut length is +17 over O2O for grip/bend allowance
+              calculatedQty = Math.max(1, Math.ceil(cutLength / 12)); 
+              
+              // Store computed math for Router PDF
+              updated.calc_o2o = o2o;
+              updated.calc_c2c = c2c;
+              updated.calc_cutLength = cutLength;
+
           } else if (template === 'calc_straight_pole') {
               let baseLength = parseFloat(updated.length) || 0;
               calculatedQty = Math.max(1, Math.ceil(baseLength / 12));
+              updated.calc_cutLength = baseLength;
+
           } else if (template === 'calc_mitered_bay') {
               let a = parseFloat(updated.wallA) || 0;
               let b = parseFloat(updated.wallB) || 0;
               let c = parseFloat(updated.wallC) || 0;
               calculatedQty = Math.max(1, Math.ceil((a + b + c + 12) / 12)); 
+              updated.calc_cutLength = a + b + c + 12; // Rough cut addition
+
           } else if (template === 'calc_curved_bay') {
               let baseLength = parseFloat(updated.length) || 0;
               calculatedQty = Math.max(1, Math.ceil((baseLength + 12) / 12)); 
+              updated.calc_cutLength = baseLength + 12;
           }
 
           if (value !== '') {
@@ -434,7 +459,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (nextIndex < activeFlow.steps.length) setCurrentStepIndex(nextIndex);
   };
 
-  // 🚀 FIXED: Checkout adds Factory Router Generation
   const handleFinalizeQuote = async () => {
       if (!jobData.customerId || !jobData.sidemark) return alert("❌ Please select a Customer and enter a Sidemark.");
       const jobId = `QUOTE-${Date.now()}`;
@@ -461,7 +485,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       try {
           await setDoc(doc(db, "jobs", jobId), payload);
           
-          // GENERATE FACTORY ROUTER PDF AUTOMATICALLY
           await generateFactoryRouter(payload);
 
           if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
@@ -474,6 +497,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       } catch (err) { console.error(err); alert("Failed to save quote."); }
   };
 
+  // 🚀 FIXED: Shop Cut List explicitly mapped in Router
   const generateFactoryRouter = async (job) => {
       const printWindow = window.open('', '_blank', 'width=800,height=900');
       let dimensionHtml = '';
@@ -483,10 +507,34 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               <div style="margin-top: 20px; border: 2px dashed #000; padding: 15px; background: #fff3cd;">
                   <h4 style="margin: 0 0 10px 0; color: #856404; text-transform: uppercase;">⚠️ DIMENSIONAL SHOP CUT SHEET</h4>
                   <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-                      <tr style="background: #e9ecef;"><th style="padding: 8px; text-align: left;">PARAMETER</th><th style="padding: 8px; text-align: left;">VALUE</th></tr>
                       ${Object.entries(job.cpqData.dimensions).map(([stepId, dims]) => `
-                          <tr><td colspan="2" style="padding: 8px; font-weight: bold; border-top: 1px solid #ccc;">${activeFlow?.steps?.find(s => s.id === stepId)?.title || stepId}</td></tr>
-                          ${Object.entries(dims).map(([key, val]) => `<tr><td style="padding: 4px 8px; border-bottom: 1px solid #eee;">${key.toUpperCase()}</td><td style="padding: 4px 8px; border-bottom: 1px solid #eee;">${val}</td></tr>`).join('')}
+                          <tr><td colspan="2" style="padding: 10px; font-weight: bold; background: #e9ecef; border-top: 2px solid #000;">${activeFlow?.steps?.find(s => s.id === stepId)?.title || stepId}</td></tr>
+                          
+                          ${Object.entries(dims).filter(([k,v]) => !k.startsWith('calc_') && v !== '').map(([key, val]) => `
+                              <tr>
+                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee;">INPUT: ${key.toUpperCase()}</td>
+                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee;">${val}</td>
+                              </tr>
+                          `).join('')}
+
+                          ${dims.calc_cutLength ? `
+                              <tr>
+                                  <td style="padding: 8px; border-bottom: 1px dashed #d9534f; color: #d9534f; font-weight: bold; font-size: 14px;">SHOP RAW CUT LENGTH</td>
+                                  <td style="padding: 8px; border-bottom: 1px dashed #d9534f; font-weight: bold; font-size: 16px; color: #d9534f;">${dims.calc_cutLength}"</td>
+                              </tr>
+                          ` : ''}
+                          ${dims.calc_o2o ? `
+                              <tr>
+                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee; font-weight: bold;">FINISHED O2O</td>
+                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee; font-weight: bold;">${dims.calc_o2o}"</td>
+                              </tr>
+                          ` : ''}
+                          ${dims.calc_c2c ? `
+                              <tr>
+                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee; font-weight: bold;">FINISHED C2C</td>
+                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee; font-weight: bold;">${dims.calc_c2c}"</td>
+                              </tr>
+                          ` : ''}
                       `).join('')}
                   </table>
               </div>
@@ -762,10 +810,15 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                       </div>
                                   )}
 
+                                  {/* 🚀 FIXED: Shop Cut List Real-Time UI */}
                                   {dimensionInputs[currentStep.id]?.length > 0 && currentStep.calculatorTemplate === 'calc_french_return_1in' && (
-                                      <div style={{ marginTop: '10px', fontSize: '0.75rem', color: '#666', background: '#fff', padding: '10px', border: '1px dashed #28a745' }}>
-                                          <strong>MATH LOGIC (1" French Return):</strong> 
-                                          {dimensionInputs[currentStep.id].type === 'C2C' ? ' Center-to-Center adds +1" to calculate O2O equivalent.' : ' Outside-to-Outside selected.'} 
+                                      <div style={{ marginTop: '10px', fontSize: '0.75rem', color: '#1e7e34', background: '#fff', padding: '10px', border: '2px solid #28a745', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}>
+                                          <strong style={{display:'block', marginBottom:'5px', color:'#000'}}>MATH LOGIC (1" French Return):</strong> 
+                                          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'5px'}}>
+                                              <div style={{background:'#eee', padding:'5px', textAlign:'center'}}><strong>O2O:</strong> {dimensionInputs[currentStep.id].calc_o2o}"</div>
+                                              <div style={{background:'#eee', padding:'5px', textAlign:'center'}}><strong>C2C:</strong> {dimensionInputs[currentStep.id].calc_c2c}"</div>
+                                              <div style={{background:'#ffeeba', padding:'5px', textAlign:'center', color:'#856404', border:'1px solid #856404'}}><strong>CUT LENGTH:</strong> {dimensionInputs[currentStep.id].calc_cutLength}"</div>
+                                          </div>
                                           Required raw pole is +17" over O2O length. Sold per foot (rounded up). 
                                           Calculated Purchase Quantity: <strong>{stepQuantities[currentStep.id] || 1} Feet</strong>.
                                       </div>
