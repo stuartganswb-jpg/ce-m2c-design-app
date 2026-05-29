@@ -139,6 +139,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
   const [stepQuantities, setStepQuantities] = useState({}); 
+  const [dimensionInputs, setDimensionInputs] = useState({});
+
   const [engineFlags, setEngineFlags] = useState({ disabledSteps: [], warnings: [] });
   
   const [pricing, setPricing] = useState({ base: 0, finalPrice: 0 });
@@ -170,7 +172,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
 
-      // 🚀 LIVE CRM SYNC FOR CHECKOUT
       const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
           const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER');
           setLiveCustomers(customers);
@@ -179,7 +180,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); };
   }, [activeBrand]);
 
-  // 🚀 MERGE CRM RECORDS WITH SIMPLE LISTS TO PREVENT MISSING DATA
   const combinedCustomers = useMemo(() => {
       const merged = [...liveCustomers];
       (globalLists.customers || []).forEach(cName => {
@@ -235,7 +235,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           const outsource = outsourceFinishes.map(f => ({ id: f.id, itemName: f.name, finalImageUrl: f.textureUrl, multiplier: f.multiplier }));
           options = [...inHouse, ...outsource];
       } else if (globalLists.inventoryTypes?.includes(step.dataSource)) {
-          // 🚀 FIX: Properly fetch raw materials from library using Inventory Routing Type
           options = libraryParts.filter(p => p.routingType === step.dataSource).map(p => ({
               id: p.id,
               itemName: p.itemName,
@@ -329,7 +328,38 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       setEngineFlags(newFlags);
   }, [dynamicConfigParams, cpqRules, libraryParts, dynamicAssets, globalFinishes, outsourceFinishes]);
 
-  // 🚀 REBUILT PRICING ENGINE
+  const handleDimensionChange = (stepId, key, value, template) => {
+      setDimensionInputs(prev => {
+          const current = prev[stepId] || { length: '', type: 'O2O', wallA: '', wallB: '', wallC: '' };
+          const updated = { ...current, [key]: value };
+          
+          let calculatedQty = 1;
+          
+          if (template === 'calc_french_return_1in') {
+              let baseLength = parseFloat(updated.length) || 0;
+              if (updated.type === 'C2C') baseLength += 1; 
+              calculatedQty = Math.max(1, Math.ceil((baseLength + 17) / 12)); 
+          } else if (template === 'calc_straight_pole') {
+              let baseLength = parseFloat(updated.length) || 0;
+              calculatedQty = Math.max(1, Math.ceil(baseLength / 12));
+          } else if (template === 'calc_mitered_bay') {
+              let a = parseFloat(updated.wallA) || 0;
+              let b = parseFloat(updated.wallB) || 0;
+              let c = parseFloat(updated.wallC) || 0;
+              calculatedQty = Math.max(1, Math.ceil((a + b + c + 12) / 12)); 
+          } else if (template === 'calc_curved_bay') {
+              let baseLength = parseFloat(updated.length) || 0;
+              calculatedQty = Math.max(1, Math.ceil((baseLength + 12) / 12)); 
+          }
+
+          if (value !== '') {
+              setStepQuantities(sq => ({...sq, [stepId]: calculatedQty}));
+          }
+          
+          return { ...prev, [stepId]: updated };
+      });
+  };
+
   useEffect(() => {
       if (!activeFlow) return;
       
@@ -339,7 +369,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       activeFlow.steps.forEach(step => {
           const selectedValue = dynamicConfigParams[step.id];
           
-          // 1. Resolve Quantity
           let rawQty = stepQuantities[step.id];
           let qty = 1;
           if (rawQty === undefined || rawQty === '') {
@@ -348,45 +377,43 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               qty = parseInt(rawQty) || 0; 
           }
 
-          if (selectedValue) {
-              // 2. Locate Source Object
-              const partObj = libraryParts.find(p => p.id === selectedValue) || 
-                              dynamicAssets.find(a => a.id === selectedValue) ||
-                              globalFinishes.find(f => f.id === selectedValue) ||
-                              outsourceFinishes.find(f => f.id === selectedValue);
+          if (selectedValue || step.type === 'DIMENSIONS') {
+              let stepPrice = 0;
+              let multiplier = 1.0;
 
-              // 3. Extract Native Base Price
-              let nativePrice = 0;
-              if (partObj) {
-                  if (partObj.manufacturingSpecs?.basePrice) nativePrice = parseFloat(partObj.manufacturingSpecs.basePrice);
-                  else if (partObj.basePrice) nativePrice = parseFloat(partObj.basePrice);
-              }
+              if (selectedValue) {
+                  const partObj = libraryParts.find(p => p.id === selectedValue) || 
+                                  dynamicAssets.find(a => a.id === selectedValue) ||
+                                  globalFinishes.find(f => f.id === selectedValue) ||
+                                  outsourceFinishes.find(f => f.id === selectedValue);
 
-              // 4. Apply Client Pricing Match (Overrides Native)
-              if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
-                  const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
-                  if (cp && cp.price !== undefined && cp.price !== "") {
-                      nativePrice = parseFloat(cp.price);
+                  let nativePrice = 0;
+                  if (partObj) {
+                      if (partObj.manufacturingSpecs?.basePrice) nativePrice = parseFloat(partObj.manufacturingSpecs.basePrice);
+                      else if (partObj.basePrice) nativePrice = parseFloat(partObj.basePrice);
+                  }
+
+                  if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
+                      const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
+                      if (cp && cp.price !== undefined && cp.price !== "") {
+                          nativePrice = parseFloat(cp.price);
+                      }
+                  }
+
+                  let upcharge = 0;
+                  if (step.priceMap && step.priceMap[selectedValue]) {
+                      upcharge = parseFloat(step.priceMap[selectedValue]) || 0;
+                  }
+
+                  stepPrice = nativePrice + upcharge;
+
+                  if (partObj && partObj.multiplier && parseFloat(partObj.multiplier) > 1.0) {
+                      multiplier = parseFloat(partObj.multiplier);
                   }
               }
 
-              // 5. Add Step Specific Upcharge
-              let upcharge = 0;
-              if (step.priceMap && step.priceMap[selectedValue]) {
-                  upcharge = parseFloat(step.priceMap[selectedValue]) || 0;
-              }
-
-              let stepPrice = nativePrice + upcharge;
-
-              // 6. Hard Price Override (Overrides everything)
               if (step.priceOverride !== undefined && step.priceOverride !== "") {
                   stepPrice = parseFloat(step.priceOverride);
-              }
-
-              // 7. Apply Material Multipliers
-              let multiplier = 1.0;
-              if (partObj && partObj.multiplier && parseFloat(partObj.multiplier) > 1.0) {
-                  multiplier = parseFloat(partObj.multiplier);
               }
               
               total += (stepPrice * multiplier * qty);
@@ -407,6 +434,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (nextIndex < activeFlow.steps.length) setCurrentStepIndex(nextIndex);
   };
 
+  // 🚀 FIXED: Checkout adds Factory Router Generation
   const handleFinalizeQuote = async () => {
       if (!jobData.customerId || !jobData.sidemark) return alert("❌ Please select a Customer and enter a Sidemark.");
       const jobId = `QUOTE-${Date.now()}`;
@@ -423,6 +451,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               totalPrice: pricing.finalPrice, 
               configuration: dynamicConfigParams,
               quantities: stepQuantities, 
+              dimensions: dimensionInputs,
               appliedRules: engineFlags.warnings 
           },
           dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, sewing: false, packing: false },
@@ -431,17 +460,86 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       
       try {
           await setDoc(doc(db, "jobs", jobId), payload);
+          
+          // GENERATE FACTORY ROUTER PDF AUTOMATICALLY
+          await generateFactoryRouter(payload);
+
           if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
-              alert(`✅ COMPLEX QUOTE GENERATED!\n\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
+              alert(`✅ COMPLEX QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
           } else {
-              alert(`✅ STANDARD QUOTE GENERATED!\n\nRouted to Tab 10 (External Coop) for standard approval.`);
+              alert(`✅ STANDARD QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10 (External Coop) for standard approval.`);
           }
-          setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setCurrentStepIndex(0); 
+          setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); 
           setActiveAssemblyId(""); setShowCheckoutModal(false); setJobData({ customerId: '', jobName: '', sidemark: '' });
       } catch (err) { console.error(err); alert("Failed to save quote."); }
   };
 
-  // 🚀 FIXED: UI Price String Renderer
+  const generateFactoryRouter = async (job) => {
+      const printWindow = window.open('', '_blank', 'width=800,height=900');
+      let dimensionHtml = '';
+      
+      if (job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0) {
+          dimensionHtml = `
+              <div style="margin-top: 20px; border: 2px dashed #000; padding: 15px; background: #fff3cd;">
+                  <h4 style="margin: 0 0 10px 0; color: #856404; text-transform: uppercase;">⚠️ DIMENSIONAL SHOP CUT SHEET</h4>
+                  <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                      <tr style="background: #e9ecef;"><th style="padding: 8px; text-align: left;">PARAMETER</th><th style="padding: 8px; text-align: left;">VALUE</th></tr>
+                      ${Object.entries(job.cpqData.dimensions).map(([stepId, dims]) => `
+                          <tr><td colspan="2" style="padding: 8px; font-weight: bold; border-top: 1px solid #ccc;">${activeFlow?.steps?.find(s => s.id === stepId)?.title || stepId}</td></tr>
+                          ${Object.entries(dims).map(([key, val]) => `<tr><td style="padding: 4px 8px; border-bottom: 1px solid #eee;">${key.toUpperCase()}</td><td style="padding: 4px 8px; border-bottom: 1px solid #eee;">${val}</td></tr>`).join('')}
+                      `).join('')}
+                  </table>
+              </div>
+          `;
+      }
+
+      const html = `
+        <html>
+          <head>
+            <title>ROUTER_${job.jobId}</title>
+            <style>
+              body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #000; max-width: 800px; margin: 0 auto; }
+              .header { display: flex; justify-content: space-between; border-bottom: 4px solid #000; padding-bottom: 20px; margin-bottom: 30px; }
+              .brand { font-size: 32px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; }
+              .doc-type { font-size: 24px; color: #fff; background: #000; padding: 5px 15px; text-transform: uppercase; }
+              .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 40px; background: #f8f9fa; padding: 20px; border: 2px solid #000; }
+              .label { font-size: 12px; font-weight: bold; color: #666; text-transform: uppercase; }
+              .val { font-size: 18px; font-weight: bold; }
+              .specs { margin-bottom: 40px; border: 2px solid #000; }
+              .spec-header { background: #000; color: #fff; padding: 10px 15px; font-weight: bold; text-transform: uppercase; }
+              .spec-row { display: flex; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid #ccc; font-size: 14px; }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <div class="brand">${activeBrand}</div>
+              <div class="doc-type">FACTORY ROUTER</div>
+            </div>
+            <div class="meta-grid">
+              <div><span class="label">Sidemark / Project:</span><br/><span class="val">${job.sidemark}</span></div>
+              <div><span class="label">Job ID:</span><br/><span class="val">${job.jobId}</span></div>
+              <div><span class="label">Customer:</span><br/><span class="val">${job.customer?.name}</span></div>
+              <div><span class="label">Date Engineered:</span><br/><span class="val">${job.dateSaved}</span></div>
+            </div>
+            <div class="specs">
+              <div class="spec-header">BILL OF MATERIALS (BOM)</div>
+              <div class="spec-row" style="background:#eee; font-weight:bold;"><span>COMPONENT</span><span>QTY</span></div>
+              ${Object.entries(job.cpqData.configuration).map(([stepId, valueId]) => {
+                  const step = activeFlow?.steps?.find(s => s.id === stepId);
+                  const qty = job.cpqData.quantities[stepId] || 1;
+                  const partObj = libraryParts.find(p => p.id === valueId) || dynamicAssets.find(a => a.id === valueId) || globalFinishes.find(f => f.id === valueId) || outsourceFinishes.find(f => f.id === valueId);
+                  return `<div class="spec-row"><span>${step?.title}: <strong>${partObj?.itemName || partObj?.name || valueId}</strong></span><span>${qty}</span></div>`;
+              }).join('')}
+            </div>
+            ${dimensionHtml}
+            <script> window.onload = function() { window.print(); } </script>
+          </body>
+        </html>
+      `;
+      printWindow.document.write(html);
+      printWindow.document.close();
+  };
+
   const renderOptionPrice = (opt, currentStep) => {
       const partObj = libraryParts.find(p => p.id === opt.id) || 
                       dynamicAssets.find(a => a.id === opt.id) ||
@@ -544,7 +642,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '8px 15px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer' }}>📥 RESUME DRAFT / CLONE QUOTE</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); }} style={{ padding: '8px 15px', background: '#fff', color: '#d9534f', fontWeight: 'bold', border: '2px solid #d9534f', cursor: 'pointer' }}>🗑️ CLEAR QUOTE</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); }} style={{ padding: '8px 15px', background: '#fff', color: '#d9534f', fontWeight: 'bold', border: '2px solid #d9534f', cursor: 'pointer' }}>🗑️ CLEAR QUOTE</button>
         </div>
       </div>
 
@@ -570,7 +668,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                  <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     
                     {cpqFlows.length > 0 && (
-                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setProductType(''); setActiveAssemblyId(''); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem', background: '#e6f2ff' }}>
+                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem', background: '#e6f2ff' }}>
                             <option value="">-- Launch Custom CPQ Flow --</option>
                             {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                         </select>
@@ -595,31 +693,91 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                       </div>
                       
                       <div style={{ padding: '20px', flex: 1, overflowY: 'auto', maxHeight: '400px' }}>
-                          {currentStep.type === 'VISUAL_GRID' ? (
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                                  {getOptionsForStep(currentStep).map(opt => {
-                                      return (
-                                          <div key={opt.id} onClick={() => handleParamChange(currentStep.id, opt.id)} style={{ border: `2px solid ${dynamicConfigParams[currentStep.id] === opt.id ? '#007bff' : '#ccc'}`, padding: '10px', textAlign: 'center', cursor: 'pointer', background: dynamicConfigParams[currentStep.id] === opt.id ? '#e6f2ff' : '#fff' }}>
-                                              <div style={{ width: '100%', height: '80px', background: opt.finalImageUrl ? `url(${opt.finalImageUrl}) center/cover` : '#eee', marginBottom: '10px' }} />
-                                              <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</div>
-                                          </div>
-                                      );
-                                  })}
+                          
+                          {(currentStep.type === 'VISUAL_GRID' || currentStep.type === 'VISUAL_DIMENSIONS') && (
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
+                                  {getOptionsForStep(currentStep).map(opt => (
+                                      <div key={opt.id} onClick={() => handleParamChange(currentStep.id, opt.id)} style={{ border: `2px solid ${dynamicConfigParams[currentStep.id] === opt.id ? '#007bff' : '#ccc'}`, padding: '10px', textAlign: 'center', cursor: 'pointer', background: dynamicConfigParams[currentStep.id] === opt.id ? '#e6f2ff' : '#fff' }}>
+                                          <div style={{ width: '100%', height: '80px', background: opt.finalImageUrl ? `url(${opt.finalImageUrl}) center/cover` : '#eee', marginBottom: '10px' }} />
+                                          <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</div>
+                                      </div>
+                                  ))}
                               </div>
-                          ) : (
-                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #000', fontSize: '1rem' }}>
+                          )}
+
+                          {(currentStep.type === 'DROPDOWN' || currentStep.type === 'DIMENSIONS') && currentStep.type !== 'VISUAL_DIMENSIONS' && currentStep.dataSource && (
+                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #000', fontSize: '1rem', marginBottom: '15px' }}>
                                   <option value="">-- Select Option --</option>
                                   {getOptionsForStep(currentStep).map(opt => (
                                       <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</option>
                                   ))}
                               </select>
                           )}
+
+                          {(currentStep.calculatorTemplate || currentStep.type === 'DIMENSIONS' || currentStep.type === 'VISUAL_DIMENSIONS') && (
+                              <div style={{ padding: '15px', background: '#eafaf1', borderTop: '2px solid #000', borderBottom: '2px solid #000' }}>
+                                  <h4 style={{ margin: '0 0 10px 0', color: '#1e7e34' }}>📐 DIMENSIONAL INPUT</h4>
+                                  
+                                  {(currentStep.calculatorTemplate === 'calc_french_return_1in' || currentStep.calculatorTemplate === 'calc_straight_pole' || currentStep.calculatorTemplate === 'calc_curved_bay') && (
+                                      <div style={{ display: 'flex', gap: '15px' }}>
+                                          {currentStep.calculatorTemplate !== 'calc_straight_pole' && (
+                                              <div style={{ flex: 1 }}>
+                                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>MEASUREMENT TYPE:</label>
+                                                  <select 
+                                                      value={dimensionInputs[currentStep.id]?.type || 'O2O'} 
+                                                      onChange={(e) => handleDimensionChange(currentStep.id, 'type', e.target.value, currentStep.calculatorTemplate)}
+                                                      style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }}
+                                                  >
+                                                      <option value="O2O">A. Outside Edge to Outside Edge (O2O)</option>
+                                                      <option value="C2C">B. Center to Center (C2C)</option>
+                                                  </select>
+                                              </div>
+                                          )}
+                                          <div style={{ flex: 1 }}>
+                                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>FINISHED LENGTH (INCHES):</label>
+                                              <input 
+                                                  type="number" min="0" placeholder="e.g. 84"
+                                                  value={dimensionInputs[currentStep.id]?.length || ''} 
+                                                  onChange={(e) => handleDimensionChange(currentStep.id, 'length', e.target.value, currentStep.calculatorTemplate)}
+                                                  style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}
+                                              />
+                                          </div>
+                                      </div>
+                                  )}
+
+                                  {currentStep.calculatorTemplate === 'calc_mitered_bay' && (
+                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                                          <div>
+                                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>WALL A (Left):</label>
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallA || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallA', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                                          </div>
+                                          <div>
+                                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>WALL B (Center):</label>
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallB || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallB', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                                          </div>
+                                          <div>
+                                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>WALL C (Right):</label>
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallC || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallC', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                                          </div>
+                                      </div>
+                                  )}
+
+                                  {dimensionInputs[currentStep.id]?.length > 0 && currentStep.calculatorTemplate === 'calc_french_return_1in' && (
+                                      <div style={{ marginTop: '10px', fontSize: '0.75rem', color: '#666', background: '#fff', padding: '10px', border: '1px dashed #28a745' }}>
+                                          <strong>MATH LOGIC (1" French Return):</strong> 
+                                          {dimensionInputs[currentStep.id].type === 'C2C' ? ' Center-to-Center adds +1" to calculate O2O equivalent.' : ' Outside-to-Outside selected.'} 
+                                          Required raw pole is +17" over O2O length. Sold per foot (rounded up). 
+                                          Calculated Purchase Quantity: <strong>{stepQuantities[currentStep.id] || 1} Feet</strong>.
+                                      </div>
+                                  )}
+                              </div>
+                          )}
                       </div>
 
-                      <div style={{ padding: '15px', background: '#f8f9fa', borderTop: '2px solid #000', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <div style={{ fontSize: '0.8rem', color: '#666', lineHeight: '1.4' }}>
+                      <div style={{ padding: '15px', background: '#f8f9fa', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ fontSize: '0.8rem', color: '#666', lineHeight: '1.4', flex: 1, paddingRight: '15px' }}>
                               <strong>STEP QUANTITY:</strong><br/>
-                              <span style={{ fontSize: '0.7rem' }}>Adjust to multiply option logic (e.g. 4 rings per foot).</span>
+                              <span style={{ fontSize: '0.7rem' }}>{currentStep.qtyHelperText || 'Adjust to multiply option logic (e.g. 4 rings per foot).'}</span>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                               <button onClick={() => {
@@ -659,9 +817,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} disabled={currentStepIndex === 0} style={{ padding: '10px 20px', border: '2px solid #000', background: '#fff', fontWeight: 'bold', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer' }}>BACK</button>
                           
                           {currentStepIndex < activeFlow.steps.length - 1 ? (
-                              <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id]} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStep.required && !dynamicConfigParams[currentStep.id] ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
+                              <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS'} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
                           ) : (
-                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id]} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep.required && !dynamicConfigParams[currentStep.id] ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
+                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS'} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
                           )}
                       </div>
                   </div>

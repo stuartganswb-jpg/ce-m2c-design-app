@@ -25,10 +25,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
 
+  // 🚀 NEW: qtyHelperText added to schema
   const [newStep, setNewStep] = useState({ 
       id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, 
       priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [],
-      useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '' // 🚀 NEW: Math Template
+      useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '' 
   });
 
   const [newFlowName, setNewFlowName] = useState("");
@@ -50,7 +51,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeFormType, setActiveFormType] = useState('QUOTE');
   const [formEditor, setFormEditor] = useState({ header: '', footer: '', terms: '' });
 
-  const DOCUMENT_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE'];
+  const DOCUMENT_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE', 'FACTORY_ROUTER'];
   const BRANDS_LIST = ['m2c', 'uniquity', 'ce', 'leyla']; 
 
   const DEFAULT_SYSTEM_WINDOWS = {
@@ -140,7 +141,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   basePrice: flow.basePrice || '',
                   linkedAssemblyId: flow.linkedAssemblyId || ''
               });
-              setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '' });
+              setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '' });
           }
       }
       setInspectedNodes([]); 
@@ -305,7 +306,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               useClientPricing: false,
               priceOverride: '',
               partHandling: '',
-              calculatorTemplate: ''
+              calculatorTemplate: '',
+              qtyHelperText: ''
           }));
 
           const updatedSteps = [...(flow.steps || []), ...generatedSteps];
@@ -327,7 +329,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               updatedSteps = [...(flow.steps || []), { ...newStep, id: `STEP-${Date.now()}` }];
           }
           await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
-          setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '' });
+          setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '' });
       } catch (err) { console.error("Error saving step:", err); alert("Database Error."); }
   };
 
@@ -624,7 +626,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                     <input value={newStep.title} onChange={e => setNewStep({...newStep, title: e.target.value})} placeholder="Step Title (e.g. Select Bracket Style)" style={{ padding: '8px', border: '1px solid #ccc' }} />
                                     <div style={{ display: 'flex', gap: '10px' }}>
-                                        {/* 🚀 NEW: VISUAL DIMENSIONS STEP TYPE */}
                                         <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }}>
                                             <option value="DROPDOWN">Dropdown List</option>
                                             <option value="VISUAL_GRID">Visual Grid (Images/Textures)</option>
@@ -653,7 +654,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         </select>
                                     </div>
 
-                                    {/* 🚀 NEW: HARDWARE MATH CALCULATORS */}
                                     {(newStep.type === 'VISUAL_DIMENSIONS' || newStep.type === 'DIMENSIONS' || newStep.calculatorTemplate) && (
                                         <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
                                             <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '5px' }}>
@@ -669,6 +669,17 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>Attaching a calculator will render dimension inputs (Length, Type, etc.) and auto-calculate the Step Quantity based on the formula.</span>
                                         </div>
                                     )}
+
+                                    {/* 🚀 NEW: QTY HELPER TEXT INPUT */}
+                                    <div style={{ background: '#fff', padding: '10px', border: '1px solid #ccc' }}>
+                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>STEP QUANTITY DESCRIPTION (Helper Text):</label>
+                                        <input 
+                                            value={newStep.qtyHelperText || ''} 
+                                            onChange={e => setNewStep({...newStep, qtyHelperText: e.target.value})} 
+                                            placeholder="e.g. Enter 4 rings per foot of pole." 
+                                            style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} 
+                                        />
+                                    </div>
 
                                     {newStep.dataSource && availableSourceItems.length > 0 && newStep.type !== 'DIMENSIONS' && (
                                         <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
@@ -805,7 +816,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             {newStep.id ? "💾 SAVE EDITS TO STEP" : "➕ MANUAL ADD STEP"}
                                         </button>
                                         {newStep.id && (
-                                            <button onClick={() => setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '' })} style={{ padding: '10px 20px', background: '#fff', color: '#333', border: '2px solid #ccc', fontWeight: 'bold', cursor: 'pointer' }}>
+                                            <button onClick={() => setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '' })} style={{ padding: '10px 20px', background: '#fff', color: '#333', border: '2px solid #ccc', fontWeight: 'bold', cursor: 'pointer' }}>
                                                 CANCEL EDIT
                                             </button>
                                         )}
@@ -825,6 +836,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                 <div style={{ fontSize: '0.65rem', color: '#CC6600', marginTop: '3px', fontWeight: 'bold' }}>🔍 RESTRICTED TO: {step.allowedOptions.length} specific options.</div>
                                             )}
                                             {step.calculatorTemplate && <div style={{ fontSize: '0.65rem', color: '#1e7e34', marginTop: '3px', fontWeight: 'bold' }}>📐 CALCULATOR: {step.calculatorTemplate}</div>}
+                                            {step.qtyHelperText && <div style={{ fontSize: '0.65rem', color: '#6f42c1', marginTop: '3px', fontWeight: 'bold' }}>ℹ️ HELPER TEXT: {step.qtyHelperText}</div>}
                                             {step.targetNodes && <div style={{ fontSize: '0.65rem', color: '#e83e8c', marginTop: '3px', fontWeight: 'bold' }}>🎨 APPLYING TEXTURES TO: {step.targetNodes.substring(0, 30)}{step.targetNodes.length > 30 ? '...' : ''}</div>}
                                             {step.geometryMap && Object.values(step.geometryMap).some(Boolean) && <div style={{ fontSize: '0.65rem', color: '#28a745', marginTop: '3px', fontWeight: 'bold' }}>🧊 GEOMETRY SWAPPING ACTIVE</div>}
                                             
