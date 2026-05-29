@@ -28,7 +28,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [newStep, setNewStep] = useState({ 
       id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, 
       priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [],
-      useClientPricing: false, priceOverride: '', partHandling: ''
+      useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '' // 🚀 NEW: Math Template
   });
 
   const [newFlowName, setNewFlowName] = useState("");
@@ -140,7 +140,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   basePrice: flow.basePrice || '',
                   linkedAssemblyId: flow.linkedAssemblyId || ''
               });
-              setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '' });
+              setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '' });
           }
       }
       setInspectedNodes([]); 
@@ -246,7 +246,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   };
 
-  // 🚀 FIXED: Delete Bug caused by orphaned linked assemblies
   const handleDeleteFlow = async () => {
       if (!activeFlowId) return;
       if (!window.confirm("Are you sure you want to delete this CPQ Flow? This will remove all configuration steps for this product.")) return;
@@ -305,7 +304,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               allowedOptions: [],
               useClientPricing: false,
               priceOverride: '',
-              partHandling: ''
+              partHandling: '',
+              calculatorTemplate: ''
           }));
 
           const updatedSteps = [...(flow.steps || []), ...generatedSteps];
@@ -327,7 +327,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               updatedSteps = [...(flow.steps || []), { ...newStep, id: `STEP-${Date.now()}` }];
           }
           await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
-          setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '' });
+          setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '' });
       } catch (err) { console.error("Error saving step:", err); alert("Database Error."); }
   };
 
@@ -349,7 +349,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
   };
 
-  // 🚀 FIXED: AI Generator understands advanced Hardware Math
   const handleAiGenerateRule = () => {
       if (!aiPrompt) return;
       setIsGeneratingAi(true);
@@ -625,45 +624,51 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                     <input value={newStep.title} onChange={e => setNewStep({...newStep, title: e.target.value})} placeholder="Step Title (e.g. Select Bracket Style)" style={{ padding: '8px', border: '1px solid #ccc' }} />
                                     <div style={{ display: 'flex', gap: '10px' }}>
-                                        {/* 🚀 NEW: DIMENSIONS STEP TYPE */}
-                                        <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value, dataSource: ''})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }}>
+                                        {/* 🚀 NEW: VISUAL DIMENSIONS STEP TYPE */}
+                                        <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }}>
                                             <option value="DROPDOWN">Dropdown List</option>
                                             <option value="VISUAL_GRID">Visual Grid (Images/Textures)</option>
-                                            <option value="DIMENSIONS">Dimensional Input (Hardware Math)</option>
+                                            <option value="VISUAL_DIMENSIONS">Visual Grid + Dimensions (2-in-1)</option>
+                                            <option value="DIMENSIONS">Dimensional Input Only (Math)</option>
                                         </select>
                                         
-                                        {/* 🚀 NEW: CALCULATION TEMPLATES */}
-                                        {newStep.type === 'DIMENSIONS' ? (
-                                            <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} style={{ flex: 1, padding: '8px', border: '2px solid #007bff', fontWeight: 'bold' }}>
-                                                <option value="">-- SELECT CALCULATION TEMPLATE --</option>
-                                                <option value="calc_french_return_1in">1" French Return Calculator (+17" QTY, C2C -1")</option>
-                                                <option value="calc_french_return_custom">Custom French Return Calculator</option>
-                                                <option value="calc_mitered_bay">Mitered Bay Calculator (Angles & Deductions)</option>
-                                                <option value="calc_curved_bay">Curved Bay Calculator (Arc / Radius)</option>
-                                                <option value="calc_straight_pole">Straight Pole Calculator (Standard)</option>
-                                            </select>
-                                        ) : (
-                                            <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} style={{ flex: 1, padding: '8px', border: '2px solid #007bff', fontWeight: 'bold' }}>
-                                                <option value="">-- SELECT DATA SOURCE --</option>
-                                                <optgroup label="Core Libraries">
-                                                    <option value="master_finishes">Master Finishes (In-House & Outsource)</option>
+                                        <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} disabled={newStep.type === 'DIMENSIONS'} style={{ flex: 1, padding: '8px', border: '2px solid #007bff', fontWeight: 'bold', opacity: newStep.type === 'DIMENSIONS' ? 0.5 : 1 }}>
+                                            <option value="">-- SELECT DATA SOURCE --</option>
+                                            <optgroup label="Core Libraries">
+                                                <option value="master_finishes">Master Finishes (In-House & Outsource)</option>
+                                            </optgroup>
+                                            {customDataWindows.length > 0 && (
+                                                <optgroup label="CPQ Asset Dictionaries (Tab 4)">
+                                                    {customDataWindows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                                                 </optgroup>
-                                                {customDataWindows.length > 0 && (
-                                                    <optgroup label="CPQ Asset Dictionaries (Tab 4)">
-                                                        {customDataWindows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                                                    </optgroup>
-                                                )}
-                                                <optgroup label="Simple Lists (Tab 4)">
-                                                    <option value="uom">UOMs</option>
-                                                    <option value="pillowSizes">Pillow Sizes</option>
-                                                    <option value="fillTypes">Fill Types</option>
-                                                    <option value="flangeStyles">Edge / Flange Styles</option>
-                                                    <option value="stitchTypes">Stitch Routing</option>
-                                                    <option value="seamCounts">Seam Counts</option>
-                                                </optgroup>
-                                            </select>
-                                        )}
+                                            )}
+                                            <optgroup label="Simple Lists (Tab 4)">
+                                                <option value="uom">UOMs</option>
+                                                <option value="pillowSizes">Pillow Sizes</option>
+                                                <option value="fillTypes">Fill Types</option>
+                                                <option value="flangeStyles">Edge / Flange Styles</option>
+                                                <option value="stitchTypes">Stitch Routing</option>
+                                                <option value="seamCounts">Seam Counts</option>
+                                            </optgroup>
+                                        </select>
                                     </div>
+
+                                    {/* 🚀 NEW: HARDWARE MATH CALCULATORS */}
+                                    {(newStep.type === 'VISUAL_DIMENSIONS' || newStep.type === 'DIMENSIONS' || newStep.calculatorTemplate) && (
+                                        <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
+                                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '5px' }}>
+                                                📐 HARDWARE MATH / CALCULATOR TEMPLATE (OPTIONAL)
+                                            </label>
+                                            <select value={newStep.calculatorTemplate || ''} onChange={e => setNewStep({...newStep, calculatorTemplate: e.target.value})} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold' }}>
+                                                <option value="">-- NO CALCULATOR (Standard Step) --</option>
+                                                <option value="calc_french_return_1in">1" French Return (+17" cut, C2C -1", Qty = Feet)</option>
+                                                <option value="calc_mitered_bay">Mitered Bay (Wall A/B/C + Angles, Qty = Feet)</option>
+                                                <option value="calc_curved_bay">Curved Bay (Arc / Radius, Qty = Feet)</option>
+                                                <option value="calc_straight_pole">Straight Pole (Qty = Feet)</option>
+                                            </select>
+                                            <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>Attaching a calculator will render dimension inputs (Length, Type, etc.) and auto-calculate the Step Quantity based on the formula.</span>
+                                        </div>
+                                    )}
 
                                     {newStep.dataSource && availableSourceItems.length > 0 && newStep.type !== 'DIMENSIONS' && (
                                         <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
@@ -704,17 +709,20 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
                                         {linkedAsm?.nodeClusters?.length > 0 && (
                                             <div style={{ marginBottom: '10px', background: '#eafaf1', border: '1px solid #28a745', padding: '10px' }}>
-                                                <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34', marginBottom: '5px' }}>📦 SAVED SUB-ASSEMBLIES (FROM TAB 3):</div>
+                                                <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34', marginBottom: '5px' }}>📦 SAVED SUB-ASSEMBLIES (FROM TAB 1.5):</div>
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                                                    {linkedAsm.nodeClusters.map(cluster => (
-                                                        <span 
-                                                            key={cluster.id} 
-                                                            onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${cluster.nodes ? cluster.nodes.join(', ') : cluster.meshes?.join(', ')}` : (cluster.nodes ? cluster.nodes.join(', ') : cluster.meshes?.join(', '))}))} 
-                                                            style={{ background: '#28a745', color: '#fff', padding: '4px 8px', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}
-                                                        >
-                                                            {cluster.name} ({(cluster.nodes || cluster.meshes || []).length} Nodes)
-                                                        </span>
-                                                    ))}
+                                                    {linkedAsm.nodeClusters.map(cluster => {
+                                                        const clusterNodes = cluster.nodes || cluster.meshes || [];
+                                                        return (
+                                                            <span 
+                                                                key={cluster.id} 
+                                                                onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${clusterNodes.join(', ')}` : clusterNodes.join(', ')}))} 
+                                                                style={{ background: '#28a745', color: '#fff', padding: '4px 8px', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}
+                                                            >
+                                                                {cluster.name} ({clusterNodes.length} Nodes)
+                                                            </span>
+                                                        );
+                                                    })}
                                                 </div>
                                             </div>
                                         )}
@@ -765,7 +773,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         </div>
                                     </div>
                                     
-                                    {optionsToMap.length > 0 && optionsToMap.length < 100 && (
+                                    {optionsToMap.length > 0 && optionsToMap.length < 100 && newStep.type !== 'DIMENSIONS' && (
                                         <div style={{ background: '#fff', padding: '10px', border: '1px solid #007bff' }}>
                                             <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff', marginBottom: '10px' }}>OPTION PROPERTIES: COST UPCHARGES & GEOMETRY SWAPPING</div>
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: '10px', maxHeight: '250px', overflowY: 'auto' }}>
@@ -793,11 +801,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <input type="checkbox" checked={newStep.required} onChange={e => setNewStep({...newStep, required: e.target.checked})} /> Required Step
                                     </label>
                                     <div style={{ display: 'flex', gap: '10px' }}>
-                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={!newStep.dataSource} style={{ flex: 1, padding: '10px', background: newStep.id ? '#ffc107' : '#000', color: newStep.id ? '#000' : '#fff', fontWeight: 'bold', border: newStep.id ? '2px solid #856404' : 'none', cursor: newStep.dataSource ? 'pointer' : 'not-allowed', opacity: newStep.dataSource ? 1 : 0.5 }}>
+                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={newStep.type !== 'DIMENSIONS' && !newStep.dataSource} style={{ flex: 1, padding: '10px', background: newStep.id ? '#ffc107' : '#000', color: newStep.id ? '#000' : '#fff', fontWeight: 'bold', border: newStep.id ? '2px solid #856404' : 'none', cursor: (newStep.type === 'DIMENSIONS' || newStep.dataSource) ? 'pointer' : 'not-allowed', opacity: (newStep.type === 'DIMENSIONS' || newStep.dataSource) ? 1 : 0.5 }}>
                                             {newStep.id ? "💾 SAVE EDITS TO STEP" : "➕ MANUAL ADD STEP"}
                                         </button>
                                         {newStep.id && (
-                                            <button onClick={() => setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '' })} style={{ padding: '10px 20px', background: '#fff', color: '#333', border: '2px solid #ccc', fontWeight: 'bold', cursor: 'pointer' }}>
+                                            <button onClick={() => setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '' })} style={{ padding: '10px 20px', background: '#fff', color: '#333', border: '2px solid #ccc', fontWeight: 'bold', cursor: 'pointer' }}>
                                                 CANCEL EDIT
                                             </button>
                                         )}
@@ -811,11 +819,12 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <div>
                                             <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>Step {idx + 1}: {step.title}</div>
                                             <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>
-                                                Type: <strong style={{ color: step.type === 'DIMENSIONS' ? '#e83e8c' : '#333'}}>{step.type}</strong> | Data: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{step.dataSource}</span> | Required: {step.required ? 'Yes' : 'No'}
+                                                Type: <strong style={{ color: step.type.includes('DIMENSIONS') ? '#e83e8c' : '#333'}}>{step.type}</strong> | Data: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{step.dataSource || 'N/A'}</span> | Required: {step.required ? 'Yes' : 'No'}
                                             </div>
                                             {step.allowedOptions && step.allowedOptions.length > 0 && (
                                                 <div style={{ fontSize: '0.65rem', color: '#CC6600', marginTop: '3px', fontWeight: 'bold' }}>🔍 RESTRICTED TO: {step.allowedOptions.length} specific options.</div>
                                             )}
+                                            {step.calculatorTemplate && <div style={{ fontSize: '0.65rem', color: '#1e7e34', marginTop: '3px', fontWeight: 'bold' }}>📐 CALCULATOR: {step.calculatorTemplate}</div>}
                                             {step.targetNodes && <div style={{ fontSize: '0.65rem', color: '#e83e8c', marginTop: '3px', fontWeight: 'bold' }}>🎨 APPLYING TEXTURES TO: {step.targetNodes.substring(0, 30)}{step.targetNodes.length > 30 ? '...' : ''}</div>}
                                             {step.geometryMap && Object.values(step.geometryMap).some(Boolean) && <div style={{ fontSize: '0.65rem', color: '#28a745', marginTop: '3px', fontWeight: 'bold' }}>🧊 GEOMETRY SWAPPING ACTIVE</div>}
                                             
@@ -881,7 +890,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
                       <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
                           <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#CC6600', marginBottom: '10px' }}>THEN EFFECT:</div>
-                          {/* 🚀 NEW: ADVANCED HARDWARE CALCULATIONS INJECTED INTO EFFECT DROPDOWN */}
                           <select value={newRule.effectField} onChange={e => setNewRule({...newRule, effectField: e.target.value})} style={{ width: '100%', padding: '8px', marginBottom: '10px', border: '1px solid #ccc' }}>
                               <option value="">-- Select Target System Rule --</option>
                               <optgroup label="UI Controls">
