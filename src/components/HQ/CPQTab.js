@@ -138,7 +138,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
-  const [stepQuantities, setStepQuantities] = useState({}); // 🚀 NEW: Tracks QTY per step
+  const [stepQuantities, setStepQuantities] = useState({}); 
   const [engineFlags, setEngineFlags] = useState({ disabledSteps: [], warnings: [] });
   
   const [pricing, setPricing] = useState({ base: 0, finalPrice: 0 });
@@ -161,7 +161,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       const unsubParts = onSnapshot(query(collection(db, "Approved_Designs")), (snap) => {
           let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           docs = docs.filter(d => d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand)));
-          
           setLibraryParts(docs.filter(d => d.partClass === "Inventory"));
           setLiveAssemblies(docs.filter(d => d.partClass === "Assembly" || d.partClass === "Master Assembly"));
       });
@@ -171,7 +170,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
 
-      // 🚀 NEW: Live dynamic CRM pulling
+      // 🚀 LIVE CRM SYNC FOR CHECKOUT
       const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
           const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER');
           setLiveCustomers(customers);
@@ -179,6 +178,17 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
       return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); };
   }, [activeBrand]);
+
+  // 🚀 MERGE CRM RECORDS WITH SIMPLE LISTS TO PREVENT MISSING DATA
+  const combinedCustomers = useMemo(() => {
+      const merged = [...liveCustomers];
+      (globalLists.customers || []).forEach(cName => {
+          if (!merged.some(c => c.name === cName || c.id === cName)) {
+              merged.push({ id: cName, name: cName });
+          }
+      });
+      return merged;
+  }, [liveCustomers, globalLists.customers]);
 
   const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
 
@@ -203,7 +213,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       }
   }, [activeAssemblyId, liveAssemblies]);
 
-  // 🚀 NEW: Fetch BOM baselines for the active assembly
   useEffect(() => {
       if (!activeAssemblyId || !liveAssemblies.length) { setActiveBomPins([]); return; }
       const asm = liveAssemblies.find(a => a.id === activeAssemblyId);
@@ -225,6 +234,16 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           const inHouse = globalFinishes.map(f => ({ id: f.id, itemName: f.name, finalImageUrl: f.textureUrl, code: f.code }));
           const outsource = outsourceFinishes.map(f => ({ id: f.id, itemName: f.name, finalImageUrl: f.textureUrl, multiplier: f.multiplier }));
           options = [...inHouse, ...outsource];
+      } else if (globalLists.inventoryTypes?.includes(step.dataSource)) {
+          // 🚀 FIX: Properly fetch raw materials from library using Inventory Routing Type
+          options = libraryParts.filter(p => p.routingType === step.dataSource).map(p => ({
+              id: p.id,
+              itemName: p.itemName,
+              finalImageUrl: p.finalImageUrl || p.manufacturingSpecs?.finalImageUrl,
+              code: p.legacyErpId,
+              clientPricing: p.clientPricing,
+              basePrice: p.manufacturingSpecs?.basePrice
+          }));
       } else {
           const customAssets = dynamicAssets.filter(a => a.windowId === step.dataSource);
           if (customAssets.length > 0) {
@@ -310,7 +329,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       setEngineFlags(newFlags);
   }, [dynamicConfigParams, cpqRules, libraryParts, dynamicAssets, globalFinishes, outsourceFinishes]);
 
-  // 🚀 UPDATED PRICING ENGINE: Incorporates Qty, Overrides, and Client Pricing
+  // 🚀 REBUILT PRICING ENGINE
   useEffect(() => {
       if (!activeFlow) return;
       
@@ -320,50 +339,62 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       activeFlow.steps.forEach(step => {
           const selectedValue = dynamicConfigParams[step.id];
           
-          // Determine Step Quantity
-          let qty = stepQuantities[step.id];
-          if (qty === undefined) {
-              if (step.linkedPinId) {
-                  const pin = activeBomPins.find(p => p.partId === step.linkedPinId);
-                  qty = pin?.defaultQty || 1;
-              } else {
-                  qty = 1;
-              }
+          // 1. Resolve Quantity
+          let rawQty = stepQuantities[step.id];
+          let qty = 1;
+          if (rawQty === undefined || rawQty === '') {
+              qty = activeBomPins.find(p => p.partId === step.linkedPinId)?.defaultQty || 1;
+          } else {
+              qty = parseInt(rawQty) || 0; 
           }
 
           if (selectedValue) {
-              let stepPrice = 0;
+              // 2. Locate Source Object
+              const partObj = libraryParts.find(p => p.id === selectedValue) || 
+                              dynamicAssets.find(a => a.id === selectedValue) ||
+                              globalFinishes.find(f => f.id === selectedValue) ||
+                              outsourceFinishes.find(f => f.id === selectedValue);
 
-              // 1. Base cost of option
-              if (step.priceOverride) {
-                  stepPrice = parseFloat(step.priceOverride);
-              } else if (step.useClientPricing && jobData.customerId) {
-                  const part = libraryParts.find(p => p.id === selectedValue) || dynamicAssets.find(a => a.id === selectedValue);
-                  const clientPrice = part?.clientPricing?.find(cp => cp.customerId === jobData.customerId)?.price;
-                  if (clientPrice !== undefined && clientPrice !== '') {
-                      stepPrice = parseFloat(clientPrice);
-                  } else if (step.priceMap && step.priceMap[selectedValue]) {
-                      stepPrice = parseFloat(step.priceMap[selectedValue]);
-                  }
-              } else if (step.priceMap && step.priceMap[selectedValue]) {
-                  stepPrice = parseFloat(step.priceMap[selectedValue]);
+              // 3. Extract Native Base Price
+              let nativePrice = 0;
+              if (partObj) {
+                  if (partObj.manufacturingSpecs?.basePrice) nativePrice = parseFloat(partObj.manufacturingSpecs.basePrice);
+                  else if (partObj.basePrice) nativePrice = parseFloat(partObj.basePrice);
               }
 
-              // 2. Material Multipliers
-              let multiplier = 1.0;
-              const dynAsset = dynamicAssets.find(a => a.id === selectedValue);
-              if (dynAsset && dynAsset.multiplier > 1.0) multiplier = dynAsset.multiplier;
-              
-              const outFin = outsourceFinishes.find(a => a.id === selectedValue);
-              if (outFin && outFin.multiplier > 1.0) multiplier = outFin.multiplier;
+              // 4. Apply Client Pricing Match (Overrides Native)
+              if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
+                  const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
+                  if (cp && cp.price !== undefined && cp.price !== "") {
+                      nativePrice = parseFloat(cp.price);
+                  }
+              }
 
-              // 3. Apply Multiplier and QTY
+              // 5. Add Step Specific Upcharge
+              let upcharge = 0;
+              if (step.priceMap && step.priceMap[selectedValue]) {
+                  upcharge = parseFloat(step.priceMap[selectedValue]) || 0;
+              }
+
+              let stepPrice = nativePrice + upcharge;
+
+              // 6. Hard Price Override (Overrides everything)
+              if (step.priceOverride !== undefined && step.priceOverride !== "") {
+                  stepPrice = parseFloat(step.priceOverride);
+              }
+
+              // 7. Apply Material Multipliers
+              let multiplier = 1.0;
+              if (partObj && partObj.multiplier && parseFloat(partObj.multiplier) > 1.0) {
+                  multiplier = parseFloat(partObj.multiplier);
+              }
+              
               total += (stepPrice * multiplier * qty);
           }
       });
 
       setPricing({ base: total, finalPrice: total });
-  }, [dynamicConfigParams, stepQuantities, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, activeBomPins]);
+  }, [dynamicConfigParams, stepQuantities, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, activeBomPins, globalFinishes]);
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
 
@@ -379,7 +410,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const handleFinalizeQuote = async () => {
       if (!jobData.customerId || !jobData.sidemark) return alert("❌ Please select a Customer and enter a Sidemark.");
       const jobId = `QUOTE-${Date.now()}`;
-      const customerName = liveCustomers.find(c => c.id === jobData.customerId)?.name || "Unknown";
+      const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
       
       const payload = {
           jobId: jobId, brandId: activeBrand, status: 'CONFIGURED',
@@ -391,7 +422,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           cpqData: { 
               totalPrice: pricing.finalPrice, 
               configuration: dynamicConfigParams,
-              quantities: stepQuantities, // 🚀 Saving QTYs for exact rebuilds
+              quantities: stepQuantities, 
               appliedRules: engineFlags.warnings 
           },
           dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, sewing: false, packing: false },
@@ -408,6 +439,35 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setCurrentStepIndex(0); 
           setActiveAssemblyId(""); setShowCheckoutModal(false); setJobData({ customerId: '', jobName: '', sidemark: '' });
       } catch (err) { console.error(err); alert("Failed to save quote."); }
+  };
+
+  // 🚀 FIXED: UI Price String Renderer
+  const renderOptionPrice = (opt, currentStep) => {
+      const partObj = libraryParts.find(p => p.id === opt.id) || 
+                      dynamicAssets.find(a => a.id === opt.id) ||
+                      globalFinishes.find(f => f.id === opt.id) ||
+                      outsourceFinishes.find(f => f.id === opt.id);
+      
+      let nativeP = 0;
+      if (partObj) {
+          if (partObj.manufacturingSpecs?.basePrice) nativeP = parseFloat(partObj.manufacturingSpecs.basePrice);
+          else if (partObj.basePrice) nativeP = parseFloat(partObj.basePrice);
+      }
+
+      if (currentStep.useClientPricing && jobData.customerId && partObj?.clientPricing) {
+          const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
+          if (cp && cp.price !== undefined && cp.price !== "") nativeP = parseFloat(cp.price);
+      }
+
+      let upP = currentStep.priceMap?.[opt.id] ? parseFloat(currentStep.priceMap[opt.id]) : 0;
+      let finalP = nativeP + upP;
+
+      if (currentStep.priceOverride !== undefined && currentStep.priceOverride !== "") {
+          finalP = parseFloat(currentStep.priceOverride);
+      }
+
+      if (finalP > 0) return ` (+$${finalP.toFixed(2)})`;
+      return '';
   };
 
   const get2DRenderLayers = () => {
@@ -488,7 +548,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
         </div>
       </div>
 
-      {/* 🚀 NEW: TOP-LEVEL CUSTOMER SELECTION FOR LIVE PRICING */}
       <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', display: 'flex', alignItems: 'center', gap: '15px', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
           <div style={{ fontWeight: 'bold', color: '#007bff', fontSize: '1.1rem' }}>🤝 ACTIVE CUSTOMER:</div>
           <select 
@@ -497,7 +556,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               style={{ flex: 1, padding: '10px', fontSize: '1rem', border: '2px solid #007bff', outline: 'none', fontWeight: 'bold' }}
           >
               <option value="">-- Select Customer to Activate Live Client Pricing --</option>
-              {liveCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
+              {combinedCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
           </select>
           {!jobData.customerId && <span style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 'bold' }}>⚠️ Base MSRP will be shown until customer is selected.</span>}
       </div>
@@ -539,21 +598,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           {currentStep.type === 'VISUAL_GRID' ? (
                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                                   {getOptionsForStep(currentStep).map(opt => {
-                                      let displayPrice = '';
-                                      if (currentStep.priceOverride) {
-                                          displayPrice = ` ($${parseFloat(currentStep.priceOverride).toFixed(2)} Flat)`;
-                                      } else if (currentStep.useClientPricing && jobData.customerId) {
-                                          const clientPrice = opt.clientPricing?.find(cp => cp.customerId === jobData.customerId)?.price;
-                                          if (clientPrice) displayPrice = ` (+$${parseFloat(clientPrice).toFixed(2)})`;
-                                          else if (currentStep.priceMap?.[opt.id]) displayPrice = ` (+$${currentStep.priceMap[opt.id]})`;
-                                      } else if (currentStep.priceMap?.[opt.id]) {
-                                          displayPrice = ` (+$${currentStep.priceMap[opt.id]})`;
-                                      }
-
                                       return (
                                           <div key={opt.id} onClick={() => handleParamChange(currentStep.id, opt.id)} style={{ border: `2px solid ${dynamicConfigParams[currentStep.id] === opt.id ? '#007bff' : '#ccc'}`, padding: '10px', textAlign: 'center', cursor: 'pointer', background: dynamicConfigParams[currentStep.id] === opt.id ? '#e6f2ff' : '#fff' }}>
                                               <div style={{ width: '100%', height: '80px', background: opt.finalImageUrl ? `url(${opt.finalImageUrl}) center/cover` : '#eee', marginBottom: '10px' }} />
-                                              <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{opt.itemName}{displayPrice}</div>
+                                              <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</div>
                                           </div>
                                       );
                                   })}
@@ -561,24 +609,13 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           ) : (
                               <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #000', fontSize: '1rem' }}>
                                   <option value="">-- Select Option --</option>
-                                  {getOptionsForStep(currentStep).map(opt => {
-                                      let displayPrice = '';
-                                      if (currentStep.priceOverride) {
-                                          displayPrice = ` ($${parseFloat(currentStep.priceOverride).toFixed(2)} Flat)`;
-                                      } else if (currentStep.useClientPricing && jobData.customerId) {
-                                          const clientPrice = opt.clientPricing?.find(cp => cp.customerId === jobData.customerId)?.price;
-                                          if (clientPrice) displayPrice = ` (+$${parseFloat(clientPrice).toFixed(2)})`;
-                                          else if (currentStep.priceMap?.[opt.id]) displayPrice = ` (+$${currentStep.priceMap[opt.id]})`;
-                                      } else if (currentStep.priceMap?.[opt.id]) {
-                                          displayPrice = ` (+$${currentStep.priceMap[opt.id]})`;
-                                      }
-                                      return <option key={opt.id} value={opt.id}>{opt.itemName}{displayPrice}</option>;
-                                  })}
+                                  {getOptionsForStep(currentStep).map(opt => (
+                                      <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</option>
+                                  ))}
                               </select>
                           )}
                       </div>
 
-                      {/* 🚀 NEW: QUANTITY SELECTOR PER STEP */}
                       <div style={{ padding: '15px', background: '#f8f9fa', borderTop: '2px solid #000', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div style={{ fontSize: '0.8rem', color: '#666', lineHeight: '1.4' }}>
                               <strong>STEP QUANTITY:</strong><br/>
@@ -587,7 +624,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                               <button onClick={() => {
                                   let current = stepQuantities[currentStep.id];
-                                  if (current === undefined) current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
+                                  if (current === undefined || current === '') current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
+                                  else current = parseInt(current);
                                   setStepQuantities({...stepQuantities, [currentStep.id]: Math.max(1, current - 1)});
                               }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>-</button>
                               
@@ -595,13 +633,17 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                   type="number" 
                                   min="1" 
                                   value={stepQuantities[currentStep.id] !== undefined ? stepQuantities[currentStep.id] : (activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1)} 
-                                  onChange={e => setStepQuantities({...stepQuantities, [currentStep.id]: parseInt(e.target.value) || 1})} 
-                                  style={{ width: '50px', padding: '10px', border: '2px solid #000', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem' }} 
+                                  onChange={e => {
+                                      const val = e.target.value;
+                                      setStepQuantities({...stepQuantities, [currentStep.id]: val === '' ? '' : parseInt(val)});
+                                  }} 
+                                  style={{ width: '50px', padding: '10px', border: '2px solid #000', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem', outline: 'none' }} 
                               />
                               
                               <button onClick={() => {
                                   let current = stepQuantities[currentStep.id];
-                                  if (current === undefined) current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
+                                  if (current === undefined || current === '') current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
+                                  else current = parseInt(current);
                                   setStepQuantities({...stepQuantities, [currentStep.id]: current + 1});
                               }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>+</button>
                           </div>
@@ -728,7 +770,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                         <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#d9534f', display: 'block', marginBottom: '5px' }}>* VERIFY CUSTOMER:</label>
                         <select value={jobData.customerId} onChange={e => setJobData({...jobData, customerId: e.target.value})} style={{ width: '100%', padding: '10px', fontSize: '1rem', border: '2px solid #d9534f', outline: 'none', background: '#fff9fa' }}>
                             <option value="">-- Choose Customer --</option>
-                            {liveCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
+                            {combinedCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
                         </select>
                     </div>
 
