@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { db } from '../../firebase';
+import { db, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
-import { useGLTF, OrbitControls, Bounds } from '@react-three/drei';
+import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
 
 const globalTextureCache = {};
 
@@ -151,7 +151,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
   const [activeAssembly, setActiveAssembly] = useState(null);
 
-  const [viewMode, setViewMode] = useState("2D");
+  const [viewMode, setViewMode] = useState("3D");
 
   useEffect(() => {
       if (!activeBrand) return;
@@ -328,7 +328,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       setEngineFlags(newFlags);
   }, [dynamicConfigParams, cpqRules, libraryParts, dynamicAssets, globalFinishes, outsourceFinishes]);
 
-  // 🚀 ADVANCED ENGINEERING MATH FOR FACTORY ROUTER
   const handleDimensionChange = (stepId, key, value, template) => {
       setDimensionInputs(prev => {
           const current = prev[stepId] || { length: '', type: 'O2O', wallA: '', wallB: '', wallC: '' };
@@ -342,19 +341,17 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           if (template === 'calc_french_return_1in') {
               let baseLength = parseFloat(updated.length) || 0;
               
-              // 1" French Return Logic
               if (updated.type === 'C2C') {
                   c2c = baseLength;
-                  o2o = baseLength + 1; // +1" to get O2O for 1" pole
+                  o2o = baseLength + 1; 
               } else {
                   o2o = baseLength;
                   c2c = baseLength - 1; 
               }
               
-              cutLength = o2o + 17; // Cut length is +17 over O2O for grip/bend allowance
+              cutLength = o2o + 17; 
               calculatedQty = Math.max(1, Math.ceil(cutLength / 12)); 
               
-              // Store computed math for Router PDF
               updated.calc_o2o = o2o;
               updated.calc_c2c = c2c;
               updated.calc_cutLength = cutLength;
@@ -369,7 +366,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               let b = parseFloat(updated.wallB) || 0;
               let c = parseFloat(updated.wallC) || 0;
               calculatedQty = Math.max(1, Math.ceil((a + b + c + 12) / 12)); 
-              updated.calc_cutLength = a + b + c + 12; // Rough cut addition
+              updated.calc_cutLength = a + b + c + 12; 
 
           } else if (template === 'calc_curved_bay') {
               let baseLength = parseFloat(updated.length) || 0;
@@ -497,7 +494,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       } catch (err) { console.error(err); alert("Failed to save quote."); }
   };
 
-  // 🚀 FIXED: Shop Cut List explicitly mapped in Router
   const generateFactoryRouter = async (job) => {
       const printWindow = window.open('', '_blank', 'width=800,height=900');
       let dimensionHtml = '';
@@ -810,7 +806,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                       </div>
                                   )}
 
-                                  {/* 🚀 FIXED: Shop Cut List Real-Time UI */}
                                   {dimensionInputs[currentStep.id]?.length > 0 && currentStep.calculatorTemplate === 'calc_french_return_1in' && (
                                       <div style={{ marginTop: '10px', fontSize: '0.75rem', color: '#1e7e34', background: '#fff', padding: '10px', border: '2px solid #28a745', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}>
                                           <strong style={{display:'block', marginBottom:'5px', color:'#000'}}>MATH LOGIC (1" French Return):</strong> 
@@ -900,6 +895,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               )}
           </div>
 
+          {/* 🚀 UPGRADED 3D ENGINE WRAPPER */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px', minHeight: '800px' }}>
               <div style={{ flex: 1, background: '#fff', border: '2px solid #000', boxShadow: '10px 10px 0 #000', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
                   
@@ -922,8 +918,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           </div>
                       ) : viewMode === '3D' ? (
                           <Canvas camera={{ position: [5, 5, 5], fov: 50 }} style={{ width: '100%', height: '100%' }}>
-                              <ambientLight intensity={0.7} />
-                              <directionalLight position={[10, 20, 5]} intensity={1.5} />
+                              <ambientLight intensity={0.5} />
+                              <directionalLight position={[5, 10, 5]} intensity={1} />
+                              {/* 🚀 NEW: HDRI Studio Lighting & Contact Shadows */}
+                              <Environment preset="studio" />
+                              <ContactShadows position={[0, -0.5, 0]} opacity={0.4} scale={10} blur={2} far={4} />
                               <OrbitControls makeDefault />
                               <Bounds fit clip margin={1.2}>
                                   <DynamicModel 

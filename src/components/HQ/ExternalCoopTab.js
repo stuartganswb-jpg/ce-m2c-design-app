@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, setDoc, getDoc } from "firebase/firestore";
+import { collection, onSnapshot, doc, updateDoc, setDoc } from "firebase/firestore";
 
 // --- 🚀 NEW: INJECT PRINT CSS FOR PDF GENERATION ---
 const printStyles = `
@@ -12,19 +12,16 @@ const printStyles = `
   }
 `;
 
-// --- EXPANDED CRM MOCK DATA (Merged with DB later) ---
-const INITIAL_CRM_DATA = {
-    'CUST-882': { id: 'CUST-882', type: 'CUSTOMER', name: 'Smith Residence (Tier 1)', email: 'jane.smith@example.com', contact: 'Jane Smith', phone: '555-0192', terms: 'Net 30', ytd: 45200.00, mtd: 12500.00, openOrders: 3, notes: 'High priority client. Always wants expedited shipping on custom hardware.' },
-    'CUST-310': { id: 'CUST-310', type: 'CUSTOMER', name: 'The Harrison Project', email: 'purchasing@harrisonproject.com', contact: 'Procurement Team', phone: '555-8831', terms: 'CIA', ytd: 120500.00, mtd: 0.00, openOrders: 1, notes: 'Strict delivery windows. Requires detailed BOMs before PO issuance.' },
-    'CUST-NEW': { id: 'CUST-NEW', type: 'CUSTOMER', name: 'New Client Demo', email: 'client@example.com', contact: 'Client', phone: '555-0000', terms: 'COD', ytd: 0, mtd: 0, openOrders: 0, notes: 'Prospecting phase. Needs finish samples.' },
-    'VEND-101': { id: 'VEND-101', type: 'VENDOR', name: 'Acme Textiles', email: 'sales@acmetextiles.com', contact: 'Bob', phone: '555-1122', terms: 'Net 60', ytd: 15400.00, mtd: 2500.00, openOrders: 5, notes: 'Lead times are slipping on luxury fabrics. Watch closely.' },
-    'VEND-202': { id: 'VEND-202', type: 'VENDOR', name: 'Prime Metals Foundry', email: 'orders@primemetals.com', contact: 'Sarah', phone: '555-9988', terms: 'Net 30', ytd: 85000.00, mtd: 14000.00, openOrders: 2, notes: 'Great quality on brass extrusions. Reliable partner.' }
-};
+const INITIAL_CRM_DATA = {};
 
 const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [activeSubTab, setActiveSubTab] = useState('CUSTOMERS'); 
   const [inceptionJobs, setInceptionJobs] = useState([]);
   const [configuredJobs, setConfiguredJobs] = useState([]);
+  
+  // 🚀 NEW: State for ALL jobs to populate CRM History
+  const [allBrandJobs, setAllBrandJobs] = useState([]); 
+  
   const [debugStats, setDebugStats] = useState({ total: 0, brandMatch: 0, inception: 0, configured: 0 });
 
   // CRM State
@@ -32,7 +29,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [crmSearchQuery, setCrmSearchQuery] = useState('');
   const [activeCrmRecord, setActiveCrmRecord] = useState(null);
   
-  // 🚀 NEW: CRM Quick-Create State
   const [showNewCrmModal, setShowNewCrmModal] = useState(false);
   const [newCrmForm, setNewCrmForm] = useState({ name: '', email: '', contact: '', phone: '', terms: 'Net 30' });
   const [globalLists, setGlobalLists] = useState({ customers: [], vendors: [] });
@@ -53,10 +49,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [brandLogos, setBrandLogos] = useState({});
   const [libraryParts, setLibraryParts] = useState([]);
   const [activeDocJob, setActiveDocJob] = useState(null);
-  const [activeDocType, setActiveDocType] = useState('QUOTE');
+  const [activeDocType, setActiveDocType] = useState('QUOTE'); // 'QUOTE' or 'FACTORY_ROUTER'
   const DOC_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE'];
 
-  // Inject Print CSS safely
   useEffect(() => {
     const styleSheet = document.createElement("style");
     styleSheet.innerText = printStyles;
@@ -70,6 +65,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       const unsub = onSnapshot(collection(db, "jobs"), (snapshot) => {
           const allJobs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
           const brandJobs = allJobs.filter(j => j.brandId === activeBrand);
+          
+          setAllBrandJobs(brandJobs); // 🚀 Store all jobs for CRM History
+
           const inceptions = brandJobs.filter(j => j.status === 'INCEPTION');
           const configured = brandJobs.filter(j => j.status === 'CONFIGURED');
           
@@ -109,7 +107,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       return () => { unsubForms(); unsubLogos(); unsubParts(); };
   }, [activeBrand]);
 
-  // 🚀 4. NEW LIVE FIREBASE LISTENER: Dynamic CRM Sync
+  // 4. LIVE FIREBASE LISTENER: Dynamic CRM Sync
   useEffect(() => {
       const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
           const dbRecords = {};
@@ -127,7 +125,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       return () => { unsubCrm(); unsubLists(); };
   }, []);
 
-  // --- 🚀 NEW ACTION: Create CRM Record & Sync to Master Lists ---
   const handleSaveNewCrm = async () => {
       if (!newCrmForm.name.trim()) return alert("Entity Name is required.");
       
@@ -147,16 +144,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       };
 
       try {
-          // 1. Save to the main CRM collection
           await setDoc(doc(db, "crm_records", newId), newRecord);
-
-          // 2. Map dynamically back to Tab 3 and Tab 4 master lists
           const listKey = isCust ? 'customers' : 'vendors';
           const updatedList = [...new Set([...(globalLists[listKey] || []), newId])];
-          
           await setDoc(doc(db, "system", "master_lists"), { [listKey]: updatedList }, { merge: true });
 
-          // 3. Reset UI and load the new record
           setShowNewCrmModal(false);
           setNewCrmForm({ name: '', email: '', contact: '', phone: '', terms: 'Net 30' });
           setCrmSearchQuery('');
@@ -168,7 +160,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       }
   };
 
-  // --- ACTION HANDLERS ---
   const handleEditJob = (job) => alert(`Loading ${job.jobId || job.id} into Global Context...\n\nRouting operator back to CPQ / Vision Tabs to configure physical inventory.`);
   
   const handleApproveJob = async (jobId) => {
@@ -180,71 +171,17 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
   const handleClearFilters = () => { setSearchQuery(''); setStartDate(''); setEndDate(''); };
 
-  // --- 📧 PDF GENERATION & EMAIL DRAFTING LOGIC ---
   const handleEmailQuote = (job) => {
       const clientData = crmData[job.customer?.id] || { email: 'client@example.com', contact: 'Valued Client' };
       const subject = encodeURIComponent(`Your Custom Hardware Quote: ${job.sidemark} (${job.jobId})`);
-      const body = encodeURIComponent(`Hi ${clientData.contact},\n\nPlease find attached your finalized quotation for the ${job.sidemark} project.\n\nTotal: $${job.cpqData?.totalPrice?.toFixed(2) || '0.00'}\nFinish: ${job.cpqData?.finish || 'Standard'}\n\nPlease review the attached PDF and reply to this email to approve the design for production.\n\nBest Regards,\nThe ${activeBrand.toUpperCase()} Team`);
+      const body = encodeURIComponent(`Hi ${clientData.contact},\n\nPlease find attached your finalized quotation for the ${job.sidemark} project.\n\nTotal: $${job.cpqData?.totalPrice?.toFixed(2) || '0.00'}\n\nPlease review the attached PDF and reply to this email to approve the design for production.\n\nBest Regards,\nThe ${activeBrand.toUpperCase()} Team`);
 
-      const printWindow = window.open('', '_blank', 'width=800,height=900');
-      const html = `
-        <html>
-          <head>
-            <title>Quote_${job.jobId}</title>
-            <style>
-              body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #333; max-width: 800px; margin: 0 auto; }
-              .header { display: flex; justify-content: space-between; border-bottom: 3px solid #000; padding-bottom: 20px; margin-bottom: 30px; }
-              .brand { font-size: 28px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; }
-              .doc-type { font-size: 24px; color: #666; text-transform: uppercase; }
-              .meta-grid { display: flex; justify-content: space-between; margin-bottom: 40px; background: #f8f9fa; padding: 20px; border-radius: 5px; }
-              .meta-col { display: flex; flex-direction: column; gap: 8px; }
-              .label { font-size: 12px; font-weight: bold; color: #888; text-transform: uppercase; }
-              .val { font-size: 16px; font-weight: bold; }
-              .specs { margin-bottom: 40px; border: 1px solid #ddd; }
-              .spec-header { background: #000; color: #fff; padding: 10px 15px; font-weight: bold; }
-              .spec-row { display: flex; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid #eee; }
-              .total-row { display: flex; justify-content: space-between; padding: 20px 15px; background: #eef5eb; border-top: 2px solid #28a745; font-size: 20px; font-weight: bold; color: #1e7e34; }
-              .footer { margin-top: 50px; font-size: 12px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 20px; }
-            </style>
-          </head>
-          <body>
-            <div class="header">
-              <div class="brand">${activeBrand}</div>
-              <div class="doc-type">OFFICIAL QUOTATION</div>
-            </div>
-            <div class="meta-grid">
-              <div class="meta-col">
-                <div><span class="label">Client:</span><br/><span class="val">${job.customer?.name || 'N/A'}</span></div>
-                <div><span class="label">Sidemark:</span><br/><span class="val">${job.sidemark || 'N/A'}</span></div>
-              </div>
-              <div class="meta-col">
-                <div><span class="label">Quote #:</span><br/><span class="val">${job.jobId}</span></div>
-                <div><span class="label">Date:</span><br/><span class="val">${job.dateSaved || new Date().toLocaleDateString()}</span></div>
-              </div>
-            </div>
-            <div class="specs">
-              <div class="spec-header">HARDWARE SPECIFICATIONS</div>
-              <div class="spec-row"><span>Master Assembly</span><span>${job.jobName || 'Custom Drapery Hardware'}</span></div>
-              <div class="spec-row"><span>Plating / Finish</span><span>${job.cpqData?.finish || 'N/A'}</span></div>
-              <div class="spec-row"><span>Pole Diameter</span><span>${job.cpqData?.dimensions?.diameter || 'N/A'}" Tube</span></div>
-              <div class="spec-row"><span>Pole Length</span><span>${job.cpqData?.dimensions?.poleLength || 'N/A'}"</span></div>
-              <div class="spec-row"><span>Ring Quantity</span><span>${job.cpqData?.dimensions?.ringsQty || 0} Units</span></div>
-              <div class="total-row"><span>TOTAL INVESTMENT</span><span>$${job.cpqData?.totalPrice?.toFixed(2) || '0.00'}</span></div>
-            </div>
-            <div class="footer">
-              This quotation is valid for 30 days. Please review all dimensions and finishes carefully. Lead times begin upon receipt of approval and payment.
-            </div>
-            <script> window.onload = function() { window.print(); } </script>
-          </body>
-        </html>
-      `;
-      printWindow.document.write(html);
-      printWindow.document.close();
+      setActiveDocJob(job);
+      setActiveDocType('QUOTE');
 
       setTimeout(() => { window.location.href = `mailto:${clientData.email}?subject=${subject}&body=${body}`; }, 1000);
   };
 
-  // --- SPATIAL CALLOUT LOGIC ---
   const handleSvgClick = async (e) => {
       if (!isAddingCallout || !activeRevisionId || !activeAssembly) { setActiveCalloutId(null); return; }
       const svg = svgRef.current;
@@ -256,11 +193,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       setActiveAssembly(prev => ({ ...prev, spatialCallouts: updatedCallouts })); setActiveCalloutId(newCallout.id); setIsAddingCallout(false);
       try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: updatedCallouts }); } catch (err) { console.error(err); }
   };
+  
   const handleLocalTextChange = (id, newText) => { setActiveAssembly(prev => ({ ...prev, spatialCallouts: (activeAssembly.spatialCallouts || []).map(c => c.id === id ? { ...c, text: newText } : c) })); };
   const saveCalloutTextToFirebase = async () => { try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: activeAssembly.spatialCallouts }); } catch (err) { console.error(err); } };
   const removeCallout = async (id) => { if(!window.confirm("Delete this external note?")) return; const updatedCallouts = (activeAssembly.spatialCallouts || []).filter(c => c.id !== id); try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: updatedCallouts }); } catch (err) { console.error(err); } };
 
-  // --- FILTER ENGINE ---
   const filterByActiveTab = (job) => { if (activeSubTab === 'CUSTOMERS') return !!job.clientName || !!job.customer; if (activeSubTab === 'VENDORS') return !!job.vendorName; return true; };
   const filteredInception = inceptionJobs.filter(job => filterByActiveTab(job)).filter(job => { const q = searchQuery.toLowerCase(); const entity = job.clientName || job.vendorName || ''; return (!q || job.id.toLowerCase().includes(q) || entity.toLowerCase().includes(q) || (job.note && job.note.toLowerCase().includes(q))) && (!startDate || job.date >= startDate) && (!endDate || job.date <= endDate); });
   const filteredConfigured = configuredJobs.filter(job => filterByActiveTab(job)).filter(job => { const q = searchQuery.toLowerCase(); const entity = job.customer?.name || ''; return (!q || (job.jobId || job.id).toLowerCase().includes(q) || entity.toLowerCase().includes(q) || (job.sidemark && job.sidemark.toLowerCase().includes(q))) && (!startDate || job.dateSaved >= startDate) && (!endDate || job.dateSaved <= endDate); });
@@ -269,15 +206,13 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const currentRevisionObj = activeRevisions.find(r => r.id === activeRevisionId) || activeRevisions[0];
   const filteredCallouts = (activeAssembly?.spatialCallouts || []).filter(c => (c.revisionId === activeRevisionId || (!c.revisionId && activeRevisionId === 'INITIAL')) && c.user && c.user.includes('(External Note)'));
 
-  // --- CRM SEARCH ENGINE ---
   const targetCrmType = activeSubTab === 'CUSTOMERS' ? 'CUSTOMER' : 'VENDOR';
   const activeCrmList = Object.values(crmData).filter(r => r.type === targetCrmType);
-  
-  // 🚀 UPDATED: Check for exact match
   const crmSearchResults = crmSearchQuery ? activeCrmList.filter(r => r.name.toLowerCase().includes(crmSearchQuery.toLowerCase()) || r.id.toLowerCase().includes(crmSearchQuery.toLowerCase())) : [];
   const exactMatchExists = crmSearchResults.some(r => r.name.toLowerCase() === crmSearchQuery.toLowerCase());
 
-  const getCrmPipeline = (id) => {
+  // 🚀 UPDATED CRM PIPELINE BUCKETS
+  const getCrmActivePipeline = (id) => {
       const entityName = crmData[id]?.name || "";
       return [...inceptionJobs, ...configuredJobs].filter(j => 
           j.customer?.id === id || 
@@ -286,11 +221,19 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       ).sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   };
 
+  const getCrmArchivedPipeline = (id) => {
+      const entityName = crmData[id]?.name || "";
+      return allBrandJobs.filter(j => 
+          j.status !== 'INCEPTION' && j.status !== 'CONFIGURED' && // Get everything that has moved on
+          (j.customer?.id === id || (j.clientName && j.clientName.includes(entityName)) || (j.vendorName && j.vendorName.includes(entityName)))
+      ).sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  };
+
   const getPartName = (partId) => {
       const part = libraryParts.find(p => p.id === partId);
       return part ? part.itemName : partId;
   };
-  const activeTemplate = formTemplates[activeDocType] || { header: '', footer: '', terms: '' };
+  const activeTemplate = formTemplates[activeDocType === 'FACTORY_ROUTER' ? 'WORK_ORDER' : activeDocType] || { header: '', footer: '', terms: '' };
   const currentLogo = brandLogos[activeBrand] || null;
 
   return (
@@ -308,7 +251,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
         </div>
       </div>
 
-      {/* CRM SEARCH BAR & QUICK-CREATE TRIGGER */}
       <div className="no-print" style={{ background: '#f8f9fa', border: '2px solid #000', borderTop: 'none', padding: '15px', display: 'flex', alignItems: 'center', gap: '20px', boxShadow: '5px 5px 0 rgba(0,0,0,0.05)' }}>
           <strong style={{ color: activeSubTab === 'CUSTOMERS' ? '#007bff' : '#fd7e14', fontSize: '0.9rem', whiteSpace: 'nowrap' }}>🔍 {activeSubTab} CRM DIRECTORY:</strong>
           <div style={{ position: 'relative', flex: 1 }}>
@@ -329,7 +271,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                           </div>
                       ))}
 
-                      {/* 🚀 QUICK CREATE BUTTON IN DROPDOWN */}
                       {!exactMatchExists && (
                           <div 
                               onClick={() => {
@@ -370,7 +311,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                     <div style={{ display: 'flex', gap: '10px', borderTop: '1px dotted #eee', paddingTop: '10px', marginTop: '5px' }}>
                         <button onClick={() => setActiveModalJob(job)} style={{ flex: 1.5, padding: '8px 10px', background: '#000', color: '#fff', border: 'none', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>💬 OPEN INCEPTION WINDOW</button>
                         <button onClick={() => handleEditJob(job)} style={{ flex: 1, padding: '8px 10px', background: '#fff', border: '1px solid #007bff', color: '#007bff', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>⚙️ START CPQ</button>
-                        <button onClick={() => setActiveDocJob(job)} style={{ padding: '8px 10px', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>📄 PDF DOC</button>
+                        <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ padding: '8px 10px', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>📄 PDF DOC</button>
                     </div>
                  </div>
               ))}
@@ -385,7 +326,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
             
             <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px', background: '#eef5eb', minHeight: '500px', maxHeight: '700px', overflowY: 'auto' }}>
               {filteredConfigured.length === 0 && <div style={{ textAlign: 'center', color: '#7ea97e', marginTop: '20px', fontStyle: 'italic' }}>No configured jobs waiting.</div>}
-              {filteredConfigured.map(job => (
+              {filteredConfigured.map(job => {
+                 // 🚀 NEW: Check if this job has dimensional math attached
+                 const hasDimensionalMath = job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0;
+
+                 return (
                  <div key={job.id} style={{ background: '#fff', border: '2px solid #28a745', padding: '0', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
                     <div style={{ padding: '10px 15px', background: '#f8f9fa', borderBottom: '1px solid #ddd', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div style={{ display: 'flex', gap: '10px', alignItems: 'baseline' }}><span style={{ fontSize: '1rem', fontWeight: 'bold', color: '#000' }}>{job.customer?.name || "Unknown"}</span><span style={{ fontSize: '0.65rem', color: '#666', background: '#e2e3e5', padding: '2px 5px', borderRadius: '3px' }}>ID: {job.jobId || job.id}</span></div>
@@ -400,16 +345,22 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                         <button onClick={() => handleEditJob(job)} style={{ flex: 1, padding: '8px', background: '#fff', border: '2px solid #007bff', color: '#007bff', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✏️ EDIT</button>
                         <button onClick={() => handleEmailQuote(job)} style={{ flex: 1.5, padding: '8px', background: '#17a2b8', border: '2px solid #117a8b', color: '#fff', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📧 EMAIL QUOTE</button>
                         <button onClick={() => handleApproveJob(job.id)} style={{ flex: 1.5, padding: '8px', background: '#28a745', border: '2px solid #1e7e34', color: '#fff', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✅ APPROVE</button>
-                        <button onClick={() => setActiveDocJob(job)} style={{ flex: 1, padding: '8px', background: '#fff', border: '2px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📄 PDF DOC</button>
+                        
+                        <div style={{ display: 'flex', gap: '5px', flex: 1.5 }}>
+                            <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '8px', background: '#fff', border: '2px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📄 QUOTE</button>
+                            {/* 🚀 NEW: Render Factory Router Button if Math exists */}
+                            {hasDimensionalMath && (
+                                <button onClick={() => { setActiveDocJob(job); setActiveDocType('FACTORY_ROUTER'); }} style={{ flex: 1, padding: '8px', background: '#fff', border: '2px solid #e83e8c', color: '#e83e8c', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>🏭 ROUTER</button>
+                            )}
+                        </div>
                     </div>
                  </div>
-              ))}
+              )})}
             </div>
           </div>
         </div>
       </div>
 
-      {/* --- 🚀 NEW: CRM QUICK-CREATE MODAL --- */}
       {showNewCrmModal && (
           <div className="no-print" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}>
               <div style={{ background: '#fff', border: '4px solid #000', width: '500px', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #28a745' }}>
@@ -497,7 +448,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                       onChange={(e) => {
                                           const val = e.target.value;
                                           setActiveCrmRecord(prev => ({ ...prev, notes: val }));
-                                          // 🚀 Also push to DB dynamically
                                           updateDoc(doc(db, "crm_records", activeCrmRecord.id), { notes: val }).catch(()=>{});
                                       }}
                                       style={{ flex: 1, padding: '10px', border: '1px solid #ccc', outline: 'none', resize: 'none', fontFamily: 'monospace', fontSize: '0.85rem' }}
@@ -509,12 +459,13 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                               </div>
                           </div>
 
-                          {/* Right Panel: Active Pipeline */}
+                          {/* 🚀 REBUILT: Active & Archived CRM Pipeline */}
                           <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                              <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>ACTIVE PIPELINE ({getCrmPipeline(activeCrmRecord.id).length})</h4>
-                              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                  {getCrmPipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No active configurations or inception drafts found in current pipeline.</div>}
-                                  {getCrmPipeline(activeCrmRecord.id).map(job => (
+                              
+                              <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#007bff' }}>ACTIVE PIPELINE (PENDING)</h4>
+                              <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
+                                  {getCrmActivePipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No active configurations pending.</div>}
+                                  {getCrmActivePipeline(activeCrmRecord.id).map(job => (
                                       <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: `4px solid ${job.status === 'CONFIGURED' ? '#28a745' : '#17a2b8'}`, padding: '10px', background: '#f4f4f4' }}>
                                           <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
                                               <span>{job.jobId || job.id}</span>
@@ -522,6 +473,32 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                           </div>
                                           <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || job.note || 'No description'}</div>
                                           {job.cpqData?.totalPrice && <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '5px', color: '#28a745' }}>Value: ${job.cpqData.totalPrice.toFixed(2)}</div>}
+                                          <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
+                                              <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', cursor: 'pointer' }}>📄 QUOTE PDF</button>
+                                              {job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0 && (
+                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('FACTORY_ROUTER'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #e83e8c', color: '#e83e8c', cursor: 'pointer' }}>🏭 ROUTER PDF</button>
+                                              )}
+                                          </div>
+                                      </div>
+                                  ))}
+                              </div>
+
+                              <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#6c757d' }}>ARCHIVED / APPROVED JOBS</h4>
+                              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                  {getCrmArchivedPipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No historical jobs found.</div>}
+                                  {getCrmArchivedPipeline(activeCrmRecord.id).map(job => (
+                                      <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: '4px solid #6c757d', padding: '10px', background: '#fff' }}>
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                              <span>{job.jobId || job.id}</span>
+                                              <span style={{ color: '#6c757d' }}>{job.status}</span>
+                                          </div>
+                                          <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || 'No description'}</div>
+                                          <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
+                                              <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#eee', border: '1px solid #ccc', color: '#333', cursor: 'pointer' }}>📄 HISTORICAL QUOTE</button>
+                                              {job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0 && (
+                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('FACTORY_ROUTER'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#eee', border: '1px solid #ccc', color: '#333', cursor: 'pointer' }}>🏭 HISTORICAL ROUTER</button>
+                                              )}
+                                          </div>
                                       </div>
                                   ))}
                               </div>
@@ -579,43 +556,43 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
         </div>
       )}
 
-      {/* 🚀 NEW: THE DOCUMENT GENERATOR STUDIO MODAL */}
+      {/* 🚀 THE DOCUMENT GENERATOR STUDIO MODAL (Shared by Quote & Router) */}
       {activeDocJob && (
         <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', zIndex: 4000, overflowY: 'auto', padding: '40px 0' }}>
             
-            {/* Modal Controls (Hidden during print) */}
             <div className="no-print" style={{ background: '#fff', border: '4px solid #000', width: '816px', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', boxShadow: '10px 10px 0 #000' }}>
                 <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
                     <label style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>SELECT DOCUMENT FORMAT:</label>
-                    <select value={activeDocType} onChange={(e) => setActiveDocType(e.target.value)} style={{ padding: '8px', border: '2px solid #6f42c1', fontWeight: 'bold', fontSize: '1rem', outline: 'none' }}>
+                    <select value={activeDocType} onChange={(e) => setActiveDocType(e.target.value)} style={{ padding: '8px', border: `2px solid ${activeDocType === 'FACTORY_ROUTER' ? '#e83e8c' : '#6f42c1'}`, fontWeight: 'bold', fontSize: '1rem', outline: 'none' }}>
                         {DOC_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
+                        {activeDocJob.cpqData?.dimensions && Object.keys(activeDocJob.cpqData.dimensions).length > 0 && (
+                            <option value="FACTORY_ROUTER">FACTORY SHOP ROUTER</option>
+                        )}
                     </select>
-                    <button onClick={() => window.print()} style={{ padding: '10px 20px', background: '#6f42c1', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>🖨️ GENERATE PDF</button>
+                    <button onClick={() => window.print()} style={{ padding: '10px 20px', background: activeDocType === 'FACTORY_ROUTER' ? '#e83e8c' : '#6f42c1', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>🖨️ GENERATE PDF</button>
                 </div>
                 <button onClick={() => setActiveDocJob(null)} style={{ background: '#d9534f', color: '#fff', border: 'none', padding: '10px 20px', fontWeight: 'bold', cursor: 'pointer' }}>CLOSE STUDIO</button>
             </div>
 
-            {/* THE LIVE HTML DOCUMENT (A4/Letter Proportion) */}
             <div id="printable-document" style={{ background: '#fff', padding: '60px', border: '1px solid #ccc', minHeight: '1056px', width: '816px', boxShadow: '0 10px 20px rgba(0,0,0,0.3)', fontFamily: 'sans-serif', color: '#000', position: 'relative' }}>
                 
-                {/* Header Section */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '3px solid #000', paddingBottom: '30px', marginBottom: '40px' }}>
                     <div style={{ width: '300px' }}>
                         {currentLogo ? <img src={currentLogo} alt={activeBrand} style={{ maxWidth: '100%', maxHeight: '100px' }} /> : <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '2rem' }}>{activeBrand}</h2>}
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                        <h1 style={{ margin: '0 0 10px 0', fontSize: '2.5rem', color: '#333', textTransform: 'uppercase' }}>{activeDocType.replace('_', ' ')}</h1>
+                        <h1 style={{ margin: '0 0 10px 0', fontSize: '2.5rem', color: activeDocType === 'FACTORY_ROUTER' ? '#000' : '#333', textTransform: 'uppercase', background: activeDocType === 'FACTORY_ROUTER' ? '#eee' : 'none', padding: activeDocType === 'FACTORY_ROUTER' ? '5px 15px' : '0' }}>
+                            {activeDocType.replace('_', ' ')}
+                        </h1>
                         <div style={{ fontSize: '1rem', color: '#666', marginBottom: '5px' }}><strong>DOC ID:</strong> {activeDocJob.jobId || activeDocJob.id.substring(0, 8).toUpperCase()}</div>
                         <div style={{ fontSize: '1rem', color: '#666' }}><strong>DATE:</strong> {activeDocJob.dateSaved || new Date().toLocaleDateString()}</div>
                     </div>
                 </div>
 
-                {/* Global Header Note from Templates */}
-                {activeTemplate.header && (
+                {activeTemplate.header && activeDocType !== 'FACTORY_ROUTER' && (
                     <div style={{ fontSize: '1rem', marginBottom: '40px', whiteSpace: 'pre-wrap', color: '#444' }}>{activeTemplate.header}</div>
                 )}
 
-                {/* Client Meta Data */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', background: '#f8f9fa', padding: '20px', border: '1px solid #eee', marginBottom: '40px' }}>
                     <div>
                         <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#888', textTransform: 'uppercase', marginBottom: '5px' }}>PREPARED FOR:</div>
@@ -629,10 +606,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                 </div>
 
                 <div style={{ marginBottom: '40px' }}>
-                    <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#333', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px', textTransform: 'uppercase' }}>ITEM SPECIFICATIONS & BUILD SHEET</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#333', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px', textTransform: 'uppercase' }}>
+                        {activeDocType === 'FACTORY_ROUTER' ? 'BILL OF MATERIALS (BOM)' : 'ITEM SPECIFICATIONS & BUILD SHEET'}
+                    </div>
                     
-                    {/* Vision Engine / RFI View */}
-                    {activeDocJob.imageUrl && (
+                    {activeDocJob.imageUrl && activeDocType !== 'FACTORY_ROUTER' && (
                         <div style={{ display: 'flex', gap: '30px', alignItems: 'flex-start' }}>
                             <div style={{ width: '400px', border: '1px solid #ccc', padding: '10px', background: '#fff' }}>
                                 <img src={activeDocJob.imageUrl} alt="Scale Model" style={{ width: '100%', display: 'block' }} />
@@ -644,41 +622,87 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                         </div>
                     )}
 
-                    {/* CPQ Itemized View */}
                     {activeDocJob.cpqData && (
                         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '1rem' }}>
                             <thead>
                                 <tr style={{ background: '#000', color: '#fff' }}>
                                     <th style={{ padding: '15px', textAlign: 'left' }}>DESCRIPTION</th>
-                                    <th style={{ padding: '15px', textAlign: 'right' }}>AMOUNT</th>
+                                    <th style={{ padding: '15px', textAlign: 'right' }}>{activeDocType === 'FACTORY_ROUTER' ? 'QTY' : 'AMOUNT'}</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr style={{ borderBottom: '1px solid #eee' }}>
                                     <td style={{ padding: '20px 15px', fontWeight: 'bold', fontSize: '1.1rem' }}>{getPartName(activeDocJob.linkedAssemblyId) || 'Master Assembly Base'}</td>
-                                    <td style={{ padding: '20px 15px', textAlign: 'right', fontWeight: 'bold', color: '#666' }}>Base Included</td>
+                                    <td style={{ padding: '20px 15px', textAlign: 'right', fontWeight: 'bold', color: '#666' }}>{activeDocType === 'FACTORY_ROUTER' ? '1' : 'Base Included'}</td>
                                 </tr>
-                                {Object.entries(activeDocJob.cpqData.configuration || {}).map(([stepId, valueId], idx) => (
-                                    <tr key={idx} style={{ borderBottom: '1px solid #eee' }}>
-                                        <td style={{ padding: '15px', paddingLeft: '40px', color: '#555' }}>• {getPartName(valueId)}</td>
-                                        <td style={{ padding: '15px', textAlign: 'right', color: '#999' }}>Included</td>
+                                {Object.entries(activeDocJob.cpqData.configuration || {}).map(([stepId, valueId], idx) => {
+                                    const qty = activeDocJob.cpqData.quantities?.[stepId] || 1;
+                                    return (
+                                        <tr key={idx} style={{ borderBottom: '1px solid #eee' }}>
+                                            <td style={{ padding: '15px', paddingLeft: '40px', color: '#555' }}>• {getPartName(valueId)}</td>
+                                            <td style={{ padding: '15px', textAlign: 'right', color: activeDocType === 'FACTORY_ROUTER' ? '#000' : '#999', fontWeight: activeDocType === 'FACTORY_ROUTER' ? 'bold' : 'normal' }}>
+                                                {activeDocType === 'FACTORY_ROUTER' ? qty : 'Included'}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                                
+                                {activeDocType !== 'FACTORY_ROUTER' && (
+                                    <tr>
+                                        <td style={{ padding: '30px 15px', textAlign: 'right', fontWeight: 'bold', fontSize: '1.4rem' }}>TOTAL INVESTMENT:</td>
+                                        <td style={{ padding: '30px 15px', textAlign: 'right', fontWeight: 'bold', fontSize: '1.4rem', borderTop: '3px solid #000' }}>${activeDocJob.cpqData.totalPrice?.toFixed(2)}</td>
                                     </tr>
-                                ))}
-                                <tr>
-                                    <td style={{ padding: '30px 15px', textAlign: 'right', fontWeight: 'bold', fontSize: '1.4rem' }}>TOTAL INVESTMENT:</td>
-                                    <td style={{ padding: '30px 15px', textAlign: 'right', fontWeight: 'bold', fontSize: '1.4rem', borderTop: '3px solid #000' }}>${activeDocJob.cpqData.totalPrice?.toFixed(2)}</td>
-                                </tr>
+                                )}
                             </tbody>
                         </table>
                     )}
                 </div>
 
-                {/* Footer & Terms */}
+                {/* 🚀 NEW: Render Shop Cut Sheet specifically for Factory Routers */}
+                {activeDocType === 'FACTORY_ROUTER' && activeDocJob.cpqData?.dimensions && Object.keys(activeDocJob.cpqData.dimensions).length > 0 && (
+                    <div style={{ marginTop: '20px', border: '2px dashed #000', padding: '15px', background: '#fff3cd' }}>
+                        <h4 style={{ margin: '0 0 10px 0', color: '#856404', textTransform: 'uppercase' }}>⚠️ DIMENSIONAL SHOP CUT SHEET</h4>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+                            <tbody>
+                                {Object.entries(activeDocJob.cpqData.dimensions).map(([stepId, dims]) => (
+                                    <React.Fragment key={stepId}>
+                                        <tr><td colSpan="2" style={{ padding: '10px', fontWeight: 'bold', background: '#e9ecef', borderTop: '2px solid #000' }}>Dimensional Inputs</td></tr>
+                                        {Object.entries(dims).filter(([k,v]) => !k.startsWith('calc_') && v !== '').map(([key, val]) => (
+                                            <tr key={key}>
+                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee' }}>INPUT: {key.toUpperCase()}</td>
+                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee' }}>{val}</td>
+                                            </tr>
+                                        ))}
+                                        {dims.calc_cutLength && (
+                                            <tr>
+                                                <td style={{ padding: '8px', borderBottom: '1px dashed #d9534f', color: '#d9534f', fontWeight: 'bold', fontSize: '14px' }}>SHOP RAW CUT LENGTH</td>
+                                                <td style={{ padding: '8px', borderBottom: '1px dashed #d9534f', fontWeight: 'bold', fontSize: '16px', color: '#d9534f' }}>{dims.calc_cutLength}"</td>
+                                            </tr>
+                                        )}
+                                        {dims.calc_o2o && (
+                                            <tr>
+                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee', fontWeight: 'bold' }}>FINISHED O2O</td>
+                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee', fontWeight: 'bold' }}>{dims.calc_o2o}"</td>
+                                            </tr>
+                                        )}
+                                        {dims.calc_c2c && (
+                                            <tr>
+                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee', fontWeight: 'bold' }}>FINISHED C2C</td>
+                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee', fontWeight: 'bold' }}>{dims.calc_c2c}"</td>
+                                            </tr>
+                                        )}
+                                    </React.Fragment>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
                 <div style={{ position: 'absolute', bottom: '60px', left: '60px', right: '60px' }}>
-                    {activeTemplate.footer && (
+                    {activeTemplate.footer && activeDocType !== 'FACTORY_ROUTER' && (
                         <div style={{ fontSize: '1rem', marginBottom: '20px', whiteSpace: 'pre-wrap', textAlign: 'center', fontWeight: 'bold', color: '#333' }}>{activeTemplate.footer}</div>
                     )}
-                    {activeTemplate.terms && (
+                    {activeTemplate.terms && activeDocType !== 'FACTORY_ROUTER' && (
                         <div style={{ fontSize: '0.75rem', color: '#888', borderTop: '1px solid #ccc', paddingTop: '15px', whiteSpace: 'pre-wrap', textAlign: 'justify', lineHeight: '1.4' }}>{activeTemplate.terms}</div>
                     )}
                 </div>
