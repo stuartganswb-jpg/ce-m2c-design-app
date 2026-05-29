@@ -7,7 +7,6 @@ import { useGLTF, OrbitControls, Bounds } from '@react-three/drei';
 
 const globalTextureCache = {};
 
-// 🚀 UPGRADED: Strict Target Matching & PBR Scalar Wiping
 const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
     const { scene } = useGLTF(url);
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
@@ -16,7 +15,6 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
     const visibilityOverridesString = JSON.stringify(visibilityOverrides);
 
     useEffect(() => {
-        // 1. Safely backup original materials AND visibility state ONCE
         clonedScene.traverse((child) => {
             if (child.isMesh && child.userData.originalMaterial === undefined) {
                 child.userData.originalMaterial = child.material.clone();
@@ -24,21 +22,18 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
             }
         });
 
-        const texMap = {}; // Will hold the loaded texture objects
+        const texMap = {}; 
 
-        // 2. The Unified Execution Engine
         const applyAllOverrides = () => {
             clonedScene.traverse((child) => {
                 if (child.isMesh && child.userData.originalMaterial) {
                     const meshName = child.name.toLowerCase();
 
-                    // --- A. VISIBILITY LOGIC (Geometry Swapping) ---
+                    // --- VISIBILITY LOGIC ---
                     let isVis = child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
-                            // Split clusters, trim spaces, and ensure no empty strings
                             const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-                            // 🚀 EXACT MATCH OR R3F SUFFIX ONLY (No more .includes() overreach!)
                             if (targets.some(t => meshName === t || meshName.startsWith(t + '_'))) {
                                 isVis = isVisibleFlag;
                             }
@@ -46,7 +41,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     }
                     child.visible = isVis;
 
-                    // --- B. TEXTURE LOGIC (Color Swapping) ---
+                    // --- TEXTURE LOGIC ---
                     let matchedTexUrl = null;
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
                         for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
@@ -59,37 +54,29 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
 
                     if (matchedTexUrl && texMap[matchedTexUrl]) {
                         const newMat = child.userData.originalMaterial.clone();
-                        
                         newMat.map = texMap[matchedTexUrl];
-                        newMat.color = new THREE.Color(0xffffff); // Force pure white base
-                        
-                        // 🚀 CRITICAL PBR FIX: Explicitly kill CAD metallic scalars so Wood looks like Wood
+                        newMat.color = new THREE.Color(0xffffff); 
                         newMat.metalness = 0.0; 
                         newMat.roughness = 0.8; 
-                        
                         newMat.normalMap = null;
                         newMat.bumpMap = null;
                         newMat.roughnessMap = null;
                         newMat.metalnessMap = null;
                         newMat.clearcoatMap = null;
-                        
                         newMat.needsUpdate = true;
                         child.material = newMat;
                     } else {
-                        // Safely restore original CAD look for untouched parts
                         child.material = child.userData.originalMaterial;
                     }
                 }
             });
         };
 
-        // If no textures to load, just apply geometry swaps immediately
         if (!textureOverrides || Object.keys(textureOverrides).length === 0) {
             applyAllOverrides();
             return;
         }
 
-        // 3. Smart Async Loader (Loads Unique URLs only once)
         const uniqueUrls = [...new Set(Object.values(textureOverrides))].filter(Boolean);
         let loadedCount = 0;
 
@@ -120,7 +107,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     undefined,
                     (err) => {
                         console.error("Failed to load texture:", url, err);
-                        loadedCount++; // Fail gracefully so the rest of the model still loads
+                        loadedCount++; 
                         if (loadedCount === uniqueUrls.length) applyAllOverrides();
                     }
                 );
@@ -139,6 +126,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [cpqFlows, setCpqFlows] = useState([]);
   
   const [libraryParts, setLibraryParts] = useState([]);
+  const [activeBomPins, setActiveBomPins] = useState([]); 
+
   const [globalLists, setGlobalLists] = useState({});
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
@@ -147,7 +136,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [productType, setProductType] = useState(''); 
   const [activeFlowId, setActiveFlowId] = useState("");
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
+  const [stepQuantities, setStepQuantities] = useState({}); // 🚀 NEW: Tracks QTY per step
   const [engineFlags, setEngineFlags] = useState({ disabledSteps: [], warnings: [] });
   
   const [pricing, setPricing] = useState({ base: 0, finalPrice: 0 });
@@ -180,13 +171,13 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
 
-      setLiveCustomers([
-        { id: 'CUST-882', name: 'Smith Residence (Tier 1)' },
-        { id: 'CUST-310', name: 'The Harrison Project (Wholesale)' },
-        { id: 'CUST-105', name: 'Alvarez Villa (Trade)' }
-      ]);
+      // 🚀 NEW: Live dynamic CRM pulling
+      const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
+          const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER');
+          setLiveCustomers(customers);
+      });
 
-      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); };
+      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); };
   }, [activeBrand]);
 
   const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
@@ -210,6 +201,17 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           setActiveAssembly(null);
           setViewMode("2D");
       }
+  }, [activeAssemblyId, liveAssemblies]);
+
+  // 🚀 NEW: Fetch BOM baselines for the active assembly
+  useEffect(() => {
+      if (!activeAssemblyId || !liveAssemblies.length) { setActiveBomPins([]); return; }
+      const asm = liveAssemblies.find(a => a.id === activeAssemblyId);
+      if (!asm) return;
+      const unsub = onSnapshot(query(collection(db, "assembly_pins"), where("assemblyId", "==", asm.itemId)), (snap) => {
+          setActiveBomPins(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      });
+      return () => unsub();
   }, [activeAssemblyId, liveAssemblies]);
 
   const currentStep = activeFlow?.steps?.[currentStepIndex];
@@ -308,6 +310,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       setEngineFlags(newFlags);
   }, [dynamicConfigParams, cpqRules, libraryParts, dynamicAssets, globalFinishes, outsourceFinishes]);
 
+  // 🚀 UPDATED PRICING ENGINE: Incorporates Qty, Overrides, and Client Pricing
   useEffect(() => {
       if (!activeFlow) return;
       
@@ -316,21 +319,51 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
       activeFlow.steps.forEach(step => {
           const selectedValue = dynamicConfigParams[step.id];
-          if (selectedValue) {
-              if (step.priceMap && step.priceMap[selectedValue]) {
-                  total += parseFloat(step.priceMap[selectedValue]);
+          
+          // Determine Step Quantity
+          let qty = stepQuantities[step.id];
+          if (qty === undefined) {
+              if (step.linkedPinId) {
+                  const pin = activeBomPins.find(p => p.partId === step.linkedPinId);
+                  qty = pin?.defaultQty || 1;
+              } else {
+                  qty = 1;
               }
-              
+          }
+
+          if (selectedValue) {
+              let stepPrice = 0;
+
+              // 1. Base cost of option
+              if (step.priceOverride) {
+                  stepPrice = parseFloat(step.priceOverride);
+              } else if (step.useClientPricing && jobData.customerId) {
+                  const part = libraryParts.find(p => p.id === selectedValue) || dynamicAssets.find(a => a.id === selectedValue);
+                  const clientPrice = part?.clientPricing?.find(cp => cp.customerId === jobData.customerId)?.price;
+                  if (clientPrice !== undefined && clientPrice !== '') {
+                      stepPrice = parseFloat(clientPrice);
+                  } else if (step.priceMap && step.priceMap[selectedValue]) {
+                      stepPrice = parseFloat(step.priceMap[selectedValue]);
+                  }
+              } else if (step.priceMap && step.priceMap[selectedValue]) {
+                  stepPrice = parseFloat(step.priceMap[selectedValue]);
+              }
+
+              // 2. Material Multipliers
+              let multiplier = 1.0;
               const dynAsset = dynamicAssets.find(a => a.id === selectedValue);
-              if (dynAsset && dynAsset.multiplier > 1.0) total *= dynAsset.multiplier;
+              if (dynAsset && dynAsset.multiplier > 1.0) multiplier = dynAsset.multiplier;
               
               const outFin = outsourceFinishes.find(a => a.id === selectedValue);
-              if (outFin && outFin.multiplier > 1.0) total *= outFin.multiplier;
+              if (outFin && outFin.multiplier > 1.0) multiplier = outFin.multiplier;
+
+              // 3. Apply Multiplier and QTY
+              total += (stepPrice * multiplier * qty);
           }
       });
 
       setPricing({ base: total, finalPrice: total });
-  }, [dynamicConfigParams, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes]);
+  }, [dynamicConfigParams, stepQuantities, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, activeBomPins]);
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
 
@@ -354,10 +387,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           jobName: jobData.jobName, sidemark: jobData.sidemark,
           flowId: activeFlow?.id || null, 
           linkedAssemblyId: activeAssemblyId || null,
-          isProjectManaged: activeAssembly?.manufacturingSpecs?.isProjectManaged || false, // 🚀 NEW: Complex Project Routing Flag
+          isProjectManaged: activeAssembly?.manufacturingSpecs?.isProjectManaged || false, 
           cpqData: { 
               totalPrice: pricing.finalPrice, 
-              configuration: dynamicConfigParams, 
+              configuration: dynamicConfigParams,
+              quantities: stepQuantities, // 🚀 Saving QTYs for exact rebuilds
               appliedRules: engineFlags.warnings 
           },
           dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, sewing: false, packing: false },
@@ -366,13 +400,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       
       try {
           await setDoc(doc(db, "jobs", jobId), payload);
-          // 🚀 Updated Alert to reflect dynamic routing based on the flag
           if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
               alert(`✅ COMPLEX QUOTE GENERATED!\n\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
           } else {
               alert(`✅ STANDARD QUOTE GENERATED!\n\nRouted to Tab 10 (External Coop) for standard approval.`);
           }
-          setActiveFlowId(""); setDynamicConfigParams({}); setCurrentStepIndex(0); 
+          setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setCurrentStepIndex(0); 
           setActiveAssemblyId(""); setShowCheckoutModal(false); setJobData({ customerId: '', jobName: '', sidemark: '' });
       } catch (err) { console.error(err); alert("Failed to save quote."); }
   };
@@ -417,7 +450,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       const overrides = {};
       activeFlow?.steps?.forEach(step => {
           if (step.geometryMap && Object.keys(step.geometryMap).length > 0) {
-              // Preemptively hide all meshes that belong to any option in this step
               Object.values(step.geometryMap).forEach(meshString => {
                   if (meshString) {
                       meshString.split(',').forEach(m => {
@@ -426,7 +458,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                   }
               });
 
-              // Un-hide the specific mesh tied to the user's current selection
               const selectedVal = dynamicConfigParams[step.id];
               if (selectedVal && step.geometryMap[selectedVal]) {
                   step.geometryMap[selectedVal].split(',').forEach(m => {
@@ -453,8 +484,22 @@ const CPQTab = ({ currentUser, activeBrand }) => {
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '8px 15px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer' }}>📥 RESUME DRAFT / CLONE QUOTE</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); }} style={{ padding: '8px 15px', background: '#fff', color: '#d9534f', fontWeight: 'bold', border: '2px solid #d9534f', cursor: 'pointer' }}>🗑️ CLEAR QUOTE</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); }} style={{ padding: '8px 15px', background: '#fff', color: '#d9534f', fontWeight: 'bold', border: '2px solid #d9534f', cursor: 'pointer' }}>🗑️ CLEAR QUOTE</button>
         </div>
+      </div>
+
+      {/* 🚀 NEW: TOP-LEVEL CUSTOMER SELECTION FOR LIVE PRICING */}
+      <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', display: 'flex', alignItems: 'center', gap: '15px', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
+          <div style={{ fontWeight: 'bold', color: '#007bff', fontSize: '1.1rem' }}>🤝 ACTIVE CUSTOMER:</div>
+          <select 
+              value={jobData.customerId} 
+              onChange={e => setJobData({...jobData, customerId: e.target.value})} 
+              style={{ flex: 1, padding: '10px', fontSize: '1rem', border: '2px solid #007bff', outline: 'none', fontWeight: 'bold' }}
+          >
+              <option value="">-- Select Customer to Activate Live Client Pricing --</option>
+              {liveCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
+          </select>
+          {!jobData.customerId && <span style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 'bold' }}>⚠️ Base MSRP will be shown until customer is selected.</span>}
       </div>
 
       <div style={{ display: 'flex', gap: '20px', alignItems: 'stretch' }}>
@@ -466,7 +511,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                  <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     
                     {cpqFlows.length > 0 && (
-                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setProductType(''); setActiveAssemblyId(''); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem', background: '#e6f2ff' }}>
+                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setProductType(''); setActiveAssemblyId(''); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem', background: '#e6f2ff' }}>
                             <option value="">-- Launch Custom CPQ Flow --</option>
                             {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                         </select>
@@ -494,11 +539,21 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           {currentStep.type === 'VISUAL_GRID' ? (
                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                                   {getOptionsForStep(currentStep).map(opt => {
-                                      const priceUpcharge = currentStep.priceMap?.[opt.id] ? ` (+$${currentStep.priceMap[opt.id]})` : '';
+                                      let displayPrice = '';
+                                      if (currentStep.priceOverride) {
+                                          displayPrice = ` ($${parseFloat(currentStep.priceOverride).toFixed(2)} Flat)`;
+                                      } else if (currentStep.useClientPricing && jobData.customerId) {
+                                          const clientPrice = opt.clientPricing?.find(cp => cp.customerId === jobData.customerId)?.price;
+                                          if (clientPrice) displayPrice = ` (+$${parseFloat(clientPrice).toFixed(2)})`;
+                                          else if (currentStep.priceMap?.[opt.id]) displayPrice = ` (+$${currentStep.priceMap[opt.id]})`;
+                                      } else if (currentStep.priceMap?.[opt.id]) {
+                                          displayPrice = ` (+$${currentStep.priceMap[opt.id]})`;
+                                      }
+
                                       return (
                                           <div key={opt.id} onClick={() => handleParamChange(currentStep.id, opt.id)} style={{ border: `2px solid ${dynamicConfigParams[currentStep.id] === opt.id ? '#007bff' : '#ccc'}`, padding: '10px', textAlign: 'center', cursor: 'pointer', background: dynamicConfigParams[currentStep.id] === opt.id ? '#e6f2ff' : '#fff' }}>
                                               <div style={{ width: '100%', height: '80px', background: opt.finalImageUrl ? `url(${opt.finalImageUrl}) center/cover` : '#eee', marginBottom: '10px' }} />
-                                              <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{opt.itemName}{priceUpcharge}</div>
+                                              <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{opt.itemName}{displayPrice}</div>
                                           </div>
                                       );
                                   })}
@@ -507,11 +562,49 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                               <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #000', fontSize: '1rem' }}>
                                   <option value="">-- Select Option --</option>
                                   {getOptionsForStep(currentStep).map(opt => {
-                                      const priceUpcharge = currentStep.priceMap?.[opt.id] ? ` (+$${currentStep.priceMap[opt.id]})` : '';
-                                      return <option key={opt.id} value={opt.id}>{opt.itemName}{priceUpcharge}</option>;
+                                      let displayPrice = '';
+                                      if (currentStep.priceOverride) {
+                                          displayPrice = ` ($${parseFloat(currentStep.priceOverride).toFixed(2)} Flat)`;
+                                      } else if (currentStep.useClientPricing && jobData.customerId) {
+                                          const clientPrice = opt.clientPricing?.find(cp => cp.customerId === jobData.customerId)?.price;
+                                          if (clientPrice) displayPrice = ` (+$${parseFloat(clientPrice).toFixed(2)})`;
+                                          else if (currentStep.priceMap?.[opt.id]) displayPrice = ` (+$${currentStep.priceMap[opt.id]})`;
+                                      } else if (currentStep.priceMap?.[opt.id]) {
+                                          displayPrice = ` (+$${currentStep.priceMap[opt.id]})`;
+                                      }
+                                      return <option key={opt.id} value={opt.id}>{opt.itemName}{displayPrice}</option>;
                                   })}
                               </select>
                           )}
+                      </div>
+
+                      {/* 🚀 NEW: QUANTITY SELECTOR PER STEP */}
+                      <div style={{ padding: '15px', background: '#f8f9fa', borderTop: '2px solid #000', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ fontSize: '0.8rem', color: '#666', lineHeight: '1.4' }}>
+                              <strong>STEP QUANTITY:</strong><br/>
+                              <span style={{ fontSize: '0.7rem' }}>Adjust to multiply option logic (e.g. 4 rings per foot).</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <button onClick={() => {
+                                  let current = stepQuantities[currentStep.id];
+                                  if (current === undefined) current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
+                                  setStepQuantities({...stepQuantities, [currentStep.id]: Math.max(1, current - 1)});
+                              }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>-</button>
+                              
+                              <input 
+                                  type="number" 
+                                  min="1" 
+                                  value={stepQuantities[currentStep.id] !== undefined ? stepQuantities[currentStep.id] : (activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1)} 
+                                  onChange={e => setStepQuantities({...stepQuantities, [currentStep.id]: parseInt(e.target.value) || 1})} 
+                                  style={{ width: '50px', padding: '10px', border: '2px solid #000', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem' }} 
+                              />
+                              
+                              <button onClick={() => {
+                                  let current = stepQuantities[currentStep.id];
+                                  if (current === undefined) current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
+                                  setStepQuantities({...stepQuantities, [currentStep.id]: current + 1});
+                              }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>+</button>
+                          </div>
                       </div>
 
                       {engineFlags.warnings.length > 0 && (
@@ -520,13 +613,13 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                            </div>
                       )}
 
-                      <div style={{ padding: '15px', borderTop: '2px solid #eee', display: 'flex', justifyContent: 'space-between' }}>
+                      <div style={{ padding: '15px', display: 'flex', justifyContent: 'space-between' }}>
                           <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} disabled={currentStepIndex === 0} style={{ padding: '10px 20px', border: '2px solid #000', background: '#fff', fontWeight: 'bold', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer' }}>BACK</button>
                           
                           {currentStepIndex < activeFlow.steps.length - 1 ? (
                               <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id]} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStep.required && !dynamicConfigParams[currentStep.id] ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
                           ) : (
-                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id]} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep.required && !dynamicConfigParams[currentStep.id] ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] ? 'not-allowed' : 'pointer' }}>FINISH CONFIGURATION</button>
+                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id]} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep.required && !dynamicConfigParams[currentStep.id] ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
                           )}
                       </div>
                   </div>
@@ -632,10 +725,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                     </div>
 
                     <div>
-                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#d9534f', display: 'block', marginBottom: '5px' }}>* SELECT CUSTOMER:</label>
+                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#d9534f', display: 'block', marginBottom: '5px' }}>* VERIFY CUSTOMER:</label>
                         <select value={jobData.customerId} onChange={e => setJobData({...jobData, customerId: e.target.value})} style={{ width: '100%', padding: '10px', fontSize: '1rem', border: '2px solid #d9534f', outline: 'none', background: '#fff9fa' }}>
                             <option value="">-- Choose Customer --</option>
-                            {liveCustomers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            {liveCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
                         </select>
                     </div>
 
