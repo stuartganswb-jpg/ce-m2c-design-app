@@ -246,18 +246,24 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   };
 
+  // 🚀 FIXED: Delete Bug caused by orphaned linked assemblies
   const handleDeleteFlow = async () => {
       if (!activeFlowId) return;
       if (!window.confirm("Are you sure you want to delete this CPQ Flow? This will remove all configuration steps for this product.")) return;
       
       try {
           if (flowSettings.linkedAssemblyId) {
-              await updateDoc(doc(db, "Approved_Designs", flowSettings.linkedAssemblyId), {
-                  linkedCpqFlowId: null
-              });
+              try {
+                  await updateDoc(doc(db, "Approved_Designs", flowSettings.linkedAssemblyId), {
+                      linkedCpqFlowId: null
+                  });
+              } catch(e) {
+                  console.warn("Linked assembly not found or already deleted. Proceeding with Flow deletion.");
+              }
           }
           await deleteDoc(doc(db, "cpq_flows", activeFlowId));
           setActiveFlowId(null);
+          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '' });
       } catch (err) {
           console.error("Error deleting flow:", err);
           alert("Failed to delete the CPQ Flow.");
@@ -343,6 +349,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
   };
 
+  // 🚀 FIXED: AI Generator understands advanced Hardware Math
   const handleAiGenerateRule = () => {
       if (!aiPrompt) return;
       setIsGeneratingAi(true);
@@ -350,7 +357,19 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           let generatedRule = { name: `AI: ${aiPrompt.substring(0, 30)}...`, conditionField: '', conditionOp: 'EQUALS', conditionVal: '', effectField: '', effectVal: '' };
           const txt = aiPrompt.toLowerCase();
 
-          if (txt.includes("light") && (txt.includes("fabric") || txt.includes("weight"))) { 
+          if (txt.includes("french return") && txt.includes("1")) {
+              generatedRule.name = "1in French Return Math Logic";
+              generatedRule.conditionField = "productType"; 
+              generatedRule.conditionVal = "FRENCH RETURN";
+              generatedRule.effectField = "MATH.frenchReturn1in"; 
+              generatedRule.effectVal = "true";
+          } else if (txt.includes("mitered")) {
+              generatedRule.name = "Mitered Bay Math Logic";
+              generatedRule.conditionField = "productType"; 
+              generatedRule.conditionVal = "MITERED BAY";
+              generatedRule.effectField = "MATH.miteredBay"; 
+              generatedRule.effectVal = "true";
+          } else if (txt.includes("light") && (txt.includes("fabric") || txt.includes("weight"))) { 
               generatedRule.conditionField = "customData.weightClass"; generatedRule.conditionVal = "LIGHTWEIGHT"; 
               generatedRule.effectField = "UI.disableStep"; generatedRule.effectVal = "Select Trim / Fringe";
           } else if (txt.includes("heavy") || txt.includes("weight")) { 
@@ -606,33 +625,47 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                     <input value={newStep.title} onChange={e => setNewStep({...newStep, title: e.target.value})} placeholder="Step Title (e.g. Select Bracket Style)" style={{ padding: '8px', border: '1px solid #ccc' }} />
                                     <div style={{ display: 'flex', gap: '10px' }}>
-                                        <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }}>
+                                        {/* 🚀 NEW: DIMENSIONS STEP TYPE */}
+                                        <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value, dataSource: ''})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }}>
                                             <option value="DROPDOWN">Dropdown List</option>
                                             <option value="VISUAL_GRID">Visual Grid (Images/Textures)</option>
+                                            <option value="DIMENSIONS">Dimensional Input (Hardware Math)</option>
                                         </select>
                                         
-                                        <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} style={{ flex: 1, padding: '8px', border: '2px solid #007bff', fontWeight: 'bold' }}>
-                                            <option value="">-- SELECT DATA SOURCE --</option>
-                                            <optgroup label="Core Libraries">
-                                                <option value="master_finishes">Master Finishes (In-House & Outsource)</option>
-                                            </optgroup>
-                                            {customDataWindows.length > 0 && (
-                                                <optgroup label="CPQ Asset Dictionaries (Tab 4)">
-                                                    {customDataWindows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                                        {/* 🚀 NEW: CALCULATION TEMPLATES */}
+                                        {newStep.type === 'DIMENSIONS' ? (
+                                            <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} style={{ flex: 1, padding: '8px', border: '2px solid #007bff', fontWeight: 'bold' }}>
+                                                <option value="">-- SELECT CALCULATION TEMPLATE --</option>
+                                                <option value="calc_french_return_1in">1" French Return Calculator (+17" QTY, C2C -1")</option>
+                                                <option value="calc_french_return_custom">Custom French Return Calculator</option>
+                                                <option value="calc_mitered_bay">Mitered Bay Calculator (Angles & Deductions)</option>
+                                                <option value="calc_curved_bay">Curved Bay Calculator (Arc / Radius)</option>
+                                                <option value="calc_straight_pole">Straight Pole Calculator (Standard)</option>
+                                            </select>
+                                        ) : (
+                                            <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} style={{ flex: 1, padding: '8px', border: '2px solid #007bff', fontWeight: 'bold' }}>
+                                                <option value="">-- SELECT DATA SOURCE --</option>
+                                                <optgroup label="Core Libraries">
+                                                    <option value="master_finishes">Master Finishes (In-House & Outsource)</option>
                                                 </optgroup>
-                                            )}
-                                            <optgroup label="Simple Lists (Tab 4)">
-                                                <option value="uom">UOMs</option>
-                                                <option value="pillowSizes">Pillow Sizes</option>
-                                                <option value="fillTypes">Fill Types</option>
-                                                <option value="flangeStyles">Edge / Flange Styles</option>
-                                                <option value="stitchTypes">Stitch Routing</option>
-                                                <option value="seamCounts">Seam Counts</option>
-                                            </optgroup>
-                                        </select>
+                                                {customDataWindows.length > 0 && (
+                                                    <optgroup label="CPQ Asset Dictionaries (Tab 4)">
+                                                        {customDataWindows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                                                    </optgroup>
+                                                )}
+                                                <optgroup label="Simple Lists (Tab 4)">
+                                                    <option value="uom">UOMs</option>
+                                                    <option value="pillowSizes">Pillow Sizes</option>
+                                                    <option value="fillTypes">Fill Types</option>
+                                                    <option value="flangeStyles">Edge / Flange Styles</option>
+                                                    <option value="stitchTypes">Stitch Routing</option>
+                                                    <option value="seamCounts">Seam Counts</option>
+                                                </optgroup>
+                                            </select>
+                                        )}
                                     </div>
 
-                                    {newStep.dataSource && availableSourceItems.length > 0 && (
+                                    {newStep.dataSource && availableSourceItems.length > 0 && newStep.type !== 'DIMENSIONS' && (
                                         <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                                                 <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>🔍 RESTRICT AVAILABLE OPTIONS (Leave empty to allow all):</span>
@@ -669,23 +702,19 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             </button>
                                         </div>
 
-                                        {/* 🚀 FIXED: Read nodes correctly from Tab 1.5 format */}
                                         {linkedAsm?.nodeClusters?.length > 0 && (
                                             <div style={{ marginBottom: '10px', background: '#eafaf1', border: '1px solid #28a745', padding: '10px' }}>
-                                                <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34', marginBottom: '5px' }}>📦 SAVED SUB-ASSEMBLIES (FROM TAB 1.5):</div>
+                                                <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34', marginBottom: '5px' }}>📦 SAVED SUB-ASSEMBLIES (FROM TAB 3):</div>
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                                                    {linkedAsm.nodeClusters.map(cluster => {
-                                                        const clusterNodes = cluster.nodes || cluster.meshes || [];
-                                                        return (
-                                                            <span 
-                                                                key={cluster.id} 
-                                                                onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${clusterNodes.join(', ')}` : clusterNodes.join(', ')}))} 
-                                                                style={{ background: '#28a745', color: '#fff', padding: '4px 8px', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}
-                                                            >
-                                                                {cluster.name} ({clusterNodes.length} Nodes)
-                                                            </span>
-                                                        );
-                                                    })}
+                                                    {linkedAsm.nodeClusters.map(cluster => (
+                                                        <span 
+                                                            key={cluster.id} 
+                                                            onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${cluster.nodes ? cluster.nodes.join(', ') : cluster.meshes?.join(', ')}` : (cluster.nodes ? cluster.nodes.join(', ') : cluster.meshes?.join(', '))}))} 
+                                                            style={{ background: '#28a745', color: '#fff', padding: '4px 8px', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}
+                                                        >
+                                                            {cluster.name} ({(cluster.nodes || cluster.meshes || []).length} Nodes)
+                                                        </span>
+                                                    ))}
                                                 </div>
                                             </div>
                                         )}
@@ -707,7 +736,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>If this is a "Finish" step, it applies the texture to these meshes. Comma separate for multiple.</span>
                                     </div>
 
-                                    {/* 🚀 NEW: PART HANDLING ROUTING */}
                                     <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', marginTop: '10px' }}>
                                         <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '5px' }}>
                                             🛤️ PART HANDLING & ROUTING
@@ -721,7 +749,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>Groups parts with identical handling together in production (e.g. Finishing vs Shop Floor). This list is managed in Tab 4 Master Lists.</span>
                                     </div>
 
-                                    {/* 🚀 NEW: DYNAMIC PRICING ENGINE */}
                                     <div style={{ background: '#fff3cd', padding: '10px', border: '1px solid #ffeeba', marginTop: '10px' }}>
                                         <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#856404', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '10px' }}>
                                             💰 ADVANCED PRICING RULES
@@ -784,7 +811,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <div>
                                             <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>Step {idx + 1}: {step.title}</div>
                                             <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>
-                                                Type: {step.type} | Data: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{step.dataSource}</span> | Required: {step.required ? 'Yes' : 'No'}
+                                                Type: <strong style={{ color: step.type === 'DIMENSIONS' ? '#e83e8c' : '#333'}}>{step.type}</strong> | Data: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{step.dataSource}</span> | Required: {step.required ? 'Yes' : 'No'}
                                             </div>
                                             {step.allowedOptions && step.allowedOptions.length > 0 && (
                                                 <div style={{ fontSize: '0.65rem', color: '#CC6600', marginTop: '3px', fontWeight: 'bold' }}>🔍 RESTRICTED TO: {step.allowedOptions.length} specific options.</div>
@@ -792,7 +819,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             {step.targetNodes && <div style={{ fontSize: '0.65rem', color: '#e83e8c', marginTop: '3px', fontWeight: 'bold' }}>🎨 APPLYING TEXTURES TO: {step.targetNodes.substring(0, 30)}{step.targetNodes.length > 30 ? '...' : ''}</div>}
                                             {step.geometryMap && Object.values(step.geometryMap).some(Boolean) && <div style={{ fontSize: '0.65rem', color: '#28a745', marginTop: '3px', fontWeight: 'bold' }}>🧊 GEOMETRY SWAPPING ACTIVE</div>}
                                             
-                                            {/* 🚀 Render Pricing and Routing flags on step list */}
                                             {step.useClientPricing && <div style={{ fontSize: '0.65rem', color: '#856404', marginTop: '3px', fontWeight: 'bold' }}>💰 CLIENT PRICING ENABLED</div>}
                                             {step.priceOverride && <div style={{ fontSize: '0.65rem', color: '#dc3545', marginTop: '3px', fontWeight: 'bold' }}>⚠️ PRICE OVERRIDE: ${step.priceOverride}</div>}
                                             {step.partHandling && <div style={{ fontSize: '0.65rem', color: '#1e7e34', marginTop: '3px', fontWeight: 'bold' }}>🛤️ ROUTING: {step.partHandling}</div>}
@@ -855,11 +881,19 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
                       <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
                           <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#CC6600', marginBottom: '10px' }}>THEN EFFECT:</div>
+                          {/* 🚀 NEW: ADVANCED HARDWARE CALCULATIONS INJECTED INTO EFFECT DROPDOWN */}
                           <select value={newRule.effectField} onChange={e => setNewRule({...newRule, effectField: e.target.value})} style={{ width: '100%', padding: '8px', marginBottom: '10px', border: '1px solid #ccc' }}>
                               <option value="">-- Select Target System Rule --</option>
-                              <option value="UI.disableStep">DISABLE Step (Name)</option>
-                              <option value="UI.hideFinishes">HIDE Specific Finishes</option>
-                              <option value="MATH.maxBracketSpacing">SET Max Bracket Spacing (in)</option>
+                              <optgroup label="UI Controls">
+                                  <option value="UI.disableStep">DISABLE Step (Name)</option>
+                                  <option value="UI.hideFinishes">HIDE Specific Finishes</option>
+                              </optgroup>
+                              <optgroup label="Hardware Calculations & Mathematics">
+                                  <option value="MATH.maxBracketSpacing">SET Max Bracket Spacing (in)</option>
+                                  <option value="MATH.frenchReturn1in">APPLY 1" French Return Logic (17" add, 1" C2C ded)</option>
+                                  <option value="MATH.miteredBay">APPLY Mitered Bay Logic (Wall A/B/C + Angles)</option>
+                                  <option value="MATH.curvedBay">APPLY Curved Bay Logic (Arc/Radius)</option>
+                              </optgroup>
                           </select>
                           <input value={newRule.effectVal} onChange={e => setNewRule({...newRule, effectVal: e.target.value})} placeholder="Effect Value (e.g. Select Trim / Fringe)" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
                       </div>
