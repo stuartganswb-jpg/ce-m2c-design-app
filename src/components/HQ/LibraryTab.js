@@ -18,7 +18,7 @@ const DEFAULT_SYSTEM_WINDOWS = {
   pillowSizes: ['uniquity'], fillTypes: ['uniquity'], flangeStyles: ['uniquity'], stitchTypes: ['uniquity'],
   seamCounts: ['uniquity'], assemblyTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
   customers: ['ce', 'm2c', 'uniquity', 'leyla'],
-  partHandling: ['ce', 'm2c', 'uniquity', 'leyla'],
+  partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], // 🚀 NEW: Part Handling 
   inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'] // 🚀 NEW: Inventory Types
 };
 
@@ -28,8 +28,8 @@ const LIST_LABELS = {
     pillowSizes: 'PILLOW SIZES', fillTypes: 'FILL TYPES', flangeStyles: 'EDGE / FLANGE STYLES', 
     stitchTypes: 'STITCH ROUTING', seamCounts: 'SEAM COUNTS / UPCHARGES', assemblyTypes: 'ASSEMBLY TYPES',
     customers: 'CUSTOMERS / DEALERS',
-    partHandling: 'PART HANDLING & ROUTING',
-    inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS' // 🚀 NEW: Inventory Types Label
+    partHandling: 'PART HANDLING & ROUTING', // 🚀 NEW
+    inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS' // 🚀 NEW
 };
 
 const LibraryTab = ({ currentUser, activeBrand }) => {
@@ -108,11 +108,11 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               watchLists: data.watchLists || [], vendors: data.vendors || [], outsourceActions: data.outsourceActions || [],
               pillowSizes: data.pillowSizes || [], fillTypes: data.fillTypes || [], flangeStyles: data.flangeStyles || [], 
               stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || ['0 Seams', '1 Seam', '2 Seams', '3 Seams', '4 Seams'],
-              assemblyTypes: data.assemblyTypes || [], // 🚀 Clean DB Passthrough
+              assemblyTypes: data.assemblyTypes || [], 
               cpqRoutingTypes: data.cpqRoutingTypes || [],
               customers: data.customers || [],
-              partHandling: data.partHandling || ['Small Parts', 'Custom'], 
-              inventoryTypes: data.inventoryTypes || [] // 🚀 Clean DB Passthrough
+              partHandling: data.partHandling || ['Small Parts', 'Custom'], // 🚀 Fallbacks
+              inventoryTypes: data.inventoryTypes || [] // 🚀 Powers the RAW MAT Routing dropdown
           });
       }
     });
@@ -320,6 +320,9 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
           payload.collection = editSpecs.collection || "";
           payload.routingType = editSpecs.routingType || "";
           payload.productType = editSpecs.productType || "";
+      } else {
+          // If it IS an inventory item, save the routingType so it maps to the Inventory Category
+          payload.routingType = editSpecs.routingType || ""; 
       }
 
       if (activePart.isNew) payload.createdAt = new Date().toISOString();
@@ -498,8 +501,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       const updated = isChecked ? [...current, item] : current.filter(i => i !== item);
       await setDoc(doc(db, "system", "master_lists"), { ...globalLists, cpqRoutingTypes: updated });
   };
-
-  const isAssembly = activePart?.partClass === 'Assembly' || activePart?.partClass === 'Master Assembly';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
@@ -760,12 +761,12 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
                    )}
 
-                   {/* 🚀 NEW: CLASSIFICATION ROUTING INTEGRATION */}
+                   {/* 🚀 FIXED CLASSIFICATION DROPDOWN (No longer hardcoded!) */}
                    <div>
-                       <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>{isAssembly ? 'ROUTING CLASSIFICATION:' : 'INVENTORY CATEGORY:'}</label>
+                       <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>{activePart.partClass === 'Inventory' ? 'INVENTORY CATEGORY:' : 'ROUTING CLASSIFICATION:'}</label>
                        <select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
                            <option value="">UNASSIGNED</option>
-                           {(isAssembly ? (globalLists.assemblyTypes || []) : (globalLists.inventoryTypes || [])).map(t => <option key={t} value={t}>{t}</option>)}
+                           {(activePart.partClass === 'Inventory' ? (globalLists.inventoryTypes || []) : (globalLists.assemblyTypes || [])).map(t => <option key={t} value={t}>{t}</option>)}
                        </select>
                    </div>
 
@@ -1196,4 +1197,4 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   );
 };
 
-export default AdminTab;
+export default LibraryTab;
