@@ -5,9 +5,40 @@ import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds } from '@react-three/drei';
 
+// --- HIERARCHY CASCADE HELPERS ---
+const findNodeByName = (tree, name) => {
+    if (!tree || !name) return null;
+    if (tree.name === name) return tree;
+    for (let child of tree.children || []) {
+        const found = findNodeByName(child, name);
+        if (found) return found;
+    }
+    return null;
+};
+
+const getAllNames = (tree) => {
+    if (!tree) return [];
+    let names = tree.name ? [tree.name] : [];
+    for (let child of tree.children || []) {
+        names = names.concat(getAllNames(child));
+    }
+    return names.filter(Boolean);
+};
+
+const getAncestors = (tree, targetName, currentPath = []) => {
+    if (!tree || !targetName) return [];
+    if (tree.name === targetName) return currentPath;
+    const nextPath = tree.name ? [...currentPath, tree.name] : currentPath;
+    for (let child of tree.children || []) {
+        const path = getAncestors(child, targetName, nextPath);
+        if (path.length > 0) return path;
+    }
+    return [];
+};
+
 // --- RECURSIVE SCENE GRAPH EXPLORER ---
 const SceneNodeTree = ({ node, level = 0, selectedNodes, hiddenNodes, onToggleSelect, onToggleHide }) => {
-    const [isExpanded, setIsExpanded] = useState(level < 2); // Auto-expand first 2 levels
+    const [isExpanded, setIsExpanded] = useState(level < 2); 
     const nodeRef = useRef(null);
 
     const descendantSelected = useMemo(() => {
@@ -105,14 +136,11 @@ const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, hi
                 const isSelected = isDescendantOf(child, selectedNodes);
                 const isClustered = existingClusters.some(cl => isDescendantOf(child, cl.nodes));
 
-                // 🚀 NEW: Highlight Unassigned Logic
                 if (isSelected) {
                     child.material = new THREE.MeshStandardMaterial({ color: '#007bff', emissive: '#007bff', emissiveIntensity: 0.5, transparent: true, opacity: 0.9 });
                 } else if (highlightUnassigned && !isClustered) {
-                    // Flash unassigned nodes bright orange
                     child.material = new THREE.MeshStandardMaterial({ color: '#fd7e14', emissive: '#fd7e14', emissiveIntensity: 0.8, transparent: true, opacity: 0.9 });
                 } else if (highlightUnassigned && isClustered) {
-                    // Turn assigned nodes into faint "glass"
                     child.material = new THREE.MeshBasicMaterial({ color: '#aaaaaa', transparent: true, opacity: 0.1 });
                 } else if (isClustered) {
                     child.material = new THREE.MeshStandardMaterial({ color: '#28a745', emissive: '#28a745', emissiveIntensity: 0.2, transparent: true, opacity: 0.9 });
@@ -142,7 +170,6 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [activeAssembly, setActiveAssembly] = useState(null);
     const [sceneGraph, setSceneGraph] = useState(null);
     
-    // Search & Filter State
     const [searchQuery, setSearchQuery] = useState("");
     const [projectFilter, setProjectFilter] = useState("ALL");
     const [statusFilter, setStatusFilter] = useState("ALL");
@@ -151,10 +178,9 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [newClusterName, setNewClusterName] = useState("");
     const [selectedNodes, setSelectedNodes] = useState([]);
     
-    // Visibility & Interaction State
-    const [interactionMode, setInteractionMode] = useState("select"); // 'select', 'hide'
+    const [interactionMode, setInteractionMode] = useState("select"); 
     const [hiddenNodes, setHiddenNodes] = useState([]);
-    const [highlightUnassigned, setHighlightUnassigned] = useState(false); // 🚀 NEW
+    const [highlightUnassigned, setHighlightUnassigned] = useState(false); 
 
     useEffect(() => {
         if (!activeBrand) return;
@@ -196,15 +222,44 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         return matchesSearch && matchesProject && matchesStatus;
     });
 
+    // 🚀 NEW: CASCADING SELECTION LOGIC
     const handleToggleSelect = (nodeName) => {
-        setSelectedNodes(prev => prev.includes(nodeName) ? prev.filter(n => n !== nodeName) : [...prev, nodeName]);
+        const targetNode = findNodeByName(sceneGraph, nodeName);
+        const descendants = targetNode ? getAllNames(targetNode) : [nodeName];
+        const ancestors = getAncestors(sceneGraph, nodeName);
+
+        setSelectedNodes(prev => {
+            const isCurrentlySelected = prev.includes(nodeName);
+            if (isCurrentlySelected) {
+                // Toggling OFF: Remove node, all its descendants, AND all its parent ancestors
+                const toRemove = new Set([...descendants, ...ancestors]);
+                return prev.filter(n => !toRemove.has(n));
+            } else {
+                // Toggling ON: Select node and all its descendants
+                return [...new Set([...prev, ...descendants])];
+            }
+        });
     };
 
+    // 🚀 NEW: CASCADING VISIBILITY LOGIC
     const handleToggleHide = (nodeName) => {
+        const targetNode = findNodeByName(sceneGraph, nodeName);
+        const descendants = targetNode ? getAllNames(targetNode) : [nodeName];
+        const ancestors = getAncestors(sceneGraph, nodeName);
+
         setHiddenNodes(prev => {
-            if (prev.includes(nodeName)) return prev.filter(n => n !== nodeName);
-            setSelectedNodes(curr => curr.filter(n => n !== nodeName));
-            return [...prev, nodeName];
+            const isCurrentlyHidden = prev.includes(nodeName);
+            if (isCurrentlyHidden) {
+                // Unhiding: Unhide the node, its descendants, and its parent ancestors
+                const toRemove = new Set([...descendants, ...ancestors]);
+                return prev.filter(n => !toRemove.has(n));
+            } else {
+                // Hiding: Hide the node and its descendants
+                const toDeselect = new Set([...descendants, ...ancestors]);
+                // Automatically deselect hidden items to prevent phantom saves
+                setSelectedNodes(curr => curr.filter(n => !toDeselect.has(n)));
+                return [...new Set([...prev, ...descendants])];
+            }
         });
     };
 
@@ -335,7 +390,6 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         👁️‍🗨️ HIDE PARTS
                                     </button>
                                 </div>
-                                {/* 🚀 NEW: THE X-RAY HIGHLIGHT TOOL */}
                                 <button 
                                     onClick={() => setHighlightUnassigned(!highlightUnassigned)}
                                     style={{ padding: '6px 12px', background: highlightUnassigned ? '#fd7e14' : '#fff', color: highlightUnassigned ? '#fff' : '#fd7e14', fontWeight: 'bold', border: '1px solid #fd7e14', cursor: 'pointer', fontSize: '0.75rem', width: '100%' }}
@@ -363,7 +417,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         selectedNodes={selectedNodes} 
                                         existingClusters={existingClusters}
                                         hiddenNodes={hiddenNodes}
-                                        highlightUnassigned={highlightUnassigned} // 🚀 Passed down
+                                        highlightUnassigned={highlightUnassigned}
                                         onMeshClick={handleMeshClick} 
                                         onLoaded={setSceneGraph}
                                     />
