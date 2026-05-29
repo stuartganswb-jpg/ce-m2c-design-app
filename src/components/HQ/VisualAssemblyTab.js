@@ -25,10 +25,38 @@ class ErrorBoundary extends React.Component {
     }
 }
 
-const SnapshotModel = ({ url, interactionMode, onMeshClick, isFrozen }) => {
+// 🚀 RE-ENGINEERED TO SUPPORT HIGHLIGHT/LOCATE MODE
+const SnapshotModel = ({ url, interactionMode, onMeshClick, isFrozen, locatingNodes = [] }) => {
     const { scene } = useGLTF(url);
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
     const isPinMode = interactionMode === 'pin';
+
+    useMemo(() => {
+        const isDescendantOf = (child, nodeNameList) => {
+            let curr = child;
+            while (curr) {
+                if (curr.name && nodeNameList.includes(curr.name)) return true;
+                curr = curr.parent;
+            }
+            return false;
+        };
+
+        clonedScene.traverse((child) => {
+            if (child.isMesh) {
+                if (!child.userData.originalMaterial) child.userData.originalMaterial = child.material;
+                
+                if (locatingNodes.length > 0 && isDescendantOf(child, locatingNodes)) {
+                    // Turn targeted nodes glowing RED
+                    child.material = new THREE.MeshStandardMaterial({ color: '#d9534f', emissive: '#d9534f', emissiveIntensity: 0.8, transparent: true, opacity: 0.9 });
+                } else if (locatingNodes.length > 0) {
+                    // Turn everything else ghostly transparent
+                    child.material = new THREE.MeshStandardMaterial({ color: '#cccccc', transparent: true, opacity: 0.3 });
+                } else {
+                    child.material = child.userData.originalMaterial;
+                }
+            }
+        });
+    }, [clonedScene, locatingNodes]);
     
     return (
         <primitive 
@@ -67,7 +95,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [pins, setPins] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
   
-  const [globalLists, setGlobalLists] = useState({ prodTypes: [], collections: [], uom: [], partHandling: [], inventoryTypes: [], assemblyTypes: [] }); // 🚀 NEW
+  const [globalLists, setGlobalLists] = useState({ prodTypes: [], collections: [], uom: [], partHandling: [], inventoryTypes: [], assemblyTypes: [] });
   const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] });
   const [customSchema, setCustomSchema] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
@@ -104,6 +132,9 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
   const [cropState, setCropState] = useState(null); 
   const [isProcessingCrop, setIsProcessingCrop] = useState(false);
+  
+  // 🚀 NEW: Cluster Locating State
+  const [locatingClusterId, setLocatingClusterId] = useState(null);
 
   const svgRef = useRef(null);
   const innerGroupRef = useRef(null);
@@ -117,8 +148,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                   collections: data.collections || [],
                   uom: data.uom || ['EA'],
                   partHandling: data.partHandling || ['Small Parts', 'Custom'],
-                  inventoryTypes: data.inventoryTypes || [], // 🚀 SYNC INVENTORY CATS
-                  assemblyTypes: data.assemblyTypes || [] // 🚀 SYNC ASSEMBLY CATS
+                  inventoryTypes: data.inventoryTypes || [],
+                  assemblyTypes: data.assemblyTypes || [] 
               });
           }
       });
@@ -171,7 +202,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
         setRoutingType(""); setAvailableImages([]); setActiveImageUrl(""); setViewMode("2D");
     }
     
-    setScale(1); setPan({ x: 0, y: 0 }); setPendingPin(null); setIsCanvasLocked(true); setDrawerOpen(false); setCropState(null); setIsFrozen(false);
+    setScale(1); setPan({ x: 0, y: 0 }); setPendingPin(null); setIsCanvasLocked(true); setDrawerOpen(false); setCropState(null); setIsFrozen(false); setLocatingClusterId(null);
   }, [selectedAssemblyId, assemblies]);
 
   useEffect(() => {
@@ -524,6 +555,9 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const unassignedClusters = (activeAssembly?.nodeClusters || []).filter(cluster => {
       return !pins.some(pin => pin.clusterId === cluster.id || pin.targetNode === cluster.nodes?.join(', '));
   });
+  
+  // 🚀 ACTIVE LOCATING NODES FOR X-RAY HIGHLIGHT
+  const activeLocatingNodes = activeAssembly?.nodeClusters?.find(c => c.id === locatingClusterId)?.nodes || [];
 
   const canvasContainerStyle = isCanvasMaximized ? {
       position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 9999, 
@@ -718,6 +752,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                             interactionMode={interactionMode}
                                             onMeshClick={handle3DMeshClick} 
                                             isFrozen={isFrozen}
+                                            locatingNodes={activeLocatingNodes} // 🚀 Pass highlighted nodes
                                         />
                                     </Bounds>
 
@@ -765,6 +800,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
         {!isCanvasMaximized && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
                 
+                {/* 🚀 FIXED: UNASSIGNED CLUSTERS WITH LOCATE BUTTON */}
                 {viewMode === '3D' && unassignedClusters.length > 0 && (
                     <div style={{ background: '#fff3cd', border: '2px solid #ffc107', padding: '15px', boxShadow: '8px 8px 0 rgba(0,0,0,0.1)' }}>
                         <div style={{ fontWeight: 'bold', color: '#856404', fontSize: '0.9rem', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -772,21 +808,31 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                         </div>
                         <div style={{ fontSize: '0.7rem', color: '#666', marginBottom: '10px' }}>These 3D groupings have not been converted into BOM items yet.</div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            {unassignedClusters.map(cl => (
-                                <button 
-                                    key={cl.id} 
-                                    onClick={() => {
-                                        setPendingPin({ x: 0, y: 0, z: 0, targetNode: cl.nodes?.join(', '), clusterId: cl.id });
-                                        setNewPartName(cl.name);
-                                        setDrawerOpen(true);
-                                        setCreationMode("NEW");
-                                    }}
-                                    style={{ padding: '10px', background: '#ffc107', color: '#000', border: '1px solid #d39e00', fontWeight: 'bold', fontSize: '0.75rem', cursor: 'pointer', textAlign: 'left', display: 'flex', justifyContent: 'space-between' }}
-                                >
-                                    <span>+ ASSIGN: {cl.name}</span>
-                                    <span style={{ opacity: 0.7 }}>({cl.nodes?.length || 0} nodes)</span>
-                                </button>
-                            ))}
+                            {unassignedClusters.map(cl => {
+                                const isLocating = locatingClusterId === cl.id;
+                                return (
+                                <div key={cl.id} style={{ display: 'flex', gap: '5px' }}>
+                                    <button 
+                                        onClick={() => setLocatingClusterId(isLocating ? null : cl.id)}
+                                        style={{ padding: '10px', background: isLocating ? '#d9534f' : '#fff', color: isLocating ? '#fff' : '#856404', border: '1px solid #d39e00', fontWeight: 'bold', fontSize: '0.75rem', cursor: 'pointer', flexShrink: 0 }}
+                                    >
+                                        {isLocating ? '🛑 CLEAR' : '🔍 LOCATE'}
+                                    </button>
+                                    <button 
+                                        onClick={() => {
+                                            setPendingPin({ x: 0, y: 0, z: 0, targetNode: cl.nodes?.join(', '), clusterId: cl.id });
+                                            setNewPartName(cl.name);
+                                            setDrawerOpen(true);
+                                            setCreationMode("NEW");
+                                            setLocatingClusterId(null);
+                                        }}
+                                        style={{ padding: '10px', background: '#ffc107', color: '#000', border: '1px solid #d39e00', fontWeight: 'bold', fontSize: '0.75rem', cursor: 'pointer', textAlign: 'left', flex: 1, display: 'flex', justifyContent: 'space-between' }}
+                                    >
+                                        <span>+ ASSIGN: {cl.name}</span>
+                                        <span style={{ opacity: 0.7 }}>({cl.nodes?.length || 0} nodes)</span>
+                                    </button>
+                                </div>
+                            )})}
                         </div>
                     </div>
                 )}
@@ -918,25 +964,25 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                           <div>
                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label>
                               <select name="productType" value={newPartSpecs.productType} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc' }}>
-                                  <option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                                  <option value="">SELECT...</option>{globalLists.prodTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
                               </select>
                           </div>
                           <div>
                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label>
                               <select name="partHandling" value={newPartSpecs.partHandling} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
-                                  <option value="">UNASSIGNED</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}
+                                  <option value="">UNASSIGNED</option>{globalLists.partHandling.map(ph => <option key={ph} value={ph}>{ph}</option>)}
                               </select>
                           </div>
                           <div>
                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label>
                               <select name="uom" value={newPartSpecs.uom} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc' }}>
-                                  {(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}
+                                  {globalLists.uom.map(u => <option key={u} value={u}>{u}</option>)}
                               </select>
                           </div>
                           <div>
                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label>
                               <select name="collection" value={newPartSpecs.collection} onChange={handleNewSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc' }}>
-                                  <option value="">SELECT...</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                  <option value="">SELECT...</option>{globalLists.collections.map(c => <option key={c} value={c}>{c}</option>)}
                               </select>
                           </div>
                       </div>
