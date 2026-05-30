@@ -57,11 +57,11 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                         newMat.map = texMap[matchedTexUrl];
                         
                         // 🚀 FIXED: Brightened Base Color
-                        // Pure white base to maximize texture brightness, 100% metal, low roughness
+                        // 🚀 THE FIX: Adjusted PBR values to prevent the "Black Mirror" effect
                         newMat.color = new THREE.Color(0xffffff); 
-                        newMat.metalness = 1.0; 
-                        newMat.roughness = 0.2; 
-                        newMat.envMapIntensity = 1.0; 
+                        newMat.metalness = 0.75; // Allows the texture's native color to bleed through
+                        newMat.roughness = 0.35; // Scatters the reflection so it isn't pitch black
+                        newMat.envMapIntensity = 1.2; 
                         
                         newMat.normalMap = null;
                         newMat.bumpMap = null;
@@ -922,9 +922,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           </div>
                       ) : viewMode === '3D' ? (
                           <Canvas camera={{ position: [5, 5, 5], fov: 50 }} style={{ width: '100%', height: '100%' }}>
-                              <ambientLight intensity={0.5} />
-                              <directionalLight position={[5, 10, 5]} intensity={1} />
-                              <Environment preset="studio" />
+                              <ambientLight intensity={0.8} />
+                              <directionalLight position={[5, 10, 5]} intensity={1.2} />
+                              {/* 🚀 THE FIX: 'city' provides 360-degree ambient light so metals don't reflect a black void */}
+                              <Environment preset="city" />
                               <ContactShadows position={[0, -0.5, 0]} opacity={0.4} scale={10} blur={2} far={4} />
                               <OrbitControls makeDefault />
                               <Bounds fit clip margin={1.2}>
