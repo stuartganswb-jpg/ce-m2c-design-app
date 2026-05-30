@@ -27,6 +27,9 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [customSchema, setCustomSchema] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [collectionsData, setCollectionsData] = useState([]);
+  
+  // 🚀 NEW: Robust NetSuite Customer State
+  const [customersData, setCustomersData] = useState([]);
 
   const [activeComponent, setActiveComponent] = useState(null);
   const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [], collections: [], clientPricing: [], sharedBrands: [] });
@@ -77,7 +80,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     
-    return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); unsubAssets(); unsubCollections(); };
+    // 🚀 NEW: Listen for raw customers collection if NetSuite dumps them there
+    const unsubCustomers = onSnapshot(collection(db, "customers"), snap => setCustomersData(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+
+    return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); unsubAssets(); unsubCollections(); unsubCustomers(); };
   }, []);
 
   useEffect(() => {
@@ -212,6 +218,29 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       const current = editSpecs.cpqCategories || [];
       const updated = current.includes(categoryId) ? current.filter(id => id !== categoryId) : [...current, categoryId];
       setEditSpecs({ ...editSpecs, cpqCategories: updated });
+  };
+
+  // 🚀 NEW: Safety Lookup function to translate raw IDs into readable names
+  const getCustomerDisplay = (val) => {
+      if (!val) return 'N/A';
+      
+      // 1. Try to find the customer in a dedicated collection (If NetSuite populates it)
+      const dbCust = customersData.find(c => c.id === val || c.customerId === val || c.legacyId === val);
+      if (dbCust) return `${dbCust.companyName || dbCust.name || 'Unknown'} - ${val}`;
+      
+      // 2. Fallback to Master Lists (If manually added as strings or objects)
+      const listCust = globalLists.customers?.find(c => {
+          if (typeof c === 'string') return c === val || c.includes(val);
+          return c.id === val || c.name === val;
+      });
+      
+      if (listCust) {
+          if (typeof listCust === 'string') return listCust;
+          return `${listCust.name} - ${listCust.id}`;
+      }
+      
+      // 3. Absolute fallback (Prevents crashing if ID doesn't exist)
+      return val;
   };
 
   const handleAddClientPricing = (isAssembly = false) => {
@@ -506,7 +535,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         />
                                     </div>
 
-                                    {/* 🚀 FIXED: Added Pricing Matrix to Assembly Level */}
+                                    {/* 🚀 FIXED: Dynamic Name Lookup for Assembly Pricing Matrix */}
                                     <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', marginTop: '10px' }}>
                                         <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
                                         <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '15px' }}>
@@ -514,7 +543,15 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOMER (NAME - ID):</label>
                                                 <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
                                                     <option value="">Select Customer...</option>
-                                                    {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                                    {customersData.length > 0 ? (
+                                                        customersData.map(c => <option key={c.id} value={c.id}>{c.companyName || c.name} - {c.id}</option>)
+                                                    ) : (
+                                                        (globalLists.customers || []).map((c, idx) => {
+                                                            const val = typeof c === 'string' ? c : c.id;
+                                                            const label = typeof c === 'string' ? c : `${c.name} - ${c.id}`;
+                                                            return <option key={val || idx} value={val}>{label}</option>
+                                                        })
+                                                    )}
                                                 </select>
                                             </div>
                                             <div style={{ flex: 2 }}>
@@ -532,7 +569,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             {(assemblyDetails.clientPricing || []).map((cp, idx) => (
                                                 <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #ccc', padding: '8px 12px' }}>
                                                     <div style={{ display: 'flex', gap: '20px', fontSize: '0.8rem', width: '100%', alignItems: 'center' }}>
-                                                        <span style={{ fontWeight: 'bold', color: '#007bff', flex: 1 }}>{cp.customerId}</span>
+                                                        <span style={{ fontWeight: 'bold', color: '#007bff', flex: 1 }}>{getCustomerDisplay(cp.customerId)}</span>
                                                         <span style={{ flex: 1 }}><strong style={{ color: '#666' }}>SKU:</strong> {cp.clientSku || 'N/A'}</span>
                                                         <span style={{ color: '#28a745', fontWeight: 'bold', width: '80px', textAlign: 'right' }}>${parseFloat(cp.price || 0).toFixed(2)}</span>
                                                     </div>
@@ -542,7 +579,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         </div>
                                     </div>
 
-                                    {/* 🚀 FIXED: Added Cross-Brand Sharing to Assembly Level */}
                                     <div style={{ background: '#f8f9fa', padding: '10px', border: '2px solid #ccc', marginTop: '10px' }}>
                                         <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>RECORD VISIBILITY & CROSS-BRAND SHARING:</label>
                                         <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
@@ -780,7 +816,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
-                        {/* 🚀 FIXED: Added Component Level Identification Box to BOM Tab for symmetry */}
                         <div>
                             <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px', marginTop: '15px' }}>IDENTIFICATION</h4>
                             <div style={{ display: 'flex', gap: '10px' }}>
@@ -795,7 +830,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
-                        {/* 🚀 FIXED: Added Client Pricing Matrix to BOM Tab Component Editor */}
+                        {/* 🚀 FIXED: Dynamic Name Lookup for Component Pricing Matrix */}
                         <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', marginTop: '15px' }}>
                             <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
                             
@@ -804,7 +839,15 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOMER (NAME - ID):</label>
                                     <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
                                         <option value="">Select Customer...</option>
-                                        {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                        {customersData.length > 0 ? (
+                                            customersData.map(c => <option key={c.id} value={c.id}>{c.companyName || c.name} - {c.id}</option>)
+                                        ) : (
+                                            (globalLists.customers || []).map((c, idx) => {
+                                                const val = typeof c === 'string' ? c : c.id;
+                                                const label = typeof c === 'string' ? c : `${c.name} - ${c.id}`;
+                                                return <option key={val || idx} value={val}>{label}</option>
+                                            })
+                                        )}
                                     </select>
                                 </div>
                                 <div style={{ flex: 2 }}>
@@ -823,7 +866,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 {(editSpecs.clientPricing || []).map((cp, idx) => (
                                     <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #ccc', padding: '8px 12px' }}>
                                         <div style={{ display: 'flex', gap: '20px', fontSize: '0.8rem', width: '100%', alignItems: 'center' }}>
-                                            <span style={{ fontWeight: 'bold', color: '#007bff', flex: 1 }}>{cp.customerId}</span>
+                                            <span style={{ fontWeight: 'bold', color: '#007bff', flex: 1 }}>{getCustomerDisplay(cp.customerId)}</span>
                                             <span style={{ flex: 1 }}><strong style={{ color: '#666' }}>SKU:</strong> {cp.clientSku || 'N/A'}</span>
                                             <span style={{ color: '#28a745', fontWeight: 'bold', width: '80px', textAlign: 'right' }}>${parseFloat(cp.price || 0).toFixed(2)}</span>
                                         </div>
@@ -833,7 +876,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
-                        {/* 🚀 FIXED: Added Cross-Brand Sharing to Component Level */}
                         <div style={{ background: '#f8f9fa', padding: '10px', border: '2px solid #ccc', marginTop: '10px' }}>
                             <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>RECORD VISIBILITY & CROSS-BRAND SHARING:</label>
                             <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
@@ -884,7 +926,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                                 const isSelected = (editSpecs.collections || []).includes(c.name);
                                                 return (
                                                     <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', background: isSelected ? '#d8b4e2' : '#fff', color: isSelected ? '#4a148c' : '#333', border: `1px solid ${isSelected ? '#6f42c1' : '#ccc'}`, padding: '6px 12px', borderRadius: '20px', transition: '0.2s' }}>
-                                                        <input type="checkbox" checked={isSelected} onChange={() => handleToggleCollection(c.name, false)} style={{ display: 'none' }} />
+                                                        <input type="checkbox" checked={isSelected} onChange={() => handleToggleCollection(c.name)} style={{ display: 'none' }} />
                                                         {c.name}
                                                     </label>
                                                 );
