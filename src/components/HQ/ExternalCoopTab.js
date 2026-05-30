@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, doc, updateDoc, setDoc } from "firebase/firestore";
 
-// --- 🚀 NEW: INJECT PRINT CSS FOR PDF GENERATION ---
 const printStyles = `
   @media print {
     body * { visibility: hidden; }
@@ -23,20 +22,23 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   
   const [debugStats, setDebugStats] = useState({ total: 0, brandMatch: 0, inception: 0, configured: 0 });
 
-  // CRM State
   const [crmData, setCrmData] = useState(INITIAL_CRM_DATA);
   const [crmSearchQuery, setCrmSearchQuery] = useState('');
   const [activeCrmRecord, setActiveCrmRecord] = useState(null);
   
   const [showNewCrmModal, setShowNewCrmModal] = useState(false);
   
-  // 🚀 UPGRADED: Expanded CRM Form State
+  // 🚀 UPGRADED: Expanded CRM Form State with Multiple Shipping Addresses
   const [newCrmForm, setNewCrmForm] = useState({ 
-      name: '', email: '', contact: '', phone: '', terms: 'Net 30',
-      billingAddress: '', shippingAddress: '', creditLimit: '', discountCode: ''
+      name: '', email: '', contact: '', phone: '', 
+      terms: '', salesRep: '', discountCode: '', creditLimit: '', 
+      billingAddress: '', shippingAddresses: [] 
   });
+
+  const [newAddressInput, setNewAddressInput] = useState({ label: '', street: '' });
   
-  const [globalLists, setGlobalLists] = useState({ customers: [], vendors: [] });
+  const [globalLists, setGlobalLists] = useState({ customers: [], vendors: [], paymentTerms: [], salesReps: [] });
+  const [crmDiscounts, setCrmDiscounts] = useState([]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -49,7 +51,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [activeCalloutId, setActiveCalloutId] = useState(null);
   const svgRef = useRef(null);
 
-  // FORMS & DOCUMENT STUDIO
   const [formTemplates, setFormTemplates] = useState({});
   const [brandLogos, setBrandLogos] = useState({});
   const [libraryParts, setLibraryParts] = useState([]);
@@ -115,7 +116,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
           snap.docs.forEach(d => dbRecords[d.id] = { id: d.id, ...d.data() });
           setCrmData({ ...INITIAL_CRM_DATA, ...dbRecords });
           
-          // Keep active record in sync if it's currently open
           if (activeCrmRecord) {
               const updatedActive = snap.docs.find(d => d.id === activeCrmRecord.id);
               if (updatedActive) setActiveCrmRecord({ id: updatedActive.id, ...updatedActive.data() });
@@ -125,12 +125,32 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (snap) => {
           if (snap.exists()) {
               const data = snap.data();
-              setGlobalLists({ customers: data.customers || [], vendors: data.vendors || [] });
+              setGlobalLists({ 
+                  customers: data.customers || [], 
+                  vendors: data.vendors || [],
+                  paymentTerms: data.paymentTerms || [],
+                  salesReps: data.salesReps || []
+              });
           }
       });
 
-      return () => { unsubCrm(); unsubLists(); };
-  }, [activeCrmRecord?.id]); // Re-bind if active record changes
+      const unsubDiscounts = onSnapshot(doc(db, "system", "crm_discounts"), (snap) => {
+          if (snap.exists() && snap.data().list) setCrmDiscounts(snap.data().list);
+      });
+
+      return () => { unsubCrm(); unsubLists(); unsubDiscounts(); };
+  }, [activeCrmRecord?.id]);
+
+  const handleAddShippingAddress = () => {
+      if (!newAddressInput.label || !newAddressInput.street) return alert("Label and Address required.");
+      const newAddr = { id: `ADDR_${Date.now()}`, label: newAddressInput.label, street: newAddressInput.street };
+      setNewCrmForm(prev => ({ ...prev, shippingAddresses: [...prev.shippingAddresses, newAddr] }));
+      setNewAddressInput({ label: '', street: '' });
+  };
+
+  const handleRemoveShippingAddress = (addrId) => {
+      setNewCrmForm(prev => ({ ...prev, shippingAddresses: prev.shippingAddresses.filter(a => a.id !== addrId) }));
+  };
 
   const handleSaveNewCrm = async () => {
       if (!newCrmForm.name.trim()) return alert("Entity Name is required.");
@@ -139,7 +159,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       const prefix = isCust ? 'CUST' : 'VEND';
       const newId = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-      // 🚀 UPGRADED: Save all new fields
       const newRecord = {
           id: newId,
           type: isCust ? 'CUSTOMER' : 'VENDOR',
@@ -147,11 +166,12 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
           email: newCrmForm.email.trim(),
           contact: newCrmForm.contact.trim(),
           phone: newCrmForm.phone.trim(),
-          terms: newCrmForm.terms || 'Net 30',
+          terms: newCrmForm.terms || '',
+          salesRep: newCrmForm.salesRep || '',
           billingAddress: newCrmForm.billingAddress.trim(),
-          shippingAddress: newCrmForm.shippingAddress.trim(),
+          shippingAddresses: newCrmForm.shippingAddresses || [],
           creditLimit: parseFloat(newCrmForm.creditLimit) || 0,
-          discountCode: newCrmForm.discountCode.trim(),
+          discountCode: newCrmForm.discountCode || '',
           ytd: 0, mtd: 0, openOrders: 0, notes: ''
       };
 
@@ -159,13 +179,12 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
           await setDoc(doc(db, "crm_records", newId), newRecord);
           const listKey = isCust ? 'customers' : 'vendors';
           
-          // Save exactly as "Name - ID" to match our BOM Tab mapping
           const formattedName = `${newRecord.name} - ${newId}`;
           const updatedList = [...new Set([...(globalLists[listKey] || []), formattedName])];
           await setDoc(doc(db, "system", "master_lists"), { [listKey]: updatedList }, { merge: true });
 
           setShowNewCrmModal(false);
-          setNewCrmForm({ name: '', email: '', contact: '', phone: '', terms: 'Net 30', billingAddress: '', shippingAddress: '', creditLimit: '', discountCode: '' });
+          setNewCrmForm({ name: '', email: '', contact: '', phone: '', terms: '', salesRep: '', billingAddress: '', shippingAddresses: [], creditLimit: '', discountCode: '' });
           setCrmSearchQuery('');
           setActiveCrmRecord(newRecord);
           
@@ -175,16 +194,27 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       }
   };
 
-  // 🚀 NEW: Auto-save function for in-line edits on the active CRM record
   const handleUpdateActiveCrmField = async (field, value) => {
       if (!activeCrmRecord) return;
-      // Optimistic UI update
       setActiveCrmRecord(prev => ({ ...prev, [field]: value }));
       try {
           await updateDoc(doc(db, "crm_records", activeCrmRecord.id), { [field]: value });
       } catch (err) {
           console.error("Failed to update CRM field:", err);
       }
+  };
+
+  const handleActiveCrmAddAddress = async (label, street) => {
+      if (!label || !street) return;
+      const newAddr = { id: `ADDR_${Date.now()}`, label, street };
+      const updatedAddresses = [...(activeCrmRecord.shippingAddresses || []), newAddr];
+      await handleUpdateActiveCrmField('shippingAddresses', updatedAddresses);
+  };
+
+  const handleActiveCrmRemoveAddress = async (addrId) => {
+      if (!window.confirm("Remove this shipping address?")) return;
+      const updatedAddresses = (activeCrmRecord.shippingAddresses || []).filter(a => a.id !== addrId);
+      await handleUpdateActiveCrmField('shippingAddresses', updatedAddresses);
   };
 
   const handleEditJob = (job) => alert(`Loading ${job.jobId || job.id} into Global Context...\n\nRouting operator back to CPQ / Vision Tabs to configure physical inventory.`);
@@ -395,7 +425,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                   </div>
                   <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
                       
-                      {/* Basic Info */}
                       <div>
                           <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ENTITY / COMPANY NAME:</label>
                           <input value={newCrmForm.name} onChange={e => setNewCrmForm({...newCrmForm, name: e.target.value})} autoFocus style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }} />
@@ -408,34 +437,62 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                           <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PHONE NUMBER:</label><input value={newCrmForm.phone} onChange={e => setNewCrmForm({...newCrmForm, phone: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
-                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PAYMENT TERMS:</label><input value={newCrmForm.terms} onChange={e => setNewCrmForm({...newCrmForm, terms: e.target.value})} placeholder="e.g. Net 30" style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>SALES REP:</label>
+                              <select value={newCrmForm.salesRep} onChange={e => setNewCrmForm({...newCrmForm, salesRep: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }}>
+                                  <option value="">-- Unassigned --</option>
+                                  {(globalLists.salesReps || []).map(r => <option key={r} value={r}>{r}</option>)}
+                              </select>
+                          </div>
                       </div>
 
-                      {/* 🚀 UPGRADED: Financial & Logistic Fields */}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', borderTop: '2px solid #eee', paddingTop: '15px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px', borderTop: '2px solid #eee', paddingTop: '15px' }}>
+                          <div>
+                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#17a2b8' }}>TERMS:</label>
+                              <select value={newCrmForm.terms} onChange={e => setNewCrmForm({...newCrmForm, terms: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #17a2b8', boxSizing: 'border-box', fontWeight: 'bold' }}>
+                                  <option value="">-- Select Terms --</option>
+                                  {(globalLists.paymentTerms || []).map(t => <option key={t} value={t}>{t}</option>)}
+                              </select>
+                          </div>
                           <div>
                               <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#17a2b8' }}>CREDIT LIMIT ($):</label>
                               <input type="number" step="100" value={newCrmForm.creditLimit} onChange={e => setNewCrmForm({...newCrmForm, creditLimit: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '10px', border: '1px solid #17a2b8', boxSizing: 'border-box', fontWeight: 'bold' }} />
                           </div>
                           <div>
-                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#17a2b8' }}>DEFAULT DISCOUNT CODE:</label>
-                              <input value={newCrmForm.discountCode} onChange={e => setNewCrmForm({...newCrmForm, discountCode: e.target.value})} placeholder="e.g. WHOLESALE_20" style={{ width: '100%', padding: '10px', border: '1px solid #17a2b8', boxSizing: 'border-box' }} />
+                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#17a2b8' }}>DISCOUNT TIER:</label>
+                              <select value={newCrmForm.discountCode} onChange={e => setNewCrmForm({...newCrmForm, discountCode: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #17a2b8', boxSizing: 'border-box', fontWeight: 'bold' }}>
+                                  <option value="">-- Base Price --</option>
+                                  {crmDiscounts.map(d => <option key={d.code} value={d.code}>{d.code} (-{d.percent}%)</option>)}
+                              </select>
                           </div>
                       </div>
 
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                          <div>
-                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1' }}>BILLING ADDRESS:</label>
-                              <textarea value={newCrmForm.billingAddress} onChange={e => setNewCrmForm({...newCrmForm, billingAddress: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #6f42c1', boxSizing: 'border-box', minHeight: '80px', resize: 'vertical' }} />
-                          </div>
-                          <div>
-                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1' }}>SHIPPING ADDRESS:</label>
-                              <textarea value={newCrmForm.shippingAddress} onChange={e => setNewCrmForm({...newCrmForm, shippingAddress: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #6f42c1', boxSizing: 'border-box', minHeight: '80px', resize: 'vertical' }} />
-                          </div>
+                      <div style={{ borderTop: '2px solid #eee', paddingTop: '15px' }}>
+                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1' }}>BILLING ADDRESS:</label>
+                          <textarea value={newCrmForm.billingAddress} onChange={e => setNewCrmForm({...newCrmForm, billingAddress: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #6f42c1', boxSizing: 'border-box', minHeight: '60px', resize: 'vertical' }} />
                       </div>
 
-                      <div style={{ marginTop: '10px', background: '#eafaf1', border: '1px solid #28a745', padding: '10px', fontSize: '0.75rem', color: '#1e7e34', fontWeight: 'bold' }}>
-                          ✓ Saving this record makes it immediately available in the CPQ Quoting Engine.
+                      {/* 🚀 UPGRADED: Dynamic Multiple Shipping Addresses Array */}
+                      <div style={{ background: '#f8f9fa', padding: '10px', border: '1px solid #ccc' }}>
+                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '10px' }}>SHIPPING ADDRESSES (Multiple Allowed):</label>
+                          
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '15px' }}>
+                              {newCrmForm.shippingAddresses.length === 0 && <span style={{ fontSize: '0.75rem', color: '#999', fontStyle: 'italic' }}>No shipping addresses added yet.</span>}
+                              {newCrmForm.shippingAddresses.map(addr => (
+                                  <div key={addr.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #eee', padding: '8px' }}>
+                                      <div>
+                                          <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: '#000' }}>{addr.label}</div>
+                                          <div style={{ fontSize: '0.75rem', color: '#666', whiteSpace: 'pre-wrap' }}>{addr.street}</div>
+                                      </div>
+                                      <button onClick={() => handleRemoveShippingAddress(addr.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>×</button>
+                                  </div>
+                              ))}
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                              <input value={newAddressInput.label} onChange={e => setNewAddressInput({...newAddressInput, label: e.target.value})} placeholder="Label (e.g. Site B)" style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }} />
+                              <textarea value={newAddressInput.street} onChange={e => setNewAddressInput({...newAddressInput, street: e.target.value})} placeholder="Full Street Address" style={{ flex: 2, padding: '8px', border: '1px solid #ccc', resize: 'none', height: '32px' }} />
+                              <button onClick={handleAddShippingAddress} style={{ padding: '8px 15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', height: '32px' }}>ADD</button>
+                          </div>
                       </div>
 
                       <div style={{ display: 'flex', gap: '10px', marginTop: '10px', position: 'sticky', bottom: 0, background: '#fff', paddingTop: '10px' }}>
@@ -467,7 +524,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                   
                   <div style={{ padding: '20px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa' }}>
                       
-                      {/* Financial Highlights */}
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px' }}>
                           <div style={{ background: '#fff', padding: '15px', border: '2px solid #000', textAlign: 'center', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                               <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>OPEN / PENDING QUOTES</div>
@@ -485,7 +541,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
                       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.5fr', gap: '20px', flex: 1 }}>
                           
-                          {/* 🚀 UPGRADED: Left Panel - Fully Editable CRM Form */}
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                               
                               <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
@@ -509,10 +564,20 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                       </div>
                                       
                                       <div style={{ borderTop: '1px dashed #eee', margin: '5px 0' }}></div>
-                                      
+
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#17a2b8' }}>SALES REP:</label>
+                                          <select value={activeCrmRecord.salesRep || ''} onChange={e => handleUpdateActiveCrmField('salesRep', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                              <option value="">-- Unassigned --</option>
+                                              {(globalLists.salesReps || []).map(r => <option key={r} value={r}>{r}</option>)}
+                                          </select>
+                                      </div>
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                           <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#17a2b8' }}>TERMS:</label>
-                                          <input value={activeCrmRecord.terms || ''} onChange={e => handleUpdateActiveCrmField('terms', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem' }} />
+                                          <select value={activeCrmRecord.terms || ''} onChange={e => handleUpdateActiveCrmField('terms', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                              <option value="">-- Select Terms --</option>
+                                              {(globalLists.paymentTerms || []).map(t => <option key={t} value={t}>{t}</option>)}
+                                          </select>
                                       </div>
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                           <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#17a2b8' }}>CREDIT LIMIT:</label>
@@ -520,7 +585,10 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                       </div>
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                           <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#17a2b8' }}>DISCOUNT:</label>
-                                          <input value={activeCrmRecord.discountCode || ''} onChange={e => handleUpdateActiveCrmField('discountCode', e.target.value)} placeholder="Promo Code" style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem' }} />
+                                          <select value={activeCrmRecord.discountCode || ''} onChange={e => handleUpdateActiveCrmField('discountCode', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                              <option value="">-- Base Price (No Disc.) --</option>
+                                              {crmDiscounts.map(d => <option key={d.code} value={d.code}>{d.code} (-{d.percent}%)</option>)}
+                                          </select>
                                       </div>
                                   </div>
                               </div>
@@ -532,9 +600,28 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                           <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>BILLING ADDRESS:</label>
                                           <textarea value={activeCrmRecord.billingAddress || ''} onChange={e => handleUpdateActiveCrmField('billingAddress', e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', resize: 'vertical', minHeight: '60px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
                                       </div>
-                                      <div>
-                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>SHIPPING ADDRESS:</label>
-                                          <textarea value={activeCrmRecord.shippingAddress || ''} onChange={e => handleUpdateActiveCrmField('shippingAddress', e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', resize: 'vertical', minHeight: '60px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                      
+                                      <div style={{ borderTop: '2px dashed #ccc', paddingTop: '10px' }}>
+                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>SHIPPING ADDRESSES:</label>
+                                          
+                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '10px', maxHeight: '120px', overflowY: 'auto' }}>
+                                              {(activeCrmRecord.shippingAddresses || []).length === 0 && <span style={{ fontSize: '0.75rem', color: '#999', fontStyle: 'italic' }}>No shipping addresses added.</span>}
+                                              {(activeCrmRecord.shippingAddresses || []).map(addr => (
+                                                  <div key={addr.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: '#f8f9fa', border: '1px solid #eee', padding: '5px' }}>
+                                                      <div>
+                                                          <div style={{ fontWeight: 'bold', fontSize: '0.75rem', color: '#000' }}>{addr.label}</div>
+                                                          <div style={{ fontSize: '0.7rem', color: '#666', whiteSpace: 'pre-wrap' }}>{addr.street}</div>
+                                                      </div>
+                                                      <button onClick={() => handleActiveCrmRemoveAddress(addr.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer', padding: '0 5px' }}>×</button>
+                                                  </div>
+                                              ))}
+                                          </div>
+
+                                          <div style={{ display: 'flex', gap: '5px', alignItems: 'flex-start' }}>
+                                              <input value={newAddressInput.label} onChange={e => setNewAddressInput({...newAddressInput, label: e.target.value})} placeholder="Label" style={{ flex: 1, padding: '5px', border: '1px solid #ccc', fontSize: '0.75rem' }} />
+                                              <textarea value={newAddressInput.street} onChange={e => setNewAddressInput({...newAddressInput, street: e.target.value})} placeholder="Street Address" style={{ flex: 2, padding: '5px', border: '1px solid #ccc', resize: 'none', height: '24px', fontSize: '0.75rem' }} />
+                                              <button onClick={() => { handleActiveCrmAddAddress(newAddressInput.label, newAddressInput.street); setNewAddressInput({label: '', street: ''}); }} style={{ padding: '5px 10px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', height: '24px', fontSize: '0.7rem' }}>ADD</button>
+                                          </div>
                                       </div>
                                   </div>
                               </div>
@@ -647,7 +734,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
         </div>
       )}
 
-      {/* 🚀 THE DOCUMENT GENERATOR STUDIO MODAL (Shared by Quote & Router) */}
+      {/* 🚀 THE DOCUMENT GENERATOR STUDIO MODAL */}
       {activeDocJob && (
         <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', zIndex: 4000, overflowY: 'auto', padding: '40px 0' }}>
             

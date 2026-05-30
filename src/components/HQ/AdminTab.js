@@ -25,7 +25,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
 
-  // 🚀 FIXED: Initialize with empty partHandling so validation catches it
+  // 🚀 NEW: CRM Master Dictionaries
+  const [crmDiscounts, setCrmDiscounts] = useState([]);
+  const [newDiscount, setNewDiscount] = useState({ code: '', description: '', percent: '' });
+  const [crmListInput, setCrmListInput] = useState({ salesReps: '', paymentTerms: '' });
+
   const [newStep, setNewStep] = useState({ 
       id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, 
       priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [],
@@ -54,34 +58,21 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const DOCUMENT_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE', 'FACTORY_ROUTER'];
   const BRANDS_LIST = ['m2c', 'uniquity', 'ce', 'leyla']; 
 
-  const DEFAULT_SYSTEM_WINDOWS = {
-      inHouseFinishes: ['ce', 'm2c'], outsourceFinishes: ['ce', 'm2c'],
-      prodTypes: ['ce', 'm2c', 'uniquity', 'leyla'], uom: ['ce', 'm2c', 'uniquity', 'leyla'],
-      collections: ['ce', 'm2c', 'uniquity', 'leyla'], watchLists: ['ce', 'm2c', 'uniquity', 'leyla'],
-      vendors: ['ce', 'm2c', 'uniquity', 'leyla'], outsourceActions: ['ce', 'm2c', 'uniquity', 'leyla'],
-      pillowSizes: ['uniquity'], fillTypes: ['uniquity'], flangeStyles: ['uniquity'], stitchTypes: ['uniquity'],
-      seamCounts: ['uniquity'], assemblyTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
-      customers: ['ce', 'm2c', 'uniquity', 'leyla'],
-      partHandling: ['ce', 'm2c', 'uniquity', 'leyla'],
-      inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'] 
-  };
-
-  const LIST_LABELS = {
-      prodTypes: 'PRODUCT TYPES', uom: 'UOMs', collections: 'COLLECTIONS',
-      watchLists: 'WATCHLISTS', vendors: 'APPROVED VENDORS', outsourceActions: 'OUTSOURCE ACTIONS',
-      pillowSizes: 'PILLOW SIZES', fillTypes: 'FILL TYPES', flangeStyles: 'EDGE / FLANGE STYLES', 
-      stitchTypes: 'STITCH ROUTING', seamCounts: 'SEAM COUNTS / UPCHARGES', assemblyTypes: 'ASSEMBLY TYPES',
-      customers: 'CUSTOMERS / DEALERS', partHandling: 'PART HANDLING & ROUTING',
-      inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS' 
-  };
-
   useEffect(() => {
       const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       const unsubRoles = onSnapshot(doc(db, "hq_config", "roles"), (docSnap) => { if (docSnap.exists() && docSnap.data().list) setDynamicRoles(docSnap.data().list); });
       const unsubSchema = onSnapshot(doc(db, "system", "master_schema"), (docSnap) => { if (docSnap.exists() && docSnap.data().inventoryFields) setCustomSchema(docSnap.data().inventoryFields); });
       const unsubRules = onSnapshot(doc(db, "system", "cpq_rules"), (docSnap) => { if (docSnap.exists() && docSnap.data().rules) setCpqRules(docSnap.data().rules); });
       const unsubFlows = onSnapshot(collection(db, "cpq_flows"), (snap) => setCpqFlows(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-      const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { if (docSnap.exists()) setGlobalLists(docSnap.data()); });
+      
+      const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { 
+          if (docSnap.exists()) setGlobalLists(docSnap.data()); 
+      });
+
+      // 🚀 NEW: Listen for CRM Discount Codes
+      const unsubDiscounts = onSnapshot(doc(db, "system", "crm_discounts"), (docSnap) => { 
+          if (docSnap.exists() && docSnap.data().list) setCrmDiscounts(docSnap.data().list); 
+      });
       
       const unsubAssemblies = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
           const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -106,7 +97,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
       });
 
-      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubLogos(); unsubForms(); };
+      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubLogos(); unsubForms(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -158,6 +149,34 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       });
       return () => unsub();
   }, [flowSettings.linkedAssemblyId, masterAssemblies]);
+
+  // 🚀 NEW: CRM Dictionary Handlers
+  const handleAddDiscount = async () => {
+      if (!newDiscount.code || !newDiscount.percent) return alert("Code and Percentage are required.");
+      const updated = [...crmDiscounts, { ...newDiscount, code: newDiscount.code.toUpperCase(), percent: parseFloat(newDiscount.percent) || 0 }];
+      await setDoc(doc(db, "system", "crm_discounts"), { list: updated }, { merge: true });
+      setNewDiscount({ code: '', description: '', percent: '' });
+  };
+
+  const handleRemoveDiscount = async (code) => {
+      if (!window.confirm(`Delete discount code ${code}?`)) return;
+      const updated = crmDiscounts.filter(d => d.code !== code);
+      await setDoc(doc(db, "system", "crm_discounts"), { list: updated }, { merge: true });
+  };
+
+  const handleAddCrmList = async (listKey) => {
+      const val = crmListInput[listKey]?.trim();
+      if (!val) return;
+      const updatedList = [...(globalLists[listKey] || []), val];
+      await setDoc(doc(db, "system", "master_lists"), { [listKey]: updatedList }, { merge: true });
+      setCrmListInput({ ...crmListInput, [listKey]: '' });
+  };
+
+  const handleRemoveCrmList = async (listKey, val) => {
+      if (!window.confirm(`Remove ${val}?`)) return;
+      const updatedList = (globalLists[listKey] || []).filter(item => item !== val);
+      await setDoc(doc(db, "system", "master_lists"), { [listKey]: updatedList }, { merge: true });
+  };
 
   const handleInspectNodes = () => {
       if (!flowSettings.linkedAssemblyId) return alert("Please link a Master Assembly to this CPQ Flow first.");
@@ -321,8 +340,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   const handleAddStepToFlow = async (flow) => {
       if (!newStep.title) return alert("Step title is required");
-      
-      // 🚀 FIXED: Mandatory Routing Validation
       if (!newStep.partHandling) return alert("❌ ERROR: Part Handling / Routing is required for every step.");
 
       try {
@@ -502,6 +519,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           <div style={{ padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold' }}>SYSTEM CONTROLS</div>
           <button onClick={() => setActiveSection("CPQ_FLOWS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "CPQ_FLOWS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "CPQ_FLOWS" ? '4px solid #007bff' : '4px solid transparent' }}>⚙️ CPQ FLOW BUILDER</button>
           <button onClick={() => setActiveSection("RULES")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "RULES" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "RULES" ? '4px solid #007bff' : '4px solid transparent' }}>📐 CPQ LOGIC ENGINE</button>
+          {/* 🚀 NEW CRM & SALES TAB */}
+          <button onClick={() => setActiveSection("CRM_SETTINGS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "CRM_SETTINGS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "CRM_SETTINGS" ? '4px solid #fd7e14' : '4px solid transparent' }}>👥 CRM & SALES CONFIG</button>
           <button onClick={() => setActiveSection("FORMS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "FORMS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "FORMS" ? '4px solid #28a745' : '4px solid transparent' }}>📝 FORM TEMPLATES</button>
           <button onClick={() => setActiveSection("USERS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "USERS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "USERS" ? '4px solid #007bff' : '4px solid transparent' }}>👥 USER MATRIX</button>
           <button onClick={() => setActiveSection("DANGER")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "DANGER" ? '#ffebee' : '#fff', color: '#d9534f', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "DANGER" ? '4px solid #d9534f' : '4px solid transparent' }}>⚠️ DANGER ZONE</button>
@@ -758,7 +777,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>If this is a "Finish" step, it applies the texture to these meshes. Comma separate for multiple.</span>
                                     </div>
 
-                                    {/* 🚀 FIXED: Required Routing Property Validation */}
                                     <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', marginTop: '10px' }}>
                                         <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '5px' }}>
                                             🛤️ PART HANDLING & ROUTING <span style={{ color: '#d9534f' }}>*REQUIRED</span>
@@ -941,6 +959,86 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   ))}
               </div>
             </div>
+          )}
+
+          {/* 🚀 NEW: CRM & SALES CONFIGURATION VIEW */}
+          {activeSection === "CRM_SETTINGS" && (
+              <div style={{ padding: '30px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px' }}>
+                      <h3 style={{ margin: 0 }}>👥 CRM & SALES DICTIONARIES</h3>
+                  </div>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                      
+                      {/* DISCOUNT CODES */}
+                      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #17a2b8' }}>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#17a2b8', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>💰 DISCOUNT CODES</h4>
+                          <div style={{ background: '#e0f7fa', padding: '10px', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '15px' }}>
+                              <div style={{ display: 'flex', gap: '10px' }}>
+                                  <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>CODE:</label><input value={newDiscount.code} onChange={e => setNewDiscount({...newDiscount, code: e.target.value})} placeholder="e.g. AD" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', textTransform: 'uppercase' }} /></div>
+                                  <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>DISC %:</label><input type="number" value={newDiscount.percent} onChange={e => setNewDiscount({...newDiscount, percent: e.target.value})} placeholder="e.g. 20" style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }} /></div>
+                              </div>
+                              <div>
+                                  <label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>DESCRIPTION:</label>
+                                  <input value={newDiscount.description} onChange={e => setNewDiscount({...newDiscount, description: e.target.value})} placeholder="e.g. Architect/Designer Tier" style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }} />
+                              </div>
+                              <button onClick={handleAddDiscount} style={{ padding: '8px', background: '#17a2b8', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ ADD DISCOUNT</button>
+                          </div>
+
+                          <div style={{ flex: 1, overflowY: 'auto', maxHeight: '300px' }}>
+                              {crmDiscounts.length === 0 && <span style={{ fontSize: '0.8rem', color: '#999', fontStyle: 'italic' }}>No discount codes defined.</span>}
+                              {crmDiscounts.map(d => (
+                                  <div key={d.code} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8f9fa', padding: '10px', borderBottom: '1px solid #eee' }}>
+                                      <div>
+                                          <div style={{ fontWeight: 'bold', color: '#000', fontSize: '1rem' }}>{d.code} <span style={{ color: '#28a745' }}>(-{d.percent}%)</span></div>
+                                          <div style={{ fontSize: '0.75rem', color: '#666' }}>{d.description}</div>
+                                      </div>
+                                      <button onClick={() => handleRemoveDiscount(d.code)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                                  </div>
+                              ))}
+                          </div>
+                      </div>
+
+                      {/* PAYMENT TERMS & SALES REPS */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                          
+                          <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', boxShadow: '5px 5px 0 #6f42c1' }}>
+                              <h4 style={{ margin: '0 0 15px 0', color: '#6f42c1', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>🤝 PAYMENT TERMS</h4>
+                              <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+                                  <input value={crmListInput.paymentTerms || ''} onChange={e => setCrmListInput({...crmListInput, paymentTerms: e.target.value})} placeholder="e.g. Net 60" style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }} />
+                                  <button onClick={() => handleAddCrmList('paymentTerms')} style={{ padding: '8px 15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>ADD</button>
+                              </div>
+                              <div style={{ maxHeight: '150px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                  {(globalLists.paymentTerms || []).length === 0 && <span style={{ fontSize: '0.8rem', color: '#999', fontStyle: 'italic' }}>No terms defined.</span>}
+                                  {(globalLists.paymentTerms || []).map(term => (
+                                      <div key={term} style={{ display: 'flex', justifyContent: 'space-between', background: '#f4f4f4', padding: '8px', border: '1px solid #eee' }}>
+                                          <span style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{term}</span>
+                                          <span onClick={() => handleRemoveCrmList('paymentTerms', term)} style={{ color: '#d9534f', cursor: 'pointer', fontWeight: 'bold' }}>×</span>
+                                      </div>
+                                  ))}
+                              </div>
+                          </div>
+
+                          <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', boxShadow: '5px 5px 0 #e83e8c' }}>
+                              <h4 style={{ margin: '0 0 15px 0', color: '#e83e8c', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>👔 SALES REPRESENTATIVES</h4>
+                              <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+                                  <input value={crmListInput.salesReps || ''} onChange={e => setCrmListInput({...crmListInput, salesReps: e.target.value})} placeholder="Rep Name" style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }} />
+                                  <button onClick={() => handleAddCrmList('salesReps')} style={{ padding: '8px 15px', background: '#e83e8c', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>ADD</button>
+                              </div>
+                              <div style={{ maxHeight: '150px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                  {(globalLists.salesReps || []).length === 0 && <span style={{ fontSize: '0.8rem', color: '#999', fontStyle: 'italic' }}>No sales reps defined.</span>}
+                                  {(globalLists.salesReps || []).map(rep => (
+                                      <div key={rep} style={{ display: 'flex', justifyContent: 'space-between', background: '#f4f4f4', padding: '8px', border: '1px solid #eee' }}>
+                                          <span style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{rep}</span>
+                                          <span onClick={() => handleRemoveCrmList('salesReps', rep)} style={{ color: '#d9534f', cursor: 'pointer', fontWeight: 'bold' }}>×</span>
+                                      </div>
+                                  ))}
+                              </div>
+                          </div>
+
+                      </div>
+                  </div>
+              </div>
           )}
 
           {/* FORMS & BRANDING VIEW */}
