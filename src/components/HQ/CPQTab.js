@@ -54,12 +54,11 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
 
                     if (matchedTexUrl && texMap[matchedTexUrl]) {
                         const newMat = child.userData.originalMaterial.clone();
-                        newMat.map = texMap[matchedTexUrl];
-                        // 🚀 THE FIX: Final Saturation Push (+15% more texture color)
+                       // 🚀 THE FIX: Restored metal physics for true hardware reflections
                         newMat.color = new THREE.Color(0xffffff); 
-                        newMat.metalness = 0.50; // Dropped further to let the rich texture color dominate
-                        newMat.roughness = 0.50; // Increased to soften reflections and prevent white-wash
-                        newMat.envMapIntensity = 0.85; // Lowered HDRI reflection intensity
+                        newMat.metalness = 0.85; // Back to a high metal value
+                        newMat.roughness = 0.35; // Polished, but matte enough to scatter light
+                        newMat.envMapIntensity = 1.0; // Balanced reflection
                         
                         newMat.normalMap = null;
                         newMat.bumpMap = null;
@@ -920,10 +919,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           </div>
                       ) : viewMode === '3D' ? (
                           <Canvas camera={{ position: [5, 5, 5], fov: 50 }} style={{ width: '100%', height: '100%' }}>
-                              <ambientLight intensity={1.15} /> {/* 🚀 Boosted to keep the rich colors bright */}
-                              <directionalLight position={[5, 10, 5]} intensity={1.2} />
-                              <Environment preset="city" />
-                              <ContactShadows position={[0, -0.5, 0]} opacity={0.4} scale={10} blur={2} far={4} />
+                              {/* 🚀 THE FIX: Deep shadows, high contrast, and interior reflections */}
+                              <ambientLight intensity={0.25} /> {/* Drastically lowered to allow deep, rich shadows */}
+                              <directionalLight position={[5, 10, 5]} intensity={1.8} /> {/* Strong, crisp highlight */}
+                              <Environment preset="apartment" /> {/* High-contrast interior room reflections */}
+                              <ContactShadows position={[0, -0.5, 0]} opacity={0.6} scale={10} blur={2} far={4} />
                               <OrbitControls makeDefault />
                               <Bounds fit clip margin={1.2}>
                                   <DynamicModel 
