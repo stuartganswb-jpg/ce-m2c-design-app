@@ -56,14 +56,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [formEditor, setFormEditor] = useState({ header: '', footer: '', terms: '' });
 
   // 🚀 NEW: NetSuite Sync State
-  const [nsSubsidiaryId, setNsSubsidiaryId] = useState("3"); // Defaulting to 3 as placeholder
+  const [nsSubsidiaryId, setNsSubsidiaryId] = useState("3"); 
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncLog, setSyncLog] = useState([]);
 
   const DOCUMENT_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE', 'FACTORY_ROUTER'];
   const BRANDS_LIST = ['m2c', 'uniquity', 'ce', 'leyla']; 
 
-  // --- REPLACE WITH YOUR ACTUAL FIREBASE FUNCTION URL ---
+  // --- 🚀 LIVE FIREBASE CLOUD FUNCTION URL ---
   const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app"; 
 
   useEffect(() => {
@@ -224,14 +224,17 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       setIsSyncing(false);
   };
 
-  const q = `SELECT id, itemid, displayname FROM item WHERE custitem_sync_to_cpq = 'T' AND isinactive = 'F' AND ${typeFilter}`;
+  const handleSyncItems = async (itemType) => {
+      setIsSyncing(true);
       
       const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
-      addLog(`Initiating CPQ Item Sync for [${typeDesc}] in Subsidiary [${nsSubsidiaryId}]...`, 'info');
+      addLog(`Initiating CPQ Item Sync for [${typeDesc}] (Safe Mode)...`, 'info');
 
       try {
           const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
-          const q = `SELECT id, itemid, displayname FROM item WHERE custitem_sync_to_cpq = 'T' AND subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND ${typeFilter}`;
+          
+          // 🚀 SAFE MODE QUERY: Correct spelling, no baseprice, no subsidiary filter
+          const q = `SELECT id, itemid, displayname FROM item WHERE custitem_sync_to_cpq = 'T' AND isinactive = 'F' AND ${typeFilter}`;
           
           const result = await executeSuiteQL(q);
           const records = result.items || [];
@@ -257,7 +260,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
               if (!existingMatch) {
                   payload.manufacturingSpecs = {
-                      basePrice: parseFloat(item.baseprice) || 0,
+                      basePrice: 0, // Default to 0 since we removed baseprice from query
                       cost: 0,
                       isInHouse: true,
                       status: "IMPORTED_FROM_ERP",
@@ -268,8 +271,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   payload.createdAt = new Date().toISOString();
               } else {
                   payload.manufacturingSpecs = {
-                      ...existingMatch.manufacturingSpecs,
-                      basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0
+                      ...existingMatch.manufacturingSpecs
                   };
                   payload.updatedAt = new Date().toISOString();
               }
@@ -675,7 +677,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                       </div>
                       
                       <div style={{ background: '#f8f9fa', border: '2px solid #000', padding: '15px' }}>
-                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff', display: 'block', marginBottom: '5px' }}>TARGET SUBSIDIARY ID:</label>
+                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff', display: 'block', marginBottom: '5px' }}>TARGET SUBSIDIARY ID (Optional in Safe Mode):</label>
                           <input 
                               type="number" 
                               value={nsSubsidiaryId} 
