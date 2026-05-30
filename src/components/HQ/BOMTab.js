@@ -10,23 +10,23 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [bomPins, setBomPins] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
   
-  const [globalLists, setGlobalLists] = useState({ uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [], pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], partHandling: [], inventoryTypes: [], assemblyTypes: [] }); 
+  const [globalLists, setGlobalLists] = useState({ uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [], pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], partHandling: [], inventoryTypes: [], assemblyTypes: [], projections: [] }); 
   const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] }); 
   
   const [customSchema, setCustomSchema] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
-  const [collectionsData, setCollectionsData] = useState([]); // 🚀 NEW: Dynamic Collections Fetcher
+  const [collectionsData, setCollectionsData] = useState([]);
 
   const [activeComponent, setActiveComponent] = useState(null);
-  const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [] });
+  const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [], collections: [] });
   const [isSaving, setIsSaving] = useState(false);
 
   const [assemblyDetails, setAssemblyDetails] = useState({
-      itemName: "", legacyErpId: "", productType: "", collection: "", routingType: "UNASSIGNED",
+      itemName: "", legacyErpId: "", productType: "", routingType: "UNASSIGNED",
       basePrice: "", cost: "", pdfUrl: "", cadUrl: "",
       isProjectManaged: false, binLocation: "",
       partHandling: "", uom: "EA", pillowSize: "", fillType: "", flangeStyle: "", stitchType: "", seamCount: "", outsourceAction: "", watchList: "NONE",
-      dynamicDicts: {}, customData: {}
+      dynamicDicts: {}, customData: {}, collections: []
   });
 
   const [pdfFile, setPdfFile] = useState(null);
@@ -50,7 +50,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || ['0 Seams', '1 Seam', '2 Seams', '3 Seams', '4 Seams'],
               partHandling: data.partHandling || ['Small Parts', 'Custom'],
               inventoryTypes: data.inventoryTypes || [], 
-              assemblyTypes: data.assemblyTypes || []
+              assemblyTypes: data.assemblyTypes || [],
+              projections: data.projections || [] // 🚀 Fetching Projections
           });
       }
     });
@@ -60,7 +61,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       }
     });
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
-    const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); // 🚀 Fetching Collections
+    const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     
     return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); unsubAssets(); unsubCollections(); };
   }, []);
@@ -101,11 +102,15 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
   useEffect(() => {
       if (selectedAssemblyData) {
+          // Legacy migration
+          const legacyCollection = selectedAssemblyData.collection && selectedAssemblyData.collection !== 'N/A' ? [selectedAssemblyData.collection] : [];
+          const currentCollections = selectedAssemblyData.manufacturingSpecs?.collections || legacyCollection;
+
           setAssemblyDetails({
               itemName: selectedAssemblyData.itemName || "",
               legacyErpId: selectedAssemblyData.legacyErpId === "PENDING" ? "" : (selectedAssemblyData.legacyErpId || ""),
               productType: selectedAssemblyData.productType || "",
-              collection: selectedAssemblyData.collection || "",
+              collections: currentCollections,
               routingType: selectedAssemblyData.routingType || "UNASSIGNED",
               basePrice: selectedAssemblyData.manufacturingSpecs?.basePrice || "",
               cost: selectedAssemblyData.manufacturingSpecs?.cost || "",
@@ -146,11 +151,15 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       const isInHouse = baseSpecs.isInHouse !== undefined ? baseSpecs.isInHouse : true;
       const partHandling = baseSpecs.partHandling || ""; 
 
+      const legacyCollection = baseSpecs.collection && baseSpecs.collection !== 'N/A' ? [baseSpecs.collection] : [];
+      const currentCollections = baseSpecs.collections || legacyCollection;
+
       setEditSpecs({ 
           ...baseSpecs, 
           parametric: parametricData, 
           customData, 
           dynamicDicts,
+          collections: currentCollections,
           cpqCategories, 
           isInHouse, 
           partHandling,
@@ -167,6 +176,16 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
   const handleDictChange = (dictId, value) => setEditSpecs(prev => ({ ...prev, dynamicDicts: { ...(prev.dynamicDicts || {}), [dictId]: value } }));
   const handleAssemblyDictChange = (dictId, value) => setAssemblyDetails(prev => ({ ...prev, dynamicDicts: { ...(prev.dynamicDicts || {}), [dictId]: value } }));
+
+  const handleToggleCollection = (collectionName, isAssembly = false) => {
+      if (isAssembly) {
+          const current = assemblyDetails.collections || [];
+          setAssemblyDetails({ ...assemblyDetails, collections: current.includes(collectionName) ? current.filter(c => c !== collectionName) : [...current, collectionName] });
+      } else {
+          const current = editSpecs.collections || [];
+          setEditSpecs({ ...editSpecs, collections: current.includes(collectionName) ? current.filter(c => c !== collectionName) : [...current, collectionName] });
+      }
+  };
 
   const handleCpqCategoryToggle = (categoryId) => {
       const current = editSpecs.cpqCategories || [];
@@ -208,12 +227,12 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           }
 
           const currentSpecs = selectedAssemblyData.manufacturingSpecs || {};
+          delete currentSpecs.collection; 
           
           await updateDoc(doc(db, "Approved_Designs", selectedAssemblyData.id), {
               itemName: assemblyDetails.itemName.toUpperCase(),
               legacyErpId: assemblyDetails.legacyErpId.toUpperCase() || "PENDING",
               productType: assemblyDetails.productType,
-              collection: assemblyDetails.collection,
               routingType: assemblyDetails.routingType,
               manufacturingSpecs: { 
                   ...currentSpecs, 
@@ -225,6 +244,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                   binLocation: assemblyDetails.binLocation,
                   partHandling: assemblyDetails.partHandling,
                   uom: assemblyDetails.uom,
+                  collections: assemblyDetails.collections, // 🚀 Saving array
                   pillowSize: assemblyDetails.pillowSize,
                   fillType: assemblyDetails.fillType,
                   flangeStyle: assemblyDetails.flangeStyle,
@@ -267,6 +287,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           cadUrl: finalCadUrl,
           status: "SPECS_LOCKED" 
       };
+      delete compiledSpecs.collection;
 
       try {
           await updateDoc(doc(db, "Approved_Designs", activeComponent.masterPart.id), {
@@ -439,13 +460,23 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
                                         <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={assemblyDetails.uom || "EA"} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                                         
-                                        {/* 🚀 FIXED: Dynamic Collections Dropdown */}
+                                        {/* 🚀 FIXED: Assembly Collections Tags */}
                                         {windowConfig.system.collections?.includes(activeBrand) && (
-                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1' }}>COLLECTION (CPQ QUOTING):</label>
-                                            <select name="collection" value={assemblyDetails.collection || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #6f42c1', fontWeight: 'bold' }}>
-                                                <option value="">-- NO COLLECTION --</option><option value="N/A">N/A</option>
-                                                {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                                            </select></div>
+                                            <div style={{ gridColumn: 'span 2' }}>
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>COLLECTIONS (MULTI-SELECT FOR CPQ):</label>
+                                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '10px', border: '2px solid #6f42c1', background: '#f8f9fa', maxHeight: '120px', overflowY: 'auto' }}>
+                                                    {collectionsData.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No collections defined in Admin.</span>}
+                                                    {collectionsData.map(c => {
+                                                        const isSelected = (assemblyDetails.collections || []).includes(c.name);
+                                                        return (
+                                                            <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', background: isSelected ? '#d8b4e2' : '#fff', color: isSelected ? '#4a148c' : '#333', border: `1px solid ${isSelected ? '#6f42c1' : '#ccc'}`, padding: '6px 12px', borderRadius: '20px', transition: '0.2s' }}>
+                                                                <input type="checkbox" checked={isSelected} onChange={() => handleToggleCollection(c.name, true)} style={{ display: 'none' }} />
+                                                                {c.name}
+                                                            </label>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
                                         )}
                                         
                                         {windowConfig.system.pillowSizes?.includes(activeBrand) && (
@@ -509,8 +540,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                                             <div>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>PROJECTION (INCHES):</label>
-                                                <input type="number" step="0.125" value={assemblyDetails.customData?.projection || ""} onChange={(e) => handleAssemblyCustomFieldChange("projection", e.target.value)} placeholder="e.g. 3.625" style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', boxSizing: 'border-box' }} />
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET PROJECTION (INCHES):</label>
+                                                <select value={assemblyDetails.customData?.projection || ""} onChange={(e) => handleAssemblyCustomFieldChange("projection", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', fontWeight: 'bold' }}>
+                                                    <option value="">-- NO PROJECTION / NOT BRACKET --</option>
+                                                    {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" PROJECTION</option>)}
+                                                </select>
                                             </div>
                                             <div>
                                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET MOUNT TYPE:</label>
@@ -646,13 +680,23 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                                 
-                                {/* 🚀 FIXED: Collection dropdown dynamically populates from new Collections Dictionary */}
+                                {/* 🚀 FIXED: Component Collections Tags */}
                                 {windowConfig.system.collections?.includes(activeBrand) && (
-                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1' }}>COLLECTION (CPQ QUOTING):</label>
-                                    <select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #6f42c1', fontWeight: 'bold' }}>
-                                        <option value="">-- NO COLLECTION --</option><option value="N/A">N/A</option>
-                                        {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                                    </select></div>
+                                    <div style={{ gridColumn: 'span 2' }}>
+                                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>COLLECTIONS (MULTI-SELECT FOR CPQ):</label>
+                                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '10px', border: '2px solid #6f42c1', background: '#f8f9fa', maxHeight: '120px', overflowY: 'auto' }}>
+                                            {collectionsData.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No collections defined in Admin.</span>}
+                                            {collectionsData.map(c => {
+                                                const isSelected = (editSpecs.collections || []).includes(c.name);
+                                                return (
+                                                    <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', background: isSelected ? '#d8b4e2' : '#fff', color: isSelected ? '#4a148c' : '#333', border: `1px solid ${isSelected ? '#6f42c1' : '#ccc'}`, padding: '6px 12px', borderRadius: '20px', transition: '0.2s' }}>
+                                                        <input type="checkbox" checked={isSelected} onChange={() => handleToggleCollection(c.name)} style={{ display: 'none' }} />
+                                                        {c.name}
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
                                 )}
                                 
                                 {windowConfig.system.pillowSizes?.includes(activeBrand) && (
@@ -717,8 +761,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                                 <div>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>PROJECTION (INCHES):</label>
-                                    <input type="number" step="0.125" value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} placeholder="e.g. 3.625" style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', boxSizing: 'border-box' }} />
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET PROJECTION (INCHES):</label>
+                                    <select value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', fontWeight: 'bold' }}>
+                                        <option value="">-- NO PROJECTION / NOT BRACKET --</option>
+                                        {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" PROJECTION</option>)}
+                                    </select>
                                 </div>
                                 <div>
                                     <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET MOUNT TYPE:</label>
@@ -801,7 +848,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>HEIGHT (in):</label><input name="height" type="number" step="0.1" value={editSpecs.parametric?.height || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
                             </div>
                             <div style={{ marginBottom: '15px' }}>
-                                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}><input type="checkbox" name="isCutToSize" checked={editSpecs.parametric?.isCutToSize || false} onChange={handleParametricChange} />DYNAMIC CUSTOM LENGTH ALLOWED</label>
+                                {/* 🚀 FIXED: Dynamic Stretch Checkbox Label Updated for Clarity */}
+                                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}><input type="checkbox" name="isCutToSize" checked={editSpecs.parametric?.isCutToSize || false} onChange={handleParametricChange} />DYNAMIC CUSTOM LENGTH ALLOWED (STRETCHABLE POLE / TRACK)</label>
                             </div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                                 <div style={{ gridColumn: 'span 2' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d9534f' }}>Z-INDEX / RENDER LAYER:</label><input name="layeringSequence" type="number" step="10" value={editSpecs.layeringSequence || ""} onChange={handleSpecChange} placeholder="e.g. 10 (Back), 30 (Front)" style={{ width: '100%', padding: '8px', border: '2px solid #ccc', boxSizing: 'border-box' }} /></div>
