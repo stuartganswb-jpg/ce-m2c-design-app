@@ -19,7 +19,8 @@ const DEFAULT_SYSTEM_WINDOWS = {
   seamCounts: ['uniquity'], assemblyTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
   customers: ['ce', 'm2c', 'uniquity', 'leyla'],
   partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], 
-  inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla']
+  inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
+  projections: ['ce', 'm2c', 'uniquity', 'leyla'] 
 };
 
 const LIST_LABELS = {
@@ -29,7 +30,8 @@ const LIST_LABELS = {
     stitchTypes: 'STITCH ROUTING', seamCounts: 'SEAM COUNTS / UPCHARGES', assemblyTypes: 'ASSEMBLY TYPES',
     customers: 'CUSTOMERS / DEALERS',
     partHandling: 'PART HANDLING & ROUTING', 
-    inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS' 
+    inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS',
+    projections: 'BRACKET PROJECTIONS' 
 };
 
 const LibraryTab = ({ currentUser, activeBrand }) => {
@@ -41,18 +43,18 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [partClassFilter, setPartClassFilter] = useState("ALL"); 
-  const [collectionFilter, setCollectionFilter] = useState(""); // 🚀 NEW: Top Bar Collection Filter
+  const [collectionFilter, setCollectionFilter] = useState(""); 
   
   const [customSchema, setCustomSchema] = useState([]);
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
-  const [collectionsData, setCollectionsData] = useState([]); // 🚀 NEW: Powerful Collections Dictionary
+  const [collectionsData, setCollectionsData] = useState([]); 
   
   const [globalLists, setGlobalLists] = useState({ 
       uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [],
       pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], assemblyTypes: [],
-      cpqRoutingTypes: [], customers: [], partHandling: [], inventoryTypes: [] 
+      cpqRoutingTypes: [], customers: [], partHandling: [], inventoryTypes: [], projections: [] 
   });
   
   const [windowConfig, setWindowConfig] = useState({ system: DEFAULT_SYSTEM_WINDOWS, custom: [] });
@@ -64,12 +66,12 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [showFinishForm, setShowFinishForm] = useState(false);
   const [showOutsourceFinishForm, setShowOutsourceFinishForm] = useState(false);
   const [showWindowManager, setShowWindowManager] = useState(false);
-  const [showCollectionForm, setShowCollectionForm] = useState(false); // 🚀 NEW: Collection Form
+  const [showCollectionForm, setShowCollectionForm] = useState(false); 
 
   const [newFieldConfig, setNewFieldConfig] = useState({ key: '', label: '', type: 'text', options: '' });
   const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '' });
   const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '' });
-  const [newCollection, setNewCollection] = useState({ name: '', allowedCustomers: [], allowedFinishes: [] }); // 🚀 NEW: Collection Payload
+  const [newCollection, setNewCollection] = useState({ name: '', allowedCustomers: [], allowedFinishes: [] }); 
   const [newCustomWindow, setNewCustomWindow] = useState({ name: '', brands: [activeBrand], hasImage: true, hasCode: true, hasVendor: false, hasMultiplier: true });
   
   const [finishUploadProgress, setFinishUploadProgress] = useState(0);
@@ -81,7 +83,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 
   const [activePart, setActivePart] = useState(null);
   const [activeBomPins, setActiveBomPins] = useState([]); 
-  const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, clientPricing: [] }); 
+  const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, clientPricing: [], collections: [] }); 
   const [isSaving, setIsSaving] = useState(false);
   
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '' }); 
@@ -101,7 +103,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (docSnap) => { if (docSnap.exists() && docSnap.data().finishes) setGlobalFinishes(docSnap.data().finishes); });
     const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
-    const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); // 🚀 Fetch Collections Dictionary
+    const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); 
     
     const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
       if (docSnap.exists()) {
@@ -115,7 +117,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               cpqRoutingTypes: data.cpqRoutingTypes || [],
               customers: data.customers || [],
               partHandling: data.partHandling || ['Small Parts', 'Custom'], 
-              inventoryTypes: data.inventoryTypes || [] 
+              inventoryTypes: data.inventoryTypes || [],
+              projections: data.projections || [] 
           });
       }
     });
@@ -161,7 +164,10 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                           ));
     
     let matchesType = typeFilter === "" || specs.productType === typeFilter;
-    let matchesCollection = collectionFilter === "" || specs.collection === collectionFilter || part.collection === collectionFilter; // 🚀 Apply Collection Filter
+    
+    const partCollections = specs.collections || (specs.collection && specs.collection !== 'N/A' ? [specs.collection] : []);
+    let matchesCollection = collectionFilter === "" || partCollections.includes(collectionFilter); 
+    
     let matchesClass = true;
 
     if (partClassFilter !== "ALL") {
@@ -184,6 +190,9 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const isInHouse = baseSpecs.isInHouse !== undefined ? baseSpecs.isInHouse : true;
     let shared = part.sharedBrands || []; if (!shared.includes(part.brandId)) shared = [...shared, part.brandId];
     
+    const legacyCollection = baseSpecs.collection && baseSpecs.collection !== 'N/A' ? [baseSpecs.collection] : [];
+    const currentCollections = baseSpecs.collections || legacyCollection;
+
     setEditSpecs({ 
         ...baseSpecs, 
         parametric: parametricData, 
@@ -196,7 +205,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         clientPricing: part.clientPricing || [], 
         binLocation: baseSpecs.binLocation || "", 
         project: part.project || "",
-        collection: part.collection || baseSpecs.collection || "",
+        collections: currentCollections, 
         routingType: part.routingType || "",
         isProjectManaged: baseSpecs.isProjectManaged || false,
         partHandling: baseSpecs.partHandling || "" 
@@ -209,6 +218,10 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const source = inventory.find(p => p.id === cloneSourceId);
     if(!source || !source.manufacturingSpecs) return;
     const clonedSpecs = JSON.parse(JSON.stringify(source.manufacturingSpecs));
+    
+    const legacyCollection = clonedSpecs.collection && clonedSpecs.collection !== 'N/A' ? [clonedSpecs.collection] : [];
+    clonedSpecs.collections = clonedSpecs.collections || legacyCollection;
+
     setEditSpecs(prev => ({ 
         ...prev, 
         ...clonedSpecs, 
@@ -228,6 +241,12 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const handleParametricChange = (e) => setEditSpecs({ ...editSpecs, parametric: { ...editSpecs.parametric, [e.target.name]: e.target.type === 'checkbox' ? e.target.checked : e.target.value } });
   const handleCustomFieldChange = (key, value) => setEditSpecs(prev => ({ ...prev, customData: { ...(prev.customData || {}), [key]: value } }));
   const handleBrandToggle = (brandId) => { let currentShared = editSpecs.sharedBrands || []; if (currentShared.includes(brandId)) currentShared = currentShared.filter(id => id !== brandId); else currentShared.push(brandId); setEditSpecs({ ...editSpecs, sharedBrands: currentShared }); };
+
+  const handleToggleCollection = (collectionName) => {
+      const current = editSpecs.collections || [];
+      const updated = current.includes(collectionName) ? current.filter(c => c !== collectionName) : [...current, collectionName];
+      setEditSpecs({ ...editSpecs, collections: updated });
+  };
 
   const handleAddClientPricing = () => {
       if (!newClientPricing.customerId) return alert("Select a customer from the dropdown.");
@@ -263,7 +282,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const newId = `${activeBrand.toUpperCase()}-${actualClass === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
     
     setActivePart({ isNew: true, id: newId, itemId: newId, legacyErpId: "PENDING", itemName: `NEW ${actualClass.toUpperCase()}`, brandId: activeBrand, partClass: actualClass });
-    setEditSpecs({ productType: "", uom: "EA", finishDetail: "", collection: "N/A", project: "", routingType: "", assemblyType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" }, isProjectManaged: false, partHandling: "" }); 
+    setEditSpecs({ productType: "", uom: "EA", finishDetail: "", collections: [], project: "", routingType: "", assemblyType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" }, isProjectManaged: false, partHandling: "" }); 
     setPdfFile(null); setCadFile(null); setCloneSourceId("");
   };
 
@@ -293,6 +312,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     }
 
     const compiledSpecs = { ...editSpecs, pdfUrl: finalPdfUrl, cadUrl: finalCadUrl };
+    delete compiledSpecs.collection; 
+
     const finalName = editSpecs.tempName || activePart.itemName;
     const finalLegacyId = (editSpecs.tempLegacyId || activePart.legacyErpId).toUpperCase();
 
@@ -308,7 +329,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       
       if (activePart.partClass !== 'Inventory') {
           payload.project = editSpecs.project || "";
-          payload.collection = editSpecs.collection || "";
           payload.routingType = editSpecs.routingType || "";
           payload.productType = editSpecs.productType || "";
       } else {
@@ -363,7 +383,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       await setDoc(doc(db, "system", "master_schema"), { inventoryFields: customSchema.filter(f => f.key !== keyToRemove) }, { merge: true });
   };
 
-  // 🚀 NEW: Handlers for Collections Dictionary
   const toggleCollectionCustomer = (cust) => {
       setNewCollection(prev => ({ ...prev, allowedCustomers: prev.allowedCustomers.includes(cust) ? prev.allowedCustomers.filter(c => c !== cust) : [...prev.allowedCustomers, cust] }));
   };
@@ -547,7 +566,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               </select>
           )}
 
-          {/* 🚀 FIXED: Added Dynamic Collection Filter to Top Bar */}
           {windowConfig.system.collections?.includes(activeBrand) && (
               <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ padding: '10px', border: '2px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', flex: 1 }}>
                   <option value="">ALL COLLECTIONS</option>
@@ -794,13 +812,23 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                    )}
 
-                   {/* 🚀 FIXED: Collection dropdown dynamically populates from new Collections Dictionary */}
+                   {/* 🚀 FIXED: Multi-Select Collection Tags */}
                    {windowConfig.system.collections?.includes(activeBrand) && (
-                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1' }}>COLLECTION (CPQ QUOTING):</label>
-                       <select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #6f42c1', fontWeight: 'bold' }}>
-                           <option value="">-- NO COLLECTION --</option><option value="N/A">N/A</option>
-                           {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                       </select></div>
+                       <div style={{ gridColumn: 'span 2' }}>
+                           <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>COLLECTIONS (MULTI-SELECT FOR CPQ):</label>
+                           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '10px', border: '2px solid #6f42c1', background: '#f8f9fa', maxHeight: '120px', overflowY: 'auto' }}>
+                               {collectionsData.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No collections defined in Admin.</span>}
+                               {collectionsData.map(c => {
+                                   const isSelected = (editSpecs.collections || []).includes(c.name);
+                                   return (
+                                       <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', background: isSelected ? '#d8b4e2' : '#fff', color: isSelected ? '#4a148c' : '#333', border: `1px solid ${isSelected ? '#6f42c1' : '#ccc'}`, padding: '6px 12px', borderRadius: '20px', transition: '0.2s' }}>
+                                           <input type="checkbox" checked={isSelected} onChange={() => handleToggleCollection(c.name)} style={{ display: 'none' }} />
+                                           {c.name}
+                                       </label>
+                                   );
+                               })}
+                           </div>
+                       </div>
                    )}
 
                    {windowConfig.system.pillowSizes?.includes(activeBrand) && (
@@ -867,8 +895,12 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                   <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                       <div>
-                          <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>PROJECTION (INCHES):</label>
-                          <input type="number" step="0.125" value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} placeholder="e.g. 3.625" style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', boxSizing: 'border-box' }} />
+                          {/* 🚀 FIXED: Projection dropdown uses System Master List */}
+                          <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET PROJECTION (INCHES):</label>
+                          <select value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', fontWeight: 'bold' }}>
+                              <option value="">-- NO PROJECTION / NOT BRACKET --</option>
+                              {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" PROJECTION</option>)}
+                          </select>
                       </div>
                       <div>
                           <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET MOUNT TYPE:</label>
@@ -934,18 +966,18 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                     </div>
                     
                     <div style={{ borderTop: '2px solid #eee', paddingTop: '10px', marginTop: '5px', display: 'flex', gap: '15px' }}>
-                      <div style={{ flex: 1 }}>
-                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>UPLOAD PRINT (PDF):</label>
-                          {editSpecs.pdfUrl && <a href={editSpecs.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>[View Current PDF]</a>}
-                          <input type="file" accept="application/pdf" onChange={(e) => setPdfFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                          {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
-                      </div>
-                      <div style={{ flex: 1, borderLeft: '1px solid #eee', paddingLeft: '15px' }}>
-                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>3D CAD MODEL (.GLB / .GLTF):</label>
-                          {editSpecs.cadUrl && <div style={{ fontSize: '0.7rem', color: '#28a745', marginBottom: '5px', fontWeight: 'bold' }}>[✓ 3D Model Assigned]</div>}
-                          <input type="file" accept=".glb,.gltf" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                          {cadUploadProgress > 0 && <progress value={cadUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
-                      </div>
+                        <div style={{ flex: 1 }}>
+                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>UPLOAD PRINT (PDF):</label>
+                            {editSpecs.pdfUrl && <a href={editSpecs.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>[View Current PDF]</a>}
+                            <input type="file" accept="application/pdf" onChange={(e) => setPdfFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
+                            {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
+                        </div>
+                        <div style={{ flex: 1, borderLeft: '1px solid #eee', paddingLeft: '15px' }}>
+                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>3D CAD MODEL (.GLB / .GLTF):</label>
+                            {editSpecs.cadUrl && <div style={{ fontSize: '0.7rem', color: '#28a745', marginBottom: '5px', fontWeight: 'bold' }}>[✓ 3D Model Assigned]</div>}
+                            <input type="file" accept=".glb,.gltf" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
+                            {cadUploadProgress > 0 && <progress value={cadUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
+                        </div>
                     </div>
                   </div>
               )}
@@ -959,7 +991,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                   <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>HEIGHT (in):</label><input name="height" type="number" step="0.1" value={editSpecs.parametric?.height || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
                 </div>
                 <div style={{ marginBottom: '15px' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}><input type="checkbox" name="isCutToSize" checked={editSpecs.parametric?.isCutToSize || false} onChange={handleParametricChange} />DYNAMIC CUSTOM LENGTH ALLOWED</label>
+                  {/* 🚀 FIXED: Dynamic Stretch Checkbox Label Updated for Clarity */}
+                  <label style={{ fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}><input type="checkbox" name="isCutToSize" checked={editSpecs.parametric?.isCutToSize || false} onChange={handleParametricChange} />DYNAMIC CUSTOM LENGTH ALLOWED (STRETCHABLE POLE / TRACK)</label>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                   <div style={{ gridColumn: 'span 2' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d9534f' }}>Z-INDEX / RENDER LAYER:</label><input name="layeringSequence" type="number" step="10" value={editSpecs.layeringSequence || ""} onChange={handleSpecChange} placeholder="e.g. 10 (Back), 30 (Front)" style={{ width: '100%', padding: '8px', border: '2px solid #ccc', boxSizing: 'border-box' }} /></div>
@@ -1058,7 +1091,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* 🚀 FIXED: NEW POWERFUL COLLECTIONS DICTIONARY MANAGER */}
+                        {/* 🚀 FIXED: POWERFUL COLLECTIONS DICTIONARY MANAGER */}
                         {windowConfig.system.collections?.includes(adminBrandFilter) && (
                             <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #6f42c1' }}>
                                 <div style={{ padding: '15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
@@ -1074,7 +1107,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                             </div>
                                             
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                                                <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '150px', overflowY: 'auto' }}>
+                                                <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '250px', overflowY: 'auto' }}>
                                                     <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#007bff' }}>RESTRICT TO CUSTOMERS (Optional):</label>
                                                     {globalLists.customers.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No customers in database.</span>}
                                                     {globalLists.customers.map(c => (
@@ -1084,12 +1117,23 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                                     ))}
                                                 </div>
 
-                                                <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '150px', overflowY: 'auto' }}>
+                                                <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '250px', overflowY: 'auto' }}>
                                                     <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#28a745' }}>ALLOWED FINISHES (Optional):</label>
-                                                    {globalFinishes.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No finishes in database.</span>}
+                                                    
+                                                    {/* Explicitly separated In-House vs Outsourced Finishes */}
+                                                    <div style={{ fontWeight: 'bold', fontSize: '0.65rem', background: '#eee', padding: '4px', marginBottom: '5px' }}>IN-HOUSE FINISHES</div>
+                                                    {globalFinishes.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic', display: 'block', padding: '5px' }}>No in-house finishes.</span>}
                                                     {globalFinishes.map(f => (
-                                                        <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
+                                                        <label key={`inhouse-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
                                                             <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name} {f.code && `(${f.code})`}
+                                                        </label>
+                                                    ))}
+
+                                                    <div style={{ fontWeight: 'bold', fontSize: '0.65rem', background: '#e0f7fa', padding: '4px', marginTop: '15px', marginBottom: '5px' }}>OUTSOURCED FINISHES</div>
+                                                    {outsourceFinishes.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic', display: 'block', padding: '5px' }}>No outsourced finishes.</span>}
+                                                    {outsourceFinishes.map(f => (
+                                                        <label key={`outsource-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
+                                                            <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name}
                                                         </label>
                                                     ))}
                                                 </div>
@@ -1245,7 +1289,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
-                        {/* 🚀 FIXED: Removed the old "collections" string array from this simple dropdown list to avoid conflicts */}
+                        {/* 🚀 FIXED: New PROJECTIONS list added to dropdowns */}
                         <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #fd7e14' }}>
                             <div style={{ padding: '15px', background: '#fd7e14', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
                                 <span>📋 SIMPLE DROPDOWN LISTS</span>
