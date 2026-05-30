@@ -28,7 +28,7 @@ const LIST_LABELS = {
     watchLists: 'WATCHLISTS', vendors: 'APPROVED VENDORS', outsourceActions: 'OUTSOURCE ACTIONS',
     pillowSizes: 'PILLOW SIZES', fillTypes: 'FILL TYPES', flangeStyles: 'EDGE / FLANGE STYLES', 
     stitchTypes: 'STITCH ROUTING', seamCounts: 'SEAM COUNTS / UPCHARGES', assemblyTypes: 'ASSEMBLY TYPES',
-    customers: 'CUSTOMERS / DEALERS',
+    customers: 'CUSTOMERS / DEALERS (Format: Name - ID)', // 🚀 FIXED: Clearer label for Admin
     partHandling: 'PART HANDLING & ROUTING', 
     inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS',
     projections: 'BRACKET PROJECTIONS' 
@@ -163,7 +163,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                               (cp.customerId && cp.customerId.toLowerCase().includes(term))
                           ));
     
-    let matchesType = typeFilter === "" || specs.productType === typeFilter;
+    let matchesType = typeFilter === "" || specs.productType === typeFilter || part.productType === typeFilter;
     
     const partCollections = specs.collections || (specs.collection && specs.collection !== 'N/A' ? [specs.collection] : []);
     let matchesCollection = collectionFilter === "" || partCollections.includes(collectionFilter); 
@@ -207,6 +207,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         project: part.project || "",
         collections: currentCollections, 
         routingType: part.routingType || "",
+        productType: part.productType || baseSpecs.productType || "",
         isProjectManaged: baseSpecs.isProjectManaged || false,
         partHandling: baseSpecs.partHandling || "" 
     });
@@ -231,7 +232,10 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         binLocation: prev.binLocation, 
         pdfUrl: prev.pdfUrl, 
         cadUrl: prev.cadUrl,
-        partHandling: prev.partHandling 
+        partHandling: prev.partHandling,
+        project: prev.project,
+        routingType: prev.routingType,
+        productType: prev.productType
     }));
     setCloneSourceId("");
   };
@@ -318,22 +322,18 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const finalLegacyId = (editSpecs.tempLegacyId || activePart.legacyErpId).toUpperCase();
 
     try {
+      // 🚀 FIXED: Project, Routing, and Product Type are saved at the root level for ALL classes
       const payload = { 
           itemName: finalName, 
           legacyErpId: finalLegacyId, 
           clientPricing: editSpecs.clientPricing || [], 
           sharedBrands: editSpecs.sharedBrands || [activePart.brandId || activeBrand], 
+          project: editSpecs.project || "",
+          routingType: editSpecs.routingType || "",
+          productType: editSpecs.productType || "",
           manufacturingSpecs: compiledSpecs, 
           updatedAt: new Date().toISOString() 
       };
-      
-      if (activePart.partClass !== 'Inventory') {
-          payload.project = editSpecs.project || "";
-          payload.routingType = editSpecs.routingType || "";
-          payload.productType = editSpecs.productType || "";
-      } else {
-          payload.routingType = editSpecs.routingType || ""; 
-      }
 
       if (activePart.isNew) payload.createdAt = new Date().toISOString();
       await setDoc(doc(db, "Approved_Designs", activePart.id), { ...activePart, ...payload }, { merge: true });
@@ -662,11 +662,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                               <div style={{ fontSize: '0.7rem', color: '#666' }}>Checking this box ensures that when this product is quoted/ordered, it routes to the Project Management dashboard for multi-WO/PO dissection.</div>
                           </div>
                       </div>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '15px' }}>
-                          <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>ROUTING TYPE:</label><select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold' }}><option value="">UNASSIGNED</option>{(globalLists.assemblyTypes || []).map(at => <option key={at} value={at}>{at}</option>)}</select></div>
-                          <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROJECT / GROUPING:</label><input name="project" value={editSpecs.project || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
-                      </div>
                       
                       {activePart.revisions && activePart.revisions.length > 0 && (
                           <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
@@ -744,7 +739,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                     
                     <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '15px' }}>
                         <div style={{ flex: 2 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOMER:</label>
+                            {/* 🚀 FIXED: Clarified Label Instruction */}
+                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOMER (NAME - ID):</label>
                             <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
                                 <option value="">Select Customer...</option>
                                 {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
@@ -752,7 +748,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                         </div>
                         <div style={{ flex: 2 }}>
                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CLIENT SKU / PART #:</label>
-                            <input value={newClientPricing.clientSku} onChange={e => setNewClientPricing({...newClientPricing, clientSku: e.target.value})} placeholder="e.g. CUST-999" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                            <input value={newClientPricing.clientSku} onChange={e => setNewClientPricing({...newClientPricing, clientSku: e.target.value})} placeholder="e.g. Brimar-8483" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
                         </div>
                         <div style={{ flex: 1 }}>
                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOM PRICE ($):</label>
@@ -796,12 +792,18 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
                    )}
 
+                   {/* 🚀 FIXED: Centralized Project Field & Routing Field for ALL Classes */}
                    <div>
                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>{activePart.partClass === 'Inventory' ? 'INVENTORY CATEGORY:' : 'ROUTING CLASSIFICATION:'}</label>
                        <select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
                            <option value="">UNASSIGNED</option>
                            {(activePart.partClass === 'Inventory' ? (globalLists.inventoryTypes || []) : (globalLists.assemblyTypes || [])).map(t => <option key={t} value={t}>{t}</option>)}
                        </select>
+                   </div>
+                   
+                   <div>
+                       <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c' }}>PROJECT / GROUPING:</label>
+                       <input name="project" value={editSpecs.project || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #e83e8c', boxSizing: 'border-box', fontWeight: 'bold' }} />
                    </div>
 
                    {windowConfig.system.partHandling?.includes(activeBrand) && (
@@ -812,7 +814,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                    )}
 
-                   {/* 🚀 FIXED: Multi-Select Collection Tags */}
                    {windowConfig.system.collections?.includes(activeBrand) && (
                        <div style={{ gridColumn: 'span 2' }}>
                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>COLLECTIONS (MULTI-SELECT FOR CPQ):</label>
@@ -890,12 +891,10 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                  </div>
               </div>
 
-              {/* 🚀 NEW: HARDWARE CPQ METADATA BLOCK */}
               <div style={{ background: '#f8f9fa', border: '2px solid #d4af37', padding: '15px', marginTop: '10px' }}>
                   <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                       <div>
-                          {/* 🚀 FIXED: Projection dropdown uses System Master List */}
                           <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET PROJECTION (INCHES):</label>
                           <select value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', fontWeight: 'bold' }}>
                               <option value="">-- NO PROJECTION / NOT BRACKET --</option>
@@ -904,7 +903,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                       </div>
                       <div>
                           <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET MOUNT TYPE:</label>
-                          <select value={editSpecs.customData?.bracketType || ""} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
+                          <select value={editSpecs.customData?.bracketType || ""} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', fontWeight: 'bold' }}>
                               <option value="">-- NOT A BRACKET --</option>
                               <option value="WALL">WALL MOUNT</option>
                               <option value="CEILING">CEILING MOUNT</option>
@@ -913,7 +912,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                       </div>
                       <div style={{ gridColumn: 'span 2' }}>
                           <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>SERVICE / FEE TYPE (AUTO-APPEND):</label>
-                          <select value={editSpecs.customData?.feeType || ""} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
+                          <select value={editSpecs.customData?.feeType || ""} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', fontWeight: 'bold' }}>
                               <option value="">-- NO SPECIAL FEE --</option>
                               <option value="SPLICE">SPLICE FEE</option>
                               <option value="MITER_CUT">MITER CUT FEE</option>
@@ -925,7 +924,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                   </div>
               </div>
 
-              {/* SOURCING & WAREHOUSE */}
               {activePart.partClass === 'Inventory' && (
                   <div>
                     <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px', color: '#007bff' }}>LOGISTICS & SOURCING</h4>
@@ -966,18 +964,18 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                     </div>
                     
                     <div style={{ borderTop: '2px solid #eee', paddingTop: '10px', marginTop: '5px', display: 'flex', gap: '15px' }}>
-                        <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>UPLOAD PRINT (PDF):</label>
-                            {editSpecs.pdfUrl && <a href={editSpecs.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>[View Current PDF]</a>}
-                            <input type="file" accept="application/pdf" onChange={(e) => setPdfFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                            {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
-                        </div>
-                        <div style={{ flex: 1, borderLeft: '1px solid #eee', paddingLeft: '15px' }}>
-                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>3D CAD MODEL (.GLB / .GLTF):</label>
-                            {editSpecs.cadUrl && <div style={{ fontSize: '0.7rem', color: '#28a745', marginBottom: '5px', fontWeight: 'bold' }}>[✓ 3D Model Assigned]</div>}
-                            <input type="file" accept=".glb,.gltf" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                            {cadUploadProgress > 0 && <progress value={cadUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
-                        </div>
+                      <div style={{ flex: 1 }}>
+                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>UPLOAD PRINT (PDF):</label>
+                          {editSpecs.pdfUrl && <a href={editSpecs.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>[View Current PDF]</a>}
+                          <input type="file" accept="application/pdf" onChange={(e) => setPdfFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
+                          {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
+                      </div>
+                      <div style={{ flex: 1, borderLeft: '1px solid #eee', paddingLeft: '15px' }}>
+                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>3D CAD MODEL (.GLB / .GLTF):</label>
+                          {editSpecs.cadUrl && <div style={{ fontSize: '0.7rem', color: '#28a745', marginBottom: '5px', fontWeight: 'bold' }}>[✓ 3D Model Assigned]</div>}
+                          <input type="file" accept=".glb,.gltf" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
+                          {cadUploadProgress > 0 && <progress value={cadUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
+                      </div>
                     </div>
                   </div>
               )}
@@ -991,7 +989,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                   <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>HEIGHT (in):</label><input name="height" type="number" step="0.1" value={editSpecs.parametric?.height || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
                 </div>
                 <div style={{ marginBottom: '15px' }}>
-                  {/* 🚀 FIXED: Dynamic Stretch Checkbox Label Updated for Clarity */}
                   <label style={{ fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}><input type="checkbox" name="isCutToSize" checked={editSpecs.parametric?.isCutToSize || false} onChange={handleParametricChange} />DYNAMIC CUSTOM LENGTH ALLOWED (STRETCHABLE POLE / TRACK)</label>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
@@ -1091,73 +1088,69 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* 🚀 FIXED: POWERFUL COLLECTIONS DICTIONARY MANAGER */}
-                        {windowConfig.system.collections?.includes(adminBrandFilter) && (
-                            <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #6f42c1' }}>
-                                <div style={{ padding: '15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                                    <span>📁 MASTER COLLECTIONS DICTIONARY</span>
-                                    <button onClick={() => setShowCollectionForm(!showCollectionForm)} style={{ background: '#fff', color: '#6f42c1', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>{showCollectionForm ? 'CLOSE' : '+ ADD COLLECTION'}</button>
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                                    {showCollectionForm && (
-                                        <div style={{ padding: '20px', background: '#f3e8ff', borderBottom: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                                            <div>
-                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>COLLECTION NAME:</label>
-                                                <input value={newCollection.name} onChange={(e) => setNewCollection({...newCollection, name: e.target.value})} placeholder="e.g. Modern Industrial" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} />
-                                            </div>
-                                            
-                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                                                <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '250px', overflowY: 'auto' }}>
-                                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#007bff' }}>RESTRICT TO CUSTOMERS (Optional):</label>
-                                                    {globalLists.customers.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No customers in database.</span>}
-                                                    {globalLists.customers.map(c => (
-                                                        <label key={c} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
-                                                            <input type="checkbox" checked={newCollection.allowedCustomers.includes(c)} onChange={() => toggleCollectionCustomer(c)} /> {c}
-                                                        </label>
-                                                    ))}
-                                                </div>
-
-                                                <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '250px', overflowY: 'auto' }}>
-                                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#28a745' }}>ALLOWED FINISHES (Optional):</label>
-                                                    
-                                                    {/* Explicitly separated In-House vs Outsourced Finishes */}
-                                                    <div style={{ fontWeight: 'bold', fontSize: '0.65rem', background: '#eee', padding: '4px', marginBottom: '5px' }}>IN-HOUSE FINISHES</div>
-                                                    {globalFinishes.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic', display: 'block', padding: '5px' }}>No in-house finishes.</span>}
-                                                    {globalFinishes.map(f => (
-                                                        <label key={`inhouse-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
-                                                            <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name} {f.code && `(${f.code})`}
-                                                        </label>
-                                                    ))}
-
-                                                    <div style={{ fontWeight: 'bold', fontSize: '0.65rem', background: '#e0f7fa', padding: '4px', marginTop: '15px', marginBottom: '5px' }}>OUTSOURCED FINISHES</div>
-                                                    {outsourceFinishes.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic', display: 'block', padding: '5px' }}>No outsourced finishes.</span>}
-                                                    {outsourceFinishes.map(f => (
-                                                        <label key={`outsource-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
-                                                            <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name}
-                                                        </label>
-                                                    ))}
-                                                </div>
-                                            </div>
-
-                                            <button onClick={handleAddCollection} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '5px' }}>SAVE COLLECTION</button>
+                        <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #6f42c1' }}>
+                            <div style={{ padding: '15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
+                                <span>📁 MASTER COLLECTIONS DICTIONARY</span>
+                                <button onClick={() => setShowCollectionForm(!showCollectionForm)} style={{ background: '#fff', color: '#6f42c1', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>{showCollectionForm ? 'CLOSE' : '+ ADD COLLECTION'}</button>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                {showCollectionForm && (
+                                    <div style={{ padding: '20px', background: '#f3e8ff', borderBottom: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                                        <div>
+                                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>COLLECTION NAME:</label>
+                                            <input value={newCollection.name} onChange={(e) => setNewCollection({...newCollection, name: e.target.value})} placeholder="e.g. Modern Industrial" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} />
                                         </div>
-                                    )}
-                                    <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto', background: '#f8f9fa' }}>
-                                        {collectionsData.length === 0 && <span style={{ color: '#999', fontStyle: 'italic' }}>No collections mapped yet.</span>}
-                                        {collectionsData.map(col => (
-                                            <div key={col.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: '#fff', padding: '15px', border: '2px solid #ccc', borderLeft: `6px solid #6f42c1`, boxShadow: '3px 3px 0 rgba(0,0,0,0.05)' }}>
-                                                <div>
-                                                    <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#000' }}>{col.name}</div>
-                                                    <div style={{ fontSize: '0.65rem', color: '#007bff', fontWeight: 'bold', marginTop: '5px' }}>CUSTOMERS: {col.allowedCustomers?.length > 0 ? col.allowedCustomers.join(', ') : 'ALL (Unrestricted)'}</div>
-                                                    <div style={{ fontSize: '0.65rem', color: '#28a745', fontWeight: 'bold', marginTop: '3px' }}>FINISHES: {col.allowedFinishes?.length > 0 ? col.allowedFinishes.join(', ') : 'ALL (Unrestricted)'}</div>
-                                                </div>
-                                                <button onClick={() => handleDeleteCollection(col.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                                        
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                            <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '250px', overflowY: 'auto' }}>
+                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#007bff' }}>RESTRICT TO CUSTOMERS (Optional):</label>
+                                                {globalLists.customers.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No customers in database.</span>}
+                                                {globalLists.customers.map(c => (
+                                                    <label key={c} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
+                                                        <input type="checkbox" checked={newCollection.allowedCustomers.includes(c)} onChange={() => toggleCollectionCustomer(c)} /> {c}
+                                                    </label>
+                                                ))}
                                             </div>
-                                        ))}
+
+                                            <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '250px', overflowY: 'auto' }}>
+                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#28a745' }}>ALLOWED FINISHES (Optional):</label>
+                                                
+                                                <div style={{ fontWeight: 'bold', fontSize: '0.65rem', background: '#eee', padding: '4px', marginBottom: '5px' }}>IN-HOUSE FINISHES</div>
+                                                {globalFinishes.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic', display: 'block', padding: '5px' }}>No in-house finishes.</span>}
+                                                {globalFinishes.map(f => (
+                                                    <label key={`inhouse-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
+                                                        <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name} {f.code && `(${f.code})`}
+                                                    </label>
+                                                ))}
+
+                                                <div style={{ fontWeight: 'bold', fontSize: '0.65rem', background: '#e0f7fa', padding: '4px', marginTop: '15px', marginBottom: '5px' }}>OUTSOURCED FINISHES</div>
+                                                {outsourceFinishes.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic', display: 'block', padding: '5px' }}>No outsourced finishes.</span>}
+                                                {outsourceFinishes.map(f => (
+                                                    <label key={`outsource-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
+                                                        <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name}
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <button onClick={handleAddCollection} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '5px' }}>SAVE COLLECTION</button>
                                     </div>
+                                )}
+                                <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto', background: '#f8f9fa' }}>
+                                    {collectionsData.length === 0 && <span style={{ color: '#999', fontStyle: 'italic' }}>No collections mapped yet.</span>}
+                                    {collectionsData.map(col => (
+                                        <div key={col.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: '#fff', padding: '15px', border: '2px solid #ccc', borderLeft: `6px solid #6f42c1`, boxShadow: '3px 3px 0 rgba(0,0,0,0.05)' }}>
+                                            <div>
+                                                <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#000' }}>{col.name}</div>
+                                                <div style={{ fontSize: '0.65rem', color: '#007bff', fontWeight: 'bold', marginTop: '5px' }}>CUSTOMERS: {col.allowedCustomers?.length > 0 ? col.allowedCustomers.join(', ') : 'ALL (Unrestricted)'}</div>
+                                                <div style={{ fontSize: '0.65rem', color: '#28a745', fontWeight: 'bold', marginTop: '3px' }}>FINISHES: {col.allowedFinishes?.length > 0 ? col.allowedFinishes.join(', ') : 'ALL (Unrestricted)'}</div>
+                                            </div>
+                                            <button onClick={() => handleDeleteCollection(col.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
-                        )}
+                        </div>
 
                         {windowConfig.system.outsourceFinishes?.includes(adminBrandFilter) && (
                             <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #17a2b8' }}>
@@ -1289,7 +1282,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
-                        {/* 🚀 FIXED: New PROJECTIONS list added to dropdowns */}
                         <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #fd7e14' }}>
                             <div style={{ padding: '15px', background: '#fd7e14', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
                                 <span>📋 SIMPLE DROPDOWN LISTS</span>
@@ -1336,58 +1328,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                     </div>
                   </div>
               )}
-          </div>
-      )}
-
-      {showWindowManager && (
-          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-              <div style={{ background: '#fff', border: '4px solid #000', width: '900px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
-                  <div style={{ padding: '20px', background: '#000', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                      <h2 style={{ margin: 0, fontSize: '1.5rem', textTransform: 'uppercase' }}>MANAGE BRAND DATA WINDOWS</h2>
-                      <button onClick={() => setShowWindowManager(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '2rem', cursor: 'pointer' }}>×</button>
-                  </div>
-                  <div style={{ flex: 1, padding: '20px', overflowY: 'auto', background: '#f8f9fa' }}>
-                      
-                      <div style={{ marginBottom: '30px', padding: '15px', border: '2px dashed #007bff', background: '#f0f8ff' }}>
-                          <h4 style={{ margin: '0 0 10px 0', color: '#007bff' }}>+ CREATE CUSTOM CPQ DICTIONARY</h4>
-                          <p style={{ fontSize: '0.75rem', color: '#666', marginBottom: '15px' }}>Create a new bucket of options (e.g. "Glass Colors", "Tassels") to use in the CPQ Engine.</p>
-                          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                              <input value={newCustomWindow.name} onChange={e => setNewCustomWindow({...newCustomWindow, name: e.target.value})} placeholder="Dictionary Name (e.g. Glass Colors)" style={{ flex: 1, padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }} />
-                              <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'flex', gap: '5px' }}><input type="checkbox" checked={newCustomWindow.hasImage} onChange={e => setNewCustomWindow({...newCustomWindow, hasImage: e.target.checked})} /> Require Texture Image</label>
-                              <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'flex', gap: '5px' }}><input type="checkbox" checked={newCustomWindow.hasCode} onChange={e => setNewCustomWindow({...newCustomWindow, hasCode: e.target.checked})} /> Require ERP Code</label>
-                              <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'flex', gap: '5px' }}><input type="checkbox" checked={newCustomWindow.hasMultiplier} onChange={e => setNewCustomWindow({...newCustomWindow, hasMultiplier: e.target.checked})} /> Has Price Multiplier</label>
-                              <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'flex', gap: '5px' }}><input type="checkbox" checked={newCustomWindow.hasVendor} onChange={e => setNewCustomWindow({...newCustomWindow, hasVendor: e.target.checked})} /> Assign Vendor</label>
-                              <button onClick={handleCreateCustomWindow} style={{ padding: '10px 20px', background: '#007bff', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>CREATE</button>
-                          </div>
-                      </div>
-
-                      <div style={{ marginBottom: '30px' }}>
-                          <h3 style={{ borderBottom: '2px solid #ccc', paddingBottom: '10px', marginTop: 0 }}>SYSTEM & CUSTOM WINDOWS</h3>
-                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', textAlign: 'left', background: '#fff', border: '1px solid #ccc' }}>
-                              <thead style={{ background: '#eee' }}>
-                                  <tr><th style={{ padding: '10px', borderBottom: '2px solid #000' }}>WINDOW</th>{AVAILABLE_BRANDS.map(b => <th key={b.id} style={{ padding: '10px', borderBottom: '2px solid #000', textAlign: 'center' }}>{b.id.toUpperCase()}</th>)}</tr>
-                              </thead>
-                              <tbody>
-                                  {Object.keys(windowConfig.system).map(key => (
-                                      <tr key={key} style={{ borderBottom: '1px solid #eee' }}>
-                                          <td style={{ padding: '10px', fontWeight: 'bold' }}>{LIST_LABELS[key] || key.replace(/([A-Z])/g, ' $1').trim().toUpperCase()}</td>
-                                          {AVAILABLE_BRANDS.map(b => <td key={b.id} style={{ padding: '10px', textAlign: 'center' }}><input type="checkbox" checked={(windowConfig.system[key] || []).includes(b.id)} onChange={() => toggleSystemWindowBrand(key, b.id)} style={{ transform: 'scale(1.3)', cursor: 'pointer' }} /></td>)}
-                                      </tr>
-                                  ))}
-                                  {windowConfig.custom.map(w => (
-                                      <tr key={w.id} style={{ borderBottom: '1px solid #ccc', background: '#fce4ec' }}>
-                                          <td style={{ padding: '10px', fontWeight: 'bold', color: '#e83e8c', display: 'flex', justifyContent: 'space-between' }}>
-                                              {w.name}
-                                              <button onClick={() => handleDeleteCustomWindow(w.id)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer' }}>🗑️ DEL</button>
-                                          </td>
-                                          {AVAILABLE_BRANDS.map(b => <td key={b.id} style={{ padding: '10px', textAlign: 'center' }}><input type="checkbox" checked={(w.brands || []).includes(b.id)} onChange={() => toggleCustomWindowBrand(w.id, b.id)} style={{ transform: 'scale(1.3)', cursor: 'pointer' }} /></td>)}
-                                      </tr>
-                                  ))}
-                              </tbody>
-                          </table>
-                      </div>
-                  </div>
-              </div>
           </div>
       )}
     </div>

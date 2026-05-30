@@ -22,7 +22,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [isSaving, setIsSaving] = useState(false);
 
   const [assemblyDetails, setAssemblyDetails] = useState({
-      itemName: "", legacyErpId: "", productType: "", routingType: "UNASSIGNED",
+      itemName: "", legacyErpId: "", productType: "", routingType: "UNASSIGNED", project: "",
       basePrice: "", cost: "", pdfUrl: "", cadUrl: "",
       isProjectManaged: false, binLocation: "",
       partHandling: "", uom: "EA", pillowSize: "", fillType: "", flangeStyle: "", stitchType: "", seamCount: "", outsourceAction: "", watchList: "NONE",
@@ -51,7 +51,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               partHandling: data.partHandling || ['Small Parts', 'Custom'],
               inventoryTypes: data.inventoryTypes || [], 
               assemblyTypes: data.assemblyTypes || [],
-              projections: data.projections || [] // 🚀 Fetching Projections
+              projections: data.projections || [] 
           });
       }
     });
@@ -102,7 +102,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
   useEffect(() => {
       if (selectedAssemblyData) {
-          // Legacy migration
           const legacyCollection = selectedAssemblyData.collection && selectedAssemblyData.collection !== 'N/A' ? [selectedAssemblyData.collection] : [];
           const currentCollections = selectedAssemblyData.manufacturingSpecs?.collections || legacyCollection;
 
@@ -112,6 +111,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               productType: selectedAssemblyData.productType || "",
               collections: currentCollections,
               routingType: selectedAssemblyData.routingType || "UNASSIGNED",
+              project: selectedAssemblyData.project || "",
               basePrice: selectedAssemblyData.manufacturingSpecs?.basePrice || "",
               cost: selectedAssemblyData.manufacturingSpecs?.cost || "",
               pdfUrl: selectedAssemblyData.manufacturingSpecs?.pdfUrl || "",
@@ -163,6 +163,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           cpqCategories, 
           isInHouse, 
           partHandling,
+          project: bomItem.masterPart.project || "",
           routingType: bomItem.masterPart.routingType || "" 
       });
   };
@@ -234,6 +235,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               legacyErpId: assemblyDetails.legacyErpId.toUpperCase() || "PENDING",
               productType: assemblyDetails.productType,
               routingType: assemblyDetails.routingType,
+              project: assemblyDetails.project || "",
               manufacturingSpecs: { 
                   ...currentSpecs, 
                   basePrice: assemblyDetails.basePrice, 
@@ -244,7 +246,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                   binLocation: assemblyDetails.binLocation,
                   partHandling: assemblyDetails.partHandling,
                   uom: assemblyDetails.uom,
-                  collections: assemblyDetails.collections, // 🚀 Saving array
+                  collections: assemblyDetails.collections, 
                   pillowSize: assemblyDetails.pillowSize,
                   fillType: assemblyDetails.fillType,
                   flangeStyle: assemblyDetails.flangeStyle,
@@ -292,6 +294,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       try {
           await updateDoc(doc(db, "Approved_Designs", activeComponent.masterPart.id), {
               routingType: editSpecs.routingType || "", 
+              project: editSpecs.project || "",
+              productType: editSpecs.productType || "",
               manufacturingSpecs: compiledSpecs,
               updatedAt: new Date().toISOString()
           });
@@ -446,6 +450,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginTop: '10px' }}>
                                         
                                         <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={assemblyDetails.productType || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
+                                        
                                         <div>
                                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>ROUTING CLASSIFICATION:</label>
                                             <select name="routingType" value={assemblyDetails.routingType || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
@@ -454,13 +459,17 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             </select>
                                         </div>
 
+                                        <div>
+                                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c' }}>PROJECT / GROUPING:</label>
+                                            <input name="project" value={assemblyDetails.project || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #e83e8c', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                                        </div>
+
                                         {windowConfig.system.partHandling?.includes(activeBrand) && (
                                             <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label><select name="partHandling" value={assemblyDetails.partHandling || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}><option value="">UNASSIGNED / STANDARD</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
                                         )}
 
                                         <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={assemblyDetails.uom || "EA"} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                                         
-                                        {/* 🚀 FIXED: Assembly Collections Tags */}
                                         {windowConfig.system.collections?.includes(activeBrand) && (
                                             <div style={{ gridColumn: 'span 2' }}>
                                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>COLLECTIONS (MULTI-SELECT FOR CPQ):</label>
@@ -535,7 +544,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
                                     </div>
 
-                                    {/* 🚀 NEW: HARDWARE CPQ METADATA BLOCK FOR ASSEMBLIES */}
                                     <div style={{ background: '#f8f9fa', border: '2px solid #d4af37', padding: '15px', marginTop: '10px' }}>
                                         <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
@@ -673,6 +681,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         {(isAssembly ? (globalLists.assemblyTypes || []) : (globalLists.inventoryTypes || [])).map(t => <option key={t} value={t}>{t}</option>)}
                                     </select>
                                 </div>
+                                
+                                <div>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c' }}>PROJECT / GROUPING:</label>
+                                    <input name="project" value={editSpecs.project || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #e83e8c', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                                </div>
 
                                 {windowConfig.system.partHandling?.includes(activeBrand) && (
                                     <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label><select name="partHandling" value={editSpecs.partHandling || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}><option value="">UNASSIGNED / STANDARD</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
@@ -680,7 +693,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                                 
-                                {/* 🚀 FIXED: Component Collections Tags */}
                                 {windowConfig.system.collections?.includes(activeBrand) && (
                                     <div style={{ gridColumn: 'span 2' }}>
                                         <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>COLLECTIONS (MULTI-SELECT FOR CPQ):</label>
@@ -756,7 +768,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
-                        {/* 🚀 NEW: HARDWARE CPQ METADATA BLOCK FOR COMPONENTS */}
                         <div style={{ background: '#f8f9fa', border: '2px solid #d4af37', padding: '15px', marginTop: '10px' }}>
                             <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
@@ -848,7 +859,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>HEIGHT (in):</label><input name="height" type="number" step="0.1" value={editSpecs.parametric?.height || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
                             </div>
                             <div style={{ marginBottom: '15px' }}>
-                                {/* 🚀 FIXED: Dynamic Stretch Checkbox Label Updated for Clarity */}
                                 <label style={{ fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}><input type="checkbox" name="isCutToSize" checked={editSpecs.parametric?.isCutToSize || false} onChange={handleParametricChange} />DYNAMIC CUSTOM LENGTH ALLOWED (STRETCHABLE POLE / TRACK)</label>
                             </div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
