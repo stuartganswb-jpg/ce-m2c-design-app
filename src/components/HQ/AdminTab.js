@@ -233,7 +233,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
       try {
           const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
-          const q = `SELECT id, itemid, displayname, baseprice FROM item WHERE custitem_sync_to_cpq = 'T' AND subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND ${typeFilter}`;
+          const q = `SELECT id, itemid, displayname FROM item WHERE custitem_sync_to_cpq = 'T' AND subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND ${typeFilter}`;
           
           const result = await executeSuiteQL(q);
           const records = result.items || [];
