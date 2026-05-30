@@ -1,0 +1,407 @@
+[debug] [2026-05-30T19:44:42.414Z] ----------------------------------------------------------------------
+[debug] [2026-05-30T19:44:42.424Z] Command:       /usr/local/bin/firebase /Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/bin/firebase deploy --only functions
+[debug] [2026-05-30T19:44:42.425Z] CLI Version:   15.16.0
+[debug] [2026-05-30T19:44:42.425Z] Platform:      darwin
+[debug] [2026-05-30T19:44:42.425Z] Node Version:  v20.18.2
+[debug] [2026-05-30T19:44:42.426Z] Time:          Sat May 30 2026 15:44:42 GMT-0400 (Eastern Daylight Time)
+[debug] [2026-05-30T19:44:42.426Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-05-30T19:44:43.626Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-05-30T19:44:43.628Z] > authorizing via signed-in user (stuartganswb@gmail.com)
+[debug] [2026-05-30T19:44:43.628Z] [iam] checking project ce-m2c-design-collab for permissions ["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]
+[debug] [2026-05-30T19:44:43.631Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:43.631Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:43.633Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions [none]
+[debug] [2026-05-30T19:44:43.633Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions  x-goog-user-project=ce-m2c-design-collab
+[debug] [2026-05-30T19:44:43.634Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions {"permissions":["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]}
+[debug] [2026-05-30T19:44:44.164Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions 200
+[debug] [2026-05-30T19:44:44.165Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions {"permissions":["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]}
+[debug] [2026-05-30T19:44:44.165Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:44.166Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:44.166Z] >>> [apiv2][query] POST https://iam.googleapis.com/v1/projects/ce-m2c-design-collab/serviceAccounts/ce-m2c-design-collab@appspot.gserviceaccount.com:testIamPermissions [none]
+[debug] [2026-05-30T19:44:44.166Z] >>> [apiv2][body] POST https://iam.googleapis.com/v1/projects/ce-m2c-design-collab/serviceAccounts/ce-m2c-design-collab@appspot.gserviceaccount.com:testIamPermissions {"permissions":["iam.serviceAccounts.actAs"]}
+[debug] [2026-05-30T19:44:44.415Z] <<< [apiv2][status] POST https://iam.googleapis.com/v1/projects/ce-m2c-design-collab/serviceAccounts/ce-m2c-design-collab@appspot.gserviceaccount.com:testIamPermissions 200
+[debug] [2026-05-30T19:44:44.416Z] <<< [apiv2][body] POST https://iam.googleapis.com/v1/projects/ce-m2c-design-collab/serviceAccounts/ce-m2c-design-collab@appspot.gserviceaccount.com:testIamPermissions {"permissions":["iam.serviceAccounts.actAs"]}
+[info] 
+[info] === Deploying to 'ce-m2c-design-collab'...
+[info] 
+[info] i  deploying functions 
+[debug] [2026-05-30T19:44:44.422Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:44.422Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:44.422Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudresourcemanager.googleapis.com [none]
+[debug] [2026-05-30T19:44:44.422Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudresourcemanager.googleapis.com  x-goog-user-project=ce-m2c-design-collab
+[debug] [2026-05-30T19:44:44.932Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudresourcemanager.googleapis.com 200
+[debug] [2026-05-30T19:44:44.933Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudresourcemanager.googleapis.com [omitted]
+[debug] [2026-05-30T19:44:44.941Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:44.941Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:44.941Z] >>> [apiv2][query] GET https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab [none]
+[debug] [2026-05-30T19:44:45.068Z] <<< [apiv2][status] GET https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab 200
+[debug] [2026-05-30T19:44:45.069Z] <<< [apiv2][body] GET https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab {"projectNumber":"166921373356","projectId":"ce-m2c-design-collab","lifecycleState":"ACTIVE","name":"CE-M2C-Design-Collab","labels":{"firebase":"enabled","firebase-core":"disabled"},"createTime":"2026-05-10T20:23:46.168Z"}
+[info] i  functions: preparing codebase default for deployment 
+[info] i  functions: ensuring required API cloudfunctions.googleapis.com is enabled... 
+[info] i  functions: ensuring required API cloudbuild.googleapis.com is enabled... 
+[debug] [2026-05-30T19:44:45.072Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:45.073Z] Checked if tokens are valid: true, expires at: 1780173659264
+[info] i  artifactregistry: ensuring required API artifactregistry.googleapis.com is enabled... 
+[debug] [2026-05-30T19:44:45.073Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:45.073Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:45.075Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudbuild.googleapis.com [none]
+[debug] [2026-05-30T19:44:45.076Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudbuild.googleapis.com  x-goog-user-project=ce-m2c-design-collab
+[debug] [2026-05-30T19:44:45.077Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/artifactregistry.googleapis.com [none]
+[debug] [2026-05-30T19:44:45.077Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/artifactregistry.googleapis.com  x-goog-user-project=ce-m2c-design-collab
+[debug] [2026-05-30T19:44:45.370Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudbuild.googleapis.com 200
+[debug] [2026-05-30T19:44:45.370Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudbuild.googleapis.com [omitted]
+[warn] ⚠  functions: missing required API cloudbuild.googleapis.com. Enabling now... 
+[debug] [2026-05-30T19:44:45.379Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:45.379Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:45.380Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudbuild.googleapis.com:enable [none]
+[debug] [2026-05-30T19:44:45.380Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudbuild.googleapis.com:enable  x-goog-user-project=ce-m2c-design-collab
+[debug] [2026-05-30T19:44:45.415Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/artifactregistry.googleapis.com 200
+[debug] [2026-05-30T19:44:45.415Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/artifactregistry.googleapis.com [omitted]
+[warn] ⚠  artifactregistry: missing required API artifactregistry.googleapis.com. Enabling now... 
+[debug] [2026-05-30T19:44:45.416Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:45.416Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:45.416Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/artifactregistry.googleapis.com:enable [none]
+[debug] [2026-05-30T19:44:45.416Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/artifactregistry.googleapis.com:enable  x-goog-user-project=ce-m2c-design-collab
+[debug] [2026-05-30T19:44:45.959Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudbuild.googleapis.com:enable 200
+[debug] [2026-05-30T19:44:45.960Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/cloudbuild.googleapis.com:enable [omitted]
+[debug] [2026-05-30T19:44:46.198Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/artifactregistry.googleapis.com:enable 200
+[debug] [2026-05-30T19:44:46.198Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/artifactregistry.googleapis.com:enable [omitted]
+[debug] [2026-05-30T19:44:56.215Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:56.223Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:44:56.223Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/ce-m2c-design-collab/adminSdkConfig [none]
+[debug] [2026-05-30T19:44:56.703Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/ce-m2c-design-collab/adminSdkConfig 200
+[debug] [2026-05-30T19:44:56.704Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/ce-m2c-design-collab/adminSdkConfig {"projectId":"ce-m2c-design-collab","storageBucket":"ce-m2c-design-collab.firebasestorage.app"}
+[debug] [2026-05-30T19:44:56.712Z] Validating nodejs source
+[debug] [2026-05-30T19:44:56.743Z] checkFunctionsSDKVersion was unable to fetch information from NPM Error: spawnSync npm Unknown system error -8
+    at Object.spawnSync (node:internal/child_process:1123:20)
+    at Object.spawnSync (node:child_process:877:24)
+    at Object.spawnSync (pkg/prelude/bootstrap.js:2092:31)
+    at Function.spawnSync [as sync] (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/cross-spawn/index.js:26:23)
+    at Object.getLatestSDKVersion (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/functions/runtimes/node/versioning.js:55:25)
+    at Object.checkFunctionsSDKVersion (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/functions/runtimes/node/versioning.js:74:32)
+    at Delegate.validate (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/functions/runtimes/node/index.js:88:20)
+    at loadCodebases (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/functions/prepare.js:378:31)
+    at async prepare (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/functions/prepare.js:73:24)
+    at async chain (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/index.js:45:9)
+[debug] [2026-05-30T19:44:56.745Z] > [functions] package.json contents: {
+  "name": "functions",
+  "description": "Cloud Functions for Firebase",
+  "scripts": {
+    "serve": "firebase emulators:start --only functions",
+    "shell": "firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "engines": {
+    "node": "24"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "crypto-js": "^4.2.0",
+    "firebase-admin": "^13.6.0",
+    "firebase-functions": "^7.0.0"
+  },
+  "devDependencies": {
+    "firebase-functions-test": "^3.4.1"
+  },
+  "private": true
+}
+[debug] [2026-05-30T19:44:56.746Z] Building nodejs source
+[info] i  functions: Loading and analyzing source code for codebase default to determine what to deploy 
+[debug] [2026-05-30T19:44:56.750Z] Could not find functions.yaml. Must use http discovery
+[debug] [2026-05-30T19:44:56.763Z] Found firebase-functions binary at '/Users/stuartgans_ma2/Desktop/ce-m2c-design-app/functions/node_modules/.bin/firebase-functions'
+[info] Serving at port 8877
+
+[debug] [2026-05-30T19:44:58.776Z] Got response from /__/functions.yaml {"endpoints":{"netsuiteProxy":{"availableMemoryMb":null,"timeoutSeconds":null,"minInstances":null,"maxInstances":null,"ingressSettings":null,"concurrency":null,"serviceAccountEmail":null,"vpc":null,"platform":"gcfv2","labels":{},"httpsTrigger":{},"entryPoint":"netsuiteProxy"}},"specVersion":"v1alpha1","requiredAPIs":[],"extensions":{}}
+[info] i  extensions: ensuring required API firebaseextensions.googleapis.com is enabled... 
+[debug] [2026-05-30T19:45:02.892Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:02.892Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:02.893Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/firebaseextensions.googleapis.com [none]
+[debug] [2026-05-30T19:45:02.893Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/firebaseextensions.googleapis.com  x-goog-user-project=ce-m2c-design-collab
+[debug] [2026-05-30T19:45:03.294Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/firebaseextensions.googleapis.com 200
+[debug] [2026-05-30T19:45:03.295Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/firebaseextensions.googleapis.com [omitted]
+[warn] ⚠  extensions: missing required API firebaseextensions.googleapis.com. Enabling now... 
+[debug] [2026-05-30T19:45:03.299Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:03.299Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:03.300Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/firebaseextensions.googleapis.com:enable [none]
+[debug] [2026-05-30T19:45:03.301Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/firebaseextensions.googleapis.com:enable  x-goog-user-project=ce-m2c-design-collab
+[debug] [2026-05-30T19:45:04.106Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/firebaseextensions.googleapis.com:enable 200
+[debug] [2026-05-30T19:45:04.107Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1/projects/ce-m2c-design-collab/services/firebaseextensions.googleapis.com:enable [omitted]
+[debug] [2026-05-30T19:45:14.146Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-05-30T19:45:14.151Z] > authorizing via signed-in user (stuartganswb@gmail.com)
+[debug] [2026-05-30T19:45:14.152Z] [iam] checking project ce-m2c-design-collab for permissions ["firebase.projects.get","firebaseextensions.instances.list"]
+[debug] [2026-05-30T19:45:14.153Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:14.153Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:14.155Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions [none]
+[debug] [2026-05-30T19:45:14.155Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions  x-goog-user-project=ce-m2c-design-collab
+[debug] [2026-05-30T19:45:14.155Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions {"permissions":["firebase.projects.get","firebaseextensions.instances.list"]}
+[debug] [2026-05-30T19:45:14.395Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions 200
+[debug] [2026-05-30T19:45:14.396Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions {"permissions":["firebase.projects.get","firebaseextensions.instances.list"]}
+[debug] [2026-05-30T19:45:14.397Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:14.398Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:14.400Z] >>> [apiv2][query] GET https://firebaseextensions.googleapis.com/v1beta/projects/ce-m2c-design-collab/instances pageSize=100&pageToken=
+[debug] [2026-05-30T19:45:18.970Z] <<< [apiv2][status] GET https://firebaseextensions.googleapis.com/v1beta/projects/ce-m2c-design-collab/instances 200
+[debug] [2026-05-30T19:45:18.971Z] <<< [apiv2][body] GET https://firebaseextensions.googleapis.com/v1beta/projects/ce-m2c-design-collab/instances {}
+[info] i  functions: preparing functions directory for uploading... 
+[info] i  functions: packaged /Users/stuartgans_ma2/Desktop/ce-m2c-design-app/functions (73.44 KB) for uploading 
+[debug] [2026-05-30T19:45:19.072Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:19.072Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:19.072Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v1/projects/ce-m2c-design-collab/locations/-/functions [none]
+[debug] [2026-05-30T19:45:19.749Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v1/projects/ce-m2c-design-collab/locations/-/functions 200
+[debug] [2026-05-30T19:45:19.750Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v1/projects/ce-m2c-design-collab/locations/-/functions {}
+[debug] [2026-05-30T19:45:19.751Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:19.751Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:19.752Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/-/functions filter=environment%3D%22GEN_2%22
+[debug] [2026-05-30T19:45:20.271Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/-/functions 200
+[debug] [2026-05-30T19:45:20.272Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/-/functions {}
+[info] i  functions: ensuring required API run.googleapis.com is enabled... 
+[debug] [2026-05-30T19:45:20.298Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:20.298Z] Checked if tokens are valid: true, expires at: 1780173659264
+[info] i  functions: ensuring required API eventarc.googleapis.com is enabled... 
+[debug] [2026-05-30T19:45:20.299Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:20.299Z] Checked if tokens are valid: true, expires at: 1780173659264
+[info] i  functions: ensuring required API pubsub.googleapis.com is enabled... 
+[debug] [2026-05-30T19:45:20.299Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:20.299Z] Checked if tokens are valid: true, expires at: 1780173659264
+[info] i  functions: ensuring required API storage.googleapis.com is enabled... 
+[debug] [2026-05-30T19:45:20.299Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:20.299Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:20.300Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/run.googleapis.com [none]
+[debug] [2026-05-30T19:45:20.300Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/run.googleapis.com  x-goog-user-project=166921373356
+[debug] [2026-05-30T19:45:20.305Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/eventarc.googleapis.com [none]
+[debug] [2026-05-30T19:45:20.305Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/eventarc.googleapis.com  x-goog-user-project=166921373356
+[debug] [2026-05-30T19:45:20.307Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/pubsub.googleapis.com [none]
+[debug] [2026-05-30T19:45:20.307Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/pubsub.googleapis.com  x-goog-user-project=166921373356
+[debug] [2026-05-30T19:45:20.307Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/storage.googleapis.com [none]
+[debug] [2026-05-30T19:45:20.307Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/storage.googleapis.com  x-goog-user-project=166921373356
+[debug] [2026-05-30T19:45:20.695Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/run.googleapis.com 200
+[debug] [2026-05-30T19:45:20.695Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/run.googleapis.com [omitted]
+[warn] ⚠  functions: missing required API run.googleapis.com. Enabling now... 
+[debug] [2026-05-30T19:45:20.697Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:20.697Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:20.698Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1/projects/166921373356/services/run.googleapis.com:enable [none]
+[debug] [2026-05-30T19:45:20.698Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1/projects/166921373356/services/run.googleapis.com:enable  x-goog-user-project=166921373356
+[debug] [2026-05-30T19:45:20.701Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/pubsub.googleapis.com 200
+[debug] [2026-05-30T19:45:20.701Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/pubsub.googleapis.com [omitted]
+[info] ✔  functions: required API pubsub.googleapis.com is enabled 
+[debug] [2026-05-30T19:45:20.717Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/eventarc.googleapis.com 200
+[debug] [2026-05-30T19:45:20.717Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/eventarc.googleapis.com [omitted]
+[warn] ⚠  functions: missing required API eventarc.googleapis.com. Enabling now... 
+[debug] [2026-05-30T19:45:20.718Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:20.718Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:20.718Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1/projects/166921373356/services/eventarc.googleapis.com:enable [none]
+[debug] [2026-05-30T19:45:20.718Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1/projects/166921373356/services/eventarc.googleapis.com:enable  x-goog-user-project=166921373356
+[debug] [2026-05-30T19:45:20.719Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/storage.googleapis.com 200
+[debug] [2026-05-30T19:45:20.720Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/166921373356/services/storage.googleapis.com [omitted]
+[info] ✔  functions: required API storage.googleapis.com is enabled 
+[debug] [2026-05-30T19:45:21.329Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1/projects/166921373356/services/eventarc.googleapis.com:enable 200
+[debug] [2026-05-30T19:45:21.330Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1/projects/166921373356/services/eventarc.googleapis.com:enable [omitted]
+[debug] [2026-05-30T19:45:21.423Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1/projects/166921373356/services/run.googleapis.com:enable 200
+[debug] [2026-05-30T19:45:21.423Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1/projects/166921373356/services/run.googleapis.com:enable [omitted]
+[info] i  functions: generating the service identity for pubsub.googleapis.com... 
+[debug] [2026-05-30T19:45:31.442Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:31.442Z] Checked if tokens are valid: true, expires at: 1780173659264
+[info] i  functions: generating the service identity for eventarc.googleapis.com... 
+[debug] [2026-05-30T19:45:31.443Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:31.443Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:31.443Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1beta1/projects/166921373356/services/pubsub.googleapis.com:generateServiceIdentity [none]
+[debug] [2026-05-30T19:45:31.443Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1beta1/projects/166921373356/services/pubsub.googleapis.com:generateServiceIdentity  x-goog-user-project=166921373356
+[debug] [2026-05-30T19:45:31.444Z] >>> [apiv2][body] POST https://serviceusage.googleapis.com/v1beta1/projects/166921373356/services/pubsub.googleapis.com:generateServiceIdentity {}
+[debug] [2026-05-30T19:45:31.447Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1beta1/projects/166921373356/services/eventarc.googleapis.com:generateServiceIdentity [none]
+[debug] [2026-05-30T19:45:31.447Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1beta1/projects/166921373356/services/eventarc.googleapis.com:generateServiceIdentity  x-goog-user-project=166921373356
+[debug] [2026-05-30T19:45:31.447Z] >>> [apiv2][body] POST https://serviceusage.googleapis.com/v1beta1/projects/166921373356/services/eventarc.googleapis.com:generateServiceIdentity {}
+[debug] [2026-05-30T19:45:32.258Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1beta1/projects/166921373356/services/pubsub.googleapis.com:generateServiceIdentity 200
+[debug] [2026-05-30T19:45:32.259Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1beta1/projects/166921373356/services/pubsub.googleapis.com:generateServiceIdentity {"name":"operations/finished.DONE_OPERATION","done":true,"response":{"@type":"type.googleapis.com/google.api.serviceusage.v1beta1.ServiceIdentity","email":"service-166921373356@gcp-sa-pubsub.iam.gserviceaccount.com","uniqueId":"102202972497012399461"}}
+[debug] [2026-05-30T19:45:32.308Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1beta1/projects/166921373356/services/eventarc.googleapis.com:generateServiceIdentity 200
+[debug] [2026-05-30T19:45:32.309Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1beta1/projects/166921373356/services/eventarc.googleapis.com:generateServiceIdentity {"name":"operations/finished.DONE_OPERATION","done":true,"response":{"@type":"type.googleapis.com/google.api.serviceusage.v1beta1.ServiceIdentity","email":"service-166921373356@gcp-sa-eventarc.iam.gserviceaccount.com","uniqueId":"103435795010534611593"}}
+[debug] [2026-05-30T19:45:32.320Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:32.321Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:32.321Z] >>> [apiv2][query] GET https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab [none]
+[debug] [2026-05-30T19:45:32.534Z] <<< [apiv2][status] GET https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab 200
+[debug] [2026-05-30T19:45:32.534Z] <<< [apiv2][body] GET https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab {"projectNumber":"166921373356","projectId":"ce-m2c-design-collab","lifecycleState":"ACTIVE","name":"CE-M2C-Design-Collab","labels":{"firebase":"enabled","firebase-core":"disabled"},"createTime":"2026-05-10T20:23:46.168Z"}
+[debug] [2026-05-30T19:45:32.536Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:32.536Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:32.536Z] >>> [apiv2][query] GET https://compute.googleapis.com/compute/v1/projects/166921373356 [none]
+[debug] [2026-05-30T19:45:32.874Z] <<< [apiv2][status] GET https://compute.googleapis.com/compute/v1/projects/166921373356 403
+[debug] [2026-05-30T19:45:32.874Z] <<< [apiv2][body] GET https://compute.googleapis.com/compute/v1/projects/166921373356 {"error":{"code":403,"message":"Compute Engine API has not been used in project 166921373356 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=166921373356 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.","errors":[{"message":"Compute Engine API has not been used in project 166921373356 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=166921373356 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.","domain":"usageLimits","reason":"accessNotConfigured","extendedHelp":"https://console.developers.google.com"}],"status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED","domain":"googleapis.com","metadata":{"containerInfo":"166921373356","serviceTitle":"Compute Engine API","activationUrl":"https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=166921373356","service":"compute.googleapis.com","consumer":"projects/166921373356"}},{"@type":"type.googleapis.com/google.rpc.LocalizedMessage","locale":"en-US","message":"Compute Engine API has not been used in project 166921373356 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=166921373356 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry."},{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Google developers console API activation","url":"https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=166921373356"}]}]}}
+[debug] [2026-05-30T19:45:32.880Z] unable to look up default compute service account. Falling back to 166921373356-compute@developer.gserviceaccount.com. Error: {"name":"FirebaseError","children":[],"context":{"body":{"error":{"code":403,"message":"Compute Engine API has not been used in project 166921373356 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=166921373356 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.","errors":[{"message":"Compute Engine API has not been used in project 166921373356 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=166921373356 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.","domain":"usageLimits","reason":"accessNotConfigured","extendedHelp":"https://console.developers.google.com"}],"status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED","domain":"googleapis.com","metadata":{"containerInfo":"166921373356","serviceTitle":"Compute Engine API","activationUrl":"https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=166921373356","service":"compute.googleapis.com","consumer":"projects/166921373356"}},{"@type":"type.googleapis.com/google.rpc.LocalizedMessage","locale":"en-US","message":"Compute Engine API has not been used in project 166921373356 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=166921373356 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry."},{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Google developers console API activation","url":"https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=166921373356"}]}]}},"response":{"statusCode":403}},"exit":1,"message":"Request to https://compute.googleapis.com/compute/v1/projects/166921373356 had HTTP Error: 403, Compute Engine API has not been used in project 166921373356 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=166921373356 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.","status":403}
+[debug] [2026-05-30T19:45:32.883Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:32.883Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:32.884Z] >>> [apiv2][query] GET https://cloudbilling.googleapis.com/v1/projects/ce-m2c-design-collab/billingInfo [none]
+[debug] [2026-05-30T19:45:33.117Z] <<< [apiv2][status] GET https://cloudbilling.googleapis.com/v1/projects/ce-m2c-design-collab/billingInfo 200
+[debug] [2026-05-30T19:45:33.117Z] <<< [apiv2][body] GET https://cloudbilling.googleapis.com/v1/projects/ce-m2c-design-collab/billingInfo {"name":"projects/ce-m2c-design-collab/billingInfo","projectId":"ce-m2c-design-collab","billingAccountName":"billingAccounts/010A44-6BBFFF-D10004","billingEnabled":true}
+[debug] [2026-05-30T19:45:33.120Z] [functions] found 1 new HTTP functions, testing setIamPolicy permission...
+[debug] [2026-05-30T19:45:33.121Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:33.121Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:33.121Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions [none]
+[debug] [2026-05-30T19:45:33.121Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions  x-goog-user-project=ce-m2c-design-collab
+[debug] [2026-05-30T19:45:33.121Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions {"permissions":["cloudfunctions.functions.setIamPolicy"]}
+[debug] [2026-05-30T19:45:33.269Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions 200
+[debug] [2026-05-30T19:45:33.269Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/ce-m2c-design-collab:testIamPermissions {"permissions":["cloudfunctions.functions.setIamPolicy"]}
+[debug] [2026-05-30T19:45:33.270Z] [functions] found setIamPolicy permission, proceeding with deploy
+[debug] [2026-05-30T19:45:33.272Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:33.272Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:33.272Z] >>> [apiv2][query] POST https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/functions:generateUploadUrl [none]
+[debug] [2026-05-30T19:45:34.673Z] <<< [apiv2][status] POST https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/functions:generateUploadUrl 200
+[debug] [2026-05-30T19:45:34.673Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/functions:generateUploadUrl {"uploadUrl":"https://storage.googleapis.com/gcf-v2-uploads-166921373356.us-central1.cloudfunctions.appspot.com/06709223-b9c6-4e03-911c-21a8a29c9a42.zip?GoogleAccessId=service-166921373356@gcf-admin-robot.iam.gserviceaccount.com&Expires=1780172134&Signature=gRqAnfQqRaYwKt2YWndA%2FlVUNGCSpiBjw3gDlcZHTX4njWeslpqlt6jrjWWify7g9vNtDVNJo7kS3mPpX6A6RyiS9dc%2FJIcKS7q0c3Wxj1tCd3K4FpSIEg0gPwzD%2FJ3ArurcTMFFLFkMG8BGfYK5Bu3Il8VNIiQ6nSmDG8Z1ZLXlMUhvdJreRCgDUzyEJZBbX026YHX7iSylq0bx07zdC8Xf0wkdDlgnGnbryv27IcMN%2BDTpW6KKYcqfnHm6NbS0oUFUE%2FzNOLZicHZKGPWqjuiUrUWVbc6HXoFbb9rbmwYHX9b8TSUCEL%2B53u9Twm%2FGdYR19Jm25%2Bm20DhVCeA8Sg%3D%3D","storageSource":{"bucket":"gcf-v2-uploads-166921373356.us-central1.cloudfunctions.appspot.com","object":"06709223-b9c6-4e03-911c-21a8a29c9a42.zip"}}
+[debug] [2026-05-30T19:45:34.686Z] >>> [apiv2][query] PUT https://storage.googleapis.com/gcf-v2-uploads-166921373356.us-central1.cloudfunctions.appspot.com/06709223-b9c6-4e03-911c-21a8a29c9a42.zip GoogleAccessId=service-166921373356%40gcf-admin-robot.iam.gserviceaccount.com&Expires=1780172134&Signature=gRqAnfQqRaYwKt2YWndA%2FlVUNGCSpiBjw3gDlcZHTX4njWeslpqlt6jrjWWify7g9vNtDVNJo7kS3mPpX6A6RyiS9dc%2FJIcKS7q0c3Wxj1tCd3K4FpSIEg0gPwzD%2FJ3ArurcTMFFLFkMG8BGfYK5Bu3Il8VNIiQ6nSmDG8Z1ZLXlMUhvdJreRCgDUzyEJZBbX026YHX7iSylq0bx07zdC8Xf0wkdDlgnGnbryv27IcMN%2BDTpW6KKYcqfnHm6NbS0oUFUE%2FzNOLZicHZKGPWqjuiUrUWVbc6HXoFbb9rbmwYHX9b8TSUCEL%2B53u9Twm%2FGdYR19Jm25%2Bm20DhVCeA8Sg%3D%3D
+[debug] [2026-05-30T19:45:34.686Z] >>> [apiv2][body] PUT https://storage.googleapis.com/gcf-v2-uploads-166921373356.us-central1.cloudfunctions.appspot.com/06709223-b9c6-4e03-911c-21a8a29c9a42.zip [stream]
+[debug] [2026-05-30T19:45:35.124Z] <<< [apiv2][status] PUT https://storage.googleapis.com/gcf-v2-uploads-166921373356.us-central1.cloudfunctions.appspot.com/06709223-b9c6-4e03-911c-21a8a29c9a42.zip 200
+[debug] [2026-05-30T19:45:35.124Z] <<< [apiv2][body] PUT https://storage.googleapis.com/gcf-v2-uploads-166921373356.us-central1.cloudfunctions.appspot.com/06709223-b9c6-4e03-911c-21a8a29c9a42.zip [omitted]
+[info] ✔  functions: functions source uploaded successfully 
+[info] i  functions: creating Node.js 24 (2nd Gen) function netsuiteProxy(us-central1)... 
+[debug] [2026-05-30T19:45:35.138Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:35.139Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:35.139Z] >>> [apiv2][query] POST https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/functions functionId=netsuiteProxy
+[debug] [2026-05-30T19:45:35.139Z] >>> [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/functions {"name":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","buildConfig":{"runtime":"nodejs24","entryPoint":"netsuiteProxy","source":{"storageSource":{"bucket":"gcf-v2-uploads-166921373356.us-central1.cloudfunctions.appspot.com","object":"06709223-b9c6-4e03-911c-21a8a29c9a42.zip"}},"environmentVariables":{"GOOGLE_NODE_RUN_SCRIPTS":""}},"serviceConfig":{"environmentVariables":{"FIREBASE_CONFIG":"{\"projectId\":\"ce-m2c-design-collab\",\"storageBucket\":\"ce-m2c-design-collab.firebasestorage.app\"}","GCLOUD_PROJECT":"ce-m2c-design-collab","EVENTARC_CLOUD_EVENT_SOURCE":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteProxy","FUNCTION_TARGET":"netsuiteProxy","LOG_EXECUTION_ID":"true"},"ingressSettings":null,"timeoutSeconds":null,"serviceAccountEmail":null,"availableMemory":"256Mi","minInstanceCount":null,"maxInstanceCount":null,"maxInstanceRequestConcurrency":80,"availableCpu":"1","vpcConnector":null,"vpcConnectorEgressSettings":null,"directVpcNetworkInterface":null,"directVpcEgress":null},"labels":{"deployment-tool":"cli-firebase","firebase-functions-hash":"200e283d9421eea9bdc466a932c258fc9323bc04"}}
+[debug] [2026-05-30T19:45:36.727Z] <<< [apiv2][status] POST https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/functions 200
+[debug] [2026-05-30T19:45:36.728Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/functions {"name":"projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218","metadata":{"@type":"type.googleapis.com/google.cloud.functions.v2.OperationMetadata","createTime":"2026-05-30T19:45:36.741852211Z","target":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","verb":"create","cancelRequested":false,"apiVersion":"v2"},"done":false}
+[debug] [2026-05-30T19:45:36.731Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:36.731Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:36.732Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 [none]
+[debug] [2026-05-30T19:45:36.945Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 200
+[debug] [2026-05-30T19:45:36.945Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 {"name":"projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218","metadata":{"@type":"type.googleapis.com/google.cloud.functions.v2.OperationMetadata","createTime":"2026-05-30T19:45:36.741852211Z","target":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","verb":"create","cancelRequested":false,"apiVersion":"v2"},"done":false}
+[debug] [2026-05-30T19:45:37.449Z] [create-default-us-central1-netsuiteProxy] Retrying task index 0
+[debug] [2026-05-30T19:45:37.450Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:37.450Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:37.451Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 [none]
+[debug] [2026-05-30T19:45:37.655Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 200
+[debug] [2026-05-30T19:45:37.655Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 {"name":"projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218","metadata":{"@type":"type.googleapis.com/google.cloud.functions.v2.OperationMetadata","createTime":"2026-05-30T19:45:36.741852211Z","target":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","verb":"create","cancelRequested":false,"apiVersion":"v2","requestResource":{"@type":"type.googleapis.com/google.cloud.functions.v2.Function","name":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","buildConfig":{"runtime":"nodejs24","entryPoint":"netsuiteProxy","source":{"storageSource":{"bucket":"gcf-v2-sources-166921373356-us-central1","object":"netsuiteProxy/function-source.zip","generation":"1780170336286883"}},"environmentVariables":{"GOOGLE_NODE_RUN_SCRIPTS":""},"serviceAccount":"projects/ce-m2c-design-collab/serviceAccounts/166921373356-compute@developer.gserviceaccount.com","automaticUpdatePolicy":{}},"serviceConfig":{"service":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteproxy","timeoutSeconds":60,"environmentVariables":{"FIREBASE_CONFIG":"{\"projectId\":\"ce-m2c-design-collab\",\"storageBucket\":\"ce-m2c-design-collab.firebasestorage.app\"}","GCLOUD_PROJECT":"ce-m2c-design-collab","EVENTARC_CLOUD_EVENT_SOURCE":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteProxy","FUNCTION_TARGET":"netsuiteProxy","LOG_EXECUTION_ID":"true"},"ingressSettings":"ALLOW_ALL","serviceAccountEmail":"166921373356-compute@developer.gserviceaccount.com","availableMemory":"256Mi","maxInstanceRequestConcurrency":80,"availableCpu":"1"},"labels":{"deployment-tool":"cli-firebase","firebase-functions-hash":"200e283d9421eea9bdc466a932c258fc9323bc04"},"environment":"GEN_2"},"stages":[{"name":"BUILD","state":"NOT_STARTED"},{"name":"SERVICE","state":"NOT_STARTED"}],"operationType":"CREATE_FUNCTION"},"done":false}
+[debug] [2026-05-30T19:45:38.657Z] [create-default-us-central1-netsuiteProxy] Retrying task index 0
+[debug] [2026-05-30T19:45:38.658Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:38.658Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:38.658Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 [none]
+[debug] [2026-05-30T19:45:38.793Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 200
+[debug] [2026-05-30T19:45:38.794Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 {"name":"projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218","metadata":{"@type":"type.googleapis.com/google.cloud.functions.v2.OperationMetadata","createTime":"2026-05-30T19:45:36.741852211Z","target":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","verb":"create","cancelRequested":false,"apiVersion":"v2","requestResource":{"@type":"type.googleapis.com/google.cloud.functions.v2.Function","name":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","buildConfig":{"runtime":"nodejs24","entryPoint":"netsuiteProxy","source":{"storageSource":{"bucket":"gcf-v2-sources-166921373356-us-central1","object":"netsuiteProxy/function-source.zip","generation":"1780170336286883"}},"environmentVariables":{"GOOGLE_NODE_RUN_SCRIPTS":""},"serviceAccount":"projects/ce-m2c-design-collab/serviceAccounts/166921373356-compute@developer.gserviceaccount.com","automaticUpdatePolicy":{}},"serviceConfig":{"service":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteproxy","timeoutSeconds":60,"environmentVariables":{"FIREBASE_CONFIG":"{\"projectId\":\"ce-m2c-design-collab\",\"storageBucket\":\"ce-m2c-design-collab.firebasestorage.app\"}","GCLOUD_PROJECT":"ce-m2c-design-collab","EVENTARC_CLOUD_EVENT_SOURCE":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteProxy","FUNCTION_TARGET":"netsuiteProxy","LOG_EXECUTION_ID":"true"},"ingressSettings":"ALLOW_ALL","serviceAccountEmail":"166921373356-compute@developer.gserviceaccount.com","availableMemory":"256Mi","maxInstanceRequestConcurrency":80,"availableCpu":"1"},"labels":{"deployment-tool":"cli-firebase","firebase-functions-hash":"200e283d9421eea9bdc466a932c258fc9323bc04"},"environment":"GEN_2"},"stages":[{"name":"BUILD","state":"NOT_STARTED"},{"name":"SERVICE","state":"NOT_STARTED"}],"operationType":"CREATE_FUNCTION"},"done":false}
+[debug] [2026-05-30T19:45:40.796Z] [create-default-us-central1-netsuiteProxy] Retrying task index 0
+[debug] [2026-05-30T19:45:40.797Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:40.797Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:40.797Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 [none]
+[debug] [2026-05-30T19:45:41.001Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 200
+[debug] [2026-05-30T19:45:41.001Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 {"name":"projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218","metadata":{"@type":"type.googleapis.com/google.cloud.functions.v2.OperationMetadata","createTime":"2026-05-30T19:45:36.741852211Z","target":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","verb":"create","cancelRequested":false,"apiVersion":"v2","requestResource":{"@type":"type.googleapis.com/google.cloud.functions.v2.Function","name":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","buildConfig":{"runtime":"nodejs24","entryPoint":"netsuiteProxy","source":{"storageSource":{"bucket":"gcf-v2-sources-166921373356-us-central1","object":"netsuiteProxy/function-source.zip","generation":"1780170336286883"}},"environmentVariables":{"GOOGLE_NODE_RUN_SCRIPTS":""},"serviceAccount":"projects/ce-m2c-design-collab/serviceAccounts/166921373356-compute@developer.gserviceaccount.com","automaticUpdatePolicy":{}},"serviceConfig":{"service":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteproxy","timeoutSeconds":60,"environmentVariables":{"FIREBASE_CONFIG":"{\"projectId\":\"ce-m2c-design-collab\",\"storageBucket\":\"ce-m2c-design-collab.firebasestorage.app\"}","GCLOUD_PROJECT":"ce-m2c-design-collab","EVENTARC_CLOUD_EVENT_SOURCE":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteProxy","FUNCTION_TARGET":"netsuiteProxy","LOG_EXECUTION_ID":"true"},"ingressSettings":"ALLOW_ALL","serviceAccountEmail":"166921373356-compute@developer.gserviceaccount.com","availableMemory":"256Mi","maxInstanceRequestConcurrency":80,"availableCpu":"1"},"labels":{"deployment-tool":"cli-firebase","firebase-functions-hash":"200e283d9421eea9bdc466a932c258fc9323bc04"},"environment":"GEN_2"},"stages":[{"name":"BUILD","state":"NOT_STARTED"},{"name":"SERVICE","state":"NOT_STARTED"}],"operationType":"CREATE_FUNCTION"},"done":false}
+[debug] [2026-05-30T19:45:45.002Z] [create-default-us-central1-netsuiteProxy] Retrying task index 0
+[debug] [2026-05-30T19:45:45.003Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:45.003Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:45.003Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 [none]
+[debug] [2026-05-30T19:45:45.222Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 200
+[debug] [2026-05-30T19:45:45.223Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 {"name":"projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218","metadata":{"@type":"type.googleapis.com/google.cloud.functions.v2.OperationMetadata","createTime":"2026-05-30T19:45:36.741852211Z","target":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","verb":"create","cancelRequested":false,"apiVersion":"v2","requestResource":{"@type":"type.googleapis.com/google.cloud.functions.v2.Function","name":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","buildConfig":{"runtime":"nodejs24","entryPoint":"netsuiteProxy","source":{"storageSource":{"bucket":"gcf-v2-sources-166921373356-us-central1","object":"netsuiteProxy/function-source.zip","generation":"1780170336286883"}},"environmentVariables":{"GOOGLE_NODE_RUN_SCRIPTS":""},"serviceAccount":"projects/ce-m2c-design-collab/serviceAccounts/166921373356-compute@developer.gserviceaccount.com","automaticUpdatePolicy":{}},"serviceConfig":{"service":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteproxy","timeoutSeconds":60,"environmentVariables":{"FIREBASE_CONFIG":"{\"projectId\":\"ce-m2c-design-collab\",\"storageBucket\":\"ce-m2c-design-collab.firebasestorage.app\"}","GCLOUD_PROJECT":"ce-m2c-design-collab","EVENTARC_CLOUD_EVENT_SOURCE":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteProxy","FUNCTION_TARGET":"netsuiteProxy","LOG_EXECUTION_ID":"true"},"ingressSettings":"ALLOW_ALL","serviceAccountEmail":"166921373356-compute@developer.gserviceaccount.com","availableMemory":"256Mi","maxInstanceRequestConcurrency":80,"availableCpu":"1"},"labels":{"deployment-tool":"cli-firebase","firebase-functions-hash":"200e283d9421eea9bdc466a932c258fc9323bc04"},"environment":"GEN_2"},"stages":[{"name":"BUILD","state":"NOT_STARTED"},{"name":"SERVICE","state":"NOT_STARTED"}],"operationType":"CREATE_FUNCTION"},"done":false}
+[debug] [2026-05-30T19:45:53.225Z] [create-default-us-central1-netsuiteProxy] Retrying task index 0
+[debug] [2026-05-30T19:45:53.231Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:53.231Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:45:53.235Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 [none]
+[debug] [2026-05-30T19:45:53.509Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 200
+[debug] [2026-05-30T19:45:53.510Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 {"name":"projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218","metadata":{"@type":"type.googleapis.com/google.cloud.functions.v2.OperationMetadata","createTime":"2026-05-30T19:45:36.741852211Z","target":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","verb":"create","cancelRequested":false,"apiVersion":"v2","requestResource":{"@type":"type.googleapis.com/google.cloud.functions.v2.Function","name":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","buildConfig":{"runtime":"nodejs24","entryPoint":"netsuiteProxy","source":{"storageSource":{"bucket":"gcf-v2-sources-166921373356-us-central1","object":"netsuiteProxy/function-source.zip","generation":"1780170336286883"}},"environmentVariables":{"GOOGLE_NODE_RUN_SCRIPTS":""},"serviceAccount":"projects/ce-m2c-design-collab/serviceAccounts/166921373356-compute@developer.gserviceaccount.com","automaticUpdatePolicy":{}},"serviceConfig":{"service":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteproxy","timeoutSeconds":60,"environmentVariables":{"FIREBASE_CONFIG":"{\"projectId\":\"ce-m2c-design-collab\",\"storageBucket\":\"ce-m2c-design-collab.firebasestorage.app\"}","GCLOUD_PROJECT":"ce-m2c-design-collab","EVENTARC_CLOUD_EVENT_SOURCE":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteProxy","FUNCTION_TARGET":"netsuiteProxy","LOG_EXECUTION_ID":"true"},"ingressSettings":"ALLOW_ALL","serviceAccountEmail":"166921373356-compute@developer.gserviceaccount.com","availableMemory":"256Mi","maxInstanceRequestConcurrency":80,"availableCpu":"1"},"labels":{"deployment-tool":"cli-firebase","firebase-functions-hash":"200e283d9421eea9bdc466a932c258fc9323bc04"},"environment":"GEN_2"},"stages":[{"name":"BUILD","state":"NOT_STARTED"},{"name":"SERVICE","state":"NOT_STARTED"}],"operationType":"CREATE_FUNCTION"},"done":false}
+[debug] [2026-05-30T19:46:03.511Z] [create-default-us-central1-netsuiteProxy] Retrying task index 0
+[debug] [2026-05-30T19:46:03.513Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:46:03.513Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:46:03.514Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 [none]
+[debug] [2026-05-30T19:46:03.870Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 200
+[debug] [2026-05-30T19:46:03.870Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 {"name":"projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218","metadata":{"@type":"type.googleapis.com/google.cloud.functions.v2.OperationMetadata","createTime":"2026-05-30T19:45:36.741852211Z","target":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","verb":"create","cancelRequested":false,"apiVersion":"v2","requestResource":{"@type":"type.googleapis.com/google.cloud.functions.v2.Function","name":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","buildConfig":{"runtime":"nodejs24","entryPoint":"netsuiteProxy","source":{"storageSource":{"bucket":"gcf-v2-sources-166921373356-us-central1","object":"netsuiteProxy/function-source.zip","generation":"1780170336286883"}},"environmentVariables":{"GOOGLE_NODE_RUN_SCRIPTS":""},"serviceAccount":"projects/ce-m2c-design-collab/serviceAccounts/166921373356-compute@developer.gserviceaccount.com","automaticUpdatePolicy":{}},"serviceConfig":{"service":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteproxy","timeoutSeconds":60,"environmentVariables":{"FIREBASE_CONFIG":"{\"projectId\":\"ce-m2c-design-collab\",\"storageBucket\":\"ce-m2c-design-collab.firebasestorage.app\"}","GCLOUD_PROJECT":"ce-m2c-design-collab","EVENTARC_CLOUD_EVENT_SOURCE":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteProxy","FUNCTION_TARGET":"netsuiteProxy","LOG_EXECUTION_ID":"true"},"ingressSettings":"ALLOW_ALL","serviceAccountEmail":"166921373356-compute@developer.gserviceaccount.com","availableMemory":"256Mi","maxInstanceRequestConcurrency":80,"availableCpu":"1"},"labels":{"deployment-tool":"cli-firebase","firebase-functions-hash":"200e283d9421eea9bdc466a932c258fc9323bc04"},"environment":"GEN_2"},"stages":[{"name":"BUILD","message":"Build in progress","state":"IN_PROGRESS","resource":"projects/166921373356/locations/us-central1/builds/3d4842a7-902c-4867-941f-3b882e67f9a5","resourceUri":"https://console.cloud.google.com/cloud-build/builds;region=us-central1/3d4842a7-902c-4867-941f-3b882e67f9a5?project=166921373356"},{"name":"SERVICE","state":"NOT_STARTED"}],"operationType":"CREATE_FUNCTION","buildName":"projects/166921373356/locations/us-central1/builds/3d4842a7-902c-4867-941f-3b882e67f9a5"},"done":false}
+[debug] [2026-05-30T19:46:13.872Z] [create-default-us-central1-netsuiteProxy] Retrying task index 0
+[debug] [2026-05-30T19:46:13.873Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:46:13.873Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:46:13.873Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 [none]
+[debug] [2026-05-30T19:46:14.161Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 200
+[debug] [2026-05-30T19:46:14.161Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 {"name":"projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218","metadata":{"@type":"type.googleapis.com/google.cloud.functions.v2.OperationMetadata","createTime":"2026-05-30T19:45:36.741852211Z","target":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","verb":"create","cancelRequested":false,"apiVersion":"v2","requestResource":{"@type":"type.googleapis.com/google.cloud.functions.v2.Function","name":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","buildConfig":{"runtime":"nodejs24","entryPoint":"netsuiteProxy","source":{"storageSource":{"bucket":"gcf-v2-sources-166921373356-us-central1","object":"netsuiteProxy/function-source.zip","generation":"1780170336286883"}},"environmentVariables":{"GOOGLE_NODE_RUN_SCRIPTS":""},"serviceAccount":"projects/ce-m2c-design-collab/serviceAccounts/166921373356-compute@developer.gserviceaccount.com","automaticUpdatePolicy":{}},"serviceConfig":{"service":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteproxy","timeoutSeconds":60,"environmentVariables":{"FIREBASE_CONFIG":"{\"projectId\":\"ce-m2c-design-collab\",\"storageBucket\":\"ce-m2c-design-collab.firebasestorage.app\"}","GCLOUD_PROJECT":"ce-m2c-design-collab","EVENTARC_CLOUD_EVENT_SOURCE":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteProxy","FUNCTION_TARGET":"netsuiteProxy","LOG_EXECUTION_ID":"true"},"ingressSettings":"ALLOW_ALL","serviceAccountEmail":"166921373356-compute@developer.gserviceaccount.com","availableMemory":"256Mi","maxInstanceRequestConcurrency":80,"availableCpu":"1"},"labels":{"deployment-tool":"cli-firebase","firebase-functions-hash":"200e283d9421eea9bdc466a932c258fc9323bc04"},"environment":"GEN_2"},"stages":[{"name":"BUILD","message":"Build in progress","state":"IN_PROGRESS","resource":"projects/166921373356/locations/us-central1/builds/3d4842a7-902c-4867-941f-3b882e67f9a5","resourceUri":"https://console.cloud.google.com/cloud-build/builds;region=us-central1/3d4842a7-902c-4867-941f-3b882e67f9a5?project=166921373356"},{"name":"SERVICE","state":"NOT_STARTED"}],"operationType":"CREATE_FUNCTION","buildName":"projects/166921373356/locations/us-central1/builds/3d4842a7-902c-4867-941f-3b882e67f9a5"},"done":false}
+[debug] [2026-05-30T19:46:24.164Z] [create-default-us-central1-netsuiteProxy] Retrying task index 0
+[debug] [2026-05-30T19:46:24.170Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:46:24.171Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:46:24.171Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 [none]
+[debug] [2026-05-30T19:46:24.484Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 200
+[debug] [2026-05-30T19:46:24.485Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 {"name":"projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218","metadata":{"@type":"type.googleapis.com/google.cloud.functions.v2.OperationMetadata","createTime":"2026-05-30T19:45:36.741852211Z","target":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","verb":"create","cancelRequested":false,"apiVersion":"v2","requestResource":{"@type":"type.googleapis.com/google.cloud.functions.v2.Function","name":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","buildConfig":{"runtime":"nodejs24","entryPoint":"netsuiteProxy","source":{"storageSource":{"bucket":"gcf-v2-sources-166921373356-us-central1","object":"netsuiteProxy/function-source.zip","generation":"1780170336286883"}},"environmentVariables":{"GOOGLE_NODE_RUN_SCRIPTS":""},"serviceAccount":"projects/ce-m2c-design-collab/serviceAccounts/166921373356-compute@developer.gserviceaccount.com","automaticUpdatePolicy":{}},"serviceConfig":{"service":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteproxy","timeoutSeconds":60,"environmentVariables":{"FIREBASE_CONFIG":"{\"projectId\":\"ce-m2c-design-collab\",\"storageBucket\":\"ce-m2c-design-collab.firebasestorage.app\"}","GCLOUD_PROJECT":"ce-m2c-design-collab","EVENTARC_CLOUD_EVENT_SOURCE":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteProxy","FUNCTION_TARGET":"netsuiteProxy","LOG_EXECUTION_ID":"true"},"ingressSettings":"ALLOW_ALL","serviceAccountEmail":"166921373356-compute@developer.gserviceaccount.com","availableMemory":"256Mi","maxInstanceRequestConcurrency":80,"availableCpu":"1"},"labels":{"deployment-tool":"cli-firebase","firebase-functions-hash":"200e283d9421eea9bdc466a932c258fc9323bc04"},"environment":"GEN_2"},"stages":[{"name":"BUILD","message":"Build in progress","state":"IN_PROGRESS","resource":"projects/166921373356/locations/us-central1/builds/3d4842a7-902c-4867-941f-3b882e67f9a5","resourceUri":"https://console.cloud.google.com/cloud-build/builds;region=us-central1/3d4842a7-902c-4867-941f-3b882e67f9a5?project=166921373356"},{"name":"SERVICE","state":"NOT_STARTED"}],"operationType":"CREATE_FUNCTION","buildName":"projects/166921373356/locations/us-central1/builds/3d4842a7-902c-4867-941f-3b882e67f9a5"},"done":false}
+[debug] [2026-05-30T19:46:34.486Z] [create-default-us-central1-netsuiteProxy] Retrying task index 0
+[debug] [2026-05-30T19:46:34.487Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:46:34.487Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:46:34.487Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 [none]
+[debug] [2026-05-30T19:46:34.912Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 200
+[debug] [2026-05-30T19:46:34.915Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v2/projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218 {"name":"projects/ce-m2c-design-collab/locations/us-central1/operations/operation-1780170335376-6530e347ad451-09006cf9-c3f3f218","metadata":{"@type":"type.googleapis.com/google.cloud.functions.v2.OperationMetadata","createTime":"2026-05-30T19:45:36.741852211Z","endTime":"2026-05-30T19:46:32.387712198Z","target":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","verb":"create","cancelRequested":false,"apiVersion":"v2","requestResource":{"@type":"type.googleapis.com/google.cloud.functions.v2.Function","name":"projects/ce-m2c-design-collab/locations/us-central1/functions/netsuiteProxy","buildConfig":{"runtime":"nodejs24","entryPoint":"netsuiteProxy","source":{"storageSource":{"bucket":"gcf-v2-sources-166921373356-us-central1","object":"netsuiteProxy/function-source.zip","generation":"1780170336286883"}},"environmentVariables":{"GOOGLE_NODE_RUN_SCRIPTS":""},"serviceAccount":"projects/ce-m2c-design-collab/serviceAccounts/166921373356-compute@developer.gserviceaccount.com","automaticUpdatePolicy":{}},"serviceConfig":{"service":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteproxy","timeoutSeconds":60,"environmentVariables":{"FIREBASE_CONFIG":"{\"projectId\":\"ce-m2c-design-collab\",\"storageBucket\":\"ce-m2c-design-collab.firebasestorage.app\"}","GCLOUD_PROJECT":"ce-m2c-design-collab","EVENTARC_CLOUD_EVENT_SOURCE":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteProxy","FUNCTION_TARGET":"netsuiteProxy","LOG_EXECUTION_ID":"true"},"ingressSettings":"ALLOW_ALL","serviceAccountEmail":"166921373356-compute@developer.gserviceaccount.com","availableMemory":"256Mi","maxInstanceRequestConcurrency":80,"availableCpu":"1"},"labels":{"deployment-tool":"cli-firebase","firebase-functions-hash":"200e283d9421eea9bdc466a932c258fc9323bc04"},"environment":"GEN_2"},"stages":[{"name":"ARTIFACT_REGISTRY","message":"Deleting function artifacts in Artifact Registry","state":"COMPLETE"},{"name":"SERVICE","message":"Deleting Cloud Run service","state":"COMPLETE","resource":"projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteproxy"}],"operationType":"CREATE_FUNCTION"},"done":true,"error":{"code":3,"message":"Build failed with status: FAILURE. Could not build the function due to a missing permission on the build service account. If you didn't revoke that permission explicitly, this could be caused by a change in the organization policies. Please refer to the following documentation for more details and resolution: https://cloud.google.com/functions/docs/troubleshooting#build-service-account\n You can also view the logs at https://console.cloud.google.com/cloud-build/builds;region=us-central1/3d4842a7-902c-4867-941f-3b882e67f9a5?project=166921373356.\n"}}
+[debug] [2026-05-30T19:46:34.916Z] Got source token undefined for region us-central1
+[error] Build failed with status: FAILURE. Could not build the function due to a missing permission on the build service account. If you didn't revoke that permission explicitly, this could be caused by a change in the organization policies. Please refer to the following documentation for more details and resolution: https://cloud.google.com/functions/docs/troubleshooting#build-service-account
+ You can also view the logs at https://console.cloud.google.com/cloud-build/builds;region=us-central1/3d4842a7-902c-4867-941f-3b882e67f9a5?project=166921373356.
+
+[warn] ⚠  functions: Deploys failed. Skipping deletes. 
+[debug] [2026-05-30T19:46:34.945Z] Total Function Deployment time: 59806
+[debug] [2026-05-30T19:46:34.945Z] 1 Functions Deployed
+[debug] [2026-05-30T19:46:34.945Z] 1 Functions Errored
+[debug] [2026-05-30T19:46:34.945Z] 0 Function Deployments Aborted
+[debug] [2026-05-30T19:46:34.945Z] Average Function Deployment time: 59801
+[info] 
+[info] Functions deploy had errors with the following functions:
+	netsuiteProxy(us-central1)
+[debug] [2026-05-30T19:46:35.182Z] Not printing URL for HTTPS function. Typically this means it didn't match a filter or we failed deployment
+[debug] [2026-05-30T19:46:35.184Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:46:35.184Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:46:35.185Z] >>> [apiv2][query] GET https://artifactregistry.googleapis.com/v1/projects/ce-m2c-design-collab/locations/us-central1/repositories/gcf-artifacts [none]
+[debug] [2026-05-30T19:46:35.656Z] <<< [apiv2][status] GET https://artifactregistry.googleapis.com/v1/projects/ce-m2c-design-collab/locations/us-central1/repositories/gcf-artifacts 200
+[debug] [2026-05-30T19:46:35.657Z] <<< [apiv2][body] GET https://artifactregistry.googleapis.com/v1/projects/ce-m2c-design-collab/locations/us-central1/repositories/gcf-artifacts {"name":"projects/ce-m2c-design-collab/locations/us-central1/repositories/gcf-artifacts","format":"DOCKER","description":"This repository is created and used by Cloud Functions for storing function docker images.","labels":{"goog-managed-by":"cloudfunctions"},"createTime":"2026-05-30T19:45:52.176194Z","updateTime":"2026-05-30T19:45:52.176194Z","mode":"STANDARD_REPOSITORY","vulnerabilityScanningConfig":{"lastEnableTime":"2026-05-30T19:45:36.926814097Z","enablementState":"SCANNING_DISABLED","enablementStateReason":"API containerscanning.googleapis.com is not enabled."},"satisfiesPzi":true,"registryUri":"us-central1-docker.pkg.dev/ce-m2c-design-collab/gcf-artifacts"}
+[warn] ⚠  functions: No cleanup policy detected for repositories in us-central1. This may result in a small monthly bill as container images accumulate over time. 
+[info] i  functions: Configuring cleanup policy for repository in us-central1. Images older than 1 days will be automatically deleted. 
+[debug] [2026-05-30T19:49:06.623Z] Setting up artifact cleanup policy for region us-central1
+[debug] [2026-05-30T19:49:06.632Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:49:06.632Z] Checked if tokens are valid: true, expires at: 1780173659264
+[debug] [2026-05-30T19:49:06.633Z] >>> [apiv2][query] PATCH https://artifactregistry.googleapis.com/v1/projects/ce-m2c-design-collab/locations/us-central1/repositories/gcf-artifacts updateMask=name%2CcleanupPolicies%2CcleanupPolicyDryRun%2Clabels
+[debug] [2026-05-30T19:49:06.633Z] >>> [apiv2][body] PATCH https://artifactregistry.googleapis.com/v1/projects/ce-m2c-design-collab/locations/us-central1/repositories/gcf-artifacts {"name":"projects/ce-m2c-design-collab/locations/us-central1/repositories/gcf-artifacts","cleanupPolicies":{"firebase-functions-cleanup":{"id":"firebase-functions-cleanup","condition":{"tagState":"ANY","olderThan":"86400s"},"action":"DELETE"}},"cleanupPolicyDryRun":false,"labels":{"goog-managed-by":"cloudfunctions"}}
+[debug] [2026-05-30T19:49:07.227Z] <<< [apiv2][status] PATCH https://artifactregistry.googleapis.com/v1/projects/ce-m2c-design-collab/locations/us-central1/repositories/gcf-artifacts 200
+[debug] [2026-05-30T19:49:07.228Z] <<< [apiv2][body] PATCH https://artifactregistry.googleapis.com/v1/projects/ce-m2c-design-collab/locations/us-central1/repositories/gcf-artifacts {"name":"projects/ce-m2c-design-collab/locations/us-central1/repositories/gcf-artifacts","format":"DOCKER","description":"This repository is created and used by Cloud Functions for storing function docker images.","labels":{"goog-managed-by":"cloudfunctions"},"createTime":"2026-05-30T19:45:52.176194Z","updateTime":"2026-05-30T19:49:07.212924Z","mode":"STANDARD_REPOSITORY","cleanupPolicies":{"firebase-functions-cleanup":{"id":"firebase-functions-cleanup","action":"DELETE","condition":{"tagState":"ANY","olderThan":"86400s"}}},"vulnerabilityScanningConfig":{"lastEnableTime":"2026-05-30T19:45:36.926814097Z","enablementState":"SCANNING_DISABLED","enablementStateReason":"API containerscanning.googleapis.com is not enabled."},"satisfiesPzi":true}
+[info] i  functions: Configured cleanup policy for repository in us-central1. 
+[debug] [2026-05-30T19:49:07.229Z] Functions deploy failed.
+[debug] [2026-05-30T19:49:07.236Z] {
+  "endpoint": {
+    "id": "netsuiteProxy",
+    "project": "ce-m2c-design-collab",
+    "region": "us-central1",
+    "entryPoint": "netsuiteProxy",
+    "platform": "gcfv2",
+    "runtime": "nodejs24",
+    "httpsTrigger": {},
+    "labels": {
+      "deployment-tool": "cli-firebase"
+    },
+    "serviceAccount": null,
+    "ingressSettings": null,
+    "availableMemoryMb": null,
+    "timeoutSeconds": null,
+    "maxInstances": null,
+    "minInstances": null,
+    "concurrency": 80,
+    "vpc": null,
+    "environmentVariables": {
+      "FIREBASE_CONFIG": "{\"projectId\":\"ce-m2c-design-collab\",\"storageBucket\":\"ce-m2c-design-collab.firebasestorage.app\"}",
+      "GCLOUD_PROJECT": "ce-m2c-design-collab",
+      "EVENTARC_CLOUD_EVENT_SOURCE": "projects/ce-m2c-design-collab/locations/us-central1/services/netsuiteProxy"
+    },
+    "codebase": "default",
+    "cpu": 1,
+    "targetedByOnly": false,
+    "hash": "200e283d9421eea9bdc466a932c258fc9323bc04"
+  },
+  "op": "create",
+  "original": {
+    "name": "FirebaseError",
+    "children": [],
+    "exit": 1,
+    "message": "Build failed with status: FAILURE. Could not build the function due to a missing permission on the build service account. If you didn't revoke that permission explicitly, this could be caused by a change in the organization policies. Please refer to the following documentation for more details and resolution: https://cloud.google.com/functions/docs/troubleshooting#build-service-account\n You can also view the logs at https://console.cloud.google.com/cloud-build/builds;region=us-central1/3d4842a7-902c-4867-941f-3b882e67f9a5?project=166921373356.\n",
+    "original": {
+      "code": 3,
+      "message": "Build failed with status: FAILURE. Could not build the function due to a missing permission on the build service account. If you didn't revoke that permission explicitly, this could be caused by a change in the organization policies. Please refer to the following documentation for more details and resolution: https://cloud.google.com/functions/docs/troubleshooting#build-service-account\n You can also view the logs at https://console.cloud.google.com/cloud-build/builds;region=us-central1/3d4842a7-902c-4867-941f-3b882e67f9a5?project=166921373356.\n"
+    },
+    "status": 3,
+    "code": 3
+  }
+}
+[debug] [2026-05-30T19:49:07.397Z] Error: Failed to create function netsuiteProxy in region us-central1
+    at /Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/functions/release/fabricator.js:332:27
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async Fabricator.createV2Function (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/functions/release/fabricator.js:311:30)
+    at async Fabricator.createEndpoint (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/functions/release/fabricator.js:153:13)
+    at async Fabricator.wrapOperation (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/functions/release/fabricator.js:138:13)
+    at async Promise.all (index 0)
+    at async Promise.allSettled (index 0)
+    at async Fabricator.applyPlan (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/functions/release/fabricator.js:77:45)
+    at async release (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/functions/release/index.js:87:21)
+    at async chain (/Users/stuartgans_ma2/.cache/firebase/tools/lib/node_modules/firebase-tools/lib/deploy/index.js:45:9)
+[error] 
+[error] Error: There was an error deploying functions

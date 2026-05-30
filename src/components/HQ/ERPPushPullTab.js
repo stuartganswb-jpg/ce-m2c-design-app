@@ -1,41 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc, getDoc } from "firebase/firestore";
-
-// --- REQUIRED FOR NETSUITE AUTHENTICATION ---
-// In a true production environment, you should move this block to a Firebase Cloud Function
-// to hide your consumer secrets. For now, it runs client-side to test the pipeline.
-import CryptoJS from 'crypto-js';
+import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 
 const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const [approvedJobs, setApprovedJobs] = useState([]);
   const [syncedJobs, setSyncedJobs] = useState([]);
   const [activeJob, setActiveJob] = useState(null);
   
-  // Master library lookup for mapping ERP IDs
   const [libraryParts, setLibraryParts] = useState([]);
-
   const [isPushing, setIsPushing] = useState(false);
   const [syncLog, setSyncLog] = useState([]);
 
-  // --- NetSuite API Credentials ---
-  const NS_ACCOUNT = "3728153";
-  const NS_CONSUMER_KEY = "0979687669fe99f5869793e3a911daeb062b779c4801817c86b494ccde1e0db4";
-  const NS_CONSUMER_SECRET = "4f88d6f93c57a1b9e0ffb29ff71831d47b075dcdf609cdb028dd305cb552c243";
-  const NS_TOKEN_ID = "2e5ce04cce902b621aad683d91e08674631cc7c9dd07edaae07cdc12e12f57ad";
-  const NS_TOKEN_SECRET = "f5c98c85514f46fc67674d822b6d70461e5407da13c84c2db6c72d8a5592a72";
+  // --- REPLACE WITH YOUR ACTUAL FIREBASE FUNCTION URL ---
+  const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app"; 
 
   useEffect(() => {
     if (!activeBrand) return;
 
-    // Listen for Approved Jobs waiting for ERP dispatch
     const unsubJobs = onSnapshot(collection(db, "jobs"), (snapshot) => {
         const allJobs = snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter(j => j.brandId === activeBrand);
         setApprovedJobs(allJobs.filter(j => j.status === 'APPROVED' || j.status === 'READY_FOR_ERP'));
         setSyncedJobs(allJobs.filter(j => j.status === 'TRANSMITTED_TO_ERP'));
     });
 
-    // Cache the Master Library so we can translate CPQ Object IDs into NetSuite ERP IDs
     const unsubParts = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
         setLibraryParts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
@@ -48,32 +35,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       setSyncLog(prev => [{ time, msg, type }, ...prev]);
   };
 
-  // --- 🔐 NETSUITE AUTHENTICATION GENERATOR ---
-  const generateNetSuiteHeader = (method, url) => {
-      const oauth_nonce = Math.random().toString(36).substring(2, 15);
-      const oauth_timestamp = Math.floor(Date.now() / 1000).toString();
-      
-      const baseString = `${method}&${encodeURIComponent(url)}&` + encodeURIComponent(
-          `oauth_consumer_key=${NS_CONSUMER_KEY}&` +
-          `oauth_nonce=${oauth_nonce}&` +
-          `oauth_signature_method=HMAC-SHA256&` +
-          `oauth_timestamp=${oauth_timestamp}&` +
-          `oauth_token=${NS_TOKEN_ID}&` +
-          `oauth_version=1.0`
-      );
-      
-      const signingKey = `${encodeURIComponent(NS_CONSUMER_SECRET)}&${encodeURIComponent(NS_TOKEN_SECRET)}`;
-      
-      // Vercel-friendly CryptoJS implementation
-      const hash = CryptoJS.HmacSHA256(baseString, signingKey);
-      const oauth_signature = CryptoJS.enc.Base64.stringify(hash);
-      
-      return `OAuth realm="${NS_ACCOUNT}", oauth_consumer_key="${NS_CONSUMER_KEY}", oauth_token="${NS_TOKEN_ID}", oauth_nonce="${oauth_nonce}", oauth_timestamp="${oauth_timestamp}", oauth_signature_method="HMAC-SHA256", oauth_signature="${encodeURIComponent(oauth_signature)}", oauth_version="1.0"`;
-  };
-
-  // --- 🚀 THE PUSH ENGINE ---
+  // --- 🚀 THE PUSH ENGINE (PROXY VERSION) ---
   const handlePushToNetSuite = async (job) => {
-      // 🛑 SAFETY CATCH: Ensure the job was actually configured in Tab 8
       if (!job.cpqData || !job.cpqData.configuration) {
           addLog(`❌ FAILED: Job ${job.jobId || job.id} has no CPQ data.`, 'error');
           alert("Hold up! This job hasn't been configured in the CPQ Engine (Tab 8) yet. There is no physical inventory attached to it.");
@@ -83,11 +46,9 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       if (!window.confirm(`Are you sure you want to push Job ${job.jobId || job.id} to NetSuite? This will create a live Estimate record.`)) return;
       
       setIsPushing(true);
-      addLog(`Initiating NetSuite Handshake for Job: ${job.jobId || job.id}`, 'info');
+      addLog(`Initiating NetSuite Cloud Proxy for Job: ${job.jobId || job.id}`, 'info');
 
       try {
-          // 1. Build the BOM Payload
-          // We must translate the dynamic CPQ selections into actual NetSuite Items
           const lineItems = [];
           
           if (job.cpqData?.configuration) {
@@ -97,7 +58,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                   
                   if (masterPart) {
                       const nsId = masterPart.legacyErpId || masterPart.itemId;
-                      // Skip parts that haven't been mapped to an ERP ID yet to prevent API errors
                       if (nsId && nsId !== 'PENDING') {
                           lineItems.push({
                               item: { id: nsId }, 
@@ -116,19 +76,16 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               throw new Error("No valid items with NetSuite ERP IDs were found in this configuration.");
           }
 
-          // Format Customer ID (Strip 'CUST-' prefix if necessary based on how NetSuite expects it)
           let nsCustomerId = job.customer?.id || "";
           if (nsCustomerId.startsWith('CUST-')) nsCustomerId = nsCustomerId.replace('CUST-', '');
 
-          // 2. Construct the exact JSON payload for NetSuite
           const payload = {
-              entity: { id: nsCustomerId || "12345" }, // Fallback to a test customer if missing
+              entity: { id: nsCustomerId || "12345" }, 
               memo: `[HQ APP CONFIG] ${job.jobName || ''} - ${job.sidemark || ''}`.trim(),
               item: {
                   items: [
-                      // Top Level Description Anchor
                       {
-                          item: { id: "123" }, // TODO: Update to your generic NetSuite "Configured Hardware" Non-Inventory Item ID
+                          item: { id: "123" }, // TODO: Update to a real Non-Inventory Item ID from NetSuite
                           quantity: 1,
                           description: `=== CPQ BUILD: ${job.sidemark?.toUpperCase() || 'CUSTOM CONFIGURATION'} ===`
                       },
@@ -139,36 +96,28 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
           addLog(`Payload constructed with ${lineItems.length} child items.`, 'success');
 
-          // --- 🌐 THE CORS PROXY WORKAROUND FOR BROWSER TESTING ---
-          const targetUrl = `https://${NS_ACCOUNT}.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
-          const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
-          
-          // NOTE: We generate the OAuth signature against the REAL NetSuite URL, not the proxy URL
-          const authHeader = generateNetSuiteHeader('POST', targetUrl);
+          // --- 🌐 SECURE CLOUD PROXY CALL ---
+          const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
+          addLog(`Transmitting to NetSuite via Google Cloud...`, 'info');
 
-          addLog(`Transmitting to NetSuite via secure proxy...`, 'info');
-
-          // 3. Fire the Request to NetSuite REST API
-          const response = await fetch(proxyUrl, {
+          const response = await fetch(FIREBASE_FUNCTION_URL, {
               method: 'POST',
-              headers: {
-                  'Authorization': authHeader,
-                  'Content-Type': 'application/json',
-                  'Prefer': 'return=representation' // Tells NetSuite to send back the created object
-              },
-              body: JSON.stringify(payload)
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  targetUrl: targetUrl,
+                  method: 'POST',
+                  payload: payload
+              })
           });
 
-          // 4. Handle Response
+          const result = await response.json();
+
           if (!response.ok) {
-              const errText = await response.text();
-              throw new Error(`API Rejected [${response.status}]: ${errText}`);
+              throw new Error(`API Rejected [${response.status}]: ${JSON.stringify(result)}`);
           }
 
-          const result = await response.json();
           addLog(`✅ Success! NetSuite Estimate Created (ID: ${result.id})`, 'success');
 
-          // 5. Update Firebase with the NetSuite Tracking ID
           await updateDoc(doc(db, "jobs", job.id), {
               status: 'TRANSMITTED_TO_ERP',
               netsuiteEstimateId: result.id,

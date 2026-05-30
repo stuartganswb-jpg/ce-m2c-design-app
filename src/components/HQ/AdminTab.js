@@ -4,12 +4,8 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, 
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
-// --- NETSUITE AUTHENTICATION IMPORTS ---
-import hmacSHA256 from 'crypto-js/hmac-sha256';
-import Base64 from 'crypto-js/enc-base64';
-
 const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
-  const [activeSection, setActiveSection] = useState("NETSUITE_SYNC"); // 🚀 Defaulting to new tab for testing
+  const [activeSection, setActiveSection] = useState("NETSUITE_SYNC"); 
   
   const [users, setUsers] = useState([]);
   const [dynamicRoles, setDynamicRoles] = useState(['admin', 'executive', 'design_team', 'sales_rep']);
@@ -67,12 +63,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const DOCUMENT_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE', 'FACTORY_ROUTER'];
   const BRANDS_LIST = ['m2c', 'uniquity', 'ce', 'leyla']; 
 
-  // --- NetSuite API Credentials ---
-  const NS_ACCOUNT = "3728153";
-  const NS_CONSUMER_KEY = "0979687669fe99f5869793e3a911daeb062b779c4801817c86b494ccde1e0db4";
-  const NS_CONSUMER_SECRET = "4f88d6f93c57a1b9e0ffb29ff71831d47b075dcdf609cdb028dd305cb552c243";
-  const NS_TOKEN_ID = "2e5ce04cce902b621aad683d91e08674631cc7c9dd07edaae07cdc12e12f57ad";
-  const NS_TOKEN_SECRET = "f5c98c85514f46fc67674d822b6d70461e5407da13c84c2db6c72d8a5592a72";
+  // --- REPLACE WITH YOUR ACTUAL FIREBASE FUNCTION URL ---
+  const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app"; 
 
   useEffect(() => {
       const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -171,46 +163,22 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       setSyncLog(prev => [{ time, msg, type }, ...prev]);
   };
 
-  const generateNetSuiteHeader = (method, url) => {
-      const oauth_nonce = Math.random().toString(36).substring(2, 15);
-      const oauth_timestamp = Math.floor(Date.now() / 1000).toString();
-      
-      const baseString = `${method}&${encodeURIComponent(url)}&` + encodeURIComponent(
-          `oauth_consumer_key=${NS_CONSUMER_KEY}&` +
-          `oauth_nonce=${oauth_nonce}&` +
-          `oauth_signature_method=HMAC-SHA256&` +
-          `oauth_timestamp=${oauth_timestamp}&` +
-          `oauth_token=${NS_TOKEN_ID}&` +
-          `oauth_version=1.0`
-      );
-      
-      const signingKey = `${encodeURIComponent(NS_CONSUMER_SECRET)}&${encodeURIComponent(NS_TOKEN_SECRET)}`;
-      const hash = hmacSHA256(baseString, signingKey);
-      const oauth_signature = Base64.stringify(hash);
-      
-      return `OAuth realm="${NS_ACCOUNT}", oauth_consumer_key="${NS_CONSUMER_KEY}", oauth_token="${NS_TOKEN_ID}", oauth_nonce="${oauth_nonce}", oauth_timestamp="${oauth_timestamp}", oauth_signature_method="HMAC-SHA256", oauth_signature="${encodeURIComponent(oauth_signature)}", oauth_version="1.0"`;
-  };
-
   const executeSuiteQL = async (queryStr) => {
-      const targetUrl = `https://${NS_ACCOUNT}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`;
-      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
-      const authHeader = generateNetSuiteHeader('POST', targetUrl);
+      const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`;
 
-      const response = await fetch(proxyUrl, {
+      const response = await fetch(FIREBASE_FUNCTION_URL, {
           method: 'POST',
-          headers: {
-              'Authorization': authHeader,
-              'Content-Type': 'application/json',
-              'Prefer': 'transient'
-          },
-          body: JSON.stringify({ q: queryStr })
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+              targetUrl: targetUrl,
+              method: 'POST',
+              payload: { q: queryStr }
+          })
       });
 
-      if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`NetSuite Error [${response.status}]: ${errText}`);
-      }
-      return await response.json();
+      const data = await response.json();
+      if (!response.ok) throw new Error(`NetSuite Error: ${JSON.stringify(data)}`);
+      return data;
   };
 
   const handleSyncCustomers = async () => {
@@ -264,8 +232,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       addLog(`Initiating CPQ Item Sync for [${typeDesc}] in Subsidiary [${nsSubsidiaryId}]...`, 'info');
 
       try {
-          // Note: "custitem_sync_to_cpq" is the exact custom field internal ID your NetSuite developer must create.
-          // Note: "itemtype" filter checks for "InvtPart" (Inventory) or "Assembly" (Kits)
           const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
           const q = `SELECT id, itemid, displayname, baseprice FROM item WHERE custitem_sync_to_cpq = 'T' AND subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND ${typeFilter}`;
           
@@ -278,7 +244,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           for (const item of records) {
               const newId = `${activeBrand.toUpperCase()}-${itemType === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
               
-              // We check if the item already exists by searching for its legacyErpId
               const existingMatch = allApprovedDesigns.find(d => d.legacyErpId === item.itemid);
               const targetDocId = existingMatch ? existingMatch.id : newId;
 
@@ -292,7 +257,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   sharedBrands: [activeBrand]
               };
 
-              // If it's a new item, scaffold out the manufacturing specs
               if (!existingMatch) {
                   payload.manufacturingSpecs = {
                       basePrice: parseFloat(item.baseprice) || 0,
@@ -305,7 +269,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   };
                   payload.createdAt = new Date().toISOString();
               } else {
-                  // If it exists, just update the base price to match NetSuite
                   payload.manufacturingSpecs = {
                       ...existingMatch.manufacturingSpecs,
                       basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0
@@ -695,10 +658,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           <button onClick={() => setActiveSection("CPQ_FLOWS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "CPQ_FLOWS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "CPQ_FLOWS" ? '4px solid #007bff' : '4px solid transparent' }}>⚙️ CPQ FLOW BUILDER</button>
           <button onClick={() => setActiveSection("RULES")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "RULES" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "RULES" ? '4px solid #007bff' : '4px solid transparent' }}>📐 CPQ LOGIC ENGINE</button>
           <button onClick={() => setActiveSection("CRM_SETTINGS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "CRM_SETTINGS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "CRM_SETTINGS" ? '4px solid #fd7e14' : '4px solid transparent' }}>👥 CRM & SALES CONFIG</button>
-          
-          {/* 🚀 NEW: NETSUITE INTEGRATION TAB */}
           <button onClick={() => setActiveSection("NETSUITE_SYNC")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "NETSUITE_SYNC" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "NETSUITE_SYNC" ? '4px solid #6f42c1' : '4px solid transparent' }}>🌐 NETSUITE SYNC</button>
-          
           <button onClick={() => setActiveSection("FORMS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "FORMS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "FORMS" ? '4px solid #28a745' : '4px solid transparent' }}>📝 FORM TEMPLATES</button>
           <button onClick={() => setActiveSection("USERS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "USERS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "USERS" ? '4px solid #007bff' : '4px solid transparent' }}>👥 USER MATRIX</button>
           <button onClick={() => setActiveSection("DANGER")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "DANGER" ? '#ffebee' : '#fff', color: '#d9534f', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "DANGER" ? '4px solid #d9534f' : '4px solid transparent' }}>⚠️ DANGER ZONE</button>
@@ -706,7 +666,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
         <div style={{ flex: 1, background: '#fff', border: '2px solid #000', minHeight: '600px', boxShadow: '10px 10px 0 #000' }}>
           
-          {/* 🚀 NEW: NETSUITE INTEGRATION MODULE */}
+          {/* NETSUITE INTEGRATION MODULE */}
           {activeSection === "NETSUITE_SYNC" && (
               <div style={{ padding: '30px', display: 'flex', gap: '20px', alignItems: 'stretch' }}>
                   
