@@ -30,6 +30,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [cadFile, setCadFile] = useState(null); 
   const [assemblyPdfFile, setAssemblyPdfFile] = useState(null);
   const [assemblyCadFile, setAssemblyCadFile] = useState(null);
+  const [assemblyImageFile, setAssemblyImageFile] = useState(null); // 🚀 NEW: State for Assembly Thumbnail
   const [uploadProgress, setUploadProgress] = useState(0);
   const [cadUploadProgress, setCadUploadProgress] = useState(0); 
 
@@ -44,7 +45,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               uom: data.uom || [], prodTypes: data.prodTypes || [], collections: data.collections || [],
               watchLists: data.watchLists || [], vendors: data.vendors || [],
               partHandling: data.partHandling || ['Small Parts', 'Custom'],
-              inventoryTypes: data.inventoryTypes || [], // 🚀 NEW
+              inventoryTypes: data.inventoryTypes || [], 
               assemblyTypes: data.assemblyTypes || []
           });
       }
@@ -133,7 +134,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           cpqCategories, 
           isInHouse, 
           partHandling,
-          routingType: bomItem.masterPart.routingType || "" // 🚀 Added Routing Sync
+          routingType: bomItem.masterPart.routingType || "" 
       });
   };
 
@@ -168,12 +169,26 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               await new Promise((resolve, reject) => { cadUploadTask.on("state_changed", null, reject, async () => { finalCadUrl = await getDownloadURL(cadUploadTask.snapshot.ref); resolve(); }); });
           }
 
+          // 🚀 NEW: Handle Assembly Thumbnail Image Upload
+          let newFinalImageUrl = selectedAssemblyData.finalImageUrl || "";
+          if (assemblyImageFile) {
+              const imgStorageRef = ref(storage, `thumbnails/${activeBrand}_${assemblyDetails.legacyErpId || selectedAssemblyData.itemId}_${assemblyImageFile.name}`);
+              const imgUploadTask = uploadBytesResumable(imgStorageRef, assemblyImageFile);
+              await new Promise((resolve, reject) => { 
+                  imgUploadTask.on("state_changed", null, reject, async () => { 
+                      newFinalImageUrl = await getDownloadURL(imgUploadTask.snapshot.ref); 
+                      resolve(); 
+                  }); 
+              });
+          }
+
           const currentSpecs = selectedAssemblyData.manufacturingSpecs || {};
           await updateDoc(doc(db, "Approved_Designs", selectedAssemblyData.id), {
               itemName: assemblyDetails.itemName.toUpperCase(),
               legacyErpId: assemblyDetails.legacyErpId.toUpperCase() || "PENDING",
               productType: assemblyDetails.productType,
               collection: assemblyDetails.collection,
+              finalImageUrl: newFinalImageUrl, // 🚀 Saves the new image URL
               manufacturingSpecs: { 
                   ...currentSpecs, 
                   basePrice: assemblyDetails.basePrice, 
@@ -185,7 +200,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               },
               updatedAt: new Date().toISOString()
           });
-          setTimeout(() => { setIsSaving(false); setAssemblyPdfFile(null); setAssemblyCadFile(null); }, 600);
+          setTimeout(() => { setIsSaving(false); setAssemblyPdfFile(null); setAssemblyCadFile(null); setAssemblyImageFile(null); }, 600);
       } catch (err) {
           console.error(err); setIsSaving(false); alert("Failed to save assembly details.");
       }
@@ -218,7 +233,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
       try {
           await updateDoc(doc(db, "Approved_Designs", activeComponent.masterPart.id), {
-              routingType: editSpecs.routingType || "", // 🚀 Sync Routing Root
+              routingType: editSpecs.routingType || "", 
               manufacturingSpecs: compiledSpecs,
               updatedAt: new Date().toISOString()
           });
@@ -326,6 +341,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     ) : (
                                         <div style={{ height: '200px', background: '#eee', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px dashed #ccc', color: '#999', fontWeight: 'bold' }}>NO IMAGE AVAILABLE</div>
                                     )}
+                                    {/* 🚀 NEW: File input for thumbnail upload */}
+                                    <div style={{ marginTop: '10px' }}>
+                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#007bff' }}>UPLOAD NEW THUMBNAIL (.PNG / .JPG):</label>
+                                        <input type="file" accept="image/png, image/jpeg" onChange={(e) => setAssemblyImageFile(e.target.files[0])} style={{ fontSize: '0.75rem' }} />
+                                    </div>
                                 </div>
 
                                 <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
@@ -468,7 +488,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
                                 
-                                {/* 🚀 NEW: CLASSIFICATION ROUTING INTEGRATION */}
                                 <div>
                                     <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>{isAssembly ? 'ROUTING CLASSIFICATION:' : 'INVENTORY CATEGORY:'}</label>
                                     <select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
