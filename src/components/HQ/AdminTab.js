@@ -228,18 +228,46 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       setIsSyncing(true);
       
       const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
-      addLog(`Initiating CPQ Item Sync for [${typeDesc}] (Safe Mode)...`, 'info');
+      addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
 
       try {
           const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
           
-          // 🚀 SAFE MODE QUERY: Correct spelling, no baseprice, no subsidiary filter
-          const q = `SELECT id, itemid, displayname FROM item WHERE custitem_sync_to_cpq = 'T' AND isinactive = 'F' AND ${typeFilter}`;
+          // 🚀 ADVANCED QUERY: Pulls custom fields, resolves names, and joins Bins!
+          const q = `
+              SELECT 
+                  item.id, 
+                  item.itemid, 
+                  item.displayname,
+                  BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
+                  BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
+                  BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
+                  BUILTIN.DF(item.stockunit) AS uom,
+                  NS_CONCAT(bin.binnumber) AS bin_numbers
+              FROM 
+                  item
+              LEFT JOIN 
+                  ItemBinNumber ON item.id = ItemBinNumber.item
+              LEFT JOIN 
+                  Bin ON ItemBinNumber.bin = Bin.id
+              WHERE 
+                  item.custitem_sync_to_cpq = 'T' 
+                  AND item.isinactive = 'F' 
+                  AND ${typeFilter}
+              GROUP BY 
+                  item.id, 
+                  item.itemid, 
+                  item.displayname,
+                  item.custitem_bit_product_type,
+                  item.custitem_bit_itemcollection,
+                  item.custitem_bit_watchlist,
+                  item.stockunit
+          `;
           
           const result = await executeSuiteQL(q);
           const records = result.items || [];
           
-          addLog(`Downloaded ${records.length} valid CPQ parts. Updating Master Library...`, 'success');
+          addLog(`Downloaded ${records.length} items with enriched metadata. Updating Library...`, 'success');
 
           let successCount = 0;
           for (const item of records) {
@@ -259,19 +287,35 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               };
 
               if (!existingMatch) {
+                  // Brand new item: Insert all the fresh NetSuite data
                   payload.manufacturingSpecs = {
-                      basePrice: 0, // Default to 0 since we removed baseprice from query
+                      basePrice: 0, 
                       cost: 0,
                       isInHouse: true,
                       status: "IMPORTED_FROM_ERP",
+                      productType: item.product_type || 'Uncategorized',
+                      uom: item.uom || 'EA',
+                      binNumber: item.bin_numbers || 'Unassigned',
                       parametric: { isCutToSize: false },
-                      customData: {},
+                      customData: {
+                          collection: item.collection || '',
+                          watchlist: item.watchlist || ''
+                      },
                       dynamicDicts: {}
                   };
                   payload.createdAt = new Date().toISOString();
               } else {
+                  // Existing item: Update ERP data without erasing any manual UI edits
                   payload.manufacturingSpecs = {
-                      ...existingMatch.manufacturingSpecs
+                      ...existingMatch.manufacturingSpecs,
+                      productType: item.product_type || existingMatch.manufacturingSpecs?.productType,
+                      uom: item.uom || existingMatch.manufacturingSpecs?.uom,
+                      binNumber: item.bin_numbers || existingMatch.manufacturingSpecs?.binNumber,
+                      customData: {
+                          ...(existingMatch.manufacturingSpecs?.customData || {}),
+                          collection: item.collection || existingMatch.manufacturingSpecs?.customData?.collection,
+                          watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist
+                      }
                   };
                   payload.updatedAt = new Date().toISOString();
               }
@@ -279,7 +323,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               await setDoc(doc(db, "Approved_Designs", targetDocId), payload, { merge: true });
               successCount++;
           }
-          addLog(`✅ Successfully synced ${successCount} library items.`, 'success');
+          addLog(`✅ Successfully synced and enriched ${successCount} library items.`, 'success');
 
       } catch (err) {
           console.error(err);
