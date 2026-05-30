@@ -26,7 +26,6 @@ class ErrorBoundary extends React.Component {
     }
 }
 
-// 🚀 FIXED: Added hiddenNodes support to the SnapshotModel
 const SnapshotModel = ({ url, interactionMode, onMeshClick, isFrozen, locatingNodes = [], hiddenNodes = [], onMeshesLoaded }) => {
     const { scene } = useGLTF(url);
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
@@ -34,7 +33,25 @@ const SnapshotModel = ({ url, interactionMode, onMeshClick, isFrozen, locatingNo
 
     useEffect(() => {
         const meshes = [];
-        clonedScene.traverse(c => { if (c.isMesh) meshes.push(c.name); });
+        clonedScene.traverse(c => { 
+            if (c.isMesh) {
+                let displayName = c.name;
+                
+                // 🚀 FIXED: Intelligent Name Extraction for Evil Eye
+                // If it's a generic CAD name, grab the parent's actual component name
+                if ((displayName.toLowerCase().startsWith('body') || displayName.toLowerCase().startsWith('mesh') || displayName.trim() === '') && c.parent && c.parent.name) {
+                    if (c.parent.name !== 'Scene' && c.parent.name !== 'RootNode') {
+                        displayName = `${c.parent.name} ➔ ${displayName || 'Mesh'}`;
+                    }
+                }
+                // Override with UserData name if metadata is explicitly embedded
+                if (c.userData && c.userData.name) {
+                    displayName = c.userData.name;
+                }
+
+                meshes.push({ originalName: c.name, displayName: displayName });
+            } 
+        });
         if (onMeshesLoaded) onMeshesLoaded(meshes);
     }, [clonedScene, onMeshesLoaded]);
 
@@ -52,7 +69,7 @@ const SnapshotModel = ({ url, interactionMode, onMeshClick, isFrozen, locatingNo
             if (child.isMesh) {
                 if (!child.userData.originalMaterial) child.userData.originalMaterial = child.material;
                 
-                // 🚀 Apply Evil Eye Visibility
+                // Apply Evil Eye Visibility
                 child.visible = !hiddenNodes.includes(child.name);
 
                 if (locatingNodes.length > 0 && isDescendantOf(child, locatingNodes)) {
@@ -143,7 +160,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   
   const [locatingClusterId, setLocatingClusterId] = useState(null);
 
-  // 🚀 NEW: Evil Eye State
   const [sceneMeshes, setSceneMeshes] = useState([]);
   const [hiddenNodes, setHiddenNodes] = useState([]);
 
@@ -213,7 +229,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
         setRoutingType(""); setAvailableImages([]); setActiveImageUrl(""); setViewMode("2D");
     }
     
-    // Reset everything when assembly changes
     setScale(1); setPan({ x: 0, y: 0 }); setPendingPin(null); setIsCanvasLocked(true); setDrawerOpen(false); setCropState(null); setIsFrozen(false); setLocatingClusterId(null); setHiddenNodes([]);
   }, [selectedAssemblyId, assemblies]);
 
@@ -431,33 +446,42 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     } catch (err) { console.error(err); }
   };
 
+  // 🚀 FIXED: Extremely robust functional state updates for crop pointer events
   const onCropPointerDown = (e, actionType) => {
       e.stopPropagation();
-      e.target.setPointerCapture(e.pointerId);
-      setCropState(prev => ({ ...prev, action: actionType, startX: e.clientX, startY: e.clientY, origX: prev.x, origY: prev.y, origW: prev.w, origH: prev.h }));
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setCropState(prev => {
+          if (!prev) return prev;
+          return { ...prev, action: actionType, startX: e.clientX, startY: e.clientY, origX: prev.x, origY: prev.y, origW: prev.w, origH: prev.h };
+      });
   };
 
   const onCropPointerMove = (e) => {
-      if (!cropState || !cropState.action) return;
-      const dx = e.clientX - cropState.startX;
-      const dy = e.clientY - cropState.startY;
+      setCropState(prev => {
+          if (!prev || !prev.action) return prev;
+          
+          const dx = e.clientX - prev.startX;
+          const dy = e.clientY - prev.startY;
 
-      if (cropState.action === 'MOVE') {
-          setCropState(prev => ({ ...prev, x: prev.origX + dx, y: prev.origY + dy }));
-      } else if (cropState.action === 'RESIZE') {
-          const sizeDelta = Math.max(dx, dy); 
-          const newSize = Math.max(80, prev.origW + sizeDelta);
-          setCropState(prev => ({ ...prev, w: newSize, h: newSize }));
-      }
+          if (prev.action === 'MOVE') {
+              return { ...prev, x: prev.origX + dx, y: prev.origY + dy };
+          } else if (prev.action === 'RESIZE') {
+              const sizeDelta = Math.max(dx, dy); 
+              const newSize = Math.max(80, prev.origW + sizeDelta);
+              return { ...prev, w: newSize, h: newSize };
+          }
+          return prev;
+      });
   };
 
   const onCropPointerUp = (e) => {
-      if (!cropState || !cropState.action) return;
-      e.target.releasePointerCapture(e.pointerId);
-      setCropState(prev => ({ ...prev, action: null }));
+      setCropState(prev => {
+          if (!prev || !prev.action) return prev;
+          try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(err) {}
+          return { ...prev, action: null };
+      });
   };
 
-  // 🚀 FIXED: Execute Thumbnail Crop allows Master Assembly saving
   const executeThumbnailCrop = async () => {
       if (!cropState || !cropState.pinId) return alert("Please select a target for this thumbnail from the dropdown.");
       setIsProcessingCrop(true);
@@ -619,7 +643,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
       <div style={{ display: 'flex', gap: '20px', alignItems: 'stretch', flex: 1 }}>
         
-        {/* 🚀 NEW: The Evil Eye (Mesh Visibility Control Sidebar) */}
         {viewMode === '3D' && activeAssembly && (
             <div style={{ width: '220px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)', flexShrink: 0 }}>
                 <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
@@ -629,17 +652,19 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                 <div style={{ padding: '10px', flex: 1, overflowY: 'auto', background: '#f8f9fa' }}>
                     <div style={{ fontSize: '0.7rem', color: '#666', marginBottom: '10px' }}>Uncheck to hide parts for clean screenshots.</div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                        {sceneMeshes.map(mesh => (
-                            <label key={mesh} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', cursor: 'pointer', background: hiddenNodes.includes(mesh) ? '#ffeeba' : '#fff', padding: '5px', border: '1px solid #ccc' }}>
+                        {sceneMeshes.map(meshObj => (
+                            <label key={meshObj.originalName} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', cursor: 'pointer', background: hiddenNodes.includes(meshObj.originalName) ? '#ffeeba' : '#fff', padding: '5px', border: '1px solid #ccc' }}>
                                 <input 
                                     type="checkbox" 
-                                    checked={!hiddenNodes.includes(mesh)} 
+                                    checked={!hiddenNodes.includes(meshObj.originalName)} 
                                     onChange={(e) => {
-                                        if (e.target.checked) setHiddenNodes(prev => prev.filter(n => n !== mesh));
-                                        else setHiddenNodes(prev => [...prev, mesh]);
+                                        if (e.target.checked) setHiddenNodes(prev => prev.filter(n => n !== meshObj.originalName));
+                                        else setHiddenNodes(prev => [...prev, meshObj.originalName]);
                                     }} 
                                 />
-                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mesh}</span>
+                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={meshObj.displayName}>
+                                    {meshObj.displayName}
+                                </span>
                             </label>
                         ))}
                     </div>
@@ -658,9 +683,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                   <div style={{ position: 'absolute', top: '15px', left: '50%', transform: 'translateX(-50%)', background: '#fff', padding: '10px 20px', border: '3px solid #000', borderRadius: '30px', fontWeight: 'bold', display: 'flex', gap: '10px', alignItems: 'center', boxShadow: '0 8px 16px rgba(0,0,0,0.4)', zIndex: 10001 }}>
                       <span style={{ color: '#007bff' }}>📸 FRAME & CROP</span>
                       
-                      <select value={cropState.pinId || ""} onChange={(e) => setCropState({...cropState, pinId: e.target.value})} style={{ padding: '8px', border: '2px solid #007bff', borderRadius: '4px', fontWeight: 'bold', outline: 'none' }}>
+                      <select value={cropState.pinId || ""} onChange={(e) => setCropState(prev => ({...prev, pinId: e.target.value}))} style={{ padding: '8px', border: '2px solid #007bff', borderRadius: '4px', fontWeight: 'bold', outline: 'none' }}>
                           <option value="">-- SELECT TARGET FOR THUMBNAIL --</option>
-                          {/* 🚀 FIXED: Allow setting Parent Assembly Thumbnail directly */}
                           <option value="MASTER_ASSEMBLY">⭐ PARENT ASSEMBLY THUMBNAIL</option>
                           <optgroup label="BOM Components">
                             {pins.map(p => <option key={p.id} value={p.id}>{p.partName}</option>)}
@@ -805,7 +829,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                             onMeshClick={handle3DMeshClick} 
                                             isFrozen={isFrozen}
                                             locatingNodes={activeLocatingNodes}
-                                            hiddenNodes={hiddenNodes} // 🚀 Pushed Evil Eye into Canvas
+                                            hiddenNodes={hiddenNodes} 
                                             onMeshesLoaded={setSceneMeshes} 
                                         />
                                     </Bounds>
