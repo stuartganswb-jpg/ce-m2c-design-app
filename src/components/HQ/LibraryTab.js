@@ -761,7 +761,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
                    )}
 
-                   {/* 🚀 FIXED CLASSIFICATION DROPDOWN (No longer hardcoded!) */}
                    <div>
                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>{activePart.partClass === 'Inventory' ? 'INVENTORY CATEGORY:' : 'ROUTING CLASSIFICATION:'}</label>
                        <select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
@@ -777,7 +776,28 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                    {windowConfig.system.uom?.includes(activeBrand) && (
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                    )}
+
+                   {/* 🚀 FIXED: Added missing soft-goods/specialty system lists */}
+                   {windowConfig.system.pillowSizes?.includes(activeBrand) && (
+                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PILLOW SIZE:</label><select name="pillowSize" value={editSpecs.pillowSize || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                   )}
+                   {windowConfig.system.fillTypes?.includes(activeBrand) && (
+                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>FILL TYPE:</label><select name="fillType" value={editSpecs.fillType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.fillTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                   )}
+                   {windowConfig.system.flangeStyles?.includes(activeBrand) && (
+                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>EDGE/FLANGE:</label><select name="flangeStyle" value={editSpecs.flangeStyle || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.flangeStyles || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                   )}
+                   {windowConfig.system.stitchTypes?.includes(activeBrand) && (
+                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>STITCH ROUTING:</label><select name="stitchType" value={editSpecs.stitchType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.stitchTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                   )}
+                   {windowConfig.system.seamCounts?.includes(activeBrand) && (
+                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>SEAM COUNT:</label><select name="seamCount" value={editSpecs.seamCount || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                   )}
+                   {windowConfig.system.outsourceActions?.includes(activeBrand) && (
+                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>OUTSOURCE ACTION:</label><select name="outsourceAction" value={editSpecs.outsourceAction || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                   )}
                    
+                   {/* 🚀 FIXED: Dynamic Dictionaries Rendering */}
                    {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
                        <div key={w.id}>
                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c', textTransform: 'uppercase' }}>{w.name}:</label>
@@ -792,8 +812,27 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label><select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option><option value="N/A">N/A</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                    )}
 
+                   {/* 🚀 FIXED: Inject customSchema fields created in the green "Static Part Attributes" window */}
+                   {customSchema.map(field => (
+                       <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#eafaf1', padding: '5px', border: '1px solid #28a745' }}>
+                           <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
+                           {field.type === 'dropdown' ? (
+                               <select value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745' }}>
+                                   <option value="">Select...</option>{(field.options || "").split(',').map(opt => <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>)}
+                               </select>
+                           ) : (
+                               <input type={field.type} value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box' }} />
+                           )}
+                       </div>
+                   ))}
+
                    {windowConfig.system.watchLists?.includes(activeBrand) && (
-                       <div style={{ gridColumn: 'span 2', background: '#fff3cd', border: '2px solid #ffc107', padding: '10px' }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: editSpecs.watchList !== "NONE" ? '#d9534f' : '#000' }}>ASSIGN TO WATCHLIST:</label><select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', fontWeight: 'bold' }}><option value="NONE">NONE</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}</select></div>
+                       <div style={{ gridColumn: 'span 2', background: '#fff3cd', border: '2px solid #ffc107', padding: '10px', marginTop: '10px' }}>
+                           <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: editSpecs.watchList !== "NONE" ? '#d9534f' : '#000' }}>ASSIGN TO WATCHLIST:</label>
+                           <select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', fontWeight: 'bold' }}>
+                               <option value="NONE">NONE</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
+                           </select>
+                       </div>
                    )}
                  </div>
               </div>
