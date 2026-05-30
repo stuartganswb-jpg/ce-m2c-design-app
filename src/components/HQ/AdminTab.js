@@ -233,7 +233,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       try {
           const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
           
-          // 🚀 ADVANCED QUERY: Pulls custom fields and UOM (Bins temporarily bypassed)
+          // 🚀 PERFECT MATCH QUERY: Uses exact internal IDs from the NetSuite CSV
           const q = `
               SELECT 
                   id, 
@@ -242,7 +242,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   BUILTIN.DF(custitem_bit_product_type) AS product_type,
                   BUILTIN.DF(custitem_bit_itemcollection) AS collection,
                   BUILTIN.DF(custitem_bit_watchlist) AS watchlist,
-                  BUILTIN.DF(stockunit) AS uom
+                  BUILTIN.DF(custitem_bit_cpq_baseunit) AS uom,
+                  custitem9 AS baseprice
               FROM 
                   item
               WHERE 
@@ -276,13 +277,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               if (!existingMatch) {
                   // Brand new item: Insert all the fresh NetSuite data
                   payload.manufacturingSpecs = {
-                      basePrice: 0, 
+                      basePrice: parseFloat(item.baseprice) || 0, 
                       cost: 0,
                       isInHouse: true,
                       status: "IMPORTED_FROM_ERP",
                       productType: item.product_type || 'Uncategorized',
                       uom: item.uom || 'EA',
-                      binNumber: 'Pending Map', // Temporarily holding until we find your Bin table
+                      binNumber: 'Pending Map',
                       parametric: { isCutToSize: false },
                       customData: {
                           collection: item.collection || '',
@@ -295,11 +296,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   // Existing item: Update ERP data without erasing any manual UI edits
                   payload.manufacturingSpecs = {
                       ...existingMatch.manufacturingSpecs,
+                      basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0,
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
                       customData: {
                           ...(existingMatch.manufacturingSpecs?.customData || {}),
-                          // FIREBASE FIX: Ensure absolute fallback to empty string if missing in both DBs!
                           collection: item.collection || existingMatch.manufacturingSpecs?.customData?.collection || '',
                           watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || ''
                       }
