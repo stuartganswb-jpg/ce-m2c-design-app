@@ -224,9 +224,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       setIsSyncing(false);
   };
 
-  const handleSyncItems = async (itemType) => {
-      if (!nsSubsidiaryId) return alert("Please enter a Target Subsidiary ID.");
-      setIsSyncing(true);
+  const q = `SELECT id, itemid, displayname FROM item WHERE custitem_sync_to_cpq = 'T' AND isinactive = 'F' AND ${typeFilter}`;
       
       const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
       addLog(`Initiating CPQ Item Sync for [${typeDesc}] in Subsidiary [${nsSubsidiaryId}]...`, 'info');
