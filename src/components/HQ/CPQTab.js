@@ -54,11 +54,13 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
 
                     if (matchedTexUrl && texMap[matchedTexUrl]) {
                         const newMat = child.userData.originalMaterial.clone();
-                      // 🚀 THE FIX: Anchored Pigment
-                        newMat.color = new THREE.Color(0xffffff); 
-                        newMat.metalness = 0.85; // Lets 15% of the texture act as raw color pigment
-                        newMat.roughness = 0.30; // Keeps the reflections tight and polished
-                        newMat.envMapIntensity = 0.85; // Lowers the white HDRI reflection slightly
+                      // 🧪 THE FIX: The Brass/Gold Diagnostic Test
+                        // We are tinting the base color to brass. If this renders beautifully, 
+                        // your lighting is perfect and your CAD files just need UV Maps!
+                        newMat.color = new THREE.Color(0xd4af37); 
+                        newMat.metalness = 1.0; 
+                        newMat.roughness = 0.35; 
+                        newMat.envMapIntensity = 1.2; 
                         
                         newMat.normalMap = null;
                         newMat.bumpMap = null;
