@@ -233,35 +233,22 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       try {
           const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
           
-          // 🚀 ADVANCED QUERY: Pulls custom fields, resolves names, and joins Bins!
+          // 🚀 ADVANCED QUERY: Pulls custom fields and UOM (Bins temporarily bypassed)
           const q = `
               SELECT 
-                  item.id, 
-                  item.itemid, 
-                  item.displayname,
-                  BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
-                  BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
-                  BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
-                  BUILTIN.DF(item.stockunit) AS uom,
-                  NS_CONCAT(bin.binnumber) AS bin_numbers
+                  id, 
+                  itemid, 
+                  displayname,
+                  BUILTIN.DF(custitem_bit_product_type) AS product_type,
+                  BUILTIN.DF(custitem_bit_itemcollection) AS collection,
+                  BUILTIN.DF(custitem_bit_watchlist) AS watchlist,
+                  BUILTIN.DF(stockunit) AS uom
               FROM 
                   item
-              LEFT JOIN 
-                  ItemBinNumber ON item.id = ItemBinNumber.item
-              LEFT JOIN 
-                  Bin ON ItemBinNumber.bin = Bin.id
               WHERE 
-                  item.custitem_sync_to_cpq = 'T' 
-                  AND item.isinactive = 'F' 
+                  custitem_sync_to_cpq = 'T' 
+                  AND isinactive = 'F' 
                   AND ${typeFilter}
-              GROUP BY 
-                  item.id, 
-                  item.itemid, 
-                  item.displayname,
-                  item.custitem_bit_product_type,
-                  item.custitem_bit_itemcollection,
-                  item.custitem_bit_watchlist,
-                  item.stockunit
           `;
           
           const result = await executeSuiteQL(q);
@@ -295,7 +282,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                       status: "IMPORTED_FROM_ERP",
                       productType: item.product_type || 'Uncategorized',
                       uom: item.uom || 'EA',
-                      binNumber: item.bin_numbers || 'Unassigned',
+                      binNumber: 'Pending Map', // Temporarily holding until we find your Bin table
                       parametric: { isCutToSize: false },
                       customData: {
                           collection: item.collection || '',
@@ -310,7 +297,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                       ...existingMatch.manufacturingSpecs,
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType,
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom,
-                      binNumber: item.bin_numbers || existingMatch.manufacturingSpecs?.binNumber,
                       customData: {
                           ...(existingMatch.manufacturingSpecs?.customData || {}),
                           collection: item.collection || existingMatch.manufacturingSpecs?.customData?.collection,
