@@ -10,11 +10,12 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [bomPins, setBomPins] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
   
-  const [globalLists, setGlobalLists] = useState({ uom: [], prodTypes: [], collections: [], watchLists: [], vendors: [], outsourceActions: [], pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], partHandling: [], inventoryTypes: [], assemblyTypes: [] }); 
+  const [globalLists, setGlobalLists] = useState({ uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [], pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], partHandling: [], inventoryTypes: [], assemblyTypes: [] }); 
   const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] }); 
   
   const [customSchema, setCustomSchema] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
+  const [collectionsData, setCollectionsData] = useState([]); // 🚀 NEW: Dynamic Collections Fetcher
 
   const [activeComponent, setActiveComponent] = useState(null);
   const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [] });
@@ -43,7 +44,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       if (docSnap.exists()) {
           const data = docSnap.data();
           setGlobalLists({
-              uom: data.uom || [], prodTypes: data.prodTypes || [], collections: data.collections || [],
+              uom: data.uom || [], prodTypes: data.prodTypes || [],
               watchLists: data.watchLists || [], vendors: data.vendors || [], outsourceActions: data.outsourceActions || [],
               pillowSizes: data.pillowSizes || [], fillTypes: data.fillTypes || [], flangeStyles: data.flangeStyles || [],
               stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || ['0 Seams', '1 Seam', '2 Seams', '3 Seams', '4 Seams'],
@@ -59,8 +60,9 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       }
     });
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+    const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); // 🚀 Fetching Collections
     
-    return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); unsubAssets(); };
+    return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); unsubAssets(); unsubCollections(); };
   }, []);
 
   useEffect(() => {
@@ -172,7 +174,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       setEditSpecs({ ...editSpecs, cpqCategories: updated });
   };
 
-  // 🚀 FIXED: Handler for dynamic schema fields of type 'file'
   const handleDynamicFileUpload = async (key, file, isAssembly = false) => {
       if (!file) return;
       const storageRef = ref(storage, `custom_uploads/${activeBrand}_${Date.now()}_${file.name}`);
@@ -437,7 +438,15 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         )}
 
                                         <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={assemblyDetails.uom || "EA"} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
-                                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label><select name="collection" value={assemblyDetails.collection || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option><option value="N/A">N/A</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                                        
+                                        {/* 🚀 FIXED: Dynamic Collections Dropdown */}
+                                        {windowConfig.system.collections?.includes(activeBrand) && (
+                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1' }}>COLLECTION (CPQ QUOTING):</label>
+                                            <select name="collection" value={assemblyDetails.collection || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #6f42c1', fontWeight: 'bold' }}>
+                                                <option value="">-- NO COLLECTION --</option><option value="N/A">N/A</option>
+                                                {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                                            </select></div>
+                                        )}
                                         
                                         {windowConfig.system.pillowSizes?.includes(activeBrand) && (
                                             <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PILLOW SIZE:</label><select name="pillowSize" value={assemblyDetails.pillowSize || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
@@ -468,7 +477,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             </div>
                                         ))}
 
-                                        {/* 🚀 FIXED: Schema field 'file' type rendering without value prop */}
                                         {customSchema.map(field => (
                                             <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#fff', padding: '5px', border: '1px solid #28a745' }}>
                                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
@@ -494,6 +502,37 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             </select>
                                         </div>
 
+                                    </div>
+
+                                    {/* 🚀 NEW: HARDWARE CPQ METADATA BLOCK FOR ASSEMBLIES */}
+                                    <div style={{ background: '#f8f9fa', border: '2px solid #d4af37', padding: '15px', marginTop: '10px' }}>
+                                        <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                                            <div>
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>PROJECTION (INCHES):</label>
+                                                <input type="number" step="0.125" value={assemblyDetails.customData?.projection || ""} onChange={(e) => handleAssemblyCustomFieldChange("projection", e.target.value)} placeholder="e.g. 3.625" style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', boxSizing: 'border-box' }} />
+                                            </div>
+                                            <div>
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET MOUNT TYPE:</label>
+                                                <select value={assemblyDetails.customData?.bracketType || ""} onChange={(e) => handleAssemblyCustomFieldChange("bracketType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
+                                                    <option value="">-- NOT A BRACKET --</option>
+                                                    <option value="WALL">WALL MOUNT</option>
+                                                    <option value="CEILING">CEILING MOUNT</option>
+                                                    <option value="INSIDE MOUNT">INSIDE MOUNT</option>
+                                                </select>
+                                            </div>
+                                            <div style={{ gridColumn: 'span 2' }}>
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>SERVICE / FEE TYPE (AUTO-APPEND):</label>
+                                                <select value={assemblyDetails.customData?.feeType || ""} onChange={(e) => handleAssemblyCustomFieldChange("feeType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
+                                                    <option value="">-- NO SPECIAL FEE --</option>
+                                                    <option value="SPLICE">SPLICE FEE</option>
+                                                    <option value="MITER_CUT">MITER CUT FEE</option>
+                                                    <option value="BENT_RETURN">BENT RETURN (FR) FEE</option>
+                                                    <option value="MITER_RETURN">MITER RETURN FEE</option>
+                                                </select>
+                                                <span style={{ fontSize: '0.6rem', color: '#666', fontStyle: 'italic', display: 'block', marginTop: '4px' }}>If selected, the Vision System will automatically bill for this item when triggered (e.g. mapping "Splice Fee" to splices).</span>
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <div style={{ display: 'flex', gap: '15px', marginTop: '10px' }}>
@@ -606,7 +645,15 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 )}
 
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
-                                <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label><select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option><option value="N/A">N/A</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                                
+                                {/* 🚀 FIXED: Collection dropdown dynamically populates from new Collections Dictionary */}
+                                {windowConfig.system.collections?.includes(activeBrand) && (
+                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1' }}>COLLECTION (CPQ QUOTING):</label>
+                                    <select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #6f42c1', fontWeight: 'bold' }}>
+                                        <option value="">-- NO COLLECTION --</option><option value="N/A">N/A</option>
+                                        {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                                    </select></div>
+                                )}
                                 
                                 {windowConfig.system.pillowSizes?.includes(activeBrand) && (
                                     <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PILLOW SIZE:</label><select name="pillowSize" value={editSpecs.pillowSize || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
@@ -637,7 +684,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                 ))}
 
-                                {/* 🚀 FIXED: Schema field 'file' type rendering without value prop */}
                                 {customSchema.map(field => (
                                     <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#eafaf1', padding: '5px', border: '1px solid #28a745' }}>
                                         <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
@@ -663,6 +709,37 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     </select>
                                 </div>
 
+                            </div>
+                        </div>
+
+                        {/* 🚀 NEW: HARDWARE CPQ METADATA BLOCK FOR COMPONENTS */}
+                        <div style={{ background: '#f8f9fa', border: '2px solid #d4af37', padding: '15px', marginTop: '10px' }}>
+                            <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                                <div>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>PROJECTION (INCHES):</label>
+                                    <input type="number" step="0.125" value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} placeholder="e.g. 3.625" style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', boxSizing: 'border-box' }} />
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET MOUNT TYPE:</label>
+                                    <select value={editSpecs.customData?.bracketType || ""} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
+                                        <option value="">-- NOT A BRACKET --</option>
+                                        <option value="WALL">WALL MOUNT</option>
+                                        <option value="CEILING">CEILING MOUNT</option>
+                                        <option value="INSIDE MOUNT">INSIDE MOUNT</option>
+                                    </select>
+                                </div>
+                                <div style={{ gridColumn: 'span 2' }}>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>SERVICE / FEE TYPE (AUTO-APPEND):</label>
+                                    <select value={editSpecs.customData?.feeType || ""} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
+                                        <option value="">-- NO SPECIAL FEE --</option>
+                                        <option value="SPLICE">SPLICE FEE</option>
+                                        <option value="MITER_CUT">MITER CUT FEE</option>
+                                        <option value="BENT_RETURN">BENT RETURN (FR) FEE</option>
+                                        <option value="MITER_RETURN">MITER RETURN FEE</option>
+                                    </select>
+                                    <span style={{ fontSize: '0.6rem', color: '#666', fontStyle: 'italic', display: 'block', marginTop: '4px' }}>If selected, the Vision System will automatically bill for this item when triggered (e.g. mapping "Splice Fee" to splices).</span>
+                                </div>
                             </div>
                         </div>
 

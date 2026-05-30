@@ -23,7 +23,7 @@ const DEFAULT_SYSTEM_WINDOWS = {
 };
 
 const LIST_LABELS = {
-    prodTypes: 'PRODUCT TYPES', uom: 'UOMs', collections: 'COLLECTIONS',
+    prodTypes: 'PRODUCT TYPES', uom: 'UOMs',
     watchLists: 'WATCHLISTS', vendors: 'APPROVED VENDORS', outsourceActions: 'OUTSOURCE ACTIONS',
     pillowSizes: 'PILLOW SIZES', fillTypes: 'FILL TYPES', flangeStyles: 'EDGE / FLANGE STYLES', 
     stitchTypes: 'STITCH ROUTING', seamCounts: 'SEAM COUNTS / UPCHARGES', assemblyTypes: 'ASSEMBLY TYPES',
@@ -41,14 +41,16 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [partClassFilter, setPartClassFilter] = useState("ALL"); 
+  const [collectionFilter, setCollectionFilter] = useState(""); // 🚀 NEW: Top Bar Collection Filter
   
   const [customSchema, setCustomSchema] = useState([]);
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
+  const [collectionsData, setCollectionsData] = useState([]); // 🚀 NEW: Powerful Collections Dictionary
   
   const [globalLists, setGlobalLists] = useState({ 
-      uom: [], prodTypes: [], collections: [], watchLists: [], vendors: [], outsourceActions: [],
+      uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [],
       pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], assemblyTypes: [],
       cpqRoutingTypes: [], customers: [], partHandling: [], inventoryTypes: [] 
   });
@@ -62,11 +64,12 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [showFinishForm, setShowFinishForm] = useState(false);
   const [showOutsourceFinishForm, setShowOutsourceFinishForm] = useState(false);
   const [showWindowManager, setShowWindowManager] = useState(false);
+  const [showCollectionForm, setShowCollectionForm] = useState(false); // 🚀 NEW: Collection Form
 
   const [newFieldConfig, setNewFieldConfig] = useState({ key: '', label: '', type: 'text', options: '' });
   const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '' });
   const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '' });
-  
+  const [newCollection, setNewCollection] = useState({ name: '', allowedCustomers: [], allowedFinishes: [] }); // 🚀 NEW: Collection Payload
   const [newCustomWindow, setNewCustomWindow] = useState({ name: '', brands: [activeBrand], hasImage: true, hasCode: true, hasVendor: false, hasMultiplier: true });
   
   const [finishUploadProgress, setFinishUploadProgress] = useState(0);
@@ -98,13 +101,13 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (docSnap) => { if (docSnap.exists() && docSnap.data().finishes) setGlobalFinishes(docSnap.data().finishes); });
     const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+    const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); // 🚀 Fetch Collections Dictionary
     
     const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
       if (docSnap.exists()) {
           const data = docSnap.data();
-          
           setGlobalLists({ 
-              uom: data.uom || [], prodTypes: data.prodTypes || [], collections: data.collections || [], 
+              uom: data.uom || [], prodTypes: data.prodTypes || [], 
               watchLists: data.watchLists || [], vendors: data.vendors || [], outsourceActions: data.outsourceActions || [],
               pillowSizes: data.pillowSizes || [], fillTypes: data.fillTypes || [], flangeStyles: data.flangeStyles || [], 
               stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || ['0 Seams', '1 Seam', '2 Seams', '3 Seams', '4 Seams'],
@@ -122,7 +125,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       if (docSnap.exists()) setWindowConfig({ system: { ...DEFAULT_SYSTEM_WINDOWS, ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
     });
 
-    return () => { unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubLists(); unsubRecipes(); unsubWindowConfig(); };
+    return () => { unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubCollections(); unsubLists(); unsubRecipes(); unsubWindowConfig(); };
   }, []);
 
   useEffect(() => {
@@ -138,14 +141,9 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   }, [activeBrand]);
 
   useEffect(() => {
-      if (!activePart || activePart.partClass !== 'Master Assembly') {
-          setActiveBomPins([]);
-          return;
-      }
+      if (!activePart || activePart.partClass !== 'Master Assembly') { setActiveBomPins([]); return; }
       const q = query(collection(db, "assembly_pins"), where("assemblyId", "==", activePart.itemId));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-          setActiveBomPins(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      });
+      const unsubscribe = onSnapshot(q, (snapshot) => { setActiveBomPins(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))); });
       return () => unsubscribe();
   }, [activePart]);
 
@@ -163,21 +161,17 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                           ));
     
     let matchesType = typeFilter === "" || specs.productType === typeFilter;
+    let matchesCollection = collectionFilter === "" || specs.collection === collectionFilter || part.collection === collectionFilter; // 🚀 Apply Collection Filter
     let matchesClass = true;
 
     if (partClassFilter !== "ALL") {
-        if (partClassFilter === "INVENTORY") {
-            matchesClass = part.partClass === "Inventory" && specs.isInHouse !== false;
-        } else if (partClassFilter === "OUTSOURCED") {
-            matchesClass = part.partClass === "Inventory" && specs.isInHouse === false;
-        } else if (partClassFilter === "UNASSIGNED") {
-            matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && (!part.routingType || part.routingType === "UNASSIGNED");
-        } else {
-            matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && part.routingType?.toUpperCase() === partClassFilter.toUpperCase();
-        }
+        if (partClassFilter === "INVENTORY") matchesClass = part.partClass === "Inventory" && specs.isInHouse !== false;
+        else if (partClassFilter === "OUTSOURCED") matchesClass = part.partClass === "Inventory" && specs.isInHouse === false;
+        else if (partClassFilter === "UNASSIGNED") matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && (!part.routingType || part.routingType === "UNASSIGNED");
+        else matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && part.routingType?.toUpperCase() === partClassFilter.toUpperCase();
     }
     
-    return matchesSearch && matchesType && matchesClass;
+    return matchesSearch && matchesType && matchesCollection && matchesClass;
   });
 
   const openPartDetails = (part) => {
@@ -202,7 +196,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         clientPricing: part.clientPricing || [], 
         binLocation: baseSpecs.binLocation || "", 
         project: part.project || "",
-        collection: part.collection || "",
+        collection: part.collection || baseSpecs.collection || "",
         routingType: part.routingType || "",
         isProjectManaged: baseSpecs.isProjectManaged || false,
         partHandling: baseSpecs.partHandling || "" 
@@ -245,13 +239,9 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   };
 
   const handleRemoveClientPricing = (idx) => {
-      setEditSpecs(prev => ({
-          ...prev,
-          clientPricing: prev.clientPricing.filter((_, i) => i !== idx)
-      }));
+      setEditSpecs(prev => ({ ...prev, clientPricing: prev.clientPricing.filter((_, i) => i !== idx) }));
   };
 
-  // 🚀 FIXED: Added proper file type logic for custom schema rendering 
   const handleDynamicFileUpload = async (key, file) => {
       if (!file) return;
       const safeId = activePart.legacyErpId !== "PENDING" ? activePart.legacyErpId : activePart.itemId;
@@ -371,6 +361,25 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const handleRemoveSchemaField = async (keyToRemove) => {
       if (!window.confirm("Remove this attribute?")) return;
       await setDoc(doc(db, "system", "master_schema"), { inventoryFields: customSchema.filter(f => f.key !== keyToRemove) }, { merge: true });
+  };
+
+  // 🚀 NEW: Handlers for Collections Dictionary
+  const toggleCollectionCustomer = (cust) => {
+      setNewCollection(prev => ({ ...prev, allowedCustomers: prev.allowedCustomers.includes(cust) ? prev.allowedCustomers.filter(c => c !== cust) : [...prev.allowedCustomers, cust] }));
+  };
+  const toggleCollectionFinish = (finishName) => {
+      setNewCollection(prev => ({ ...prev, allowedFinishes: prev.allowedFinishes.includes(finishName) ? prev.allowedFinishes.filter(f => f !== finishName) : [...prev.allowedFinishes, finishName] }));
+  };
+  const handleAddCollection = async () => {
+      if (!newCollection.name) return alert("Collection name is required.");
+      const safeId = `COL_${Date.now()}`;
+      await setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: newCollection.name, allowedCustomers: newCollection.allowedCustomers, allowedFinishes: newCollection.allowedFinishes });
+      setNewCollection({ name: '', allowedCustomers: [], allowedFinishes: [] });
+      setShowCollectionForm(false);
+  };
+  const handleDeleteCollection = async (id) => {
+      if (!window.confirm("Delete this Collection?")) return;
+      await deleteDoc(doc(db, "hq_collections", id));
   };
 
   const handleSyncFloorRecipes = async () => {
@@ -535,6 +544,14 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ padding: '10px', border: '2px solid #000', fontWeight: 'bold', flex: 1 }}>
                   <option value="">ALL CATEGORIES</option>
                   {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}
+              </select>
+          )}
+
+          {/* 🚀 FIXED: Added Dynamic Collection Filter to Top Bar */}
+          {windowConfig.system.collections?.includes(activeBrand) && (
+              <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ padding: '10px', border: '2px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', flex: 1 }}>
+                  <option value="">ALL COLLECTIONS</option>
+                  {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
               </select>
           )}
 
@@ -777,7 +794,15 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                    )}
 
-                   {/* Soft-goods/specialty system lists */}
+                   {/* 🚀 FIXED: Collection dropdown dynamically populates from new Collections Dictionary */}
+                   {windowConfig.system.collections?.includes(activeBrand) && (
+                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1' }}>COLLECTION (CPQ QUOTING):</label>
+                       <select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #6f42c1', fontWeight: 'bold' }}>
+                           <option value="">-- NO COLLECTION --</option><option value="N/A">N/A</option>
+                           {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                       </select></div>
+                   )}
+
                    {windowConfig.system.pillowSizes?.includes(activeBrand) && (
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PILLOW SIZE:</label><select name="pillowSize" value={editSpecs.pillowSize || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
@@ -797,7 +822,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>OUTSOURCE ACTION:</label><select name="outsourceAction" value={editSpecs.outsourceAction || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
                    
-                   {/* Dynamic Dictionaries Rendering */}
                    {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
                        <div key={w.id}>
                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c', textTransform: 'uppercase' }}>{w.name}:</label>
@@ -808,11 +832,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        </div>
                    ))}
 
-                   {windowConfig.system.collections?.includes(activeBrand) && (
-                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label><select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option><option value="N/A">N/A</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                   )}
-
-                   {/* 🚀 FIXED: Schema field 'file' type rendering without value prop */}
                    {customSchema.map(field => (
                        <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#eafaf1', padding: '5px', border: '1px solid #28a745' }}>
                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
@@ -843,6 +862,37 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                  </div>
               </div>
 
+              {/* 🚀 NEW: HARDWARE CPQ METADATA BLOCK */}
+              <div style={{ background: '#f8f9fa', border: '2px solid #d4af37', padding: '15px', marginTop: '10px' }}>
+                  <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                      <div>
+                          <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>PROJECTION (INCHES):</label>
+                          <input type="number" step="0.125" value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} placeholder="e.g. 3.625" style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', boxSizing: 'border-box' }} />
+                      </div>
+                      <div>
+                          <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET MOUNT TYPE:</label>
+                          <select value={editSpecs.customData?.bracketType || ""} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
+                              <option value="">-- NOT A BRACKET --</option>
+                              <option value="WALL">WALL MOUNT</option>
+                              <option value="CEILING">CEILING MOUNT</option>
+                              <option value="INSIDE MOUNT">INSIDE MOUNT</option>
+                          </select>
+                      </div>
+                      <div style={{ gridColumn: 'span 2' }}>
+                          <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>SERVICE / FEE TYPE (AUTO-APPEND):</label>
+                          <select value={editSpecs.customData?.feeType || ""} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
+                              <option value="">-- NO SPECIAL FEE --</option>
+                              <option value="SPLICE">SPLICE FEE</option>
+                              <option value="MITER_CUT">MITER CUT FEE</option>
+                              <option value="BENT_RETURN">BENT RETURN (FR) FEE</option>
+                              <option value="MITER_RETURN">MITER RETURN FEE</option>
+                          </select>
+                          <span style={{ fontSize: '0.6rem', color: '#666', fontStyle: 'italic', display: 'block', marginTop: '4px' }}>If selected, the Vision System will automatically bill for this item when triggered (e.g. mapping "Splice Fee" to splices).</span>
+                      </div>
+                  </div>
+              </div>
+
               {/* SOURCING & WAREHOUSE */}
               {activePart.partClass === 'Inventory' && (
                   <div>
@@ -863,7 +913,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                         <>
                           <div style={{ display: 'flex', gap: '10px' }}>
                             {windowConfig.system.vendors?.includes(activeBrand) ? (
-                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT VENDOR...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
+                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }}><option value="">SELECT VENDOR...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
                             ) : (
                                 <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><input name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
                             )}
@@ -1008,6 +1058,63 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
+                        {/* 🚀 FIXED: NEW POWERFUL COLLECTIONS DICTIONARY MANAGER */}
+                        {windowConfig.system.collections?.includes(adminBrandFilter) && (
+                            <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #6f42c1' }}>
+                                <div style={{ padding: '15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
+                                    <span>📁 MASTER COLLECTIONS DICTIONARY</span>
+                                    <button onClick={() => setShowCollectionForm(!showCollectionForm)} style={{ background: '#fff', color: '#6f42c1', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>{showCollectionForm ? 'CLOSE' : '+ ADD COLLECTION'}</button>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                    {showCollectionForm && (
+                                        <div style={{ padding: '20px', background: '#f3e8ff', borderBottom: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                                            <div>
+                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>COLLECTION NAME:</label>
+                                                <input value={newCollection.name} onChange={(e) => setNewCollection({...newCollection, name: e.target.value})} placeholder="e.g. Modern Industrial" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} />
+                                            </div>
+                                            
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                                <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '150px', overflowY: 'auto' }}>
+                                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#007bff' }}>RESTRICT TO CUSTOMERS (Optional):</label>
+                                                    {globalLists.customers.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No customers in database.</span>}
+                                                    {globalLists.customers.map(c => (
+                                                        <label key={c} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
+                                                            <input type="checkbox" checked={newCollection.allowedCustomers.includes(c)} onChange={() => toggleCollectionCustomer(c)} /> {c}
+                                                        </label>
+                                                    ))}
+                                                </div>
+
+                                                <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '150px', overflowY: 'auto' }}>
+                                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#28a745' }}>ALLOWED FINISHES (Optional):</label>
+                                                    {globalFinishes.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No finishes in database.</span>}
+                                                    {globalFinishes.map(f => (
+                                                        <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
+                                                            <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name} {f.code && `(${f.code})`}
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <button onClick={handleAddCollection} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '5px' }}>SAVE COLLECTION</button>
+                                        </div>
+                                    )}
+                                    <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto', background: '#f8f9fa' }}>
+                                        {collectionsData.length === 0 && <span style={{ color: '#999', fontStyle: 'italic' }}>No collections mapped yet.</span>}
+                                        {collectionsData.map(col => (
+                                            <div key={col.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: '#fff', padding: '15px', border: '2px solid #ccc', borderLeft: `6px solid #6f42c1`, boxShadow: '3px 3px 0 rgba(0,0,0,0.05)' }}>
+                                                <div>
+                                                    <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#000' }}>{col.name}</div>
+                                                    <div style={{ fontSize: '0.65rem', color: '#007bff', fontWeight: 'bold', marginTop: '5px' }}>CUSTOMERS: {col.allowedCustomers?.length > 0 ? col.allowedCustomers.join(', ') : 'ALL (Unrestricted)'}</div>
+                                                    <div style={{ fontSize: '0.65rem', color: '#28a745', fontWeight: 'bold', marginTop: '3px' }}>FINISHES: {col.allowedFinishes?.length > 0 ? col.allowedFinishes.join(', ') : 'ALL (Unrestricted)'}</div>
+                                                </div>
+                                                <button onClick={() => handleDeleteCollection(col.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {windowConfig.system.outsourceFinishes?.includes(adminBrandFilter) && (
                             <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #17a2b8' }}>
                                 <div style={{ padding: '15px', background: '#17a2b8', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
@@ -1138,6 +1245,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
+                        {/* 🚀 FIXED: Removed the old "collections" string array from this simple dropdown list to avoid conflicts */}
                         <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #fd7e14' }}>
                             <div style={{ padding: '15px', background: '#fd7e14', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
                                 <span>📋 SIMPLE DROPDOWN LISTS</span>
@@ -1147,7 +1255,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                             </div>
                             
                             <div style={{ padding: '20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px', background: '#f8f9fa', maxHeight: '500px', overflowY: 'auto' }}>
-                                {Object.keys(globalLists).filter(k => windowConfig.system[k]?.includes(adminBrandFilter) && k !== 'cpqRoutingTypes').map(listKey => {
+                                {Object.keys(globalLists).filter(k => windowConfig.system[k]?.includes(adminBrandFilter) && k !== 'cpqRoutingTypes' && k !== 'collections').map(listKey => {
                                     return (
                                         <div key={listKey} style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #eee', paddingBottom: '8px', marginBottom: '15px' }}>
