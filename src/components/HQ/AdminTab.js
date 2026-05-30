@@ -25,7 +25,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
 
-  // 🚀 NEW: qtyHelperText added to schema
+  // 🚀 FIXED: Initialize with empty partHandling so validation catches it
   const [newStep, setNewStep] = useState({ 
       id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, 
       priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [],
@@ -321,6 +321,10 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   const handleAddStepToFlow = async (flow) => {
       if (!newStep.title) return alert("Step title is required");
+      
+      // 🚀 FIXED: Mandatory Routing Validation
+      if (!newStep.partHandling) return alert("❌ ERROR: Part Handling / Routing is required for every step.");
+
       try {
           let updatedSteps;
           if (newStep.id) {
@@ -670,7 +674,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         </div>
                                     )}
 
-                                    {/* 🚀 NEW: QTY HELPER TEXT INPUT */}
                                     <div style={{ background: '#fff', padding: '10px', border: '1px solid #ccc' }}>
                                         <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>STEP QUANTITY DESCRIPTION (Helper Text):</label>
                                         <input 
@@ -755,12 +758,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>If this is a "Finish" step, it applies the texture to these meshes. Comma separate for multiple.</span>
                                     </div>
 
+                                    {/* 🚀 FIXED: Required Routing Property Validation */}
                                     <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', marginTop: '10px' }}>
                                         <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '5px' }}>
-                                            🛤️ PART HANDLING & ROUTING
+                                            🛤️ PART HANDLING & ROUTING <span style={{ color: '#d9534f' }}>*REQUIRED</span>
                                         </label>
                                         <select value={newStep.partHandling || ''} onChange={e => setNewStep({...newStep, partHandling: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold', textTransform: 'uppercase' }}>
-                                            <option value="">-- SELECT HANDLING ROUTE (OPTIONAL) --</option>
+                                            <option value="">-- SELECT HANDLING ROUTE --</option>
                                             {(globalLists.partHandling || ['Small Parts', 'Custom']).map(ph => (
                                                 <option key={ph} value={ph}>{ph.toUpperCase()}</option>
                                             ))}

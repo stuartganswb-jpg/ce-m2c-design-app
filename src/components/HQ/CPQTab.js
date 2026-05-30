@@ -55,9 +55,12 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     if (matchedTexUrl && texMap[matchedTexUrl]) {
                         const newMat = child.userData.originalMaterial.clone();
                         newMat.map = texMap[matchedTexUrl];
-                        newMat.color = new THREE.Color(0xffffff); 
-                        newMat.metalness = 0.0; 
-                        newMat.roughness = 0.8; 
+                        
+                        // 🚀 FIXED: Darker base color + metalness to prevent HDRI blowout
+                        newMat.color = new THREE.Color(0x999999); 
+                        newMat.metalness = 0.6; 
+                        newMat.roughness = 0.4; 
+                        
                         newMat.normalMap = null;
                         newMat.bumpMap = null;
                         newMat.roughnessMap = null;
@@ -895,7 +898,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               )}
           </div>
 
-          {/* 🚀 UPGRADED 3D ENGINE WRAPPER */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px', minHeight: '800px' }}>
               <div style={{ flex: 1, background: '#fff', border: '2px solid #000', boxShadow: '10px 10px 0 #000', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
                   
@@ -920,7 +922,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           <Canvas camera={{ position: [5, 5, 5], fov: 50 }} style={{ width: '100%', height: '100%' }}>
                               <ambientLight intensity={0.5} />
                               <directionalLight position={[5, 10, 5]} intensity={1} />
-                              {/* 🚀 NEW: HDRI Studio Lighting & Contact Shadows */}
                               <Environment preset="studio" />
                               <ContactShadows position={[0, -0.5, 0]} opacity={0.4} scale={10} blur={2} far={4} />
                               <OrbitControls makeDefault />
