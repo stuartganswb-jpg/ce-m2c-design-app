@@ -56,10 +56,12 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                         const newMat = child.userData.originalMaterial.clone();
                         newMat.map = texMap[matchedTexUrl];
                         
-                        // 🚀 FIXED: Darker base color + metalness to prevent HDRI blowout
-                        newMat.color = new THREE.Color(0x999999); 
-                        newMat.metalness = 0.6; 
-                        newMat.roughness = 0.4; 
+                        // 🚀 THE FIX: Polished Steel Base
+                        // Light silver base, 100% metal, low roughness, boosted HDRI reflections
+                        newMat.color = new THREE.Color(0xdddddd); 
+                        newMat.metalness = 1.0; 
+                        newMat.roughness = 0.2; 
+                        newMat.envMapIntensity = 1.2; 
                         
                         newMat.normalMap = null;
                         newMat.bumpMap = null;
