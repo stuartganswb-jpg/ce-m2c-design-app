@@ -8,7 +8,8 @@ import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } fro
 const globalTextureCache = {};
 
 const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
-    const { scene } = useGLTF(url);
+    // This tells the app to download Google's official decoder to unzip the file
+const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
     
     const textureOverridesString = JSON.stringify(textureOverrides);
