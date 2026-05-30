@@ -4,9 +4,8 @@ import { collection, onSnapshot, doc, updateDoc, getDoc } from "firebase/firesto
 
 // --- REQUIRED FOR NETSUITE AUTHENTICATION ---
 // In a true production environment, you should move this block to a Firebase Cloud Function
-// to hide your consumer secrets. For now, it runs client-side to test the pipeline.
-import hmacSHA256 from 'crypto-js/hmac-sha256';
-import Base64 from 'crypto-js/enc-base64';
+// REPLACE WITH THIS SINGLE LINE:
+import CryptoJS from 'crypto-js';
 
 const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const [approvedJobs, setApprovedJobs] = useState([]);
@@ -64,8 +63,9 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       );
       
       const signingKey = `${encodeURIComponent(NS_CONSUMER_SECRET)}&${encodeURIComponent(NS_TOKEN_SECRET)}`;
-      const hash = hmacSHA256(baseString, signingKey);
-      const oauth_signature = Base64.stringify(hash);
+     // REPLACE WITH THESE TWO LINES:
+      const hash = CryptoJS.HmacSHA256(baseString, signingKey);
+      const oauth_signature = CryptoJS.enc.Base64.stringify(hash);
       
       return `OAuth realm="${NS_ACCOUNT}", oauth_consumer_key="${NS_CONSUMER_KEY}", oauth_token="${NS_TOKEN_ID}", oauth_nonce="${oauth_nonce}", oauth_timestamp="${oauth_timestamp}", oauth_signature_method="HMAC-SHA256", oauth_signature="${encodeURIComponent(oauth_signature)}", oauth_version="1.0"`;
   };
