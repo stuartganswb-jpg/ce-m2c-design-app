@@ -55,12 +55,11 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     if (matchedTexUrl && texMap[matchedTexUrl]) {
                         const newMat = child.userData.originalMaterial.clone();
                         newMat.map = texMap[matchedTexUrl];
-                        
-                        // 🚀 THE FIX: Saturation Boost (Letting the texture's native color win)
+                        // 🚀 THE FIX: Final Saturation Push (+15% more texture color)
                         newMat.color = new THREE.Color(0xffffff); 
-                        newMat.metalness = 0.65; // Dropped to give the texture color more weight
-                        newMat.roughness = 0.40; // Softened slightly to enrich the color absorption
-                        newMat.envMapIntensity = 1.0; // Lowered so the HDRI sky doesn't wash out the tint
+                        newMat.metalness = 0.50; // Dropped further to let the rich texture color dominate
+                        newMat.roughness = 0.50; // Increased to soften reflections and prevent white-wash
+                        newMat.envMapIntensity = 0.85; // Lowered HDRI reflection intensity
                         
                         newMat.normalMap = null;
                         newMat.bumpMap = null;
@@ -921,7 +920,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           </div>
                       ) : viewMode === '3D' ? (
                           <Canvas camera={{ position: [5, 5, 5], fov: 50 }} style={{ width: '100%', height: '100%' }}>
-                              <ambientLight intensity={1.0} /> {/* 🚀 Boosted to bring out texture saturation */}
+                              <ambientLight intensity={1.15} /> {/* 🚀 Boosted to keep the rich colors bright */}
                               <directionalLight position={[5, 10, 5]} intensity={1.2} />
                               <Environment preset="city" />
                               <ContactShadows position={[0, -0.5, 0]} opacity={0.4} scale={10} blur={2} far={4} />
