@@ -9,7 +9,7 @@ const globalTextureCache = {};
 
 const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
     // This tells the app to download Google's official decoder to unzip the file
-const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
+    const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
     
     const textureOverridesString = JSON.stringify(textureOverrides);
@@ -55,20 +55,18 @@ const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders
 
                     if (matchedTexUrl && texMap[matchedTexUrl]) {
                         const newMat = child.userData.originalMaterial.clone();
-                      // 🧪 THE FIX: The Brass/Gold Diagnostic Test
-                        // We are tinting the base color to brass. If this renders beautifully, 
-                        // your lighting is perfect and your CAD files just need UV Maps!
-                        newMat.color = new THREE.Color(0xd4af37); 
-                        newMat.metalness = 1.0; 
-                        newMat.roughness = 0.35; 
-                        newMat.envMapIntensity = 1.2; 
                         
-                        newMat.normalMap = null;
-                        newMat.bumpMap = null;
-                        newMat.roughnessMap = null;
-                        newMat.metalnessMap = null;
-                        newMat.clearcoatMap = null;
+                        // 🚀 THE REAL TEXTURE ENGINE:
+                        // Apply the actual loaded image texture to the base color map
+                        newMat.map = texMap[matchedTexUrl];
+                        
+                        // Reset base color to white so the uploaded texture image shows purely
+                        newMat.color = new THREE.Color(0xffffff); 
+                        
+                        // Keep environment reflections active so metals/woods react to light
+                        newMat.envMapIntensity = 1.0; 
                         newMat.needsUpdate = true;
+                        
                         child.material = newMat;
                     } else {
                         child.material = child.userData.originalMaterial;

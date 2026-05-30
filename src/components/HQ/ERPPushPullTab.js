@@ -4,7 +4,7 @@ import { collection, onSnapshot, doc, updateDoc, getDoc } from "firebase/firesto
 
 // --- REQUIRED FOR NETSUITE AUTHENTICATION ---
 // In a true production environment, you should move this block to a Firebase Cloud Function
-// REPLACE WITH THIS SINGLE LINE:
+// to hide your consumer secrets. For now, it runs client-side to test the pipeline.
 import CryptoJS from 'crypto-js';
 
 const ERPPushPullTab = ({ currentUser, activeBrand }) => {
@@ -63,7 +63,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       );
       
       const signingKey = `${encodeURIComponent(NS_CONSUMER_SECRET)}&${encodeURIComponent(NS_TOKEN_SECRET)}`;
-     // REPLACE WITH THESE TWO LINES:
+      
+      // Vercel-friendly CryptoJS implementation
       const hash = CryptoJS.HmacSHA256(baseString, signingKey);
       const oauth_signature = CryptoJS.enc.Base64.stringify(hash);
       
@@ -72,6 +73,13 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
   // --- 🚀 THE PUSH ENGINE ---
   const handlePushToNetSuite = async (job) => {
+      // 🛑 SAFETY CATCH: Ensure the job was actually configured in Tab 8
+      if (!job.cpqData || !job.cpqData.configuration) {
+          addLog(`❌ FAILED: Job ${job.jobId || job.id} has no CPQ data.`, 'error');
+          alert("Hold up! This job hasn't been configured in the CPQ Engine (Tab 8) yet. There is no physical inventory attached to it.");
+          return;
+      }
+
       if (!window.confirm(`Are you sure you want to push Job ${job.jobId || job.id} to NetSuite? This will create a live Estimate record.`)) return;
       
       setIsPushing(true);
@@ -92,7 +100,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       // Skip parts that haven't been mapped to an ERP ID yet to prevent API errors
                       if (nsId && nsId !== 'PENDING') {
                           lineItems.push({
-                              item: { id: nsId }, // The NetSuite internal ID
+                              item: { id: nsId }, 
                               quantity: qty,
                               rate: masterPart.manufacturingSpecs?.basePrice || 0,
                               description: `${masterPart.itemName} (Mapped from CPQ)`
@@ -102,6 +110,10 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       }
                   }
               }
+          }
+
+          if (lineItems.length === 0) {
+              throw new Error("No valid items with NetSuite ERP IDs were found in this configuration.");
           }
 
           // Format Customer ID (Strip 'CUST-' prefix if necessary based on how NetSuite expects it)
@@ -127,13 +139,17 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
           addLog(`Payload constructed with ${lineItems.length} child items.`, 'success');
 
+          // --- 🌐 THE CORS PROXY WORKAROUND FOR BROWSER TESTING ---
+          const targetUrl = `https://${NS_ACCOUNT}.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
+          const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+          
+          // NOTE: We generate the OAuth signature against the REAL NetSuite URL, not the proxy URL
+          const authHeader = generateNetSuiteHeader('POST', targetUrl);
+
+          addLog(`Transmitting to NetSuite via secure proxy...`, 'info');
+
           // 3. Fire the Request to NetSuite REST API
-          const url = `https://${NS_ACCOUNT}.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
-          const authHeader = generateNetSuiteHeader('POST', url);
-
-          addLog(`Transmitting to NetSuite...`, 'info');
-
-          const response = await fetch(url, {
+          const response = await fetch(proxyUrl, {
               method: 'POST',
               headers: {
                   'Authorization': authHeader,
@@ -165,9 +181,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           console.error("NetSuite Push Error:", error);
           addLog(`❌ FAILED: ${error.message}`, 'error');
           alert("Failed to push to NetSuite. Please check the logs on the right side of the screen.");
-          
-          // NOTE: If you get a CORS error here, it means NetSuite is blocking browser-based requests.
-          // We will need to wrap the fetch logic in a 10-line Firebase Cloud Function.
       }
       
       setIsPushing(false);

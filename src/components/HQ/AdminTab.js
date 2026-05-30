@@ -4,8 +4,12 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, 
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
+// --- NETSUITE AUTHENTICATION IMPORTS ---
+import hmacSHA256 from 'crypto-js/hmac-sha256';
+import Base64 from 'crypto-js/enc-base64';
+
 const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
-  const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
+  const [activeSection, setActiveSection] = useState("NETSUITE_SYNC"); // 🚀 Defaulting to new tab for testing
   
   const [users, setUsers] = useState([]);
   const [dynamicRoles, setDynamicRoles] = useState(['admin', 'executive', 'design_team', 'sales_rep']);
@@ -25,7 +29,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
 
-  // 🚀 NEW: CRM Master Dictionaries
+  // CRM Master Dictionaries
   const [crmDiscounts, setCrmDiscounts] = useState([]);
   const [newDiscount, setNewDiscount] = useState({ code: '', description: '', percent: '' });
   const [crmListInput, setCrmListInput] = useState({ salesReps: '', paymentTerms: '' });
@@ -55,8 +59,20 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeFormType, setActiveFormType] = useState('QUOTE');
   const [formEditor, setFormEditor] = useState({ header: '', footer: '', terms: '' });
 
+  // 🚀 NEW: NetSuite Sync State
+  const [nsSubsidiaryId, setNsSubsidiaryId] = useState("3"); // Defaulting to 3 as placeholder
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncLog, setSyncLog] = useState([]);
+
   const DOCUMENT_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE', 'FACTORY_ROUTER'];
   const BRANDS_LIST = ['m2c', 'uniquity', 'ce', 'leyla']; 
+
+  // --- NetSuite API Credentials ---
+  const NS_ACCOUNT = "3728153";
+  const NS_CONSUMER_KEY = "0979687669fe99f5869793e3a911daeb062b779c4801817c86b494ccde1e0db4";
+  const NS_CONSUMER_SECRET = "4f88d6f93c57a1b9e0ffb29ff71831d47b075dcdf609cdb028dd305cb552c243";
+  const NS_TOKEN_ID = "2e5ce04cce902b621aad683d91e08674631cc7c9dd07edaae07cdc12e12f57ad";
+  const NS_TOKEN_SECRET = "f5c98c85514f46fc67674d822b6d70461e5407da13c84c2db6c72d8a5592a72";
 
   useEffect(() => {
       const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -69,7 +85,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           if (docSnap.exists()) setGlobalLists(docSnap.data()); 
       });
 
-      // 🚀 NEW: Listen for CRM Discount Codes
       const unsubDiscounts = onSnapshot(doc(db, "system", "crm_discounts"), (docSnap) => { 
           if (docSnap.exists() && docSnap.data().list) setCrmDiscounts(docSnap.data().list); 
       });
@@ -150,7 +165,167 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       return () => unsub();
   }, [flowSettings.linkedAssemblyId, masterAssemblies]);
 
-  // 🚀 NEW: CRM Dictionary Handlers
+  // --- 🚀 NETSUITE AUTHENTICATION & SYNC ENGINE ---
+  const addLog = (msg, type = 'info') => {
+      const time = new Date().toLocaleTimeString();
+      setSyncLog(prev => [{ time, msg, type }, ...prev]);
+  };
+
+  const generateNetSuiteHeader = (method, url) => {
+      const oauth_nonce = Math.random().toString(36).substring(2, 15);
+      const oauth_timestamp = Math.floor(Date.now() / 1000).toString();
+      
+      const baseString = `${method}&${encodeURIComponent(url)}&` + encodeURIComponent(
+          `oauth_consumer_key=${NS_CONSUMER_KEY}&` +
+          `oauth_nonce=${oauth_nonce}&` +
+          `oauth_signature_method=HMAC-SHA256&` +
+          `oauth_timestamp=${oauth_timestamp}&` +
+          `oauth_token=${NS_TOKEN_ID}&` +
+          `oauth_version=1.0`
+      );
+      
+      const signingKey = `${encodeURIComponent(NS_CONSUMER_SECRET)}&${encodeURIComponent(NS_TOKEN_SECRET)}`;
+      const hash = hmacSHA256(baseString, signingKey);
+      const oauth_signature = Base64.stringify(hash);
+      
+      return `OAuth realm="${NS_ACCOUNT}", oauth_consumer_key="${NS_CONSUMER_KEY}", oauth_token="${NS_TOKEN_ID}", oauth_nonce="${oauth_nonce}", oauth_timestamp="${oauth_timestamp}", oauth_signature_method="HMAC-SHA256", oauth_signature="${encodeURIComponent(oauth_signature)}", oauth_version="1.0"`;
+  };
+
+  const executeSuiteQL = async (queryStr) => {
+      const targetUrl = `https://${NS_ACCOUNT}.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`;
+      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+      const authHeader = generateNetSuiteHeader('POST', targetUrl);
+
+      const response = await fetch(proxyUrl, {
+          method: 'POST',
+          headers: {
+              'Authorization': authHeader,
+              'Content-Type': 'application/json',
+              'Prefer': 'transient'
+          },
+          body: JSON.stringify({ q: queryStr })
+      });
+
+      if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`NetSuite Error [${response.status}]: ${errText}`);
+      }
+      return await response.json();
+  };
+
+  const handleSyncCustomers = async () => {
+      if (!nsSubsidiaryId) return alert("Please enter a Target Subsidiary ID.");
+      setIsSyncing(true);
+      addLog(`Initiating Customer Sync for Subsidiary [${nsSubsidiaryId}]...`, 'info');
+
+      try {
+          const q = `SELECT id, companyname, email, phone, creditlimit, terms FROM customer WHERE subsidiary = ${nsSubsidiaryId} AND isinactive = 'F'`;
+          const result = await executeSuiteQL(q);
+          const records = result.items || [];
+          
+          addLog(`Downloaded ${records.length} active customers. Writing to CRM Database...`, 'success');
+
+          let successCount = 0;
+          for (const c of records) {
+              const safeId = `CUST-${c.id}`;
+              const docRef = doc(db, "crm_records", safeId);
+              await setDoc(docRef, {
+                  id: safeId,
+                  type: 'CUSTOMER',
+                  name: c.companyname || `Customer ${c.id}`,
+                  email: c.email || '',
+                  phone: c.phone || '',
+                  creditLimit: parseFloat(c.creditlimit) || 0,
+                  terms: c.terms || '',
+                  billingAddress: '',
+                  shippingAddresses: [],
+                  discountCode: '',
+                  contact: '',
+                  salesRep: '',
+                  notes: 'Imported from NetSuite',
+                  ytd: 0, mtd: 0, openOrders: 0
+              }, { merge: true });
+              successCount++;
+          }
+          addLog(`✅ Successfully synced ${successCount} CRM records.`, 'success');
+
+      } catch (err) {
+          console.error(err);
+          addLog(`❌ FAILED: ${err.message}`, 'error');
+      }
+      setIsSyncing(false);
+  };
+
+  const handleSyncItems = async (itemType) => {
+      if (!nsSubsidiaryId) return alert("Please enter a Target Subsidiary ID.");
+      setIsSyncing(true);
+      
+      const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
+      addLog(`Initiating CPQ Item Sync for [${typeDesc}] in Subsidiary [${nsSubsidiaryId}]...`, 'info');
+
+      try {
+          // Note: "custitem_sync_to_cpq" is the exact custom field internal ID your NetSuite developer must create.
+          // Note: "itemtype" filter checks for "InvtPart" (Inventory) or "Assembly" (Kits)
+          const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
+          const q = `SELECT id, itemid, displayname, baseprice FROM item WHERE custitem_sync_to_cpq = 'T' AND subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND ${typeFilter}`;
+          
+          const result = await executeSuiteQL(q);
+          const records = result.items || [];
+          
+          addLog(`Downloaded ${records.length} valid CPQ parts. Updating Master Library...`, 'success');
+
+          let successCount = 0;
+          for (const item of records) {
+              const newId = `${activeBrand.toUpperCase()}-${itemType === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
+              
+              // We check if the item already exists by searching for its legacyErpId
+              const existingMatch = allApprovedDesigns.find(d => d.legacyErpId === item.itemid);
+              const targetDocId = existingMatch ? existingMatch.id : newId;
+
+              const payload = {
+                  id: targetDocId,
+                  itemId: targetDocId,
+                  legacyErpId: item.itemid || item.id,
+                  itemName: item.displayname || item.itemid,
+                  brandId: activeBrand,
+                  partClass: itemType,
+                  sharedBrands: [activeBrand]
+              };
+
+              // If it's a new item, scaffold out the manufacturing specs
+              if (!existingMatch) {
+                  payload.manufacturingSpecs = {
+                      basePrice: parseFloat(item.baseprice) || 0,
+                      cost: 0,
+                      isInHouse: true,
+                      status: "IMPORTED_FROM_ERP",
+                      parametric: { isCutToSize: false },
+                      customData: {},
+                      dynamicDicts: {}
+                  };
+                  payload.createdAt = new Date().toISOString();
+              } else {
+                  // If it exists, just update the base price to match NetSuite
+                  payload.manufacturingSpecs = {
+                      ...existingMatch.manufacturingSpecs,
+                      basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0
+                  };
+                  payload.updatedAt = new Date().toISOString();
+              }
+
+              await setDoc(doc(db, "Approved_Designs", targetDocId), payload, { merge: true });
+              successCount++;
+          }
+          addLog(`✅ Successfully synced ${successCount} library items.`, 'success');
+
+      } catch (err) {
+          console.error(err);
+          addLog(`❌ FAILED: ${err.message}`, 'error');
+      }
+      setIsSyncing(false);
+  };
+
+  // --- CRM Dictionary Handlers ---
   const handleAddDiscount = async () => {
       if (!newDiscount.code || !newDiscount.percent) return alert("Code and Percentage are required.");
       const updated = [...crmDiscounts, { ...newDiscount, code: newDiscount.code.toUpperCase(), percent: parseFloat(newDiscount.percent) || 0 }];
@@ -519,8 +694,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           <div style={{ padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold' }}>SYSTEM CONTROLS</div>
           <button onClick={() => setActiveSection("CPQ_FLOWS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "CPQ_FLOWS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "CPQ_FLOWS" ? '4px solid #007bff' : '4px solid transparent' }}>⚙️ CPQ FLOW BUILDER</button>
           <button onClick={() => setActiveSection("RULES")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "RULES" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "RULES" ? '4px solid #007bff' : '4px solid transparent' }}>📐 CPQ LOGIC ENGINE</button>
-          {/* 🚀 NEW CRM & SALES TAB */}
           <button onClick={() => setActiveSection("CRM_SETTINGS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "CRM_SETTINGS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "CRM_SETTINGS" ? '4px solid #fd7e14' : '4px solid transparent' }}>👥 CRM & SALES CONFIG</button>
+          
+          {/* 🚀 NEW: NETSUITE INTEGRATION TAB */}
+          <button onClick={() => setActiveSection("NETSUITE_SYNC")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "NETSUITE_SYNC" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "NETSUITE_SYNC" ? '4px solid #6f42c1' : '4px solid transparent' }}>🌐 NETSUITE SYNC</button>
+          
           <button onClick={() => setActiveSection("FORMS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "FORMS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "FORMS" ? '4px solid #28a745' : '4px solid transparent' }}>📝 FORM TEMPLATES</button>
           <button onClick={() => setActiveSection("USERS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "USERS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "USERS" ? '4px solid #007bff' : '4px solid transparent' }}>👥 USER MATRIX</button>
           <button onClick={() => setActiveSection("DANGER")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "DANGER" ? '#ffebee' : '#fff', color: '#d9534f', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "DANGER" ? '4px solid #d9534f' : '4px solid transparent' }}>⚠️ DANGER ZONE</button>
@@ -528,6 +706,72 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
         <div style={{ flex: 1, background: '#fff', border: '2px solid #000', minHeight: '600px', boxShadow: '10px 10px 0 #000' }}>
           
+          {/* 🚀 NEW: NETSUITE INTEGRATION MODULE */}
+          {activeSection === "NETSUITE_SYNC" && (
+              <div style={{ padding: '30px', display: 'flex', gap: '20px', alignItems: 'stretch' }}>
+                  
+                  {/* Left Column: Sync Controls */}
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '10px' }}>
+                          <h3 style={{ margin: 0, color: '#6f42c1' }}>🌐 NETSUITE MASTER SYNC (PULL)</h3>
+                      </div>
+                      
+                      <div style={{ background: '#f8f9fa', border: '2px solid #000', padding: '15px' }}>
+                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff', display: 'block', marginBottom: '5px' }}>TARGET SUBSIDIARY ID:</label>
+                          <input 
+                              type="number" 
+                              value={nsSubsidiaryId} 
+                              onChange={e => setNsSubsidiaryId(e.target.value)} 
+                              placeholder="e.g. 3 (Classical Elements)" 
+                              style={{ width: '100%', padding: '10px', border: '2px solid #007bff', boxSizing: 'border-box', fontWeight: 'bold', fontSize: '1.2rem' }} 
+                          />
+                          <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '5px' }}>The Internal ID of the NetSuite subsidiary you want to import data from.</p>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                          <button onClick={handleSyncCustomers} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#fd7e14', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                              ⬇️ 1. SYNC ACTIVE CUSTOMERS
+                              <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls all active customers mapped to Subsidiary {nsSubsidiaryId}.</div>
+                          </button>
+                          
+                          <button onClick={() => handleSyncItems('Inventory')} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#007bff', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                              ⬇️ 2. SYNC INVENTORY / COMPONENTS
+                              <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls non-assembly items where "Sync to CPQ App" is checked.</div>
+                          </button>
+
+                          <button onClick={() => handleSyncItems('Assembly')} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                              ⬇️ 3. SYNC KITS / ASSEMBLIES
+                              <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls Assembly Items where "Sync to CPQ App" is checked.</div>
+                          </button>
+                      </div>
+                  </div>
+
+                  {/* Right Column: Terminal */}
+                  <div style={{ flex: 1, background: '#1e1e1e', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000' }}>
+                      <div style={{ padding: '10px 15px', background: '#333', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between' }}>
+                          <span>>_ SUITEQL TERMINAL</span>
+                          <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '0.7rem' }}>CLEAR</button>
+                      </div>
+                      <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                          {syncLog.length === 0 && <span style={{ color: '#666' }}>Awaiting command...</span>}
+                          {syncLog.map((log, idx) => {
+                              let color = '#fff';
+                              if (log.type === 'error') color = '#ff4d4d';
+                              if (log.type === 'success') color = '#28a745';
+                              if (log.type === 'warn') color = '#ffc107';
+                              
+                              return (
+                                  <div key={idx} style={{ color, borderBottom: '1px dotted #333', paddingBottom: '4px' }}>
+                                      <span style={{ color: '#888', marginRight: '8px' }}>[{log.time}]</span>
+                                      {log.msg}
+                                  </div>
+                              );
+                          })}
+                      </div>
+                  </div>
+              </div>
+          )}
+
           {/* FLOW BUILDER */}
           {activeSection === "CPQ_FLOWS" && (
             <div style={{ display: 'flex', flex: 1, height: '100%' }}>
@@ -961,7 +1205,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
             </div>
           )}
 
-          {/* 🚀 NEW: CRM & SALES CONFIGURATION VIEW */}
+          {/* CRM & SALES CONFIGURATION VIEW */}
           {activeSection === "CRM_SETTINGS" && (
               <div style={{ padding: '30px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px' }}>
