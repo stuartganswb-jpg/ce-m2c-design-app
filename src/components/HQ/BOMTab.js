@@ -80,8 +80,13 @@ const BOMTab = ({ currentUser, activeBrand }) => {
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     
-    // 🚀 NEW: Listen for raw customers collection if NetSuite dumps them there
-    const unsubCustomers = onSnapshot(collection(db, "customers"), snap => setCustomersData(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+    // 🚀 NEW: Listen for the unified CRM records and filter out only the Customers
+const unsubCustomers = onSnapshot(collection(db, "crm_records"), snap => {
+    const onlyCustomers = snap.docs
+        .map(d => ({id: d.id, ...d.data()}))
+        .filter(record => record.type === 'CUSTOMER');
+    setCustomersData(onlyCustomers);
+});
 
     return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); unsubAssets(); unsubCollections(); unsubCustomers(); };
   }, []);
@@ -549,7 +554,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                                         (globalLists.customers || []).map((c, idx) => {
                                                             const val = typeof c === 'string' ? c : c.id;
                                                             const label = typeof c === 'string' ? c : `${c.name} - ${c.id}`;
-                                                            return <option key={val || idx} value={val}>{label}</option>
+                                                           {/* We just wrap the label in our lookup function so the dropdown menu translates it too! */}
+<option key={val || idx} value={val}>{getCustomerDisplay(val)}</option>
                                                         })
                                                     )}
                                                 </select>

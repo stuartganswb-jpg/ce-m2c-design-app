@@ -8,14 +8,15 @@ import { OrbitControls, Box, Cylinder, Plane, Html } from '@react-three/drei';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
-const CUSTOMERS = ["CUST-882 (Smith Residence)", "CUST-310 (The Harrison Project)", "CUST-105 (Alvarez Villa)"];
-const VENDORS = ["VEND-101 (Acme Plating)", "VEND-202 (Prime Assembly)"];
-
 const VisionLighting = ({ currentUser, activeBrand }) => {
     // --- Data Hooks ---
     const [masterAssemblies, setMasterAssemblies] = useState([]);
     const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
     const [cpqRoutingTypes, setCpqRoutingTypes] = useState([]);
+    
+    // 🚀 NEW: Live CRM Data State
+    const [liveCustomers, setLiveCustomers] = useState([]);
+    const [liveVendors, setLiveVendors] = useState([]);
 
     // --- Application State ---
     const [room, setRoom] = useState({ width: 240, depth: 240, height: 144 }); 
@@ -28,9 +29,9 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
     const [isCapturing, setIsCapturing] = useState(false);
     
     const [coopModalOpen, setCoopModalOpen] = useState(false);
-    const [coopFormData, setCoopFormData] = useState({ target: 'CUSTOMER', entityId: CUSTOMERS[0], note: '' });
+    const [coopFormData, setCoopFormData] = useState({ target: 'CUSTOMER', entityId: '', note: '' });
 
-    // Fetch Master Assemblies and Data Lists
+    // Fetch Master Assemblies, Data Lists, and unified CRM records
     useEffect(() => {
         const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
             if (docSnap.exists() && docSnap.data().cpqRoutingTypes) {
@@ -44,7 +45,14 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
             setMasterAssemblies(docs);
         });
 
-        return () => { unsubLists(); unsubAsm(); };
+        // 🚀 NEW: Listen for unified CRM records
+        const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
+            const records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            setLiveCustomers(records.filter(r => r.type === 'CUSTOMER'));
+            setLiveVendors(records.filter(r => r.type === 'VENDOR'));
+        });
+
+        return () => { unsubLists(); unsubAsm(); unsubCrm(); };
     }, [activeBrand]);
 
     const validAssemblies = masterAssemblies.filter(d => {
@@ -109,6 +117,7 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
     };
 
     const handlePushToCoop = async () => {
+        if (!coopFormData.entityId) return alert(`Please select a ${coopFormData.target} first.`);
         setIsCapturing(true);
         try {
             const canvas = document.querySelector('#vision-lighting-canvas canvas');
@@ -125,10 +134,16 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                 const dlUrl = await getDownloadURL(uploadTask.snapshot.ref);
                 
                 const newJobId = `LEAD-${Math.floor(1000 + Math.random() * 9000)}`;
+                
+                // Lookup full entity data for formatting
+                const selectedEntity = (coopFormData.target === 'CUSTOMER' ? liveCustomers : liveVendors).find(e => e.id === coopFormData.entityId);
+                const entityName = selectedEntity ? `${selectedEntity.name} - ${selectedEntity.id}` : coopFormData.entityId;
+
                 const payload = {
                     jobId: newJobId, status: 'INCEPTION', brandId: activeBrand,
-                    clientName: coopFormData.target === 'CUSTOMER' ? coopFormData.entityId : '',
-                    vendorName: coopFormData.target === 'VENDOR' ? coopFormData.entityId : '',
+                    clientName: coopFormData.target === 'CUSTOMER' ? entityName : '',
+                    vendorName: coopFormData.target === 'VENDOR' ? entityName : '',
+                    customer: coopFormData.target === 'CUSTOMER' && selectedEntity ? { id: selectedEntity.id, name: selectedEntity.name } : null,
                     note: `[Scale/Spatial Concept] ${coopFormData.note}`,
                     linkedAssemblyId: selectedAssemblyId || "", 
                     imageUrl: dlUrl,
@@ -139,7 +154,7 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                 await setDoc(doc(db, "jobs", newJobId), payload);
                 alert(`✅ Snapshot captured and pushed to External Coop (${coopFormData.target})!`);
                 setCoopModalOpen(false);
-                setCoopFormData({ ...coopFormData, note: '' });
+                setCoopFormData({ ...coopFormData, note: '', entityId: '' });
                 setIsCapturing(false);
             });
 
@@ -193,7 +208,7 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
             <div style={{ width: '450px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000', overflowY: 'auto' }}>
                 <div style={{ padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold' }}>📐 SCALE & SPATIAL PLANNER</div>
                 
-                {/* 🚀 NEW: Assembly Data Binder */}
+                {/* Assembly Data Binder */}
                 <div style={{ padding: '15px', borderBottom: '2px solid #ccc', background: '#eafaf1' }}>
                     <h4 style={{ margin: '0 0 10px 0', color: '#1e7e34' }}>1. BASE CHANDELIER MODEL</h4>
                     <select 
@@ -278,7 +293,6 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                     <div style={{ fontSize: '0.8rem', color: '#666', fontWeight: 'bold' }}>{room.width}"w x {room.depth}"d x {room.height}"h</div>
                 </div>
                 
-                {/* 🚀 GL configured to preserve drawing buffer for the PNG Snapshot tool */}
                 <Canvas gl={{ preserveDrawingBuffer: true }} camera={{ position: [0, room.height / 2, room.width], fov: 60 }}>
                     <ambientLight intensity={0.6} />
                     <directionalLight position={[100, 200, 100]} intensity={1.2} />
@@ -321,7 +335,7 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
                            <div>
                                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>ROUTING DESTINATION:</label>
-                               <select value={coopFormData.target} onChange={(e) => setCoopFormData({...coopFormData, target: e.target.value, entityId: e.target.value === 'CUSTOMER' ? CUSTOMERS[0] : VENDORS[0] })} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }}>
+                               <select value={coopFormData.target} onChange={(e) => setCoopFormData({...coopFormData, target: e.target.value, entityId: '' })} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }}>
                                    <option value="CUSTOMER">👥 Customer CRM</option>
                                    <option value="VENDOR">🏢 Vendor Portal</option>
                                </select>
@@ -329,7 +343,10 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                            <div>
                                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#007bff' }}>ASSIGN TO {coopFormData.target}:</label>
                                <select value={coopFormData.entityId} onChange={(e) => setCoopFormData({...coopFormData, entityId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #007bff', boxSizing: 'border-box' }}>
-                                   {(coopFormData.target === 'CUSTOMER' ? CUSTOMERS : VENDORS).map(item => ( <option key={item} value={item}>{item}</option> ))}
+                                   <option value="">-- Select {coopFormData.target} --</option>
+                                   {(coopFormData.target === 'CUSTOMER' ? liveCustomers : liveVendors).map(item => ( 
+                                       <option key={item.id} value={item.id}>{item.name} - {item.id}</option> 
+                                   ))}
                                </select>
                            </div>
                            <div>

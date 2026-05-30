@@ -19,7 +19,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [inceptionJobs, setInceptionJobs] = useState([]);
   const [configuredJobs, setConfiguredJobs] = useState([]);
   
-  // 🚀 NEW: State for ALL jobs to populate CRM History
   const [allBrandJobs, setAllBrandJobs] = useState([]); 
   
   const [debugStats, setDebugStats] = useState({ total: 0, brandMatch: 0, inception: 0, configured: 0 });
@@ -30,7 +29,13 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [activeCrmRecord, setActiveCrmRecord] = useState(null);
   
   const [showNewCrmModal, setShowNewCrmModal] = useState(false);
-  const [newCrmForm, setNewCrmForm] = useState({ name: '', email: '', contact: '', phone: '', terms: 'Net 30' });
+  
+  // 🚀 UPGRADED: Expanded CRM Form State
+  const [newCrmForm, setNewCrmForm] = useState({ 
+      name: '', email: '', contact: '', phone: '', terms: 'Net 30',
+      billingAddress: '', shippingAddress: '', creditLimit: '', discountCode: ''
+  });
+  
   const [globalLists, setGlobalLists] = useState({ customers: [], vendors: [] });
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -49,7 +54,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [brandLogos, setBrandLogos] = useState({});
   const [libraryParts, setLibraryParts] = useState([]);
   const [activeDocJob, setActiveDocJob] = useState(null);
-  const [activeDocType, setActiveDocType] = useState('QUOTE'); // 'QUOTE' or 'FACTORY_ROUTER'
+  const [activeDocType, setActiveDocType] = useState('QUOTE'); 
   const DOC_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE'];
 
   useEffect(() => {
@@ -59,14 +64,13 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
     return () => styleSheet.remove();
   }, []);
 
-  // 1. LIVE FIREBASE LISTENER (Jobs)
   useEffect(() => {
       if (!activeBrand) return;
       const unsub = onSnapshot(collection(db, "jobs"), (snapshot) => {
           const allJobs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
           const brandJobs = allJobs.filter(j => j.brandId === activeBrand);
           
-          setAllBrandJobs(brandJobs); // 🚀 Store all jobs for CRM History
+          setAllBrandJobs(brandJobs); 
 
           const inceptions = brandJobs.filter(j => j.status === 'INCEPTION');
           const configured = brandJobs.filter(j => j.status === 'CONFIGURED');
@@ -78,7 +82,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       return () => unsub();
   }, [activeBrand]);
 
-  // 2. LIVE FIREBASE LISTENER: Linked Assembly
   useEffect(() => {
       if (!activeModalJob?.linkedAssemblyId) { setActiveAssembly(null); return; }
       const unsub = onSnapshot(doc(db, "Approved_Designs", activeModalJob.linkedAssemblyId), (docSnap) => {
@@ -92,7 +95,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       return () => unsub();
   }, [activeModalJob, activeRevisionId]);
 
-  // 3. LIVE FIREBASE LISTENER: Forms, Logos, and Parts Dictionary
   useEffect(() => {
       if (!activeBrand) return;
       const unsubForms = onSnapshot(doc(db, "hq_config", "form_templates"), (snap) => {
@@ -107,12 +109,17 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       return () => { unsubForms(); unsubLogos(); unsubParts(); };
   }, [activeBrand]);
 
-  // 4. LIVE FIREBASE LISTENER: Dynamic CRM Sync
   useEffect(() => {
       const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
           const dbRecords = {};
           snap.docs.forEach(d => dbRecords[d.id] = { id: d.id, ...d.data() });
           setCrmData({ ...INITIAL_CRM_DATA, ...dbRecords });
+          
+          // Keep active record in sync if it's currently open
+          if (activeCrmRecord) {
+              const updatedActive = snap.docs.find(d => d.id === activeCrmRecord.id);
+              if (updatedActive) setActiveCrmRecord({ id: updatedActive.id, ...updatedActive.data() });
+          }
       });
 
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (snap) => {
@@ -123,7 +130,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       });
 
       return () => { unsubCrm(); unsubLists(); };
-  }, []);
+  }, [activeCrmRecord?.id]); // Re-bind if active record changes
 
   const handleSaveNewCrm = async () => {
       if (!newCrmForm.name.trim()) return alert("Entity Name is required.");
@@ -132,6 +139,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       const prefix = isCust ? 'CUST' : 'VEND';
       const newId = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
 
+      // 🚀 UPGRADED: Save all new fields
       const newRecord = {
           id: newId,
           type: isCust ? 'CUSTOMER' : 'VENDOR',
@@ -140,23 +148,42 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
           contact: newCrmForm.contact.trim(),
           phone: newCrmForm.phone.trim(),
           terms: newCrmForm.terms || 'Net 30',
+          billingAddress: newCrmForm.billingAddress.trim(),
+          shippingAddress: newCrmForm.shippingAddress.trim(),
+          creditLimit: parseFloat(newCrmForm.creditLimit) || 0,
+          discountCode: newCrmForm.discountCode.trim(),
           ytd: 0, mtd: 0, openOrders: 0, notes: ''
       };
 
       try {
           await setDoc(doc(db, "crm_records", newId), newRecord);
           const listKey = isCust ? 'customers' : 'vendors';
-          const updatedList = [...new Set([...(globalLists[listKey] || []), newId])];
+          
+          // Save exactly as "Name - ID" to match our BOM Tab mapping
+          const formattedName = `${newRecord.name} - ${newId}`;
+          const updatedList = [...new Set([...(globalLists[listKey] || []), formattedName])];
           await setDoc(doc(db, "system", "master_lists"), { [listKey]: updatedList }, { merge: true });
 
           setShowNewCrmModal(false);
-          setNewCrmForm({ name: '', email: '', contact: '', phone: '', terms: 'Net 30' });
+          setNewCrmForm({ name: '', email: '', contact: '', phone: '', terms: 'Net 30', billingAddress: '', shippingAddress: '', creditLimit: '', discountCode: '' });
           setCrmSearchQuery('');
           setActiveCrmRecord(newRecord);
           
       } catch (err) {
           console.error(err);
           alert("Failed to create the new CRM record.");
+      }
+  };
+
+  // 🚀 NEW: Auto-save function for in-line edits on the active CRM record
+  const handleUpdateActiveCrmField = async (field, value) => {
+      if (!activeCrmRecord) return;
+      // Optimistic UI update
+      setActiveCrmRecord(prev => ({ ...prev, [field]: value }));
+      try {
+          await updateDoc(doc(db, "crm_records", activeCrmRecord.id), { [field]: value });
+      } catch (err) {
+          console.error("Failed to update CRM field:", err);
       }
   };
 
@@ -211,7 +238,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const crmSearchResults = crmSearchQuery ? activeCrmList.filter(r => r.name.toLowerCase().includes(crmSearchQuery.toLowerCase()) || r.id.toLowerCase().includes(crmSearchQuery.toLowerCase())) : [];
   const exactMatchExists = crmSearchResults.some(r => r.name.toLowerCase() === crmSearchQuery.toLowerCase());
 
-  // 🚀 UPDATED CRM PIPELINE BUCKETS
   const getCrmActivePipeline = (id) => {
       const entityName = crmData[id]?.name || "";
       return [...inceptionJobs, ...configuredJobs].filter(j => 
@@ -224,7 +250,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const getCrmArchivedPipeline = (id) => {
       const entityName = crmData[id]?.name || "";
       return allBrandJobs.filter(j => 
-          j.status !== 'INCEPTION' && j.status !== 'CONFIGURED' && // Get everything that has moved on
+          j.status !== 'INCEPTION' && j.status !== 'CONFIGURED' && 
           (j.customer?.id === id || (j.clientName && j.clientName.includes(entityName)) || (j.vendorName && j.vendorName.includes(entityName)))
       ).sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   };
@@ -327,7 +353,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
             <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px', background: '#eef5eb', minHeight: '500px', maxHeight: '700px', overflowY: 'auto' }}>
               {filteredConfigured.length === 0 && <div style={{ textAlign: 'center', color: '#7ea97e', marginTop: '20px', fontStyle: 'italic' }}>No configured jobs waiting.</div>}
               {filteredConfigured.map(job => {
-                 // 🚀 NEW: Check if this job has dimensional math attached
                  const hasDimensionalMath = job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0;
 
                  return (
@@ -348,7 +373,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                         
                         <div style={{ display: 'flex', gap: '5px', flex: 1.5 }}>
                             <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '8px', background: '#fff', border: '2px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📄 QUOTE</button>
-                            {/* 🚀 NEW: Render Factory Router Button if Math exists */}
                             {hasDimensionalMath && (
                                 <button onClick={() => { setActiveDocJob(job); setActiveDocType('FACTORY_ROUTER'); }} style={{ flex: 1, padding: '8px', background: '#fff', border: '2px solid #e83e8c', color: '#e83e8c', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>🏭 ROUTER</button>
                             )}
@@ -361,35 +385,60 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
         </div>
       </div>
 
+      {/* --- NEW CRM MODAL --- */}
       {showNewCrmModal && (
           <div className="no-print" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}>
-              <div style={{ background: '#fff', border: '4px solid #000', width: '500px', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #28a745' }}>
-                  <div style={{ padding: '20px', background: '#28a745', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ background: '#fff', border: '4px solid #000', width: '600px', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #28a745', maxHeight: '90vh', overflowY: 'auto' }}>
+                  <div style={{ padding: '20px', background: '#28a745', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 10 }}>
                       <h2 style={{ margin: 0, fontSize: '1.2rem', textTransform: 'uppercase' }}>ADD NEW {targetCrmType}</h2>
                       <button onClick={() => setShowNewCrmModal(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
                   </div>
                   <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
                       
+                      {/* Basic Info */}
                       <div>
-                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ENTITY NAME:</label>
+                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ENTITY / COMPANY NAME:</label>
                           <input value={newCrmForm.name} onChange={e => setNewCrmForm({...newCrmForm, name: e.target.value})} autoFocus style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }} />
                       </div>
 
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                           <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PRIMARY CONTACT:</label><input value={newCrmForm.contact} onChange={e => setNewCrmForm({...newCrmForm, contact: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
-                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PAYMENT TERMS:</label><input value={newCrmForm.terms} onChange={e => setNewCrmForm({...newCrmForm, terms: e.target.value})} placeholder="e.g. Net 30" style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>EMAIL ADDRESS:</label><input value={newCrmForm.email} onChange={e => setNewCrmForm({...newCrmForm, email: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
                       </div>
 
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>EMAIL ADDRESS:</label><input value={newCrmForm.email} onChange={e => setNewCrmForm({...newCrmForm, email: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
                           <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PHONE NUMBER:</label><input value={newCrmForm.phone} onChange={e => setNewCrmForm({...newCrmForm, phone: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PAYMENT TERMS:</label><input value={newCrmForm.terms} onChange={e => setNewCrmForm({...newCrmForm, terms: e.target.value})} placeholder="e.g. Net 30" style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                      </div>
+
+                      {/* 🚀 UPGRADED: Financial & Logistic Fields */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', borderTop: '2px solid #eee', paddingTop: '15px' }}>
+                          <div>
+                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#17a2b8' }}>CREDIT LIMIT ($):</label>
+                              <input type="number" step="100" value={newCrmForm.creditLimit} onChange={e => setNewCrmForm({...newCrmForm, creditLimit: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '10px', border: '1px solid #17a2b8', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                          </div>
+                          <div>
+                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#17a2b8' }}>DEFAULT DISCOUNT CODE:</label>
+                              <input value={newCrmForm.discountCode} onChange={e => setNewCrmForm({...newCrmForm, discountCode: e.target.value})} placeholder="e.g. WHOLESALE_20" style={{ width: '100%', padding: '10px', border: '1px solid #17a2b8', boxSizing: 'border-box' }} />
+                          </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                          <div>
+                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1' }}>BILLING ADDRESS:</label>
+                              <textarea value={newCrmForm.billingAddress} onChange={e => setNewCrmForm({...newCrmForm, billingAddress: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #6f42c1', boxSizing: 'border-box', minHeight: '80px', resize: 'vertical' }} />
+                          </div>
+                          <div>
+                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1' }}>SHIPPING ADDRESS:</label>
+                              <textarea value={newCrmForm.shippingAddress} onChange={e => setNewCrmForm({...newCrmForm, shippingAddress: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #6f42c1', boxSizing: 'border-box', minHeight: '80px', resize: 'vertical' }} />
+                          </div>
                       </div>
 
                       <div style={{ marginTop: '10px', background: '#eafaf1', border: '1px solid #28a745', padding: '10px', fontSize: '0.75rem', color: '#1e7e34', fontWeight: 'bold' }}>
-                          ✓ Saving this record will automatically sync it to the Master Library mapping dropdowns.
+                          ✓ Saving this record makes it immediately available in the CPQ Quoting Engine.
                       </div>
 
-                      <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                      <div style={{ display: 'flex', gap: '10px', marginTop: '10px', position: 'sticky', bottom: 0, background: '#fff', paddingTop: '10px' }}>
                           <button onClick={handleSaveNewCrm} disabled={!newCrmForm.name.trim()} style={{ flex: 1, padding: '15px', background: newCrmForm.name.trim() ? '#28a745' : '#ccc', color: '#fff', fontWeight: 'bold', border: 'none', cursor: newCrmForm.name.trim() ? 'pointer' : 'not-allowed' }}>💾 SAVE {targetCrmType}</button>
                           <button onClick={() => setShowNewCrmModal(false)} style={{ padding: '15px 20px', background: '#eee', color: '#333', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>CANCEL</button>
                       </div>
@@ -398,15 +447,20 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
           </div>
       )}
 
-      {/* --- CRM VIEWER MODAL --- */}
+      {/* --- 🚀 UPGRADED: CRM VIEWER / EDITOR MODAL --- */}
       {activeCrmRecord && (
           <div className="no-print" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000 }}>
-              <div style={{ background: '#fff', border: '4px solid #000', width: '900px', height: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
+              <div style={{ background: '#fff', border: '4px solid #000', width: '1100px', height: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
                   
                   <div style={{ padding: '20px', background: activeSubTab === 'CUSTOMERS' ? '#007bff' : '#fd7e14', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
                       <div>
-                          <h2 style={{ margin: 0, fontSize: '1.5rem', textTransform: 'uppercase' }}>{activeCrmRecord.name}</h2>
-                          <span style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>{activeCrmRecord.type} ID: {activeCrmRecord.id}</span>
+                          <input 
+                              type="text" 
+                              value={activeCrmRecord.name} 
+                              onChange={(e) => handleUpdateActiveCrmField('name', e.target.value)}
+                              style={{ margin: 0, fontSize: '1.5rem', textTransform: 'uppercase', background: 'transparent', border: 'none', color: '#fff', fontWeight: 'bold', width: '400px', borderBottom: '1px dashed rgba(255,255,255,0.5)', outline: 'none' }} 
+                          />
+                          <span style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginTop: '5px' }}>{activeCrmRecord.type} ID: {activeCrmRecord.id}</span>
                       </div>
                       <button onClick={() => setActiveCrmRecord(null)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '2rem', cursor: 'pointer' }}>×</button>
                   </div>
@@ -429,41 +483,78 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                           </div>
                       </div>
 
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '20px', flex: 1 }}>
-                          {/* Left Panel: Contact & Notes */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.5fr', gap: '20px', flex: 1 }}>
+                          
+                          {/* 🚀 UPGRADED: Left Panel - Fully Editable CRM Form */}
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                              
                               <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                                  <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>CONTACT PROFILE</h4>
-                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.85rem' }}>
-                                      <div><strong style={{ color: '#666' }}>POC:</strong> {activeCrmRecord.contact || 'N/A'}</div>
-                                      <div><strong style={{ color: '#666' }}>EMAIL:</strong> {activeCrmRecord.email || 'N/A'}</div>
-                                      <div><strong style={{ color: '#666' }}>PHONE:</strong> {activeCrmRecord.phone || 'N/A'}</div>
-                                      <div><strong style={{ color: '#666' }}>TERMS:</strong> {activeCrmRecord.terms || 'N/A'}</div>
+                                  <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', display: 'flex', justifyContent: 'space-between' }}>
+                                      <span>CONTACT & FINANCIAL PROFILE</span>
+                                      <span style={{ fontSize: '0.6rem', color: '#28a745', fontWeight: 'bold' }}>AUTO-SAVES ON EDIT</span>
+                                  </h4>
+                                  
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#666' }}>POC:</label>
+                                          <input value={activeCrmRecord.contact || ''} onChange={e => handleUpdateActiveCrmField('contact', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
+                                      </div>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#666' }}>EMAIL:</label>
+                                          <input value={activeCrmRecord.email || ''} onChange={e => handleUpdateActiveCrmField('email', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
+                                      </div>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#666' }}>PHONE:</label>
+                                          <input value={activeCrmRecord.phone || ''} onChange={e => handleUpdateActiveCrmField('phone', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
+                                      </div>
+                                      
+                                      <div style={{ borderTop: '1px dashed #eee', margin: '5px 0' }}></div>
+                                      
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#17a2b8' }}>TERMS:</label>
+                                          <input value={activeCrmRecord.terms || ''} onChange={e => handleUpdateActiveCrmField('terms', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem' }} />
+                                      </div>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#17a2b8' }}>CREDIT LIMIT:</label>
+                                          <input type="number" value={activeCrmRecord.creditLimit || ''} onChange={e => handleUpdateActiveCrmField('creditLimit', parseFloat(e.target.value)||0)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }} />
+                                      </div>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#17a2b8' }}>DISCOUNT:</label>
+                                          <input value={activeCrmRecord.discountCode || ''} onChange={e => handleUpdateActiveCrmField('discountCode', e.target.value)} placeholder="Promo Code" style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem' }} />
+                                      </div>
                                   </div>
                               </div>
+
+                              <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                                  <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#6f42c1' }}>LOGISTICS & ADDRESSES</h4>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                      <div>
+                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>BILLING ADDRESS:</label>
+                                          <textarea value={activeCrmRecord.billingAddress || ''} onChange={e => handleUpdateActiveCrmField('billingAddress', e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', resize: 'vertical', minHeight: '60px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                      </div>
+                                      <div>
+                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>SHIPPING ADDRESS:</label>
+                                          <textarea value={activeCrmRecord.shippingAddress || ''} onChange={e => handleUpdateActiveCrmField('shippingAddress', e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', resize: 'vertical', minHeight: '60px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                      </div>
+                                  </div>
+                              </div>
+
                               <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', flex: 1, display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                                   <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>RELATIONSHIP NOTES</h4>
                                   <textarea 
                                       value={activeCrmRecord.notes || ''}
-                                      onChange={(e) => {
-                                          const val = e.target.value;
-                                          setActiveCrmRecord(prev => ({ ...prev, notes: val }));
-                                          updateDoc(doc(db, "crm_records", activeCrmRecord.id), { notes: val }).catch(()=>{});
-                                      }}
+                                      onChange={(e) => handleUpdateActiveCrmField('notes', e.target.value)}
                                       style={{ flex: 1, padding: '10px', border: '1px solid #ccc', outline: 'none', resize: 'none', fontFamily: 'monospace', fontSize: '0.85rem' }}
                                       placeholder="Add strategic notes, preferences, or warnings here..."
                                   />
-                                  <div style={{ textAlign: 'right', marginTop: '10px' }}>
-                                      <span style={{ fontSize: '0.65rem', color: '#28a745', fontWeight: 'bold' }}>✓ AUTOSAVED</span>
-                                  </div>
                               </div>
                           </div>
 
-                          {/* 🚀 REBUILT: Active & Archived CRM Pipeline */}
+                          {/* Right Panel: Active & Archived CRM Pipeline */}
                           <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                               
                               <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#007bff' }}>ACTIVE PIPELINE (PENDING)</h4>
-                              <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
+                              <div style={{ maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px', paddingRight: '5px' }}>
                                   {getCrmActivePipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No active configurations pending.</div>}
                                   {getCrmActivePipeline(activeCrmRecord.id).map(job => (
                                       <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: `4px solid ${job.status === 'CONFIGURED' ? '#28a745' : '#17a2b8'}`, padding: '10px', background: '#f4f4f4' }}>
@@ -484,7 +575,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                               </div>
 
                               <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#6c757d' }}>ARCHIVED / APPROVED JOBS</h4>
-                              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '5px' }}>
                                   {getCrmArchivedPipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No historical jobs found.</div>}
                                   {getCrmArchivedPipeline(activeCrmRecord.id).map(job => (
                                       <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: '4px solid #6c757d', padding: '10px', background: '#fff' }}>
@@ -658,7 +749,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                     )}
                 </div>
 
-                {/* 🚀 NEW: Render Shop Cut Sheet specifically for Factory Routers */}
                 {activeDocType === 'FACTORY_ROUTER' && activeDocJob.cpqData?.dimensions && Object.keys(activeDocJob.cpqData.dimensions).length > 0 && (
                     <div style={{ marginTop: '20px', border: '2px dashed #000', padding: '15px', background: '#fff3cd' }}>
                         <h4 style={{ margin: '0 0 10px 0', color: '#856404', textTransform: 'uppercase' }}>⚠️ DIMENSIONAL SHOP CUT SHEET</h4>
