@@ -10,27 +10,29 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [bomPins, setBomPins] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
   
-  const [globalLists, setGlobalLists] = useState({ uom: [], prodTypes: [], collections: [], watchLists: [], vendors: [], partHandling: [], inventoryTypes: [] }); 
+  const [globalLists, setGlobalLists] = useState({ uom: [], prodTypes: [], collections: [], watchLists: [], vendors: [], outsourceActions: [], pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], partHandling: [], inventoryTypes: [], assemblyTypes: [] }); 
   const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] }); 
   
   const [customSchema, setCustomSchema] = useState([]);
+  const [dynamicAssets, setDynamicAssets] = useState([]);
 
   const [activeComponent, setActiveComponent] = useState(null);
-  const [editSpecs, setEditSpecs] = useState({ customData: {}, cpqCategories: [] });
+  const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [] });
   const [isSaving, setIsSaving] = useState(false);
 
+  // 🚀 FIXED: Added all attributes to Assembly State
   const [assemblyDetails, setAssemblyDetails] = useState({
       itemName: "", legacyErpId: "", productType: "", collection: "", routingType: "UNASSIGNED",
       basePrice: "", cost: "", pdfUrl: "", cadUrl: "",
-      isProjectManaged: false,
-      binLocation: "" 
+      isProjectManaged: false, binLocation: "",
+      partHandling: "", uom: "EA", pillowSize: "", fillType: "", flangeStyle: "", stitchType: "", seamCount: "", outsourceAction: "", watchList: "NONE",
+      dynamicDicts: {}, customData: {}
   });
 
   const [pdfFile, setPdfFile] = useState(null);
   const [cadFile, setCadFile] = useState(null); 
   const [assemblyPdfFile, setAssemblyPdfFile] = useState(null);
   const [assemblyCadFile, setAssemblyCadFile] = useState(null);
-  const [assemblyImageFile, setAssemblyImageFile] = useState(null); // 🚀 NEW: State for Assembly Thumbnail
   const [uploadProgress, setUploadProgress] = useState(0);
   const [cadUploadProgress, setCadUploadProgress] = useState(0); 
 
@@ -43,7 +45,9 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           const data = docSnap.data();
           setGlobalLists({
               uom: data.uom || [], prodTypes: data.prodTypes || [], collections: data.collections || [],
-              watchLists: data.watchLists || [], vendors: data.vendors || [],
+              watchLists: data.watchLists || [], vendors: data.vendors || [], outsourceActions: data.outsourceActions || [],
+              pillowSizes: data.pillowSizes || [], fillTypes: data.fillTypes || [], flangeStyles: data.flangeStyles || [],
+              stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || ['0 Seams', '1 Seam', '2 Seams', '3 Seams', '4 Seams'],
               partHandling: data.partHandling || ['Small Parts', 'Custom'],
               inventoryTypes: data.inventoryTypes || [], 
               assemblyTypes: data.assemblyTypes || []
@@ -55,7 +59,9 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           setWindowConfig({ system: { partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
       }
     });
-    return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); };
+    const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+    
+    return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); unsubAssets(); };
   }, []);
 
   useEffect(() => {
@@ -94,6 +100,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
   useEffect(() => {
       if (selectedAssemblyData) {
+          // 🚀 FIXED: Populating all custom fields for the Assembly
           setAssemblyDetails({
               itemName: selectedAssemblyData.itemName || "",
               legacyErpId: selectedAssemblyData.legacyErpId === "PENDING" ? "" : (selectedAssemblyData.legacyErpId || ""),
@@ -105,7 +112,18 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               pdfUrl: selectedAssemblyData.manufacturingSpecs?.pdfUrl || "",
               cadUrl: selectedAssemblyData.manufacturingSpecs?.cadUrl || "",
               isProjectManaged: selectedAssemblyData.manufacturingSpecs?.isProjectManaged || false,
-              binLocation: selectedAssemblyData.manufacturingSpecs?.binLocation || "" 
+              binLocation: selectedAssemblyData.manufacturingSpecs?.binLocation || "",
+              partHandling: selectedAssemblyData.manufacturingSpecs?.partHandling || "",
+              uom: selectedAssemblyData.manufacturingSpecs?.uom || "EA",
+              pillowSize: selectedAssemblyData.manufacturingSpecs?.pillowSize || "",
+              fillType: selectedAssemblyData.manufacturingSpecs?.fillType || "",
+              flangeStyle: selectedAssemblyData.manufacturingSpecs?.flangeStyle || "",
+              stitchType: selectedAssemblyData.manufacturingSpecs?.stitchType || "",
+              seamCount: selectedAssemblyData.manufacturingSpecs?.seamCount || "",
+              outsourceAction: selectedAssemblyData.manufacturingSpecs?.outsourceAction || "",
+              watchList: selectedAssemblyData.manufacturingSpecs?.watchList || "NONE",
+              dynamicDicts: selectedAssemblyData.manufacturingSpecs?.dynamicDicts || {},
+              customData: selectedAssemblyData.manufacturingSpecs?.customData || {}
           });
       }
   }, [selectedAssemblyData]);
@@ -123,6 +141,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       const baseSpecs = bomItem.masterPart.manufacturingSpecs || {};
       const parametricData = baseSpecs.parametric || { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" };
       const customData = baseSpecs.customData || {}; 
+      const dynamicDicts = baseSpecs.dynamicDicts || {};
       const cpqCategories = baseSpecs.cpqCategories || []; 
       const isInHouse = baseSpecs.isInHouse !== undefined ? baseSpecs.isInHouse : true;
       const partHandling = baseSpecs.partHandling || ""; 
@@ -131,6 +150,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           ...baseSpecs, 
           parametric: parametricData, 
           customData, 
+          dynamicDicts,
           cpqCategories, 
           isInHouse, 
           partHandling,
@@ -139,11 +159,14 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   };
 
   const handleSpecChange = (e) => setEditSpecs({ ...editSpecs, [e.target.name]: e.target.value });
+  const handleAssemblySpecChange = (e) => setAssemblyDetails({ ...assemblyDetails, [e.target.name]: e.target.value });
   const handleParametricChange = (e) => setEditSpecs({ ...editSpecs, parametric: { ...editSpecs.parametric, [e.target.name]: e.target.type === 'checkbox' ? e.target.checked : e.target.value } });
   
-  const handleCustomFieldChange = (key, value) => {
-      setEditSpecs(prev => ({ ...prev, customData: { ...(prev.customData || {}), [key]: value } }));
-  };
+  const handleCustomFieldChange = (key, value) => setEditSpecs(prev => ({ ...prev, customData: { ...(prev.customData || {}), [key]: value } }));
+  const handleAssemblyCustomFieldChange = (key, value) => setAssemblyDetails(prev => ({ ...prev, customData: { ...(prev.customData || {}), [key]: value } }));
+
+  const handleDictChange = (dictId, value) => setEditSpecs(prev => ({ ...prev, dynamicDicts: { ...(prev.dynamicDicts || {}), [dictId]: value } }));
+  const handleAssemblyDictChange = (dictId, value) => setAssemblyDetails(prev => ({ ...prev, dynamicDicts: { ...(prev.dynamicDicts || {}), [dictId]: value } }));
 
   const handleCpqCategoryToggle = (categoryId) => {
       const current = editSpecs.cpqCategories || [];
@@ -169,26 +192,15 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               await new Promise((resolve, reject) => { cadUploadTask.on("state_changed", null, reject, async () => { finalCadUrl = await getDownloadURL(cadUploadTask.snapshot.ref); resolve(); }); });
           }
 
-          // 🚀 NEW: Handle Assembly Thumbnail Image Upload
-          let newFinalImageUrl = selectedAssemblyData.finalImageUrl || "";
-          if (assemblyImageFile) {
-              const imgStorageRef = ref(storage, `thumbnails/${activeBrand}_${assemblyDetails.legacyErpId || selectedAssemblyData.itemId}_${assemblyImageFile.name}`);
-              const imgUploadTask = uploadBytesResumable(imgStorageRef, assemblyImageFile);
-              await new Promise((resolve, reject) => { 
-                  imgUploadTask.on("state_changed", null, reject, async () => { 
-                      newFinalImageUrl = await getDownloadURL(imgUploadTask.snapshot.ref); 
-                      resolve(); 
-                  }); 
-              });
-          }
-
           const currentSpecs = selectedAssemblyData.manufacturingSpecs || {};
+          
+          // 🚀 FIXED: Save all custom fields to the assembly
           await updateDoc(doc(db, "Approved_Designs", selectedAssemblyData.id), {
               itemName: assemblyDetails.itemName.toUpperCase(),
               legacyErpId: assemblyDetails.legacyErpId.toUpperCase() || "PENDING",
               productType: assemblyDetails.productType,
               collection: assemblyDetails.collection,
-              finalImageUrl: newFinalImageUrl, // 🚀 Saves the new image URL
+              routingType: assemblyDetails.routingType,
               manufacturingSpecs: { 
                   ...currentSpecs, 
                   basePrice: assemblyDetails.basePrice, 
@@ -196,11 +208,22 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                   pdfUrl: finalPdfUrl,
                   cadUrl: finalCadUrl,
                   isProjectManaged: assemblyDetails.isProjectManaged,
-                  binLocation: assemblyDetails.binLocation 
+                  binLocation: assemblyDetails.binLocation,
+                  partHandling: assemblyDetails.partHandling,
+                  uom: assemblyDetails.uom,
+                  pillowSize: assemblyDetails.pillowSize,
+                  fillType: assemblyDetails.fillType,
+                  flangeStyle: assemblyDetails.flangeStyle,
+                  stitchType: assemblyDetails.stitchType,
+                  seamCount: assemblyDetails.seamCount,
+                  outsourceAction: assemblyDetails.outsourceAction,
+                  watchList: assemblyDetails.watchList,
+                  dynamicDicts: assemblyDetails.dynamicDicts,
+                  customData: assemblyDetails.customData 
               },
               updatedAt: new Date().toISOString()
           });
-          setTimeout(() => { setIsSaving(false); setAssemblyPdfFile(null); setAssemblyCadFile(null); setAssemblyImageFile(null); }, 600);
+          setTimeout(() => { setIsSaving(false); setAssemblyPdfFile(null); setAssemblyCadFile(null); }, 600);
       } catch (err) {
           console.error(err); setIsSaving(false); alert("Failed to save assembly details.");
       }
@@ -335,17 +358,16 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: '10px' }}>
                         {selectedAssemblyData ? (
                             <>
+                                {/* 🚀 FIXED: Removed Image Upload, Replaced with instruction */}
                                 <div style={{ textAlign: 'center', marginBottom: '30px' }}>
                                     {selectedAssemblyData.finalImageUrl ? (
                                         <img src={selectedAssemblyData.finalImageUrl} alt="Assembly" style={{ maxWidth: '80%', maxHeight: '350px', objectFit: 'contain', border: '2px solid #ccc', padding: '10px', background: '#f8f9fa' }} />
                                     ) : (
-                                        <div style={{ height: '200px', background: '#eee', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px dashed #ccc', color: '#999', fontWeight: 'bold' }}>NO IMAGE AVAILABLE</div>
+                                        <div style={{ height: '200px', background: '#eee', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px dashed #ccc', color: '#999', fontWeight: 'bold', flexDirection: 'column' }}>
+                                            NO IMAGE AVAILABLE
+                                            <span style={{fontSize: '0.7rem', marginTop: '10px', color: '#007bff'}}>Capture Thumbnail via Tab 2 Visual Engine</span>
+                                        </div>
                                     )}
-                                    {/* 🚀 NEW: File input for thumbnail upload */}
-                                    <div style={{ marginTop: '10px' }}>
-                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#007bff' }}>UPLOAD NEW THUMBNAIL (.PNG / .JPG):</label>
-                                        <input type="file" accept="image/png, image/jpeg" onChange={(e) => setAssemblyImageFile(e.target.files[0])} style={{ fontSize: '0.75rem' }} />
-                                    </div>
                                 </div>
 
                                 <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
@@ -370,8 +392,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     </div>
 
                                     <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '15px' }}>
-                                        <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ASSEMBLY NAME:</label><input value={assemblyDetails.itemName} onChange={e => setAssemblyDetails({...assemblyDetails, itemName: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontWeight: 'bold' }} /></div>
-                                        <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>ERP ID:</label><input value={assemblyDetails.legacyErpId} onChange={e => setAssemblyDetails({...assemblyDetails, legacyErpId: e.target.value})} placeholder="PENDING" style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box', textTransform: 'uppercase' }} /></div>
+                                        <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ASSEMBLY NAME:</label><input name="itemName" value={assemblyDetails.itemName} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontWeight: 'bold' }} /></div>
+                                        <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>ERP ID:</label><input name="legacyErpId" value={assemblyDetails.legacyErpId} onChange={handleAssemblySpecChange} placeholder="PENDING" style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box', textTransform: 'uppercase' }} /></div>
                                     </div>
 
                                     <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '10px', marginTop: '10px' }}>
@@ -379,27 +401,93 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             📍 WAREHOUSE BIN LOCATION (BARCODE/REF)
                                         </label>
                                         <input 
+                                            name="binLocation"
                                             value={assemblyDetails.binLocation} 
-                                            onChange={e => setAssemblyDetails({...assemblyDetails, binLocation: e.target.value})} 
+                                            onChange={handleAssemblySpecChange} 
                                             placeholder="e.g. KIT-SHELF-B" 
                                             style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', boxSizing: 'border-box', textTransform: 'uppercase', fontWeight: 'bold', fontSize: '1.1rem' }} 
                                         />
                                     </div>
 
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginTop: '5px' }}>
-                                        <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PRODUCT TYPE:</label><select value={assemblyDetails.productType} onChange={e => setAssemblyDetails({...assemblyDetails, productType: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
-                                        <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>COLLECTION:</label><select value={assemblyDetails.collection} onChange={e => setAssemblyDetails({...assemblyDetails, collection: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }}><option value="">SELECT...</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                                    {/* 🚀 FIXED: ADDED ALL CUSTOM/SYSTEM LISTS TO ASSEMBLY EDIT */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginTop: '10px' }}>
+                                        
+                                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={assemblyDetails.productType || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
+                                        <div>
+                                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>ROUTING CLASSIFICATION:</label>
+                                            <select name="routingType" value={assemblyDetails.routingType || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
+                                                <option value="">UNASSIGNED</option>
+                                                {(globalLists.assemblyTypes || []).map(t => <option key={t} value={t}>{t}</option>)}
+                                            </select>
+                                        </div>
+
+                                        {windowConfig.system.partHandling?.includes(activeBrand) && (
+                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label><select name="partHandling" value={assemblyDetails.partHandling || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}><option value="">UNASSIGNED / STANDARD</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
+                                        )}
+
+                                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={assemblyDetails.uom || "EA"} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+                                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label><select name="collection" value={assemblyDetails.collection || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option><option value="N/A">N/A</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                                        
+                                        {windowConfig.system.pillowSizes?.includes(activeBrand) && (
+                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PILLOW SIZE:</label><select name="pillowSize" value={assemblyDetails.pillowSize || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                        )}
+                                        {windowConfig.system.fillTypes?.includes(activeBrand) && (
+                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>FILL TYPE:</label><select name="fillType" value={assemblyDetails.fillType || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.fillTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                        )}
+                                        {windowConfig.system.flangeStyles?.includes(activeBrand) && (
+                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>EDGE/FLANGE:</label><select name="flangeStyle" value={assemblyDetails.flangeStyle || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.flangeStyles || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                        )}
+                                        {windowConfig.system.stitchTypes?.includes(activeBrand) && (
+                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>STITCH ROUTING:</label><select name="stitchType" value={assemblyDetails.stitchType || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.stitchTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                        )}
+                                        {windowConfig.system.seamCounts?.includes(activeBrand) && (
+                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>SEAM COUNT:</label><select name="seamCount" value={assemblyDetails.seamCount || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                        )}
+                                        {windowConfig.system.outsourceActions?.includes(activeBrand) && (
+                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>OUTSOURCE ACTION:</label><select name="outsourceAction" value={assemblyDetails.outsourceAction || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                        )}
+                                        
+                                        {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
+                                            <div key={w.id}>
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c', textTransform: 'uppercase' }}>{w.name}:</label>
+                                                <select value={assemblyDetails.dynamicDicts?.[w.id] || ""} onChange={(e) => handleAssemblyDictChange(w.id, e.target.value)} style={{ width: '100%', padding: '8px', border: '2px solid #e83e8c', outline: 'none', fontWeight: 'bold' }}>
+                                                    <option value="">SELECT...</option><option value="N/A">N/A</option>
+                                                    {dynamicAssets.filter(a => a.windowId === w.id).map(a => <option key={a.id} value={a.name}>{a.name} {a.code ? `(${a.code})` : ''}</option>)}
+                                                </select>
+                                            </div>
+                                        ))}
+
+                                        {customSchema.map(field => (
+                                            <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#fff', padding: '5px', border: '1px solid #28a745' }}>
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
+                                                {field.type === 'dropdown' ? (
+                                                    <select value={assemblyDetails.customData?.[field.key] || ""} onChange={(e) => handleAssemblyCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745' }}>
+                                                        <option value="">Select...</option>{(field.options || "").split(',').map(opt => <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>)}
+                                                    </select>
+                                                ) : (
+                                                    <input type={field.type} value={assemblyDetails.customData?.[field.key] || ""} onChange={(e) => handleAssemblyCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box' }} />
+                                                )}
+                                            </div>
+                                        ))}
+
+                                        <div style={{ background: '#fff3cd', border: '1px solid #ffeeba', padding: '5px 10px', gridColumn: 'span 2' }}>
+                                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'block', marginBottom: '3px' }}>ASSIGN TO WATCHLIST:</label>
+                                            <select name="watchList" value={assemblyDetails.watchList || "NONE"} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', fontWeight: 'bold' }}>
+                                                <option value="NONE">NONE</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
+                                            </select>
+                                        </div>
+
                                     </div>
 
                                     <div style={{ display: 'flex', gap: '15px', marginTop: '10px' }}>
                                         <div style={{ flex: 1 }}>
                                             <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ASSEMBLY BASE PRICE ($):</label>
-                                            <input type="number" step="0.01" value={assemblyDetails.basePrice} onChange={(e) => setAssemblyDetails({...assemblyDetails, basePrice: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', fontSize: '1.1rem', boxSizing: 'border-box' }} />
+                                            <input name="basePrice" type="number" step="0.01" value={assemblyDetails.basePrice} onChange={handleAssemblySpecChange} placeholder="0.00" style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', fontSize: '1.1rem', boxSizing: 'border-box' }} />
                                             <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '3px' }}>Standalone CPQ Base Price</span>
                                         </div>
                                         <div style={{ flex: 1 }}>
                                             <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ASSEMBLY UNIT COST ($):</label>
-                                            <input type="number" step="0.01" value={assemblyDetails.cost} onChange={(e) => setAssemblyDetails({...assemblyDetails, cost: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontSize: '1.1rem', boxSizing: 'border-box' }} />
+                                            <input name="cost" type="number" step="0.01" value={assemblyDetails.cost} onChange={handleAssemblySpecChange} placeholder="0.00" style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontSize: '1.1rem', boxSizing: 'border-box' }} />
                                             <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '3px' }}>Internal Cost (Optional)</span>
                                         </div>
                                     </div>
@@ -502,20 +590,55 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                                 <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label><select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option><option value="N/A">N/A</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                                <div style={{ background: '#fff3cd', border: '1px solid #ffeeba', padding: '5px 10px' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'block', marginBottom: '3px' }}>ASSIGN TO WATCHLIST:</label><select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', fontWeight: 'bold' }}><option value="NONE">NONE</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}</select></div>
                                 
+                                {windowConfig.system.pillowSizes?.includes(activeBrand) && (
+                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PILLOW SIZE:</label><select name="pillowSize" value={editSpecs.pillowSize || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                )}
+                                {windowConfig.system.fillTypes?.includes(activeBrand) && (
+                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>FILL TYPE:</label><select name="fillType" value={editSpecs.fillType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.fillTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                )}
+                                {windowConfig.system.flangeStyles?.includes(activeBrand) && (
+                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>EDGE/FLANGE:</label><select name="flangeStyle" value={editSpecs.flangeStyle || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.flangeStyles || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                )}
+                                {windowConfig.system.stitchTypes?.includes(activeBrand) && (
+                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>STITCH ROUTING:</label><select name="stitchType" value={editSpecs.stitchType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.stitchTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                )}
+                                {windowConfig.system.seamCounts?.includes(activeBrand) && (
+                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>SEAM COUNT:</label><select name="seamCount" value={editSpecs.seamCount || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                )}
+                                {windowConfig.system.outsourceActions?.includes(activeBrand) && (
+                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>OUTSOURCE ACTION:</label><select name="outsourceAction" value={editSpecs.outsourceAction || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                )}
+                                
+                                {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
+                                    <div key={w.id}>
+                                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c', textTransform: 'uppercase' }}>{w.name}:</label>
+                                        <select value={editSpecs.dynamicDicts?.[w.id] || ""} onChange={(e) => handleDictChange(w.id, e.target.value)} style={{ width: '100%', padding: '8px', border: '2px solid #e83e8c', outline: 'none', fontWeight: 'bold' }}>
+                                            <option value="">SELECT...</option><option value="N/A">N/A</option>
+                                            {dynamicAssets.filter(a => a.windowId === w.id).map(a => <option key={a.id} value={a.name}>{a.name} {a.code ? `(${a.code})` : ''}</option>)}
+                                        </select>
+                                    </div>
+                                ))}
+
                                 {customSchema.map(field => (
-                                    <div key={field.key} style={{ display: 'flex', flexDirection: 'column' }}>
-                                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#007bff' }}>{field.label} (Schema):</label>
+                                    <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#eafaf1', padding: '5px', border: '1px solid #28a745' }}>
+                                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
                                         {field.type === 'dropdown' ? (
-                                            <select value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #007bff' }}>
+                                            <select value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745' }}>
                                                 <option value="">Select...</option>{(field.options || "").split(',').map(opt => <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>)}
                                             </select>
                                         ) : (
-                                            <input type={field.type} value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #007bff', boxSizing: 'border-box' }} />
+                                            <input type={field.type} value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box' }} />
                                         )}
                                     </div>
                                 ))}
+
+                                <div style={{ background: '#fff3cd', border: '1px solid #ffeeba', padding: '5px 10px', gridColumn: 'span 2' }}>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'block', marginBottom: '3px' }}>ASSIGN TO WATCHLIST:</label>
+                                    <select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', fontWeight: 'bold' }}>
+                                        <option value="NONE">NONE</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
+                                    </select>
+                                </div>
 
                             </div>
                         </div>

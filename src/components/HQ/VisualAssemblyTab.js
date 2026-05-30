@@ -4,6 +4,7 @@ import { collection, onSnapshot, query, where, addDoc, deleteDoc, doc, updateDoc
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
+import * as THREE from 'three';
 
 class ErrorBoundary extends React.Component {
     constructor(props) { super(props); this.state = { hasError: false }; }
@@ -25,11 +26,17 @@ class ErrorBoundary extends React.Component {
     }
 }
 
-// 🚀 RE-ENGINEERED TO SUPPORT HIGHLIGHT/LOCATE MODE
-const SnapshotModel = ({ url, interactionMode, onMeshClick, isFrozen, locatingNodes = [] }) => {
+// 🚀 FIXED: Added hiddenNodes support to the SnapshotModel
+const SnapshotModel = ({ url, interactionMode, onMeshClick, isFrozen, locatingNodes = [], hiddenNodes = [], onMeshesLoaded }) => {
     const { scene } = useGLTF(url);
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
     const isPinMode = interactionMode === 'pin';
+
+    useEffect(() => {
+        const meshes = [];
+        clonedScene.traverse(c => { if (c.isMesh) meshes.push(c.name); });
+        if (onMeshesLoaded) onMeshesLoaded(meshes);
+    }, [clonedScene, onMeshesLoaded]);
 
     useMemo(() => {
         const isDescendantOf = (child, nodeNameList) => {
@@ -45,18 +52,19 @@ const SnapshotModel = ({ url, interactionMode, onMeshClick, isFrozen, locatingNo
             if (child.isMesh) {
                 if (!child.userData.originalMaterial) child.userData.originalMaterial = child.material;
                 
+                // 🚀 Apply Evil Eye Visibility
+                child.visible = !hiddenNodes.includes(child.name);
+
                 if (locatingNodes.length > 0 && isDescendantOf(child, locatingNodes)) {
-                    // Turn targeted nodes glowing RED
                     child.material = new THREE.MeshStandardMaterial({ color: '#d9534f', emissive: '#d9534f', emissiveIntensity: 0.8, transparent: true, opacity: 0.9 });
                 } else if (locatingNodes.length > 0) {
-                    // Turn everything else ghostly transparent
                     child.material = new THREE.MeshStandardMaterial({ color: '#cccccc', transparent: true, opacity: 0.3 });
                 } else {
                     child.material = child.userData.originalMaterial;
                 }
             }
         });
-    }, [clonedScene, locatingNodes]);
+    }, [clonedScene, locatingNodes, hiddenNodes]);
     
     return (
         <primitive 
@@ -133,8 +141,11 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [cropState, setCropState] = useState(null); 
   const [isProcessingCrop, setIsProcessingCrop] = useState(false);
   
-  // 🚀 NEW: Cluster Locating State
   const [locatingClusterId, setLocatingClusterId] = useState(null);
+
+  // 🚀 NEW: Evil Eye State
+  const [sceneMeshes, setSceneMeshes] = useState([]);
+  const [hiddenNodes, setHiddenNodes] = useState([]);
 
   const svgRef = useRef(null);
   const innerGroupRef = useRef(null);
@@ -202,7 +213,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
         setRoutingType(""); setAvailableImages([]); setActiveImageUrl(""); setViewMode("2D");
     }
     
-    setScale(1); setPan({ x: 0, y: 0 }); setPendingPin(null); setIsCanvasLocked(true); setDrawerOpen(false); setCropState(null); setIsFrozen(false); setLocatingClusterId(null);
+    // Reset everything when assembly changes
+    setScale(1); setPan({ x: 0, y: 0 }); setPendingPin(null); setIsCanvasLocked(true); setDrawerOpen(false); setCropState(null); setIsFrozen(false); setLocatingClusterId(null); setHiddenNodes([]);
   }, [selectedAssemblyId, assemblies]);
 
   useEffect(() => {
@@ -445,13 +457,15 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       setCropState(prev => ({ ...prev, action: null }));
   };
 
+  // 🚀 FIXED: Execute Thumbnail Crop allows Master Assembly saving
   const executeThumbnailCrop = async () => {
-      if (!cropState || !cropState.pinId) return alert("Please select a BOM Component from the dropdown to attach this thumbnail to.");
+      if (!cropState || !cropState.pinId) return alert("Please select a target for this thumbnail from the dropdown.");
       setIsProcessingCrop(true);
 
       try {
-          const targetPin = pins.find(p => p.id === cropState.pinId);
-          if (!targetPin) throw new Error("Pin not found.");
+          const isMasterThumb = cropState.pinId === 'MASTER_ASSEMBLY';
+          const targetPin = isMasterThumb ? null : pins.find(p => p.id === cropState.pinId);
+          if (!isMasterThumb && !targetPin) throw new Error("Pin not found.");
 
           const targetSize = 512; 
           const cropCanvas = document.createElement('canvas');
@@ -518,12 +532,19 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           }
 
           cropCanvas.toBlob(async (blob) => {
-              const thumbRef = ref(storage, `dynamic_assets/auto_crops/${targetPin.partId}_${Date.now()}.png`);
-              await uploadBytes(thumbRef, blob);
-              const dlUrl = await getDownloadURL(thumbRef);
-              
-              await updateDoc(doc(db, "Approved_Designs", targetPin.partId), { finalImageUrl: dlUrl });
-              await updateDoc(doc(db, "assembly_pins", targetPin.id), { imageUrl: dlUrl });
+              // Target saving mechanism
+              if (isMasterThumb) {
+                  const thumbRef = ref(storage, `thumbnails/${activeBrand}_MASTER_${activeAssembly.id}_${Date.now()}.png`);
+                  await uploadBytes(thumbRef, blob);
+                  const dlUrl = await getDownloadURL(thumbRef);
+                  await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { finalImageUrl: dlUrl });
+              } else {
+                  const thumbRef = ref(storage, `dynamic_assets/auto_crops/${targetPin.partId}_${Date.now()}.png`);
+                  await uploadBytes(thumbRef, blob);
+                  const dlUrl = await getDownloadURL(thumbRef);
+                  await updateDoc(doc(db, "Approved_Designs", targetPin.partId), { finalImageUrl: dlUrl });
+                  await updateDoc(doc(db, "assembly_pins", targetPin.id), { imageUrl: dlUrl });
+              }
               
               setCropState(null);
               setIsFrozen(false);
@@ -556,7 +577,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       return !pins.some(pin => pin.clusterId === cluster.id || pin.targetNode === cluster.nodes?.join(', '));
   });
   
-  // 🚀 ACTIVE LOCATING NODES FOR X-RAY HIGHLIGHT
   const activeLocatingNodes = activeAssembly?.nodeClusters?.find(c => c.id === locatingClusterId)?.nodes || [];
 
   const canvasContainerStyle = isCanvasMaximized ? {
@@ -599,6 +619,34 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
       <div style={{ display: 'flex', gap: '20px', alignItems: 'stretch', flex: 1 }}>
         
+        {/* 🚀 NEW: The Evil Eye (Mesh Visibility Control Sidebar) */}
+        {viewMode === '3D' && activeAssembly && (
+            <div style={{ width: '220px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)', flexShrink: 0 }}>
+                <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>👁️ EVIL EYE</span>
+                    <button onClick={() => setHiddenNodes([])} style={{ background: 'none', border: 'none', color: '#007bff', fontSize: '0.7rem', cursor: 'pointer', fontWeight: 'bold' }}>SHOW ALL</button>
+                </div>
+                <div style={{ padding: '10px', flex: 1, overflowY: 'auto', background: '#f8f9fa' }}>
+                    <div style={{ fontSize: '0.7rem', color: '#666', marginBottom: '10px' }}>Uncheck to hide parts for clean screenshots.</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        {sceneMeshes.map(mesh => (
+                            <label key={mesh} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.75rem', cursor: 'pointer', background: hiddenNodes.includes(mesh) ? '#ffeeba' : '#fff', padding: '5px', border: '1px solid #ccc' }}>
+                                <input 
+                                    type="checkbox" 
+                                    checked={!hiddenNodes.includes(mesh)} 
+                                    onChange={(e) => {
+                                        if (e.target.checked) setHiddenNodes(prev => prev.filter(n => n !== mesh));
+                                        else setHiddenNodes(prev => [...prev, mesh]);
+                                    }} 
+                                />
+                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mesh}</span>
+                            </label>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        )}
+
         <div style={canvasContainerStyle} id="canvas-container">
           
           {cropState && (
@@ -611,8 +659,12 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                       <span style={{ color: '#007bff' }}>📸 FRAME & CROP</span>
                       
                       <select value={cropState.pinId || ""} onChange={(e) => setCropState({...cropState, pinId: e.target.value})} style={{ padding: '8px', border: '2px solid #007bff', borderRadius: '4px', fontWeight: 'bold', outline: 'none' }}>
-                          <option value="">-- SELECT BOM COMPONENT --</option>
-                          {pins.map(p => <option key={p.id} value={p.id}>{p.partName}</option>)}
+                          <option value="">-- SELECT TARGET FOR THUMBNAIL --</option>
+                          {/* 🚀 FIXED: Allow setting Parent Assembly Thumbnail directly */}
+                          <option value="MASTER_ASSEMBLY">⭐ PARENT ASSEMBLY THUMBNAIL</option>
+                          <optgroup label="BOM Components">
+                            {pins.map(p => <option key={p.id} value={p.id}>{p.partName}</option>)}
+                          </optgroup>
                       </select>
 
                       <button onClick={executeThumbnailCrop} disabled={!cropState.pinId || isProcessingCrop} style={{ background: cropState.pinId ? '#28a745' : '#ccc', color: '#fff', padding: '8px 15px', border: 'none', borderRadius: '20px', fontWeight: 'bold', cursor: cropState.pinId ? 'pointer' : 'not-allowed' }}>{isProcessingCrop ? 'SAVING...' : '✅ SNAP & SAVE'}</button>
@@ -752,7 +804,9 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                             interactionMode={interactionMode}
                                             onMeshClick={handle3DMeshClick} 
                                             isFrozen={isFrozen}
-                                            locatingNodes={activeLocatingNodes} // 🚀 Pass highlighted nodes
+                                            locatingNodes={activeLocatingNodes}
+                                            hiddenNodes={hiddenNodes} // 🚀 Pushed Evil Eye into Canvas
+                                            onMeshesLoaded={setSceneMeshes} 
                                         />
                                     </Bounds>
 
@@ -800,7 +854,6 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
         {!isCanvasMaximized && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
                 
-                {/* 🚀 FIXED: UNASSIGNED CLUSTERS WITH LOCATE BUTTON */}
                 {viewMode === '3D' && unassignedClusters.length > 0 && (
                     <div style={{ background: '#fff3cd', border: '2px solid #ffc107', padding: '15px', boxShadow: '8px 8px 0 rgba(0,0,0,0.1)' }}>
                         <div style={{ fontWeight: 'bold', color: '#856404', fontSize: '0.9rem', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
