@@ -3,6 +3,13 @@ import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, updateDoc } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
+const AVAILABLE_BRANDS = [
+  { id: 'm2c', name: 'M2C Studio' },
+  { id: 'uniquity', name: 'Uniquity' }, 
+  { id: 'ce', name: 'Classical Elements' }, 
+  { id: 'leyla', name: 'Leyla Gans' }
+];
+
 const BOMTab = ({ currentUser, activeBrand }) => {
   const [assemblies, setAssemblies] = useState([]);
   const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
@@ -10,7 +17,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [bomPins, setBomPins] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
   
-  const [globalLists, setGlobalLists] = useState({ uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [], pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], partHandling: [], inventoryTypes: [], assemblyTypes: [], projections: [] }); 
+  const [globalLists, setGlobalLists] = useState({ 
+      uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [], 
+      pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], 
+      partHandling: [], inventoryTypes: [], assemblyTypes: [], projections: [], customers: [] 
+  }); 
   const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] }); 
   
   const [customSchema, setCustomSchema] = useState([]);
@@ -18,15 +29,17 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [collectionsData, setCollectionsData] = useState([]);
 
   const [activeComponent, setActiveComponent] = useState(null);
-  const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [], collections: [] });
+  const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [], collections: [], clientPricing: [], sharedBrands: [] });
   const [isSaving, setIsSaving] = useState(false);
+
+  const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '' }); 
 
   const [assemblyDetails, setAssemblyDetails] = useState({
       itemName: "", legacyErpId: "", productType: "", routingType: "UNASSIGNED", project: "",
       basePrice: "", cost: "", pdfUrl: "", cadUrl: "",
       isProjectManaged: false, binLocation: "",
       partHandling: "", uom: "EA", pillowSize: "", fillType: "", flangeStyle: "", stitchType: "", seamCount: "", outsourceAction: "", watchList: "NONE",
-      dynamicDicts: {}, customData: {}, collections: []
+      dynamicDicts: {}, customData: {}, collections: [], clientPricing: [], sharedBrands: []
   });
 
   const [pdfFile, setPdfFile] = useState(null);
@@ -51,7 +64,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               partHandling: data.partHandling || ['Small Parts', 'Custom'],
               inventoryTypes: data.inventoryTypes || [], 
               assemblyTypes: data.assemblyTypes || [],
-              projections: data.projections || [] 
+              projections: data.projections || [],
+              customers: data.customers || [] 
           });
       }
     });
@@ -128,10 +142,12 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               outsourceAction: selectedAssemblyData.manufacturingSpecs?.outsourceAction || "",
               watchList: selectedAssemblyData.manufacturingSpecs?.watchList || "NONE",
               dynamicDicts: selectedAssemblyData.manufacturingSpecs?.dynamicDicts || {},
-              customData: selectedAssemblyData.manufacturingSpecs?.customData || {}
+              customData: selectedAssemblyData.manufacturingSpecs?.customData || {},
+              clientPricing: selectedAssemblyData.clientPricing || [],
+              sharedBrands: selectedAssemblyData.sharedBrands || [activeBrand]
           });
       }
-  }, [selectedAssemblyData]);
+  }, [selectedAssemblyData, activeBrand]);
 
   const populatedBOM = bomPins.map(pin => {
       const masterPart = libraryParts.find(p => p.id === pin.partId);
@@ -164,7 +180,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           isInHouse, 
           partHandling,
           project: bomItem.masterPart.project || "",
-          routingType: bomItem.masterPart.routingType || "" 
+          routingType: bomItem.masterPart.routingType || "",
+          clientPricing: bomItem.masterPart.clientPricing || [],
+          sharedBrands: bomItem.masterPart.sharedBrands || [activeBrand],
+          tempName: bomItem.masterPart.itemName, 
+          tempLegacyId: bomItem.masterPart.legacyErpId === "PENDING" ? "" : bomItem.masterPart.legacyErpId
       });
   };
 
@@ -192,6 +212,36 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       const current = editSpecs.cpqCategories || [];
       const updated = current.includes(categoryId) ? current.filter(id => id !== categoryId) : [...current, categoryId];
       setEditSpecs({ ...editSpecs, cpqCategories: updated });
+  };
+
+  const handleAddClientPricing = (isAssembly = false) => {
+      if (!newClientPricing.customerId) return alert("Select a customer from the dropdown.");
+      if (isAssembly) {
+          setAssemblyDetails(prev => ({ ...prev, clientPricing: [...(prev.clientPricing || []), { ...newClientPricing }] }));
+      } else {
+          setEditSpecs(prev => ({ ...prev, clientPricing: [...(prev.clientPricing || []), { ...newClientPricing }] }));
+      }
+      setNewClientPricing({ customerId: '', clientSku: '', price: '' });
+  };
+
+  const handleRemoveClientPricing = (idx, isAssembly = false) => {
+      if (isAssembly) {
+          setAssemblyDetails(prev => ({ ...prev, clientPricing: prev.clientPricing.filter((_, i) => i !== idx) }));
+      } else {
+          setEditSpecs(prev => ({ ...prev, clientPricing: prev.clientPricing.filter((_, i) => i !== idx) }));
+      }
+  };
+
+  const handleBrandToggle = (brandId, isAssembly = false) => {
+      if (isAssembly) {
+          let currentShared = assemblyDetails.sharedBrands || [];
+          if (currentShared.includes(brandId)) currentShared = currentShared.filter(id => id !== brandId); else currentShared.push(brandId);
+          setAssemblyDetails({ ...assemblyDetails, sharedBrands: currentShared });
+      } else {
+          let currentShared = editSpecs.sharedBrands || [];
+          if (currentShared.includes(brandId)) currentShared = currentShared.filter(id => id !== brandId); else currentShared.push(brandId);
+          setEditSpecs({ ...editSpecs, sharedBrands: currentShared });
+      }
   };
 
   const handleDynamicFileUpload = async (key, file, isAssembly = false) => {
@@ -236,6 +286,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               productType: assemblyDetails.productType,
               routingType: assemblyDetails.routingType,
               project: assemblyDetails.project || "",
+              clientPricing: assemblyDetails.clientPricing || [], 
+              sharedBrands: assemblyDetails.sharedBrands || [activeBrand], 
               manufacturingSpecs: { 
                   ...currentSpecs, 
                   basePrice: assemblyDetails.basePrice, 
@@ -290,12 +342,19 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           status: "SPECS_LOCKED" 
       };
       delete compiledSpecs.collection;
+      
+      const finalName = editSpecs.tempName || activeComponent.masterPart.itemName;
+      const finalLegacyId = (editSpecs.tempLegacyId || activeComponent.masterPart.legacyErpId).toUpperCase();
 
       try {
           await updateDoc(doc(db, "Approved_Designs", activeComponent.masterPart.id), {
+              itemName: finalName, 
+              legacyErpId: finalLegacyId, 
               routingType: editSpecs.routingType || "", 
               project: editSpecs.project || "",
               productType: editSpecs.productType || "",
+              clientPricing: editSpecs.clientPricing || [], 
+              sharedBrands: editSpecs.sharedBrands || [activeBrand], 
               manufacturingSpecs: compiledSpecs,
               updatedAt: new Date().toISOString()
           });
@@ -388,7 +447,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                     <h3 style={{ margin: 0, fontSize: '1.2rem', textTransform: 'uppercase' }}>{activeComponent ? "GLOBAL PART DATA" : "ASSEMBLY METADATA & PRICING"}</h3>
                     <span style={{ fontSize: '0.75rem' }}>{activeComponent ? "Changes made here update the Master Library globally." : "Review and set root metadata for this assembly."}</span>
                 </div>
-                {activeComponent && <span style={{ background: '#fff', color: '#007bff', padding: '4px 8px', fontSize: '0.8rem', fontWeight: 'bold' }}>{activeComponent.legacyErpId}</span>}
+                {activeComponent && <span style={{ background: '#fff', color: '#007bff', padding: '4px 8px', fontSize: '0.8rem', fontWeight: 'bold' }}>{activeComponent.masterPart?.legacyErpId}</span>}
             </div>
 
             <div style={{ padding: '20px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '25px' }}>
@@ -445,6 +504,59 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             placeholder="e.g. KIT-SHELF-B" 
                                             style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', boxSizing: 'border-box', textTransform: 'uppercase', fontWeight: 'bold', fontSize: '1.1rem' }} 
                                         />
+                                    </div>
+
+                                    {/* 🚀 FIXED: Added Pricing Matrix to Assembly Level */}
+                                    <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', marginTop: '10px' }}>
+                                        <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
+                                        <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '15px' }}>
+                                            <div style={{ flex: 2 }}>
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOMER (NAME - ID):</label>
+                                                <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                                    <option value="">Select Customer...</option>
+                                                    {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                                </select>
+                                            </div>
+                                            <div style={{ flex: 2 }}>
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CLIENT SKU / PART #:</label>
+                                                <input value={newClientPricing.clientSku} onChange={e => setNewClientPricing({...newClientPricing, clientSku: e.target.value})} placeholder="e.g. Brimar-8483" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                            </div>
+                                            <div style={{ flex: 1 }}>
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOM PRICE ($):</label>
+                                                <input type="number" step="0.01" value={newClientPricing.price} onChange={e => setNewClientPricing({...newClientPricing, price: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                            </div>
+                                            <button onClick={() => handleAddClientPricing(true)} style={{ padding: '9px 15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ ADD</button>
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                            {(assemblyDetails.clientPricing || []).length === 0 && <div style={{ fontSize: '0.75rem', color: '#666', fontStyle: 'italic' }}>No custom client pricing assigned. Defaults to Base Price.</div>}
+                                            {(assemblyDetails.clientPricing || []).map((cp, idx) => (
+                                                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #ccc', padding: '8px 12px' }}>
+                                                    <div style={{ display: 'flex', gap: '20px', fontSize: '0.8rem', width: '100%', alignItems: 'center' }}>
+                                                        <span style={{ fontWeight: 'bold', color: '#007bff', flex: 1 }}>{cp.customerId}</span>
+                                                        <span style={{ flex: 1 }}><strong style={{ color: '#666' }}>SKU:</strong> {cp.clientSku || 'N/A'}</span>
+                                                        <span style={{ color: '#28a745', fontWeight: 'bold', width: '80px', textAlign: 'right' }}>${parseFloat(cp.price || 0).toFixed(2)}</span>
+                                                    </div>
+                                                    <button onClick={() => handleRemoveClientPricing(idx, true)} style={{ background: 'none', border: 'none', color: '#d9534f', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.2rem', marginLeft: '10px' }}>×</button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* 🚀 FIXED: Added Cross-Brand Sharing to Assembly Level */}
+                                    <div style={{ background: '#f8f9fa', padding: '10px', border: '2px solid #ccc', marginTop: '10px' }}>
+                                        <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>RECORD VISIBILITY & CROSS-BRAND SHARING:</label>
+                                        <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+                                            {AVAILABLE_BRANDS.map(brand => {
+                                                const isOwner = selectedAssemblyData.brandId === brand.id; 
+                                                const isShared = assemblyDetails.sharedBrands?.includes(brand.id);
+                                                return ( 
+                                                    <label key={brand.id} style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px', cursor: isOwner ? 'not-allowed' : 'pointer', opacity: isOwner ? 0.7 : 1 }}>
+                                                        <input type="checkbox" checked={isOwner || isShared} disabled={isOwner} onChange={() => handleBrandToggle(brand.id, true)} />
+                                                        {brand.name} {isOwner && "(Owner)"}
+                                                    </label> 
+                                                );
+                                            })}
+                                        </div>
                                     </div>
 
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginTop: '10px' }}>
@@ -668,6 +780,76 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
+                        {/* 🚀 FIXED: Added Component Level Identification Box to BOM Tab for symmetry */}
+                        <div>
+                            <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px', marginTop: '15px' }}>IDENTIFICATION</h4>
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                                <div style={{ flex: 2 }}>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>RECORD NAME / DESCRIPTION:</label>
+                                    <input name="tempName" value={editSpecs.tempName !== undefined ? editSpecs.tempName : activeComponent.masterPart.itemName} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff' }}>ERP LEGACY ID (Internal):</label>
+                                    <input name="tempLegacyId" value={editSpecs.tempLegacyId !== undefined ? editSpecs.tempLegacyId : (activeComponent.masterPart.legacyErpId === "PENDING" ? "" : activeComponent.masterPart.legacyErpId)} onChange={handleSpecChange} placeholder="e.g. P-1234" style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box', textTransform: 'uppercase' }} />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 🚀 FIXED: Added Client Pricing Matrix to BOM Tab Component Editor */}
+                        <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', marginTop: '15px' }}>
+                            <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
+                            
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '15px' }}>
+                                <div style={{ flex: 2 }}>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOMER (NAME - ID):</label>
+                                    <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                        <option value="">Select Customer...</option>
+                                        {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                </div>
+                                <div style={{ flex: 2 }}>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CLIENT SKU / PART #:</label>
+                                    <input value={newClientPricing.clientSku} onChange={e => setNewClientPricing({...newClientPricing, clientSku: e.target.value})} placeholder="e.g. Brimar-8483" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOM PRICE ($):</label>
+                                    <input type="number" step="0.01" value={newClientPricing.price} onChange={e => setNewClientPricing({...newClientPricing, price: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                </div>
+                                <button onClick={() => handleAddClientPricing(false)} style={{ padding: '9px 15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ ADD</button>
+                            </div>
+                            
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                {(editSpecs.clientPricing || []).length === 0 && <div style={{ fontSize: '0.75rem', color: '#666', fontStyle: 'italic' }}>No custom client pricing assigned. Defaults to Base Price.</div>}
+                                {(editSpecs.clientPricing || []).map((cp, idx) => (
+                                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #ccc', padding: '8px 12px' }}>
+                                        <div style={{ display: 'flex', gap: '20px', fontSize: '0.8rem', width: '100%', alignItems: 'center' }}>
+                                            <span style={{ fontWeight: 'bold', color: '#007bff', flex: 1 }}>{cp.customerId}</span>
+                                            <span style={{ flex: 1 }}><strong style={{ color: '#666' }}>SKU:</strong> {cp.clientSku || 'N/A'}</span>
+                                            <span style={{ color: '#28a745', fontWeight: 'bold', width: '80px', textAlign: 'right' }}>${parseFloat(cp.price || 0).toFixed(2)}</span>
+                                        </div>
+                                        <button onClick={() => handleRemoveClientPricing(idx, false)} style={{ background: 'none', border: 'none', color: '#d9534f', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.2rem', marginLeft: '10px' }}>×</button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* 🚀 FIXED: Added Cross-Brand Sharing to Component Level */}
+                        <div style={{ background: '#f8f9fa', padding: '10px', border: '2px solid #ccc', marginTop: '10px' }}>
+                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>RECORD VISIBILITY & CROSS-BRAND SHARING:</label>
+                            <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+                                {AVAILABLE_BRANDS.map(brand => {
+                                    const isOwner = activeComponent.masterPart.brandId === brand.id; 
+                                    const isShared = editSpecs.sharedBrands?.includes(brand.id);
+                                    return ( 
+                                        <label key={brand.id} style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px', cursor: isOwner ? 'not-allowed' : 'pointer', opacity: isOwner ? 0.7 : 1 }}>
+                                            <input type="checkbox" checked={isOwner || isShared} disabled={isOwner} onChange={() => handleBrandToggle(brand.id, false)} />
+                                            {brand.name} {isOwner && "(Owner)"}
+                                        </label> 
+                                    );
+                                })}
+                            </div>
+                        </div>
+
                         <div>
                             <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px', marginTop: '15px' }}>CORE STATIC ATTRIBUTES</h4>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
@@ -702,7 +884,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                                 const isSelected = (editSpecs.collections || []).includes(c.name);
                                                 return (
                                                     <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', background: isSelected ? '#d8b4e2' : '#fff', color: isSelected ? '#4a148c' : '#333', border: `1px solid ${isSelected ? '#6f42c1' : '#ccc'}`, padding: '6px 12px', borderRadius: '20px', transition: '0.2s' }}>
-                                                        <input type="checkbox" checked={isSelected} onChange={() => handleToggleCollection(c.name)} style={{ display: 'none' }} />
+                                                        <input type="checkbox" checked={isSelected} onChange={() => handleToggleCollection(c.name, false)} style={{ display: 'none' }} />
                                                         {c.name}
                                                     </label>
                                                 );
