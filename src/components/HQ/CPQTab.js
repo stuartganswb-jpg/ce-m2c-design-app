@@ -54,11 +54,11 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
 
                     if (matchedTexUrl && texMap[matchedTexUrl]) {
                         const newMat = child.userData.originalMaterial.clone();
-                       // 🚀 THE FIX: Restored the favored base, dialed for deep saturation
+                      // 🚀 THE FIX: True PBR Metal (Restores 100% texture saturation)
                         newMat.color = new THREE.Color(0xffffff); 
-                        newMat.metalness = 0.60; // Dropped to let the pure texture color shine through
-                        newMat.roughness = 0.45; // Softened to enrich the color absorption
-                        newMat.envMapIntensity = 0.90; // Prevents the HDRI from washing out the tint
+                        newMat.metalness = 1.0; // MUST be 1.0 for deep metallic colors to render
+                        newMat.roughness = 0.35; // Scatters the light to reveal the rich color
+                        newMat.envMapIntensity = 1.2; // Strong, realistic reflections
                         
                         newMat.normalMap = null;
                         newMat.bumpMap = null;
@@ -919,10 +919,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           </div>
                       ) : viewMode === '3D' ? (
                          <Canvas camera={{ position: [5, 5, 5], fov: 50 }} style={{ width: '100%', height: '100%' }}>
-                              {/* 🚀 THE FIX: Back to 'city' for clean colors, balanced contrast */}
-                              <ambientLight intensity={0.85} /> 
+                              {/* 🚀 THE FIX: 'warehouse' provides rich, warm product-photography lighting */}
+                              <ambientLight intensity={0.5} /> 
                               <directionalLight position={[5, 10, 5]} intensity={1.5} />
-                              <Environment preset="city" /> 
+                              <Environment preset="warehouse" /> 
                               <ContactShadows position={[0, -0.5, 0]} opacity={0.5} scale={10} blur={2} far={4} />
                               <OrbitControls makeDefault />
                               <Bounds fit clip margin={1.2}>
