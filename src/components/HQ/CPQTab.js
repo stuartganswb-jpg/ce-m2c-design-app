@@ -30,24 +30,24 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                 if (child.isMesh && child.userData.originalMaterial) {
                     const meshName = child.name.toLowerCase();
 
-                    // --- VISIBILITY LOGIC ---
+                    // --- VISIBILITY LOGIC (UPGRADED FOR BLENDER .001 DUPLICATES) ---
                     let isVis = child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
                             const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-                            if (targets.some(t => meshName === t || meshName.startsWith(t + '_'))) {
+                            if (targets.some(t => meshName === t || meshName.startsWith(t + '_') || meshName.startsWith(t + '.'))) {
                                 isVis = isVisibleFlag;
                             }
                         }
                     }
                     child.visible = isVis;
 
-                    // --- TEXTURE LOGIC ---
+                    // --- TEXTURE LOGIC (UPGRADED FOR BLENDER .001 DUPLICATES) ---
                     let matchedTexUrl = null;
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
                         for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
                             const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-                            if (targets.some(t => meshName === t || meshName.startsWith(t + '_'))) {
+                            if (targets.some(t => meshName === t || meshName.startsWith(t + '_') || meshName.startsWith(t + '.'))) {
                                 matchedTexUrl = texUrl;
                             }
                         }
@@ -55,18 +55,10 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
 
                     if (matchedTexUrl && texMap[matchedTexUrl]) {
                         const newMat = child.userData.originalMaterial.clone();
-                        
-                        // 🚀 THE REAL TEXTURE ENGINE:
-                        // Apply the actual loaded image texture to the base color map
                         newMat.map = texMap[matchedTexUrl];
-                        
-                        // Reset base color to white so the uploaded texture image shows purely
                         newMat.color = new THREE.Color(0xffffff); 
-                        
-                        // Keep environment reflections active so metals/woods react to light
                         newMat.envMapIntensity = 1.0; 
                         newMat.needsUpdate = true;
-                        
                         child.material = newMat;
                     } else {
                         child.material = child.userData.originalMaterial;
@@ -920,9 +912,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           </div>
                       ) : viewMode === '3D' ? (
                          <Canvas camera={{ position: [5, 5, 5], fov: 50 }} style={{ width: '100%', height: '100%' }}>
-                              {/* 🚀 THE FIX: Balanced lighting prevents the white-wash effect */}
                               <ambientLight intensity={0.9} /> 
-                              <directionalLight position={[5, 10, 5]} intensity={0.7} /> {/* Dropped to prevent bleaching */}
+                              <directionalLight position={[5, 10, 5]} intensity={0.7} />
                               <Environment preset="warehouse" /> 
                               <ContactShadows position={[0, -0.5, 0]} opacity={0.5} scale={10} blur={2} far={4} />
                               <OrbitControls makeDefault />
