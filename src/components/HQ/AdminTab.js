@@ -224,7 +224,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       setIsSyncing(false);
   };
 
-  const handleSyncItems = async (itemType) => {
+ const handleSyncItems = async (itemType) => {
       setIsSyncing(true);
       
       const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
@@ -233,7 +233,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       try {
           const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
           
-          // 🚀 PERFECT MATCH QUERY: Uses exact internal IDs from the NetSuite CSV
+          // 🚀 THE GOLDILOCKS QUERY: Custom fields + Base Price + Native Stock Unit
           const q = `
               SELECT 
                   id, 
@@ -242,7 +242,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   BUILTIN.DF(custitem_bit_product_type) AS product_type,
                   BUILTIN.DF(custitem_bit_itemcollection) AS collection,
                   BUILTIN.DF(custitem_bit_watchlist) AS watchlist,
-                  BUILTIN.DF(custitem_bit_cpq_baseunit) AS uom,
+                  BUILTIN.DF(stockunit) AS uom,
                   custitem9 AS baseprice
               FROM 
                   item
