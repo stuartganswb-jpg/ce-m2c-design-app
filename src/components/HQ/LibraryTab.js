@@ -18,8 +18,8 @@ const DEFAULT_SYSTEM_WINDOWS = {
   pillowSizes: ['uniquity'], fillTypes: ['uniquity'], flangeStyles: ['uniquity'], stitchTypes: ['uniquity'],
   seamCounts: ['uniquity'], assemblyTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
   customers: ['ce', 'm2c', 'uniquity', 'leyla'],
-  partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], // 🚀 NEW: Part Handling 
-  inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'] // 🚀 NEW: Inventory Types
+  partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], 
+  inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla']
 };
 
 const LIST_LABELS = {
@@ -28,8 +28,8 @@ const LIST_LABELS = {
     pillowSizes: 'PILLOW SIZES', fillTypes: 'FILL TYPES', flangeStyles: 'EDGE / FLANGE STYLES', 
     stitchTypes: 'STITCH ROUTING', seamCounts: 'SEAM COUNTS / UPCHARGES', assemblyTypes: 'ASSEMBLY TYPES',
     customers: 'CUSTOMERS / DEALERS',
-    partHandling: 'PART HANDLING & ROUTING', // 🚀 NEW
-    inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS' // 🚀 NEW
+    partHandling: 'PART HANDLING & ROUTING', 
+    inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS' 
 };
 
 const LibraryTab = ({ currentUser, activeBrand }) => {
@@ -111,8 +111,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               assemblyTypes: data.assemblyTypes || [], 
               cpqRoutingTypes: data.cpqRoutingTypes || [],
               customers: data.customers || [],
-              partHandling: data.partHandling || ['Small Parts', 'Custom'], // 🚀 Fallbacks
-              inventoryTypes: data.inventoryTypes || [] // 🚀 Powers the RAW MAT Routing dropdown
+              partHandling: data.partHandling || ['Small Parts', 'Custom'], 
+              inventoryTypes: data.inventoryTypes || [] 
           });
       }
     });
@@ -251,6 +251,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       }));
   };
 
+  // 🚀 FIXED: Added proper file type logic for custom schema rendering 
   const handleDynamicFileUpload = async (key, file) => {
       if (!file) return;
       const safeId = activePart.legacyErpId !== "PENDING" ? activePart.legacyErpId : activePart.itemId;
@@ -321,7 +322,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
           payload.routingType = editSpecs.routingType || "";
           payload.productType = editSpecs.productType || "";
       } else {
-          // If it IS an inventory item, save the routingType so it maps to the Inventory Category
           payload.routingType = editSpecs.routingType || ""; 
       }
 
@@ -777,7 +777,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                    )}
 
-                   {/* 🚀 FIXED: Added missing soft-goods/specialty system lists */}
+                   {/* Soft-goods/specialty system lists */}
                    {windowConfig.system.pillowSizes?.includes(activeBrand) && (
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PILLOW SIZE:</label><select name="pillowSize" value={editSpecs.pillowSize || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
@@ -797,7 +797,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>OUTSOURCE ACTION:</label><select name="outsourceAction" value={editSpecs.outsourceAction || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
                    
-                   {/* 🚀 FIXED: Dynamic Dictionaries Rendering */}
+                   {/* Dynamic Dictionaries Rendering */}
                    {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
                        <div key={w.id}>
                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c', textTransform: 'uppercase' }}>{w.name}:</label>
@@ -812,7 +812,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>COLLECTION:</label><select name="collection" value={editSpecs.collection || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option><option value="N/A">N/A</option>{(globalLists.collections || []).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
                    )}
 
-                   {/* 🚀 FIXED: Inject customSchema fields created in the green "Static Part Attributes" window */}
+                   {/* 🚀 FIXED: Schema field 'file' type rendering without value prop */}
                    {customSchema.map(field => (
                        <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#eafaf1', padding: '5px', border: '1px solid #28a745' }}>
                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
@@ -820,6 +820,12 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                <select value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745' }}>
                                    <option value="">Select...</option>{(field.options || "").split(',').map(opt => <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>)}
                                </select>
+                           ) : field.type === 'file' ? (
+                               <div>
+                                   {editSpecs.customData?.[field.key] && <a href={editSpecs.customData[field.key]} target="_blank" rel="noreferrer" style={{ fontSize: '0.65rem', color: '#007bff', display: 'block', marginBottom: '5px' }}>[View Current File]</a>}
+                                   <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0])} style={{ width: '100%', fontSize: '0.75rem' }} />
+                                   {dynamicUploadProgress[field.key] > 0 && <progress value={dynamicUploadProgress[field.key]} max="100" style={{ width: '100%', marginTop: '5px' }} />}
+                               </div>
                            ) : (
                                <input type={field.type} value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box' }} />
                            )}
