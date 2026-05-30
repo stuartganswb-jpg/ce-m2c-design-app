@@ -295,12 +295,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   // Existing item: Update ERP data without erasing any manual UI edits
                   payload.manufacturingSpecs = {
                       ...existingMatch.manufacturingSpecs,
-                      productType: item.product_type || existingMatch.manufacturingSpecs?.productType,
-                      uom: item.uom || existingMatch.manufacturingSpecs?.uom,
+                      productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
+                      uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
                       customData: {
                           ...(existingMatch.manufacturingSpecs?.customData || {}),
-                          collection: item.collection || existingMatch.manufacturingSpecs?.customData?.collection,
-                          watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist
+                          // FIREBASE FIX: Ensure absolute fallback to empty string if missing in both DBs!
+                          collection: item.collection || existingMatch.manufacturingSpecs?.customData?.collection || '',
+                          watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || ''
                       }
                   };
                   payload.updatedAt = new Date().toISOString();
