@@ -20,7 +20,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [] });
   const [isSaving, setIsSaving] = useState(false);
 
-  // 🚀 FIXED: Added all attributes to Assembly State
   const [assemblyDetails, setAssemblyDetails] = useState({
       itemName: "", legacyErpId: "", productType: "", collection: "", routingType: "UNASSIGNED",
       basePrice: "", cost: "", pdfUrl: "", cadUrl: "",
@@ -100,7 +99,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
   useEffect(() => {
       if (selectedAssemblyData) {
-          // 🚀 FIXED: Populating all custom fields for the Assembly
           setAssemblyDetails({
               itemName: selectedAssemblyData.itemName || "",
               legacyErpId: selectedAssemblyData.legacyErpId === "PENDING" ? "" : (selectedAssemblyData.legacyErpId || ""),
@@ -174,6 +172,22 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       setEditSpecs({ ...editSpecs, cpqCategories: updated });
   };
 
+  // 🚀 FIXED: Handler for dynamic schema fields of type 'file'
+  const handleDynamicFileUpload = async (key, file, isAssembly = false) => {
+      if (!file) return;
+      const storageRef = ref(storage, `custom_uploads/${activeBrand}_${Date.now()}_${file.name}`);
+      const uploadTask = uploadBytesResumable(storageRef, file);
+      
+      uploadTask.on("state_changed", null, 
+          (err) => { console.error(err); alert("File upload failed."); },
+          async () => { 
+              const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+              if (isAssembly) handleAssemblyCustomFieldChange(key, downloadURL);
+              else handleCustomFieldChange(key, downloadURL);
+          }
+      );
+  };
+
   const saveAssemblyDetails = async () => {
       if (!selectedAssemblyData) return;
       setIsSaving(true);
@@ -194,7 +208,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
           const currentSpecs = selectedAssemblyData.manufacturingSpecs || {};
           
-          // 🚀 FIXED: Save all custom fields to the assembly
           await updateDoc(doc(db, "Approved_Designs", selectedAssemblyData.id), {
               itemName: assemblyDetails.itemName.toUpperCase(),
               legacyErpId: assemblyDetails.legacyErpId.toUpperCase() || "PENDING",
@@ -358,7 +371,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: '10px' }}>
                         {selectedAssemblyData ? (
                             <>
-                                {/* 🚀 FIXED: Removed Image Upload, Replaced with instruction */}
                                 <div style={{ textAlign: 'center', marginBottom: '30px' }}>
                                     {selectedAssemblyData.finalImageUrl ? (
                                         <img src={selectedAssemblyData.finalImageUrl} alt="Assembly" style={{ maxWidth: '80%', maxHeight: '350px', objectFit: 'contain', border: '2px solid #ccc', padding: '10px', background: '#f8f9fa' }} />
@@ -409,7 +421,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         />
                                     </div>
 
-                                    {/* 🚀 FIXED: ADDED ALL CUSTOM/SYSTEM LISTS TO ASSEMBLY EDIT */}
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginTop: '10px' }}>
                                         
                                         <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={assemblyDetails.productType || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
@@ -457,6 +468,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             </div>
                                         ))}
 
+                                        {/* 🚀 FIXED: Schema field 'file' type rendering without value prop */}
                                         {customSchema.map(field => (
                                             <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#fff', padding: '5px', border: '1px solid #28a745' }}>
                                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
@@ -464,6 +476,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                                     <select value={assemblyDetails.customData?.[field.key] || ""} onChange={(e) => handleAssemblyCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745' }}>
                                                         <option value="">Select...</option>{(field.options || "").split(',').map(opt => <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>)}
                                                     </select>
+                                                ) : field.type === 'file' ? (
+                                                    <div>
+                                                        {assemblyDetails.customData?.[field.key] && <a href={assemblyDetails.customData[field.key]} target="_blank" rel="noreferrer" style={{ fontSize: '0.65rem', color: '#007bff', display: 'block', marginBottom: '5px' }}>[View Current File]</a>}
+                                                        <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0], true)} style={{ width: '100%', fontSize: '0.75rem' }} />
+                                                    </div>
                                                 ) : (
                                                     <input type={field.type} value={assemblyDetails.customData?.[field.key] || ""} onChange={(e) => handleAssemblyCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box' }} />
                                                 )}
@@ -620,6 +637,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                 ))}
 
+                                {/* 🚀 FIXED: Schema field 'file' type rendering without value prop */}
                                 {customSchema.map(field => (
                                     <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#eafaf1', padding: '5px', border: '1px solid #28a745' }}>
                                         <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
@@ -627,6 +645,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             <select value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745' }}>
                                                 <option value="">Select...</option>{(field.options || "").split(',').map(opt => <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>)}
                                             </select>
+                                        ) : field.type === 'file' ? (
+                                            <div>
+                                                {editSpecs.customData?.[field.key] && <a href={editSpecs.customData[field.key]} target="_blank" rel="noreferrer" style={{ fontSize: '0.65rem', color: '#007bff', display: 'block', marginBottom: '5px' }}>[View Current File]</a>}
+                                                <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0], false)} style={{ width: '100%', fontSize: '0.75rem' }} />
+                                            </div>
                                         ) : (
                                             <input type={field.type} value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box' }} />
                                         )}
