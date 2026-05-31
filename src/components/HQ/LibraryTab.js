@@ -50,7 +50,14 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [collectionsData, setCollectionsData] = useState([]); 
+  const [customSchema, setCustomSchema] = useState([]);
+  const [globalFinishes, setGlobalFinishes] = useState([]);
+  const [outsourceFinishes, setOutsourceFinishes] = useState([]);
+  const [dynamicAssets, setDynamicAssets] = useState([]);
+  const [collectionsData, setCollectionsData] = useState([]); 
   
+  // 🟢 PASTE THIS LINE HERE:
+  const [liveVendors, setLiveVendors] = useState([]);
   const [globalLists, setGlobalLists] = useState({ 
       uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [],
       pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], assemblyTypes: [],
@@ -104,7 +111,10 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); 
+    const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); 
     
+    // 🟢 PASTE THIS LINE HERE:
+    const unsubVendors = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "VENDOR")), snap => setLiveVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
       if (docSnap.exists()) {
           const data = docSnap.data();
@@ -128,7 +138,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       if (docSnap.exists()) setWindowConfig({ system: { ...DEFAULT_SYSTEM_WINDOWS, ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
     });
 
-    return () => { unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubCollections(); unsubLists(); unsubRecipes(); unsubWindowConfig(); };
+    return () => { unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubCollections(); unsubLists(); unsubRecipes(); unsubWindowConfig(); unsubVendors(); };
   }, []);
 
   useEffect(() => {
@@ -973,12 +983,18 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                         </>
                       ) : (
                         <>
+                         {/* 🟢 PASTE THIS NEW BLOCK HERE */}
                           <div style={{ display: 'flex', gap: '10px' }}>
-                            {windowConfig.system.vendors?.includes(activeBrand) ? (
-                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }}><option value="">SELECT VENDOR...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
-                            ) : (
-                                <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><input name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                            )}
+                            <div style={{ flex: 2 }}>
+                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME (FROM CO-OP CRM):</label>
+                                <select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }}>
+                                    <option value="">SELECT VENDOR...</option>
+                                    {editSpecs.vendorName && !liveVendors.find(v => v.name.toUpperCase() === editSpecs.vendorName.toUpperCase()) && (
+                                        <option value={editSpecs.vendorName}>⭐ {editSpecs.vendorName} (From ERP)</option>
+                                    )}
+                                    {liveVendors.map(v => <option key={v.id} value={v.name}>{v.name}</option>)}
+                                </select>
+                            </div>
                             <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff' }}>VENDOR PART # / SKU:</label><input name="vendorId" value={editSpecs.vendorId || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box' }} /></div>
                           </div>
                           <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
