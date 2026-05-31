@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc, serverTimestamp, collection, onSnapshot, query } from "firebase/firestore";
+import { doc, setDoc, serverTimestamp, collection, onSnapshot, query, where } from "firebase/firestore";
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [viewMode, setViewMode] = useState('ENGINEERING');
@@ -36,14 +36,18 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [collectionsData, setCollectionsData] = useState([]);
+  
+  // 🚀 NEW: CPQ Flows and Dynamic Assets state for the quoting engine
+  const [cpqFlows, setCpqFlows] = useState([]);
+  const [dynamicAssets, setDynamicAssets] = useState([]);
+  const [globalLists, setGlobalLists] = useState({});
 
-  const [quoteSelections, setQuoteSelections] = useState({ collection: '', finishId: '', poleId: '', bracketId: '', finialId: '', ringId: '', ringsPerFoot: 4 });
-
+  // 🚀 FIX: Projection default is now empty string to allow dynamic sync
   const [engData, setEngData] = useState({
     jobName: '', sidemark: '', shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'FINIAL', proj: 3.5, poleDiameter: 1.0, finialW: 3.5, bracketW: 3.0,           
+    endStyle: 'FINIAL', proj: "", poleDiameter: 1.0, finialW: 3.5, bracketW: 3.0,           
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   });
 
@@ -52,6 +56,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [panStart, setPanStart] = useState(null);
   const svgRef = useRef(null);
   const innerGroupRef = useRef(null);
+
+  // 🚀 PATH B REFACTOR: Replaced hardcoded selections with dynamic step parameters
+  const [quoteSelections, setQuoteSelections] = useState({ collection: '', finishId: '' });
+  const [dynamicConfigParams, setDynamicConfigParams] = useState({});
 
   useEffect(() => {
     if (!activeBrand) return;
@@ -63,20 +71,85 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
     const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (docSnap) => { if (docSnap.exists() && docSnap.data().finishes) setGlobalFinishes(docSnap.data().finishes); });
     const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => { setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))); });
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => { setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()}))); });
-    return () => { unsubParts(); unsubFinishes(); unsubOutsource(); unsubCollections(); };
+    
+    // 🚀 NEW: Fetch CPQ Flows, Dynamic Assets, and Master Lists
+    const unsubFlows = onSnapshot(query(collection(db, "cpq_flows"), where("brandId", "==", activeBrand)), (snap) => setCpqFlows(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+    const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { if (docSnap.exists()) setGlobalLists(docSnap.data()); });
+
+    return () => { unsubParts(); unsubFinishes(); unsubOutsource(); unsubCollections(); unsubFlows(); unsubDynamic(); unsubLists(); };
   }, [activeBrand]);
 
-  // 🚀 FIX: Auto-sync engineering projection to match the selected Master Library bracket
-  useEffect(() => {
-      if (quoteSelections.bracketId) {
-          const bracket = libraryParts.find(p => p.id === quoteSelections.bracketId);
-          const bracketProj = bracket?.manufacturingSpecs?.customData?.projection;
-          if (bracketProj) {
-              setEngData(prev => ({ ...prev, proj: parseFloat(bracketProj) }));
-              setIsCustomProj(false);
+  // Determine the active flow based on the loaded configuration
+  const activeFlow = useMemo(() => {
+      const config = visionConfigs.find(c => c.id === selectedConfigId);
+      if (!config || !config.linkedAssemblyId) return null;
+      return cpqFlows.find(f => f.linkedAssemblyId === config.linkedAssemblyId);
+  }, [selectedConfigId, visionConfigs, cpqFlows]);
+
+  // Helper function to map data sources to options, respecting collection filters
+  const getOptionsForStep = (step) => {
+      if (!step || !step.dataSource) return [];
+      let options = [];
+
+      if (globalLists.inventoryTypes?.includes(step.dataSource) || globalLists.assemblyTypes?.includes(step.dataSource)) {
+          // It's pointing to an inventory or assembly category
+          options = libraryParts.filter(p => {
+              // Exclude fee types
+              if (p.manufacturingSpecs?.customData?.feeType) return false;
+              // Must match the routing type
+              if (p.routingType !== step.dataSource) return false;
+              
+              // Collection Filtering
+              const partCollection = (p.manufacturingSpecs?.customData?.collection || p.manufacturingSpecs?.collection || 'N/A').toUpperCase();
+              const selCollection = (quoteSelections.collection || "").toUpperCase();
+              if (selCollection && partCollection !== selCollection && partCollection !== 'N/A') return false;
+
+              // Projection Filtering (Only apply if the part has a projection defined)
+              if (!isCustomProj && p.manufacturingSpecs?.customData?.projection) {
+                  if (parseFloat(p.manufacturingSpecs.customData.projection) !== parseFloat(engData.proj)) return false;
+              }
+
+              return true;
+          }).map(p => ({
+              id: p.id,
+              itemName: p.itemName,
+              code: p.legacyErpId
+          }));
+      } else {
+          // Dynamic assets or global lists (Not typically restricted by collection in the same way, but allowedOptions applies)
+          const customAssets = dynamicAssets.filter(a => a.windowId === step.dataSource);
+          if (customAssets.length > 0) {
+              options = customAssets.map(a => ({ id: a.id, itemName: a.name, code: a.code }));
+          } else if (globalLists[step.dataSource]) {
+              options = globalLists[step.dataSource].map(val => ({ id: val, itemName: val }));
           }
       }
-  }, [quoteSelections.bracketId, libraryParts]);
+
+      // Apply Admin-defined restrictions
+      if (step.allowedOptions && step.allowedOptions.length > 0) {
+          return options.filter(opt => step.allowedOptions.includes(opt.id));
+      }
+
+      return options;
+  };
+
+  // 🚀 FIX: Auto-sync engineering projection.
+  // We scan the dynamicConfigParams to find if any selected item is a bracket and extract its projection.
+  useEffect(() => {
+      let foundProjection = null;
+      Object.values(dynamicConfigParams).forEach(itemId => {
+          const part = libraryParts.find(p => p.id === itemId);
+          if (part && part.manufacturingSpecs?.customData?.projection) {
+              foundProjection = parseFloat(part.manufacturingSpecs.customData.projection);
+          }
+      });
+
+      if (foundProjection !== null) {
+          setEngData(prev => ({ ...prev, proj: foundProjection }));
+          setIsCustomProj(false);
+      }
+  }, [dynamicConfigParams, libraryParts]);
 
   const uniqueProjections = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.customData?.projection).filter(Boolean))].sort((a,b) => parseFloat(a) - parseFloat(b));
 
@@ -372,32 +445,27 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   };
 
   const handlePushToCPQ = async () => {
-      if (!quoteSelections.poleId) return alert("Please select a Pole/Tube to build the quote.");
+      // 🚀 FIX: Prevent push if required steps are missing. We iterate over the dynamic parameters.
+      const hasMissingRequirements = activeFlow?.steps?.some(step => step.required && !dynamicConfigParams[step.id] && step.type !== 'DIMENSIONS');
+      if (hasMissingRequirements) return alert("Please complete all required steps in the configuration before adding to cart.");
+      
       setIsPushingToCPQ(true);
       const draftId = `QUOTE-${Date.now()}`;
       
       const payload = { 
           id: draftId, brandId: activeBrand, category: 'HARDWARE', status: 'DRAFT_FROM_VISION', 
           jobName: engData.jobName, sidemark: engData.sidemark, 
+          linkedAssemblyId: activeFlow?.linkedAssemblyId || null,
           specs: {
-              finishId: quoteSelections.finishId,
               collection: quoteSelections.collection,
-              poleId: quoteSelections.poleId,
-              bracketId: quoteSelections.bracketId,
-              finialId: quoteSelections.finialId,
-              ringId: quoteSelections.ringId,
-              ringsPerFoot: quoteSelections.ringsPerFoot,
               quantities: {
-                  pole: poleFeetQty,
-                  bracket: qtyBrackets,
-                  finial: qtyFinials,
-                  ring: qtyRings,
                   splice: qtySplices,
                   miter: qtyMiters,
                   bend: qtyBends,
                   miterReturn: qtyMiterReturns,
                   customProj: qtyCustomProjBrackets
-              }
+              },
+              ...dynamicConfigParams // 🚀 PATH B REFACTOR: Pass the raw step IDs directly
           }, 
           spatialData: { ...engData, attachments, shopNotes }, 
           author: currentUser, createdAt: serverTimestamp() 
@@ -407,50 +475,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       catch (e) { console.error(e); alert("Error pushing to CPQ."); } 
       finally { setIsPushingToCPQ(false); }
   };
-
-  const getFilteredParts = (type) => {
-      return libraryParts.filter(p => {
-          // 🚀 FIX: Prevent fees from ever showing up in hardware inventory dropdowns
-          if (p.manufacturingSpecs?.customData?.feeType) return false;
-
-          const t = (p.manufacturingSpecs?.productType || "").toUpperCase();
-          if (type === 'POLE' && !(t === 'POLE' || t === 'POLES' || t === 'TUBE')) return false;
-          if (type === 'BRACKET' && t !== 'BRACKET') return false;
-          if (type === 'FINIAL' && t !== 'FINIAL') return false;
-          if (type === 'RING' && t !== 'RING') return false;
-          
-          const partCollection = (p.manufacturingSpecs?.customData?.collection || p.manufacturingSpecs?.collection || 'N/A').toUpperCase();
-          const selCollection = (quoteSelections.collection || "").toUpperCase();
-          if (selCollection && partCollection !== selCollection && partCollection !== 'N/A') return false;
-          
-          if (type === 'BRACKET') {
-              if (!isCustomProj && p.manufacturingSpecs?.customData?.projection) {
-                  if (parseFloat(p.manufacturingSpecs.customData.projection) !== parseFloat(engData.proj)) return false;
-              }
-              if (engData.shape === 'STRAIGHT') {
-                  const needsCeiling = engData.mountLeft === 'CEILING' || engData.mountRight === 'CEILING';
-                  const needsInside = engData.mountLeft === 'INSIDE' || engData.mountRight === 'INSIDE';
-                  const bt = (p.manufacturingSpecs?.customData?.bracketType || 'WALL').toUpperCase();
-                  if (needsCeiling && bt !== 'CEILING') return false;
-                  if (needsInside && bt !== 'INSIDE MOUNT') return false;
-              }
-          }
-          return true;
-      });
-  };
-
-  const activeColData = collectionsData.find(c => c.name.toUpperCase() === quoteSelections.collection.toUpperCase());
-  const allowedFinishes = (activeColData?.allowedFinishes || []).map(f => f.toUpperCase());
-  const allAvailableFinishes = [...globalFinishes, ...outsourceFinishes];
-  const standardCollectionFinishes = [];
-  const otherSystemFinishes = [];
-
-  allAvailableFinishes.forEach(f => {
-      if (quoteSelections.collection && allowedFinishes.length > 0 && allowedFinishes.includes(f.name.toUpperCase())) standardCollectionFinishes.push(f);
-      else otherSystemFinishes.push(f);
-  });
-
-  const disableFinials = engData.endStyle === 'RETURN_BEND' || engData.endStyle === 'RETURN_MITER';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh', overflow: 'hidden' }}>
@@ -561,6 +585,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                 <div style={{ flex: 1 }}>
                                     <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>PROJECTION (IN):</label>
                                     <select value={isCustomProj ? "CUSTOM" : engData.proj} onChange={e => { if (e.target.value === "CUSTOM") setIsCustomProj(true); else { setIsCustomProj(false); setEngData({...engData, proj: parseFloat(e.target.value)}); } }} style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box', marginBottom: isCustomProj ? '5px' : '0' }}>
+                                        <option value="">-- AUTO-SYNC W/ BRACKET --</option>
                                         {uniqueProjections.map(p => <option key={p} value={p}>{p}" STD PROJ</option>)}
                                         <option value="CUSTOM">-- CUSTOM PROJ. --</option>
                                     </select>
@@ -662,7 +687,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                   <g transform="translate(500, 50)"><rect x="-225" y="-20" width="450" height="30" fill="#ffcccc" stroke="#d9534f" strokeWidth="2" rx="5" /><text x="0" y="0" fill="#d9534f" fontSize="16" fontWeight="bold" textAnchor="middle">⚠️ CUSTOM PROJECTION REQUESTED: {engData.proj}" ⚠️</text></g>
                               )}
 
-                              {/* 🚀 FIX: SVG DIMENSION OVERLAPS (Pushed offset from 40 to 65) */}
+                              {/* 🚀 FIX: Offsets pushed out to 65 to prevent Tube Cut yellow text overlap */}
                               {viewMode === 'ENGINEERING' && (
                                   <g>
                                       {engData.shape === 'STRAIGHT' && <g><line x1={P2.x} y1={P2.y} x2={P3.x} y2={P3.y} stroke="#aaa" strokeWidth="3" /><text x={500} y={P2.y - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text><text x={500} y={HS.y + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text></g>}
@@ -755,36 +780,57 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   </div>
 
                   <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa' }}>
+                      
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>1. COLLECTION & FINISH</h4>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>COLLECTION & FLOW ASSIGNMENT</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                               <div>
                                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>COLLECTION (FILTERS HARDWARE):</label>
-                                  <select value={quoteSelections.collection} onChange={e => setQuoteSelections({...quoteSelections, collection: e.target.value, finishId: '', poleId: '', bracketId: '', finialId: ''})} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold', background: '#e6f2ff' }}>
+                                  <select value={quoteSelections.collection} onChange={e => { setQuoteSelections({...quoteSelections, collection: e.target.value}); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold', background: '#e6f2ff' }}>
                                       <option value="">-- NO COLLECTION RESTRICTION --</option>
                                       {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                                  </select>
-                              </div>
-                              <div>
-                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>SYSTEM FINISH:</label>
-                                  <select value={quoteSelections.finishId} onChange={e => setQuoteSelections({...quoteSelections, finishId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold' }}>
-                                      <option value="">-- SELECT FINISH --</option>
-                                      {standardCollectionFinishes.length > 0 && <optgroup label={`★ Standard Finishes (${quoteSelections.collection})`}>{standardCollectionFinishes.map(f => <option key={`std-${f.id}`} value={f.id}>{f.name} {f.code && `(${f.code})`}</option>)}</optgroup>}
-                                      <optgroup label={quoteSelections.collection ? "Other Available Finishes" : "All Available Finishes"}>{otherSystemFinishes.map(f => <option key={`oth-${f.id}`} value={f.id}>{f.name} {f.code && `(${f.code})`}</option>)}</optgroup>
                                   </select>
                               </div>
                           </div>
                       </div>
 
+                      {/* 🚀 PATH B REFACTOR: Fully dynamic CPQ Step Rendering based on Active Flow */}
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>2. REQUIRED COMPONENTS & FABRICATION</h4>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>REQUIRED COMPONENTS & FABRICATION</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                               
-                              <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>MAIN TUBE / POLE:</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>{poleFeetQty} FT REQ</span></div>
-                                  <select value={quoteSelections.poleId} onChange={e => setQuoteSelections({...quoteSelections, poleId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}><option value="">-- SELECT TUBE/POLE --</option>{getFilteredParts('POLE').map(p => <option key={p.id} value={p.id}>{p.itemName} [{p.legacyErpId}]</option>)}</select>
-                              </div>
+                              {!activeFlow ? (
+                                  <div style={{ color: '#d9534f', fontSize: '0.8rem', fontWeight: 'bold', fontStyle: 'italic', padding: '10px', border: '1px dashed #d9534f' }}>
+                                      ⚠️ WARNING: No CPQ Flow is linked to this Master Assembly.
+                                      <br/><br/>
+                                      To configure options, please open the <b>Admin Tab</b> &rarr; <b>CPQ Flow Builder</b> and assign a flow to this Master Assembly.
+                                  </div>
+                              ) : (
+                                  activeFlow.steps.map((step, idx) => {
+                                      // Skip Dimensional or Visual grids in this simple dropdown layout for hardware
+                                      if (step.type === 'DIMENSIONS' || step.type === 'VISUAL_GRID' || step.type === 'VISUAL_DIMENSIONS') return null;
+                                      
+                                      const options = getOptionsForStep(step);
 
+                                      return (
+                                          <div key={step.id} style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
+                                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{idx + 1}. {step.title.toUpperCase()}:</label>
+                                              </div>
+                                              <select 
+                                                  value={dynamicConfigParams[step.id] || ''} 
+                                                  onChange={e => setDynamicConfigParams({...dynamicConfigParams, [step.id]: e.target.value})} 
+                                                  style={{ width: '100%', padding: '10px', border: '1px solid #000' }}
+                                              >
+                                                  <option value="">-- SELECT OPTION --</option>
+                                                  {options.map(opt => <option key={opt.id} value={opt.id}>{opt.itemName} {opt.code ? `[${opt.code}]` : ''}</option>)}
+                                              </select>
+                                          </div>
+                                      );
+                                  })
+                              )}
+
+                              {/* Fabrication Fees always append natively at the bottom of the list */}
                               {(qtyBends > 0 || qtyMiterReturns > 0 || qtyMiters > 0) && (
                                   <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px dotted #ccc', alignItems: 'center' }}>
                                       <div>
@@ -807,45 +853,19 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                   </div>
                               )}
 
-                              {qtyBrackets > 0 && (
-                                  <div>
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>BRACKETS ({isCustomProj ? "CUSTOM" : `${engData.proj}"`} PROJ):</label>
-                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>QTY: {qtyBrackets}</span>
-                                      </div>
-                                      <select value={quoteSelections.bracketId} onChange={e => setQuoteSelections({...quoteSelections, bracketId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}><option value="">-- SELECT BRACKET --</option>{getFilteredParts('BRACKET').map(p => <option key={p.id} value={p.id}>{p.itemName} [{p.legacyErpId}]</option>)}</select>
-                                      
-                                      {qtyCustomProjBrackets > 0 && (
-                                          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px', marginTop: '5px', background: '#fff0f0' }}>
-                                              <span style={{ fontSize: '0.65rem', color: '#d9534f', fontWeight: 'bold' }}>CUSTOM PROJ. SETUP {feeSkuCustomProj ? `[${feeSkuCustomProj.legacyErpId}]` : '[UNMAPPED]'}</span>
-                                              <strong style={{ color: '#d9534f', fontSize: '0.7rem' }}>{qtyCustomProjBrackets}x</strong>
-                                          </div>
-                                      )}
+                              {qtyCustomProjBrackets > 0 && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px', marginTop: '5px', background: '#fff0f0' }}>
+                                      <span style={{ fontSize: '0.65rem', color: '#d9534f', fontWeight: 'bold' }}>CUSTOM PROJ. SETUP {feeSkuCustomProj ? `[${feeSkuCustomProj.legacyErpId}]` : '[UNMAPPED]'}</span>
+                                      <strong style={{ color: '#d9534f', fontSize: '0.7rem' }}>{qtyCustomProjBrackets}x</strong>
                                   </div>
                               )}
-
-                              {qtyFinials > 0 && (
-                                  <div style={{ opacity: disableFinials ? 0.5 : 1 }}>
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>FINIALS:</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: disableFinials ? '#999' : '#1e7e34' }}>{disableFinials ? "N/A (RETURN BEND SELECTED)" : `QTY: ${qtyFinials}`}</span></div>
-                                      <select value={quoteSelections.finialId} onChange={e => setQuoteSelections({...quoteSelections, finialId: e.target.value})} disabled={disableFinials} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}><option value="">-- SELECT FINIAL --</option>{getFilteredParts('FINIAL').map(p => <option key={p.id} value={p.id}>{p.itemName} [{p.legacyErpId}]</option>)}</select>
-                                  </div>
-                              )}
-                          </div>
-                      </div>
-
-                      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#6f42c1', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>3. OPTIONAL RINGS</h4>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>RINGS PER FOOT:</label><input type="number" value={quoteSelections.ringsPerFoot} onChange={e => setQuoteSelections({...quoteSelections, ringsPerFoot: parseInt(e.target.value)||0})} style={{ width: '60px', padding: '5px', textAlign: 'center', fontWeight: 'bold', border: '1px solid #000' }} /></div>
-                              <select value={quoteSelections.ringId} onChange={e => setQuoteSelections({...quoteSelections, ringId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}><option value="">-- NO RINGS / TRAVERSE --</option>{getFilteredParts('RING').map(p => <option key={p.id} value={p.id}>{p.itemName} [{p.legacyErpId}]</option>)}</select>
-                              {quoteSelections.ringId && <div style={{ textAlign: 'right', fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>CALCULATED QTY: {qtyRings} RINGS</div>}
                           </div>
                       </div>
 
                   </div>
                   
                   <div style={{ padding: '20px', background: '#000', borderTop: '2px solid #000' }}>
-                      <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !quoteSelections.poleId} style={{ width: '100%', padding: '15px', background: (isPushingToCPQ || !quoteSelections.poleId) ? '#666' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isPushingToCPQ || !quoteSelections.poleId) ? 'not-allowed' : 'pointer', fontSize: '1.1rem', transition: '0.2s' }}>
+                      <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeFlow} style={{ width: '100%', padding: '15px', background: (isPushingToCPQ || !activeFlow) ? '#666' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isPushingToCPQ || !activeFlow) ? 'not-allowed' : 'pointer', fontSize: '1.1rem', transition: '0.2s' }}>
                           {isPushingToCPQ ? 'SAVING DRAFT...' : '🛒 SEND TO CPQ CART'}
                       </button>
                   </div>
