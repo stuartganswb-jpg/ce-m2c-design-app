@@ -48,11 +48,12 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [stepQuantities, setStepQuantities] = useState({}); 
   const [flowPins, setFlowPins] = useState([]);
 
+  // 🚀 FIXED: Added bracketId to core engineering state for seamless two-way binding
   const [engData, setEngData] = useState({
     jobName: '', sidemark: '', shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'FINIAL', proj: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
+    endStyle: 'FINIAL', proj: "", bracketId: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   });
 
@@ -86,26 +87,22 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return cpqFlows.find(f => f.id === quoteFlowId);
   }, [quoteFlowId, cpqFlows]);
 
-  // 🚀 FIXED: Added strict hierarchy so "Bracket Finish" isn't misclassified as "Bracket"
+  // 🚀 ROBUST STEP CATEGORY SCANNER (Prevents "Bracket Finish" from being misclassified as Bracket)
   const getStepCategory = (step) => {
       if (!step) return '';
       const t = (step.title || '').toLowerCase();
       const ds = (step.dataSource || '').toLowerCase();
       
-      // Strict override: if it's a finish, return immediately
       if (ds === 'master_finishes' || t.includes('finish') || t.includes('color') || t.includes('patina')) return 'FINISH';
-      
       if (t.includes('pole') || t.includes('tube') || t.includes('rod') || ds.includes('pole')) return 'POLE';
       if (t.includes('bracket') || ds.includes('bracket')) return 'BRACKET';
       if (t.includes('finial') || ds.includes('finial')) return 'FINIAL';
       if (t.includes('ring') || ds.includes('ring')) return 'RING';
       if (t.includes('splice') || ds.includes('splice')) return 'SPLICE';
-      
       return 'OTHER';
   };
 
   const bracketStep = activeFlow?.steps.find(s => getStepCategory(s) === 'BRACKET');
-  const selectedBracketId = bracketStep ? dynamicConfigParams[bracketStep.id] : null;
 
   useEffect(() => {
       if (!activeFlow?.linkedAssemblyId) { setFlowPins([]); return; }
@@ -116,6 +113,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return () => unsub();
   }, [activeFlow, libraryParts]);
 
+  // 🚀 FLOW-FIRST INTELLIGENCE: Auto-set Projection and End Style based on Master Assembly pins
   useEffect(() => {
       if (!activeFlow) return;
 
@@ -133,6 +131,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           }
       });
 
+      // Fallbacks
+      activeFlow.steps.forEach(step => {
+          if (step.calculatorTemplate === 'calc_french_return_1in') detectedEndStyle = 'RETURN_BEND';
+      });
+
       if (!detectedEndStyle && activeFlow.name.toUpperCase().includes("FRENCH RETURN")) {
           detectedEndStyle = 'RETURN_BEND';
       }
@@ -140,17 +143,19 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       setEngData(prev => {
           const updates = { ...prev };
           let changed = false;
-          if (detectedProj && prev.proj !== detectedProj) { updates.proj = detectedProj; changed = true; }
+          // Only auto-update projection if we haven't actively locked a bracket in
+          if (detectedProj && !prev.bracketId && prev.proj !== detectedProj) { updates.proj = detectedProj; changed = true; }
           if (detectedEndStyle && prev.endStyle !== detectedEndStyle) { updates.endStyle = detectedEndStyle; changed = true; }
           return changed ? updates : prev;
       });
       
-      if (detectedProj) setIsCustomProj(false);
+      if (detectedProj && !engData.bracketId) setIsCustomProj(false);
   }, [activeFlow, flowPins, libraryParts]);
 
+  // 🚀 SEAMLESS TWO-WAY BINDING: When bracketId changes in engData, update the math dimensions AND the CPQ cart.
   useEffect(() => {
-      if (selectedBracketId) {
-          const part = libraryParts.find(p => p.id === selectedBracketId);
+      if (engData.bracketId) {
+          const part = libraryParts.find(p => p.id === engData.bracketId);
           if (part) {
               const cData = part.manufacturingSpecs?.customData || {};
               const pData = part.manufacturingSpecs?.parametric || {};
@@ -167,11 +172,43 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   if (bt && prev.bracketThickness !== bt) { updates.bracketThickness = bt; changed = true; }
                   return changed ? updates : prev;
               });
+              
+              if (proj) setIsCustomProj(false);
           }
       }
-  }, [selectedBracketId, libraryParts]);
+  }, [engData.bracketId, libraryParts]);
+
+  // Sync CPQ Cart bracket selection down to Engineering
+  useEffect(() => {
+      if (bracketStep && dynamicConfigParams[bracketStep.id] && dynamicConfigParams[bracketStep.id] !== engData.bracketId) {
+          setEngData(prev => ({ ...prev, bracketId: dynamicConfigParams[bracketStep.id] }));
+      }
+  }, [dynamicConfigParams, bracketStep]);
 
   const safeProj = parseFloat(engData.proj) || 0;
+
+  // 🚀 NEW: Standalone Bracket Options Fetcher (Always available regardless of CPQ Flow)
+  const allBrackets = useMemo(() => {
+      return libraryParts.filter(p => {
+          const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
+          if (!pt.includes('BRACKET')) return false;
+
+          const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
+          const upperCollections = collectionsArray.map(c => c.toUpperCase());
+          const selCollection = (quoteSelections.collection || "").toUpperCase();
+          
+          if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
+              if (!upperCollections.includes('N/A')) return false; 
+          }
+
+          // If a bracket step exists in the flow, enforce its allowed options
+          if (bracketStep && bracketStep.allowedOptions?.length > 0) {
+              if (!bracketStep.allowedOptions.includes(p.id)) return false;
+          }
+
+          return true;
+      });
+  }, [libraryParts, quoteSelections.collection, bracketStep]);
 
   const getOptionsForStep = (step) => {
       if (!step || !step.dataSource) return [];
@@ -194,6 +231,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   if (!upperCollections.includes('N/A')) return false; 
               }
 
+              // 🚀 CRITICAL FIX: Do NOT filter by projection if the step is picking a bracket!
               const cat = getStepCategory(step);
               if (!isCustomProj && p.manufacturingSpecs?.customData?.projection && safeProj > 0 && cat !== 'BRACKET') {
                   if (parseFloat(p.manufacturingSpecs.customData.projection) !== safeProj) return false;
@@ -223,10 +261,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       }
       return options;
   };
-
-  const bracketOptions = bracketStep ? getOptionsForStep(bracketStep) : [];
-
-  const uniqueProjections = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.customData?.projection).filter(Boolean))].sort((a,b) => parseFloat(a) - parseFloat(b));
 
   const rad = (deg) => (deg * Math.PI) / 180;
   const S = 3.5; 
@@ -289,6 +323,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   
   const recRings = Math.ceil(systemO2O / 12) * 4;
 
+  // 🚀 SYNC QUANTITIES TO CPQ STEPS
   useEffect(() => {
       if (!activeFlow) return;
       
@@ -306,6 +341,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           return updates;
       });
 
+      // 🚀 AUTO-SELECT FIX: If 1 valid option, instantly assign it to clear the blocker
       setDynamicConfigParams(prev => {
           let updates = { ...prev };
           let changed = false;
@@ -409,6 +445,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               {engData.shape === 'MITERED' && ( <g><polyline points={`${eHSx},0 ${HC1.x},0 ${HC2.x},0 ${eHEx},0`} fill="none" stroke="#d4af37" strokeWidth="8" strokeLinejoin="miter" /><line x1={HC1.x} y1="-5" x2={HC1.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" /><line x1={HC2.x} y1="-5" x2={HC2.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" /></g> )}
               {engData.shape === 'BOW' && <line x1={eHSx} y1="0" x2={eHEx} y2="0" stroke="#d4af37" strokeWidth="8" />}
               
+              {/* 🚀 CRASH FIX: Vector normals safely enforced before drawing */}
               {attachments.map(att => {
                   let seg = null;
                   if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" }; }
@@ -768,15 +805,35 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                 <div style={{ flex: 1.5 }}>
                                     <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>SELECT BRACKET (AUTO-SYNCS DIMS):</label>
                                     <select 
-                                        value={selectedBracketId || ''} 
+                                        value={engData.bracketId || ''} 
                                         onChange={e => {
-                                            if (bracketStep) setDynamicConfigParams(prev => ({ ...prev, [bracketStep.id]: e.target.value }));
+                                            const val = e.target.value;
+                                            setEngData(prev => ({ ...prev, bracketId: val }));
+                                            if (bracketStep && val) {
+                                                setDynamicConfigParams(prev => ({ ...prev, [bracketStep.id]: val }));
+                                            }
                                         }}
-                                        disabled={!bracketStep}
                                         style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box' }}
                                     >
-                                        <option value="">{bracketStep ? '-- SELECT BRACKET --' : '-- SELECT CPQ FLOW FIRST --'}</option>
-                                        {bracketOptions.map(b => <option key={b.id} value={b.id}>{b.itemName}</option>)}
+                                        <option value="">-- SELECT BRACKET --</option>
+                                        {libraryParts.filter(p => {
+                                            const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
+                                            if (!pt.includes('BRACKET')) return false;
+
+                                            const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
+                                            const upperCollections = collectionsArray.map(c => c.toUpperCase());
+                                            const selCollection = (quoteSelections.collection || "").toUpperCase();
+                                            
+                                            if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
+                                                if (!upperCollections.includes('N/A')) return false; 
+                                            }
+
+                                            if (bracketStep && bracketStep.allowedOptions?.length > 0) {
+                                                if (!bracketStep.allowedOptions.includes(p.id)) return false;
+                                            }
+
+                                            return true;
+                                        }).map(b => <option key={b.id} value={b.id}>{b.itemName}</option>)}
                                     </select>
                                 </div>
                                 <div style={{ flex: 1 }}>
@@ -1010,7 +1067,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                   </div>
                               ) : (
                                   activeFlow.steps.map((step, idx) => {
-                                      if (step.type === 'DIMENSIONS') return null;
+                                      if (step.type === 'DIMENSIONS' || step.type === 'VISUAL_GRID' || step.type === 'VISUAL_DIMENSIONS') return null;
                                       
                                       const options = getOptionsForStep(step);
                                       const cat = getStepCategory(step);
@@ -1026,7 +1083,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                               <div key={step.id} style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
                                                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
                                                       <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{idx + 1}. {step.title.toUpperCase()}:</label>
-                                                      {stepQuantities[step.id] > 0 && <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>REC: {recRings} RINGS</span>}
                                                   </div>
                                                   <select value={dynamicConfigParams[step.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [step.id]: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}>
                                                       <option value="">-- SELECT OPTION --</option>
