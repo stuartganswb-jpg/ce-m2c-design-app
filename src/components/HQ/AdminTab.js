@@ -268,26 +268,30 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
 
       try {
-          const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
+          // 🚀 FIXED: Added "item." prefix to prevent ambiguous column errors during the JOIN
+          const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
           
+          // 🚀 FIXED: Added the ItemVendor JOIN to correctly pull the Preferred Vendor data!
           const q = `
               SELECT 
-                  id, 
-                  itemid, 
-                  displayname,
-                  BUILTIN.DF(custitem_bit_product_type) AS product_type,
-                  BUILTIN.DF(custitem_bit_itemcollection) AS collection,
-                  BUILTIN.DF(custitem_bit_watchlist) AS watchlist,
-                  BUILTIN.DF(stockunit) AS uom,
-                  custitem9 AS baseprice,
-                  BUILTIN.DF(vendor) AS vendor_name,
-                  vendorname AS vendor_part_number,
-                  lastpurchaseprice
+                  item.id, 
+                  item.itemid, 
+                  item.displayname,
+                  BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
+                  BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
+                  BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
+                  BUILTIN.DF(item.stockunit) AS uom,
+                  item.custitem9 AS baseprice,
+                  BUILTIN.DF(ItemVendor.vendor) AS vendor_name,
+                  ItemVendor.vendorcode AS vendor_part_number,
+                  ItemVendor.purchaseprice AS lastpurchaseprice
               FROM 
                   item
+              LEFT JOIN 
+                  ItemVendor ON ItemVendor.item = item.id AND ItemVendor.preferredvendor = 'T'
               WHERE 
-                  custitem_sync_to_cpq = 'T' 
-                  AND isinactive = 'F' 
+                  item.custitem_sync_to_cpq = 'T' 
+                  AND item.isinactive = 'F' 
                   AND ${typeFilter}
           `;
           
@@ -303,6 +307,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               const existingMatch = allApprovedDesigns.find(d => d.legacyErpId === item.itemid);
               const targetDocId = existingMatch ? existingMatch.id : newId;
 
+              // Smart Routing Logic
               const pTypeClean = (item.product_type || '').toLowerCase().trim();
               const uomClean = (item.uom || '').toLowerCase().trim();
               
