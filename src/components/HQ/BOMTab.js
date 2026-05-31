@@ -28,7 +28,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [collectionsData, setCollectionsData] = useState([]);
   
-  // 🚀 NEW: Robust NetSuite Customer State
+  // Robust NetSuite Customer State
   const [customersData, setCustomersData] = useState([]);
 
   const [activeComponent, setActiveComponent] = useState(null);
@@ -80,13 +80,13 @@ const BOMTab = ({ currentUser, activeBrand }) => {
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     
-    // 🚀 NEW: Listen for the unified CRM records and filter out only the Customers
-const unsubCustomers = onSnapshot(collection(db, "crm_records"), snap => {
-    const onlyCustomers = snap.docs
-        .map(d => ({id: d.id, ...d.data()}))
-        .filter(record => record.type === 'CUSTOMER');
-    setCustomersData(onlyCustomers);
-});
+    // Listen for the unified CRM records and filter out only the Customers
+    const unsubCustomers = onSnapshot(collection(db, "crm_records"), snap => {
+        const onlyCustomers = snap.docs
+            .map(d => ({id: d.id, ...d.data()}))
+            .filter(record => record.type === 'CUSTOMER');
+        setCustomersData(onlyCustomers);
+    });
 
     return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); unsubAssets(); unsubCollections(); unsubCustomers(); };
   }, []);
@@ -225,15 +225,12 @@ const unsubCustomers = onSnapshot(collection(db, "crm_records"), snap => {
       setEditSpecs({ ...editSpecs, cpqCategories: updated });
   };
 
-  // 🚀 NEW: Safety Lookup function to translate raw IDs into readable names
   const getCustomerDisplay = (val) => {
       if (!val) return 'N/A';
       
-      // 1. Try to find the customer in a dedicated collection (If NetSuite populates it)
       const dbCust = customersData.find(c => c.id === val || c.customerId === val || c.legacyId === val);
       if (dbCust) return `${dbCust.companyName || dbCust.name || 'Unknown'} - ${val}`;
       
-      // 2. Fallback to Master Lists (If manually added as strings or objects)
       const listCust = globalLists.customers?.find(c => {
           if (typeof c === 'string') return c === val || c.includes(val);
           return c.id === val || c.name === val;
@@ -244,7 +241,6 @@ const unsubCustomers = onSnapshot(collection(db, "crm_records"), snap => {
           return `${listCust.name} - ${listCust.id}`;
       }
       
-      // 3. Absolute fallback (Prevents crashing if ID doesn't exist)
       return val;
   };
 
@@ -540,7 +536,6 @@ const unsubCustomers = onSnapshot(collection(db, "crm_records"), snap => {
                                         />
                                     </div>
 
-                                    {/* 🚀 FIXED: Dynamic Name Lookup for Assembly Pricing Matrix */}
                                     <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', marginTop: '10px' }}>
                                         <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
                                         <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '15px' }}>
@@ -553,9 +548,7 @@ const unsubCustomers = onSnapshot(collection(db, "crm_records"), snap => {
                                                     ) : (
                                                         (globalLists.customers || []).map((c, idx) => {
                                                             const val = typeof c === 'string' ? c : c.id;
-                                                            const label = typeof c === 'string' ? c : `${c.name} - ${c.id}`;
-                                                           {/* We just wrap the label in our lookup function so the dropdown menu translates it too! */}
-<option key={val || idx} value={val}>{getCustomerDisplay(val)}</option>
+                                                            return <option key={val || idx} value={val}>{getCustomerDisplay(val)}</option>
                                                         })
                                                     )}
                                                 </select>
@@ -836,7 +829,6 @@ const unsubCustomers = onSnapshot(collection(db, "crm_records"), snap => {
                             </div>
                         </div>
 
-                        {/* 🚀 FIXED: Dynamic Name Lookup for Component Pricing Matrix */}
                         <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', marginTop: '15px' }}>
                             <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
                             
@@ -850,8 +842,7 @@ const unsubCustomers = onSnapshot(collection(db, "crm_records"), snap => {
                                         ) : (
                                             (globalLists.customers || []).map((c, idx) => {
                                                 const val = typeof c === 'string' ? c : c.id;
-                                                const label = typeof c === 'string' ? c : `${c.name} - ${c.id}`;
-                                                return <option key={val || idx} value={val}>{label}</option>
+                                                return <option key={val || idx} value={val}>{getCustomerDisplay(val)}</option>
                                             })
                                         )}
                                     </select>
