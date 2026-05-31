@@ -37,7 +37,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [collectionsData, setCollectionsData] = useState([]);
 
-  // 🚀 PATH B FIX: finishId replaces the string 'finish'
   const [quoteSelections, setQuoteSelections] = useState({ collection: '', finishId: '', poleId: '', bracketId: '', finialId: '', ringId: '', ringsPerFoot: 4 });
 
   const [engData, setEngData] = useState({
@@ -66,6 +65,18 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => { setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()}))); });
     return () => { unsubParts(); unsubFinishes(); unsubOutsource(); unsubCollections(); };
   }, [activeBrand]);
+
+  // 🚀 FIX: Auto-sync engineering projection to match the selected Master Library bracket
+  useEffect(() => {
+      if (quoteSelections.bracketId) {
+          const bracket = libraryParts.find(p => p.id === quoteSelections.bracketId);
+          const bracketProj = bracket?.manufacturingSpecs?.customData?.projection;
+          if (bracketProj) {
+              setEngData(prev => ({ ...prev, proj: parseFloat(bracketProj) }));
+              setIsCustomProj(false);
+          }
+      }
+  }, [quoteSelections.bracketId, libraryParts]);
 
   const uniqueProjections = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.customData?.projection).filter(Boolean))].sort((a,b) => parseFloat(a) - parseFloat(b));
 
@@ -360,7 +371,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       setPlacedItems(placedItems.filter(i => i.id !== id)); if (activePlacedId === id) setActivePlacedId(null); 
   };
 
-  // 🚀 PATH B FIX: Push Payload directly mimics CPQTab's cpqData dictionary using strict IDs
   const handlePushToCPQ = async () => {
       if (!quoteSelections.poleId) return alert("Please select a Pole/Tube to build the quote.");
       setIsPushingToCPQ(true);
@@ -400,6 +410,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
   const getFilteredParts = (type) => {
       return libraryParts.filter(p => {
+          // 🚀 FIX: Prevent fees from ever showing up in hardware inventory dropdowns
+          if (p.manufacturingSpecs?.customData?.feeType) return false;
+
           const t = (p.manufacturingSpecs?.productType || "").toUpperCase();
           if (type === 'POLE' && !(t === 'POLE' || t === 'POLES' || t === 'TUBE')) return false;
           if (type === 'BRACKET' && t !== 'BRACKET') return false;
@@ -649,14 +662,15 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                   <g transform="translate(500, 50)"><rect x="-225" y="-20" width="450" height="30" fill="#ffcccc" stroke="#d9534f" strokeWidth="2" rx="5" /><text x="0" y="0" fill="#d9534f" fontSize="16" fontWeight="bold" textAnchor="middle">⚠️ CUSTOM PROJECTION REQUESTED: {engData.proj}" ⚠️</text></g>
                               )}
 
+                              {/* 🚀 FIX: SVG DIMENSION OVERLAPS (Pushed offset from 40 to 65) */}
                               {viewMode === 'ENGINEERING' && (
                                   <g>
                                       {engData.shape === 'STRAIGHT' && <g><line x1={P2.x} y1={P2.y} x2={P3.x} y2={P3.y} stroke="#aaa" strokeWidth="3" /><text x={500} y={P2.y - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text><text x={500} y={HS.y + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text></g>}
                                       {engData.shape === 'MITERED' && <g><polyline points={`${P1.x},${P1.y} ${P2.x},${P2.y} ${P3.x},${P3.y} ${P4.x},${P4.y}`} fill="none" stroke="#aaa" strokeWidth="3" /><text x={500} y={P2.y - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text><text x={500} y={HC1.y + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text><text x={(P1.x+P2.x)/2 - 10} y={(P1.y+P2.y)/2 - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">WALL A: {wall1.toFixed(1)}"</text><text x={(HS.x+HC1.x)/2 + 10} y={(HS.y+HC1.y)/2 + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE A CUT: {rawLeft.toFixed(2)}"</text><text x={(P3.x+P4.x)/2 + 10} y={(P3.y+P4.y)/2 - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">WALL C: {wall3.toFixed(1)}"</text><text x={(HC2.x+HE.x)/2 - 10} y={(HC2.y+HE.y)/2 + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE C CUT: {rawRight.toFixed(2)}"</text></g>}
                                       {engData.shape === 'BOW' && <g><path d={bowWallPath} fill="none" stroke="#aaa" strokeWidth="3" /><text x={500} y={P2.y - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">CHORD B: {wall2.toFixed(1)}"</text><text x={500} y={HS.y + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text></g>}
 
-                                      {engData.shape === 'STRAIGHT' && renderDimLine(HS, HE, {x:0,y:1}, 40, `C-to-C: ${(pole2).toFixed(1)}"`)}
-                                      {engData.shape === 'MITERED' && <g>{renderDimLine(HS, HC1, {x:-nL.x, y:-nL.y}, 35, `C-to-C: ${(pole1).toFixed(1)}"`)}{renderDimLine(HC1, HC2, {x:0, y:1}, 35, `C-to-C: ${(pole2).toFixed(1)}"`)}{renderDimLine(HC2, HE, {x:-nR.x, y:-nR.y}, 35, `C-to-C: ${(pole3).toFixed(1)}"`)}</g>}
+                                      {engData.shape === 'STRAIGHT' && renderDimLine(HS, HE, {x:0,y:1}, 65, `C-to-C: ${(pole2).toFixed(1)}"`)}
+                                      {engData.shape === 'MITERED' && <g>{renderDimLine(HS, HC1, {x:-nL.x, y:-nL.y}, 65, `C-to-C: ${(pole1).toFixed(1)}"`)}{renderDimLine(HC1, HC2, {x:0, y:1}, 65, `C-to-C: ${(pole2).toFixed(1)}"`)}{renderDimLine(HC2, HE, {x:-nR.x, y:-nR.y}, 65, `C-to-C: ${(pole3).toFixed(1)}"`)}</g>}
 
                                       {engData.shape === 'STRAIGHT' && <line x1={drawHS.x} y1={drawHS.y} x2={drawHE.x} y2={drawHE.y} stroke="#d4af37" strokeWidth="1.5" />}
                                       {engData.shape === 'MITERED' && <polyline points={`${drawHS.x},${drawHS.y} ${HC1.x},${HC1.y} ${HC2.x},${HC2.y} ${drawHE.x},${drawHE.y}`} fill="none" stroke="#d4af37" strokeWidth="1.5" />}
@@ -762,7 +776,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                           </div>
                       </div>
 
-                      {/* 🚀 PATH B FIX: Waterfall BOM UI layout for NetSuite logic */}
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
                           <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>2. REQUIRED COMPONENTS & FABRICATION</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
