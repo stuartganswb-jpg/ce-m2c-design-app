@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, query, doc, setDoc, deleteDoc, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, updateDoc } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
 const AVAILABLE_BRANDS = [
