@@ -50,14 +50,10 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [collectionsData, setCollectionsData] = useState([]); 
-  const [customSchema, setCustomSchema] = useState([]);
-  const [globalFinishes, setGlobalFinishes] = useState([]);
-  const [outsourceFinishes, setOutsourceFinishes] = useState([]);
-  const [dynamicAssets, setDynamicAssets] = useState([]);
-  const [collectionsData, setCollectionsData] = useState([]); 
   
-  // 🟢 PASTE THIS LINE HERE:
-  const [liveVendors, setLiveVendors] = useState([]);
+  // 🚀 BRAND NEW: Live Vendors State
+  const [liveVendors, setLiveVendors] = useState([]); 
+  
   const [globalLists, setGlobalLists] = useState({ 
       uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [],
       pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], assemblyTypes: [],
@@ -111,10 +107,10 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); 
-    const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); 
     
-    // 🟢 PASTE THIS LINE HERE:
+    // 🚀 BRAND NEW: Listen to CRM database for Vendors specifically
     const unsubVendors = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "VENDOR")), snap => setLiveVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+
     const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
       if (docSnap.exists()) {
           const data = docSnap.data();
@@ -138,6 +134,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       if (docSnap.exists()) setWindowConfig({ system: { ...DEFAULT_SYSTEM_WINDOWS, ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
     });
 
+    // 🚀 FIXED: Added unsubVendors to cleanup
     return () => { unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubCollections(); unsubLists(); unsubRecipes(); unsubWindowConfig(); unsubVendors(); };
   }, []);
 
@@ -175,7 +172,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     
     let matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase() || (part.productType || "").toUpperCase() === typeFilter.toUpperCase();
     
-    // Check both legacy array and new customData object for collections filter
     const nsCollection = specs.customData?.collection ? [specs.customData.collection.toUpperCase()] : [];
     const partCollections = specs.collections ? specs.collections.map(c=>c.toUpperCase()) : nsCollection;
     let matchesCollection = collectionFilter === "" || partCollections.includes(collectionFilter.toUpperCase()); 
@@ -202,7 +198,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const isInHouse = baseSpecs.isInHouse !== undefined ? baseSpecs.isInHouse : true;
     let shared = part.sharedBrands || []; if (!shared.includes(part.brandId)) shared = [...shared, part.brandId];
     
-    // 🚀 FIXED: Map NetSuite's customData fields properly and FORCE UPPERCASE for Dropdown matching
     const legacyCollection = baseSpecs.collection && baseSpecs.collection !== 'N/A' ? [baseSpecs.collection.toUpperCase()] : [];
     const nsCollection = customData.collection && customData.collection !== 'N/A' ? [customData.collection.toUpperCase()] : [];
     const currentCollections = baseSpecs.collections ? baseSpecs.collections.map(c => c.toUpperCase()) : (nsCollection.length > 0 ? nsCollection : legacyCollection);
@@ -602,7 +597,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
           {filteredInventory.length === 0 && <div style={{ color: '#666', fontStyle: 'italic', padding: '20px' }}>No {partClassFilter === 'ALL' ? 'records' : partClassFilter} found in this category.</div>}
           {filteredInventory.map(part => {
             const specs = part.manufacturingSpecs || {};
-            // 🚀 Ensure list tags look at customData fallback too!
             const isWatchlist = specs.watchList && specs.watchList !== "NONE" || (specs.customData?.watchlist && specs.customData.watchlist !== "NONE" && specs.customData.watchlist !== "N/A");
             const displayId = part.legacyErpId && part.legacyErpId !== "PENDING" ? part.legacyErpId : part.itemId;
             const isSharedIn = part.brandId !== activeBrand; 
@@ -811,7 +805,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label>
                            <select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}>
                                <option value="">SELECT...</option>
-                               {/* 🚀 FIXED: Dynamic injection if NetSuite sends a category not in global list */}
                                {editSpecs.productType && !(globalLists.prodTypes || []).map(p=>p.toUpperCase()).includes(editSpecs.productType) && (
                                    <option value={editSpecs.productType}>⭐ {editSpecs.productType} (From ERP)</option>
                                )}
@@ -841,7 +834,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                        <div>
                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label>
                            <select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>
-                               {/* 🚀 FIXED: Dynamic injection if NetSuite sends a UOM not in global list */}
                                {editSpecs.uom && !(globalLists.uom || []).map(u=>u.toUpperCase()).includes(editSpecs.uom) && (
                                    <option value={editSpecs.uom}>⭐ {editSpecs.uom} (From ERP)</option>
                                )}
@@ -856,7 +848,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '10px', border: '2px solid #6f42c1', background: '#f8f9fa', maxHeight: '120px', overflowY: 'auto' }}>
                                {collectionsData.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No collections defined in Admin.</span>}
                                {collectionsData.map(c => {
-                                   {/* 🚀 FIXED: Force Uppercase mapping for Collection Checkboxes */}
                                    const isSelected = (editSpecs.collections || []).includes(c.name.toUpperCase());
                                    return (
                                        <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', background: isSelected ? '#d8b4e2' : '#fff', color: isSelected ? '#4a148c' : '#333', border: `1px solid ${isSelected ? '#6f42c1' : '#ccc'}`, padding: '6px 12px', borderRadius: '20px', transition: '0.2s' }}>
@@ -922,7 +913,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: editSpecs.watchList !== "NONE" ? '#d9534f' : '#000' }}>ASSIGN TO WATCHLIST:</label>
                            <select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', fontWeight: 'bold' }}>
                                <option value="NONE">NONE</option>
-                               {/* 🚀 FIXED: Dynamic injection for watchlists */}
                                {editSpecs.watchList && editSpecs.watchList !== "NONE" && !(globalLists.watchLists || []).map(w=>w.toUpperCase()).includes(editSpecs.watchList) && (
                                    <option value={editSpecs.watchList}>⭐ {editSpecs.watchList} (From ERP)</option>
                                )}
@@ -983,13 +973,12 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                         </>
                       ) : (
                         <>
-                         {/* 🟢 PASTE THIS NEW BLOCK HERE */}
                           <div style={{ display: 'flex', gap: '10px' }}>
                             <div style={{ flex: 2 }}>
                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME (FROM CO-OP CRM):</label>
                                 <select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }}>
                                     <option value="">SELECT VENDOR...</option>
-                                    {editSpecs.vendorName && !liveVendors.find(v => v.name.toUpperCase() === editSpecs.vendorName.toUpperCase()) && (
+                                    {editSpecs.vendorName && !liveVendors.find(v => (v.name || '').toUpperCase() === editSpecs.vendorName.toUpperCase()) && (
                                         <option value={editSpecs.vendorName}>⭐ {editSpecs.vendorName} (From ERP)</option>
                                     )}
                                     {liveVendors.map(v => <option key={v.id} value={v.name}>{v.name}</option>)}
