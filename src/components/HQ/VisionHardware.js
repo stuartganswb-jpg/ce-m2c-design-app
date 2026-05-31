@@ -34,6 +34,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   
   const [libraryParts, setLibraryParts] = useState([]);
   const [globalFinishes, setGlobalFinishes] = useState([]);
+  const [outsourceFinishes, setOutsourceFinishes] = useState([]);
+  const [collectionsData, setCollectionsData] = useState([]);
 
   // --- QUOTE SELECTIONS STATE ---
   const [quoteSelections, setQuoteSelections] = useState({
@@ -44,16 +46,18 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
     jobName: '', sidemark: '', shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'FINIAL', proj: 3.625, poleDiameter: 1.0, finialW: 3.5, bracketW: 3.0,           
+    endStyle: 'FINIAL', proj: 3.5, poleDiameter: 1.0, finialW: 3.5, bracketW: 3.0,           
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   });
+
+  const [isCustomProj, setIsCustomProj] = useState(false);
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState(null);
   const svgRef = useRef(null);
   const innerGroupRef = useRef(null);
 
-  // --- FETCH MASTER LIBRARY FOR QUOTING ---
+  // --- FETCH MASTER LIBRARIES ---
   useEffect(() => {
     if (!activeBrand) return;
     const unsubParts = onSnapshot(query(collection(db, "Approved_Designs")), (snapshot) => {
@@ -64,8 +68,19 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
     const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (docSnap) => { 
         if (docSnap.exists() && docSnap.data().finishes) setGlobalFinishes(docSnap.data().finishes); 
     });
-    return () => { unsubParts(); unsubFinishes(); };
+    const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => {
+        setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()})));
+    });
+    const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => {
+        setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})));
+    });
+
+    return () => { unsubParts(); unsubFinishes(); unsubOutsource(); unsubCollections(); };
   }, [activeBrand]);
+
+  // Extract unique projections from library for the dropdown
+  const uniqueProjections = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.customData?.projection).filter(Boolean))]
+                            .sort((a,b) => parseFloat(a) - parseFloat(b));
 
   // --- HARDWARE MATH CALCULATIONS ---
   const rad = (deg) => (deg * Math.PI) / 180;
@@ -82,10 +97,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const isLeftInside = engData.shape === 'STRAIGHT' ? engData.mountLeft === 'INSIDE' : engData.mountOuter === 'INSIDE';
   const isRightInside = engData.shape === 'STRAIGHT' ? engData.mountRight === 'INSIDE' : engData.mountOuter === 'INSIDE';
   
-  // Ceiling Mounts act dimensionally identical to Open mounts (no IM deductions), but they filter bracket types in CPQ
-  const isLeftCeiling = engData.shape === 'STRAIGHT' ? engData.mountLeft === 'CEILING' : engData.mountOuter === 'CEILING';
-  const isRightCeiling = engData.shape === 'STRAIGHT' ? engData.mountRight === 'CEILING' : engData.mountOuter === 'CEILING';
-
   const bendDeductL = (!isLeftInside && engData.endStyle === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
   const bendDeductR = (!isRightInside && engData.endStyle === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
   const imDeductL = isLeftInside ? engData.insideMountDeduct : 0;
@@ -125,7 +136,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
   const rawLeft = engData.shape === 'MITERED' ? pole1 + addL_RAW : 0; const rawRight = engData.shape === 'MITERED' ? pole3 + addR_RAW : 0;
   const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 + addL_RAW + addR_RAW : pole2;
-  const miterArmCut = Math.max(0, engData.proj - engData.bracketThickness);
   
   // --- DERIVED QUANTITIES FOR QUOTE ---
   const totalPoleRawInches = rawLeft + rawCenter + rawRight;
@@ -136,6 +146,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const qtyMiterReturns = engData.endStyle === 'RETURN_MITER' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
   const qtyFinials = engData.endStyle === 'FINIAL' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
   const qtyRings = quoteSelections.ringId ? Math.ceil((tolLeft + tolCenter + tolRight) / 12) * quoteSelections.ringsPerFoot : 0;
+  const qtyCustomProjBrackets = isCustomProj ? qtyBrackets : 0;
 
 
   const P2 = { x: 500 - (wall2 * S)/2, y: 250 }; const P3 = { x: 500 + (wall2 * S)/2, y: 250 };
@@ -373,7 +384,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       setPlacedItems(placedItems.filter(i => i.id !== id)); if (activePlacedId === id) setActivePlacedId(null); 
   };
 
-  // 🚀 FIXED: NEW QUOTING ENGINE SUBMISSION
   const handlePushToCPQ = async () => {
       if (!quoteSelections.poleId) return alert("Please select a Pole/Tube to build the quote.");
       setIsPushingToCPQ(true);
@@ -395,7 +405,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           systemFinish: quoteSelections.finish,
           collection: quoteSelections.collection,
           bom: bomItems,
-          fees: { splices: qtySplices, miters: qtyMiters, bends: qtyBends, miterReturns: qtyMiterReturns },
+          // 🚀 ADDED: Custom Projection Fee
+          fees: { splices: qtySplices, miters: qtyMiters, bends: qtyBends, miterReturns: qtyMiterReturns, customProjections: qtyCustomProjBrackets },
           spatialData: { ...engData, attachments, shopNotes }, 
           author: currentUser, 
           createdAt: serverTimestamp() 
@@ -406,18 +417,24 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       finally { setIsPushingToCPQ(false); }
   };
 
-  // Filter Parts dynamically based on Engineering Data
+  // --- UI FILTERING ENGINES ---
   const getFilteredParts = (type) => {
       return libraryParts.filter(p => {
           const t = p.manufacturingSpecs?.productType?.toUpperCase() || "";
-          if (!t.includes(type)) return false;
-          // Further refine based on Collection if selected
-          if (quoteSelections.collection && p.manufacturingSpecs?.collection && p.manufacturingSpecs.collection !== quoteSelections.collection && p.manufacturingSpecs.collection !== 'N/A') return false;
           
+          // Must match the core component type
+          if (!t.includes(type) && t !== type) return false;
+          
+          // 🚀 FIXED: Dynamic Collection Filtering
+          const partCollection = p.manufacturingSpecs?.customData?.collection || p.manufacturingSpecs?.collection || 'N/A';
+          if (quoteSelections.collection && partCollection !== quoteSelections.collection && partCollection !== 'N/A') return false;
+          
+          // 🚀 FIXED: Dynamic Bracket Projection Filtering
           if (type === 'BRACKET') {
-              // 🚀 STEP 1 PREP: Filter by Projection (Assuming Master Library will have customData.projection)
-              if (p.manufacturingSpecs?.customData?.projection && parseFloat(p.manufacturingSpecs.customData.projection) !== parseFloat(engData.proj)) return false;
-              // 🚀 STEP 1 PREP: Filter by Mount (Assuming Master Library will have customData.bracketType)
+              if (!isCustomProj && p.manufacturingSpecs?.customData?.projection) {
+                  if (parseFloat(p.manufacturingSpecs.customData.projection) !== parseFloat(engData.proj)) return false;
+              }
+              
               if (engData.shape === 'STRAIGHT') {
                   const needsCeiling = engData.mountLeft === 'CEILING' || engData.mountRight === 'CEILING';
                   const needsInside = engData.mountLeft === 'INSIDE' || engData.mountRight === 'INSIDE';
@@ -429,6 +446,24 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           return true;
       });
   };
+
+  // 🚀 FIXED: Dynamic System Finish Splitting based on Collection
+  const activeColData = collectionsData.find(c => c.name === quoteSelections.collection);
+  const allowedFinishes = activeColData?.allowedFinishes || [];
+  
+  const allAvailableFinishes = [...globalFinishes, ...outsourceFinishes];
+  const standardCollectionFinishes = [];
+  const otherSystemFinishes = [];
+
+  allAvailableFinishes.forEach(f => {
+      if (quoteSelections.collection && allowedFinishes.length > 0 && allowedFinishes.includes(f.name)) {
+          standardCollectionFinishes.push(f);
+      } else {
+          otherSystemFinishes.push(f);
+      }
+  });
+
+  const disableFinials = engData.endStyle === 'RETURN_BEND' || engData.endStyle === 'RETURN_MITER';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh', overflow: 'hidden' }}>
@@ -444,7 +479,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           <button onClick={() => { setViewMode('ENGINEERING'); setShowQuotePanel(false); }} style={{ padding: '10px 20px', background: viewMode === 'ENGINEERING' && !showQuotePanel ? '#d9534f' : 'transparent', color: viewMode === 'ENGINEERING' && !showQuotePanel ? '#fff' : '#666', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>📐 TOP-DOWN BOM</button>
         </div>
         
-        {/* 🚀 FIXED: New Price & Quote Button */}
         <button onClick={() => setShowQuotePanel(!showQuotePanel)} style={{ padding: '10px 20px', background: showQuotePanel ? '#000' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', borderRadius: '4px', boxShadow: '3px 3px 0 rgba(0,0,0,0.2)' }}>
             {showQuotePanel ? "🔙 BACK TO DRAWING" : "💲 CONFIGURE & QUOTE ➔"}
         </button>
@@ -541,7 +575,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                         </div>
                         <div style={{ flex: 1 }}>
                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d9534f' }}>MOUNT (WALL/WALL):</label>
-                            {/* 🚀 FIXED: Added CEILING Mounts to dropdowns */}
                             {engData.shape === 'STRAIGHT' ? (
                                 <div style={{ display: 'flex', gap: '5px' }}>
                                 <select value={engData.mountLeft} onChange={e => setEngData({...engData, mountLeft: e.target.value})} style={{ flex: 1, padding: '6px', border: '1px solid #d9534f' }}><option value="OPEN">L: OPEN</option><option value="INSIDE">L: INSIDE</option><option value="CEILING">L: CEILING</option></select>
@@ -579,10 +612,29 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                     <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>2. FABRICATION SETTINGS</div>
                     <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                         <div style={{ display: 'flex', gap: '10px' }}>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>PROJECTION (IN):</label><input type="number" step="0.125" value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box' }} /></div>
+                            
+                            {/* 🚀 FIXED: Dynamic Projection Selection */}
                             <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>END STYLE:</label>
-                            <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }}><option value="FLUSH">FLUSH CUT</option><option value="FINIAL">FINIALS</option><option value="RETURN_MITER">MITER RETURN</option><option value="RETURN_BEND">BENT RETURN (FR)</option></select>
+                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>PROJECTION (IN):</label>
+                                <select 
+                                    value={isCustomProj ? "CUSTOM" : engData.proj} 
+                                    onChange={e => {
+                                        if (e.target.value === "CUSTOM") setIsCustomProj(true);
+                                        else { setIsCustomProj(false); setEngData({...engData, proj: parseFloat(e.target.value)}); }
+                                    }} 
+                                    style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box', marginBottom: isCustomProj ? '5px' : '0' }}
+                                >
+                                    {uniqueProjections.map(p => <option key={p} value={p}>{p}" STD PROJ</option>)}
+                                    <option value="CUSTOM">-- CUSTOM PROJ. --</option>
+                                </select>
+                                {isCustomProj && (
+                                    <input type="number" step="0.125" placeholder="Enter custom..." value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '2px dashed #d9534f', boxSizing: 'border-box', background: '#ffcccc' }} />
+                                )}
+                            </div>
+
+                            <div style={{ flex: 1 }}>
+                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>END STYLE:</label>
+                                <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }}><option value="FLUSH">FLUSH CUT</option><option value="FINIAL">FINIALS</option><option value="RETURN_MITER">MITER RETURN</option><option value="RETURN_BEND">BENT RETURN (FR)</option></select>
                             </div>
                         </div>
 
@@ -691,6 +743,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                       <g>
                                           {Array.from({ length: 15 }).map((_, i) => <line key={`h-${i}`} x1="0" y1={i * 40} x2="1000" y2={i * 40} stroke="#e0e0e0" strokeWidth="1" />)}
                                           {Array.from({ length: 25 }).map((_, i) => <line key={`v-${i}`} x1={i * 40} y1="0" x2={i * 40} y2="600" stroke="#e0e0e0" strokeWidth="1" />)}
+                                      </g>
+                                  )}
+
+                                  {/* --- 🚀 FIXED: MASSIVE SHOP FLOOR CUSTOM PROJECTION WARNING --- */}
+                                  {viewMode === 'ENGINEERING' && isCustomProj && (
+                                      <g transform="translate(500, 50)">
+                                          <rect x="-225" y="-20" width="450" height="30" fill="#ffcccc" stroke="#d9534f" strokeWidth="2" rx="5" />
+                                          <text x="0" y="0" fill="#d9534f" fontSize="14" fontWeight="bold" textAnchor="middle">⚠️ CUSTOM PROJECTION REQUESTED: {engData.proj}" ⚠️</text>
                                       </g>
                                   )}
 
@@ -821,7 +881,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               </div>
           </div>
 
-          {/* --- 🚀 FIXED: NEW "CONFIGURE & QUOTE" RIGHT SIDEBAR --- */}
+          {/* --- RIGHT SIDEBAR: CONFIGURE & QUOTE --- */}
           {showQuotePanel && (
               <div style={{ flex: 1, background: '#fff', border: '3px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '-10px 0 20px rgba(0,0,0,0.1)', zIndex: 100 }}>
                   <div style={{ padding: '15px 20px', background: '#28a745', color: '#fff', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -835,20 +895,27 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
                           <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>1. COLLECTION & FINISH</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                              
                               <div>
                                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>COLLECTION (FILTERS HARDWARE):</label>
-                                  <select value={quoteSelections.collection} onChange={e => setQuoteSelections({...quoteSelections, collection: e.target.value, finish: '', poleId: '', bracketId: '', finialId: ''})} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold' }}>
+                                  <select value={quoteSelections.collection} onChange={e => setQuoteSelections({...quoteSelections, collection: e.target.value, finish: '', poleId: '', bracketId: '', finialId: ''})} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold', background: '#e6f2ff' }}>
                                       <option value="">-- NO COLLECTION RESTRICTION --</option>
-                                      <option value="Modern Industrial">Modern Industrial</option>
-                                      <option value="Georgetown">Georgetown</option>
-                                      {/* This will link to the new Collection Dictionaries in the next prompt */}
+                                      {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                   </select>
                               </div>
+
                               <div>
                                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>SYSTEM FINISH:</label>
                                   <select value={quoteSelections.finish} onChange={e => setQuoteSelections({...quoteSelections, finish: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold' }}>
                                       <option value="">-- SELECT FINISH --</option>
-                                      {globalFinishes.map(f => <option key={f.id} value={f.name}>{f.name} {f.code && `(${f.code})`}</option>)}
+                                      {standardCollectionFinishes.length > 0 && (
+                                          <optgroup label={`★ Standard Finishes (${quoteSelections.collection})`}>
+                                              {standardCollectionFinishes.map(f => <option key={`std-${f.id}`} value={f.name}>{f.name} {f.code && `(${f.code})`}</option>)}
+                                          </optgroup>
+                                      )}
+                                      <optgroup label={quoteSelections.collection ? "Other Available Finishes" : "All Available Finishes"}>
+                                          {otherSystemFinishes.map(f => <option key={`oth-${f.id}`} value={f.name}>{f.name} {f.code && `(${f.code})`}</option>)}
+                                      </optgroup>
                                   </select>
                               </div>
                           </div>
@@ -861,11 +928,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                               
                               <div>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                                      <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>POLE / TUBE:</label>
+                                      <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>MAIN TUBE / COMPONENT:</label>
                                       <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>{totalPoleRawInches.toFixed(2)}" REQ</span>
                                   </div>
                                   <select value={quoteSelections.poleId} onChange={e => setQuoteSelections({...quoteSelections, poleId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}>
-                                      <option value="">-- SELECT POLE --</option>
+                                      <option value="">-- SELECT TUBE/POLE --</option>
                                       {getFilteredParts('POLE').map(p => <option key={p.id} value={p.id}>{p.itemName} [{p.legacyErpId}]</option>)}
                                   </select>
                               </div>
@@ -873,7 +940,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                               {qtyBrackets > 0 && (
                                   <div>
                                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>BRACKETS ({engData.proj}" PROJ):</label>
+                                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>BRACKETS ({isCustomProj ? "CUSTOM" : `${engData.proj}"`} PROJ):</label>
                                           <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>QTY: {qtyBrackets}</span>
                                       </div>
                                       <select value={quoteSelections.bracketId} onChange={e => setQuoteSelections({...quoteSelections, bracketId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}>
@@ -884,12 +951,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                               )}
 
                               {qtyFinials > 0 && (
-                                  <div>
+                                  <div style={{ opacity: disableFinials ? 0.5 : 1 }}>
                                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
                                           <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>FINIALS:</label>
-                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>QTY: {qtyFinials}</span>
+                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: disableFinials ? '#999' : '#1e7e34' }}>
+                                              {disableFinials ? "N/A (RETURN BEND SELECTED)" : `QTY: ${qtyFinials}`}
+                                          </span>
                                       </div>
-                                      <select value={quoteSelections.finialId} onChange={e => setQuoteSelections({...quoteSelections, finialId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}>
+                                      <select value={quoteSelections.finialId} onChange={e => setQuoteSelections({...quoteSelections, finialId: e.target.value})} disabled={disableFinials} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}>
                                           <option value="">-- SELECT FINIAL --</option>
                                           {getFilteredParts('FINIAL').map(p => <option key={p.id} value={p.id}>{p.itemName} [{p.legacyErpId}]</option>)}
                                       </select>
@@ -923,7 +992,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                               <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>SPLICE SERVICES:</span><strong>{qtySplices}x</strong></div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>MITER CUTS:</span><strong>{qtyMiters}x</strong></div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>RETURN BENDS:</span><strong>{qtyBends}x</strong></div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>MITERED RETURNS:</span><strong>{qtyMiterReturns}x</strong></div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>MITERED RETURNS:</span><strong>{qtyMiterReturns}x</strong></div>
+                              {qtyCustomProjBrackets > 0 && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', color: '#d9534f', fontWeight: 'bold' }}><span>CUSTOM PROJ. BRACKETS:</span><strong>{qtyCustomProjBrackets}x</strong></div>
+                              )}
                           </div>
                           <p style={{ fontSize: '0.65rem', color: '#666', marginTop: '10px', fontStyle: 'italic', marginBottom: 0 }}>These fabrication fees will be automatically appended to the quote based on master pricing rules.</p>
                       </div>
