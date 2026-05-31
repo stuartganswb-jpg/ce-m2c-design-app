@@ -224,7 +224,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       setIsSyncing(false);
   };
 
- const handleSyncItems = async (itemType) => {
+const handleSyncItems = async (itemType) => {
       setIsSyncing(true);
       
       const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
@@ -263,11 +263,28 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               const existingMatch = allApprovedDesigns.find(d => d.legacyErpId === item.itemid);
               const targetDocId = existingMatch ? existingMatch.id : newId;
 
+              // 🚀 NEW: SMART INTAKE ROUTING LOGIC
+              // Clean the text to ensure matching works regardless of NetSuite capitalization
+              const pTypeClean = (item.product_type || '').toLowerCase().trim();
+              const uomClean = (item.uom || '').toLowerCase().trim();
+              
+              // Define the rule conditions
+              const isPoleOrLinear = 
+                  pTypeClean === 'pole' || 
+                  pTypeClean === 'poles' || 
+                  uomClean === 'ft' || 
+                  uomClean === 'foot' || 
+                  uomClean === 'feet';
+
+              // Assign the appropriate variables based on the rule
+              const autoPartHandling = isPoleOrLinear ? 'Custom' : 'Small Parts';
+              const autoIsCutToSize = isPoleOrLinear; // Translates to true or false
+
               const payload = {
                   id: targetDocId,
                   itemId: targetDocId,
                   legacyErpId: item.itemid || item.id,
-                  netSuiteInternalId: item.id, // 🚀 NEW: Explicitly save the numeric ID for pushing orders!
+                  netSuiteInternalId: item.id, 
                   itemName: item.displayname || item.itemid,
                   brandId: activeBrand,
                   partClass: itemType,
@@ -275,6 +292,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               };
 
               if (!existingMatch) {
+                  // Brand New Item Setup
                   payload.manufacturingSpecs = {
                       basePrice: parseFloat(item.baseprice) || 0, 
                       cost: 0,
@@ -283,7 +301,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                       productType: item.product_type || 'Uncategorized',
                       uom: item.uom || 'EA',
                       binNumber: 'Pending Map',
-                      parametric: { isCutToSize: false },
+                      partHandling: autoPartHandling, // Applies Smart Routing
+                      parametric: { isCutToSize: autoIsCutToSize }, // Toggles the Checkbox
                       customData: {
                           collection: item.collection || '',
                           watchlist: item.watchlist || ''
@@ -292,11 +311,19 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   };
                   payload.createdAt = new Date().toISOString();
               } else {
+                  // Existing Item Update (Prioritizes any manual edits made in the UI)
                   payload.manufacturingSpecs = {
                       ...existingMatch.manufacturingSpecs,
                       basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0,
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
+                      partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
+                      parametric: {
+                          ...(existingMatch.manufacturingSpecs?.parametric || {}),
+                          isCutToSize: existingMatch.manufacturingSpecs?.parametric?.isCutToSize !== undefined 
+                                       ? existingMatch.manufacturingSpecs.parametric.isCutToSize 
+                                       : autoIsCutToSize
+                      },
                       customData: {
                           ...(existingMatch.manufacturingSpecs?.customData || {}),
                           collection: item.collection || existingMatch.manufacturingSpecs?.customData?.collection || '',
