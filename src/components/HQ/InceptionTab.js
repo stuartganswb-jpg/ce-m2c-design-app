@@ -111,7 +111,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const viewerContainerRef = useRef(null);
   const [viewerSize, setViewerSize] = useState({ width: 800, height: 600 });
   
-  // 🚀 NEW: Mouse tracking state for precision crosshairs
+  // 🚀 Mouse tracking state for precision crosshairs
   const [mouseCoords, setMouseCoords] = useState({ x: -100, y: -100 });
 
   useEffect(() => {
@@ -701,7 +701,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                  
                  {isCanvasMaximized && (
                      <div style={{ position: 'absolute', top: '15px', left: '50%', transform: 'translateX(-50%)', zIndex: 10000, background: '#fff', border: '2px solid #000', borderRadius: '30px', padding: '5px', display: 'flex', gap: '5px', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
-                        <button onClick={activatePinMode} style={{ padding: '8px 15px', background: isAddingCallout ? '#d9534f' : '#fff', color: isAddingCallout ? '#fff' : '#000', border: 'none', borderRadius: '20px', fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer', boxShadow: isAddingCallout ? 'inset 0 3px 5px rgba(0,0,0,0.5)' : 'none' }}>
+                        <button onClick={activatePinMode} style={{ padding: '8px 15px', background: isAddingCallout ? '#ffc107' : '#fff', color: isAddingCallout ? '#000' : '#000', border: 'none', borderRadius: '20px', fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer', boxShadow: isAddingCallout ? 'inset 0 3px 5px rgba(0,0,0,0.5)' : 'none' }}>
                             {isAddingCallout ? '🎯 TARGETING...' : '📍 PIN'}
                         </button>
                         <button onClick={activatePanMode} style={{ padding: '8px 15px', background: !isAddingCallout ? '#007bff' : '#fff', color: !isAddingCallout ? '#fff' : '#000', border: 'none', borderRadius: '20px', fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer' }}>
@@ -749,12 +749,25 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center' }}>
-                            {currentRevisionObj?.url && !isCurrent3D && (
+                            {currentRevisionObj?.url && (
                                 <div style={{ display: 'flex', gap: '5px', marginRight: '15px', paddingRight: '15px', borderRight: '1px solid rgba(255,255,255,0.3)' }}>
-                                    <button onClick={activatePanMode} style={{ padding: '5px 10px', background: activeTool === TOOL_PAN && !isAddingCallout ? '#007bff' : '#fff', color: activeTool === TOOL_PAN && !isAddingCallout ? '#fff' : '#000', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer' }}>🖐️ PAN</button>
-                                    <button onClick={() => { setIsAddingCallout(false); setActiveTool(TOOL_ZOOM_IN); setIsCanvasLocked(false); }} style={{ padding: '5px 10px', background: activeTool === TOOL_ZOOM_IN && !isAddingCallout ? '#007bff' : '#fff', color: activeTool === TOOL_ZOOM_IN && !isAddingCallout ? '#fff' : '#000', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer' }}>🔍 IN</button>
-                                    <button onClick={() => { setIsAddingCallout(false); setActiveTool(TOOL_ZOOM_OUT); setIsCanvasLocked(false); }} style={{ padding: '5px 10px', background: activeTool === TOOL_ZOOM_OUT && !isAddingCallout ? '#007bff' : '#fff', color: activeTool === TOOL_ZOOM_OUT && !isAddingCallout ? '#fff' : '#000', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer' }}>🔍 OUT</button>
-                                    <button onClick={() => { reactSvgPanZoomRef?.fitToViewer(); setIsCanvasLocked(false); }} style={{ padding: '5px 10px', background: '#fff', color: '#000', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer' }}>🔄 RESET</button>
+                                    
+                                    {/* 🚀 ADDED: THE PIN BUTTON IS NOW EXPOSED IN THE DEFAULT VIEW */}
+                                    <button onClick={activatePinMode} style={{ padding: '5px 10px', background: isAddingCallout ? '#ffc107' : '#fff', color: '#000', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer', boxShadow: isAddingCallout ? 'inset 0 2px 4px rgba(0,0,0,0.5)' : 'none' }}>
+                                        {isAddingCallout ? '🎯 TARGETING...' : '📍 PIN'}
+                                    </button>
+                                    
+                                    <button onClick={activatePanMode} style={{ padding: '5px 10px', background: !isAddingCallout ? '#007bff' : '#fff', color: !isAddingCallout ? '#fff' : '#000', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer' }}>
+                                        {isCurrent3D ? '🔄 NAVIGATE' : '🖐️ PAN'}
+                                    </button>
+
+                                    {!isCurrent3D && (
+                                        <>
+                                            <button onClick={() => { setIsAddingCallout(false); setActiveTool(TOOL_ZOOM_IN); setIsCanvasLocked(false); }} style={{ padding: '5px 10px', background: activeTool === TOOL_ZOOM_IN && !isAddingCallout ? '#007bff' : '#fff', color: activeTool === TOOL_ZOOM_IN && !isAddingCallout ? '#fff' : '#000', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer' }}>🔍 IN</button>
+                                            <button onClick={() => { setIsAddingCallout(false); setActiveTool(TOOL_ZOOM_OUT); setIsCanvasLocked(false); }} style={{ padding: '5px 10px', background: activeTool === TOOL_ZOOM_OUT && !isAddingCallout ? '#007bff' : '#fff', color: activeTool === TOOL_ZOOM_OUT && !isAddingCallout ? '#fff' : '#000', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer' }}>🔍 OUT</button>
+                                            <button onClick={() => { reactSvgPanZoomRef?.fitToViewer(); setIsCanvasLocked(false); }} style={{ padding: '5px 10px', background: '#fff', color: '#000', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer' }}>🔄 RESET</button>
+                                        </>
+                                    )}
                                 </div>
                             )}
 
@@ -778,10 +791,9 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                  
                  {uploadProgress > 0 && <div style={{ padding: '5px 15px', background: '#f8d7da', fontSize: '0.7rem', fontWeight: 'bold', color: '#721c24' }}>UPLOADING REVISION: {uploadProgress}%</div>}
                  
-                 {/* 🚀 ADDED: onMouseMove added to the container to track precision lines */}
                  <div ref={viewerContainerRef} onMouseMove={handleMouseMove} style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
                     
-                    {/* 🚀 ADDED: PRECISION TARGETING CROSSHAIRS FOR PIN PLACEMENT */}
+                    {/* 🚀 PRECISION TARGETING CROSSHAIRS FOR PIN PLACEMENT */}
                     {isAddingCallout && (
                         <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 9999 }}>
                             <div style={{ position: 'absolute', top: mouseCoords.y, left: 0, width: '100%', height: '1px', background: 'rgba(217, 83, 79, 0.9)' }} />
@@ -844,7 +856,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                                 <span>{callout.user}</span>
                                                                 {isActive && <button onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0 }}>✖</button>}
                                                             </div>
-                                                            {/* 🚀 ADDED: Explicit FINALIZE NOTE button logic */}
                                                             {isActive ? (
                                                                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                                                                     <textarea autoFocus placeholder="Type spatial note or RFI..." value={callout.text} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onBlur={saveCalloutTextToFirebase} style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} />
@@ -896,7 +907,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                             <span>{callout.user}</span>
                                                             {isActive && <button onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0 }}>✖</button>}
                                                         </div>
-                                                        {/* 🚀 ADDED: Explicit FINALIZE NOTE button logic */}
                                                         {isActive ? (
                                                             <div style={{ display: 'flex', flexDirection: 'column' }}>
                                                                 <textarea autoFocus placeholder="Type spatial note or RFI..." value={callout.text} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onBlur={saveCalloutTextToFirebase} style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} />
