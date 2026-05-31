@@ -223,7 +223,51 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
       setIsSyncing(false);
   };
+// ==========================================
+  // 🟢 PASTE THE NEW VENDOR CODE EXACTLY HERE 🟢
+  // ==========================================
+  const handleSyncVendors = async () => {
+      setIsSyncing(true);
+      addLog(`Initiating Vendor Sync for External Co-Op CRM...`, 'info');
 
+      try {
+          // Pulls all active Vendors from NetSuite
+          const q = `SELECT id, companyname, email, phone, terms FROM vendor WHERE isinactive = 'F'`;
+          const result = await executeSuiteQL(q);
+          const records = result.items || [];
+          
+          addLog(`Downloaded ${records.length} active vendors. Writing to CRM Database...`, 'success');
+
+          let successCount = 0;
+          for (const v of records) {
+              const safeId = `VEND-${v.id}`;
+              const docRef = doc(db, "crm_records", safeId);
+              
+              // Saves them alongside customers, but tagged as VENDOR for your Co-Op tab
+              await setDoc(docRef, {
+                  id: safeId,
+                  type: 'VENDOR',
+                  name: v.companyname || `Vendor ${v.id}`,
+                  email: v.email || '',
+                  phone: v.phone || '',
+                  terms: v.terms || '',
+                  notes: 'Imported from NetSuite',
+                  status: 'ACTIVE'
+              }, { merge: true });
+              successCount++;
+          }
+          addLog(`✅ Successfully synced ${successCount} Vendor records.`, 'success');
+
+      } catch (err) {
+          console.error(err);
+          addLog(`❌ FAILED: ${err.message}`, 'error');
+      }
+      setIsSyncing(false);
+  };
+
+  // ==========================================
+  // LANDMARK 2: YOUR EXISTING ITEM CODE
+  // ==========================================
 const handleSyncItems = async (itemType) => {
       setIsSyncing(true);
       
@@ -233,6 +277,7 @@ const handleSyncItems = async (itemType) => {
       try {
           const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
           
+          // 🚀 ADDED: Vendor Name, Vendor Part # (vendorname), and Last Purchase Price
           const q = `
               SELECT 
                   id, 
@@ -242,7 +287,10 @@ const handleSyncItems = async (itemType) => {
                   BUILTIN.DF(custitem_bit_itemcollection) AS collection,
                   BUILTIN.DF(custitem_bit_watchlist) AS watchlist,
                   BUILTIN.DF(stockunit) AS uom,
-                  custitem9 AS baseprice
+                  custitem9 AS baseprice,
+                  BUILTIN.DF(vendor) AS vendor_name,
+                  vendorname AS vendor_part_number,
+                  lastpurchaseprice
               FROM 
                   item
               WHERE 
@@ -263,22 +311,12 @@ const handleSyncItems = async (itemType) => {
               const existingMatch = allApprovedDesigns.find(d => d.legacyErpId === item.itemid);
               const targetDocId = existingMatch ? existingMatch.id : newId;
 
-              // 🚀 NEW: SMART INTAKE ROUTING LOGIC
-              // Clean the text to ensure matching works regardless of NetSuite capitalization
               const pTypeClean = (item.product_type || '').toLowerCase().trim();
               const uomClean = (item.uom || '').toLowerCase().trim();
               
-              // Define the rule conditions
-              const isPoleOrLinear = 
-                  pTypeClean === 'pole' || 
-                  pTypeClean === 'poles' || 
-                  uomClean === 'ft' || 
-                  uomClean === 'foot' || 
-                  uomClean === 'feet';
-
-              // Assign the appropriate variables based on the rule
+              const isPoleOrLinear = pTypeClean === 'pole' || pTypeClean === 'poles' || uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
               const autoPartHandling = isPoleOrLinear ? 'Custom' : 'Small Parts';
-              const autoIsCutToSize = isPoleOrLinear; // Translates to true or false
+              const autoIsCutToSize = isPoleOrLinear; 
 
               const payload = {
                   id: targetDocId,
@@ -292,17 +330,18 @@ const handleSyncItems = async (itemType) => {
               };
 
               if (!existingMatch) {
-                  // Brand New Item Setup
                   payload.manufacturingSpecs = {
                       basePrice: parseFloat(item.baseprice) || 0, 
-                      cost: 0,
+                      cost: parseFloat(item.lastpurchaseprice) || 0, // 🚀 NEW: Last Purchase Price mapped to Cost
                       isInHouse: true,
                       status: "IMPORTED_FROM_ERP",
                       productType: item.product_type || 'Uncategorized',
                       uom: item.uom || 'EA',
                       binNumber: 'Pending Map',
-                      partHandling: autoPartHandling, // Applies Smart Routing
-                      parametric: { isCutToSize: autoIsCutToSize }, // Toggles the Checkbox
+                      partHandling: autoPartHandling, 
+                      parametric: { isCutToSize: autoIsCutToSize }, 
+                      vendorName: item.vendor_name || '',         // 🚀 NEW: Preferred Vendor Name
+                      vendorId: item.vendor_part_number || '',    // 🚀 NEW: Vendor SKU / Part #
                       customData: {
                           collection: item.collection || '',
                           watchlist: item.watchlist || ''
@@ -311,13 +350,15 @@ const handleSyncItems = async (itemType) => {
                   };
                   payload.createdAt = new Date().toISOString();
               } else {
-                  // Existing Item Update (Prioritizes any manual edits made in the UI)
                   payload.manufacturingSpecs = {
                       ...existingMatch.manufacturingSpecs,
                       basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0,
+                      cost: parseFloat(item.lastpurchaseprice) || existingMatch.manufacturingSpecs?.cost || 0,
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
                       partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
+                      vendorName: item.vendor_name || existingMatch.manufacturingSpecs?.vendorName || '',
+                      vendorId: item.vendor_part_number || existingMatch.manufacturingSpecs?.vendorId || '',
                       parametric: {
                           ...(existingMatch.manufacturingSpecs?.parametric || {}),
                           isCutToSize: existingMatch.manufacturingSpecs?.parametric?.isCutToSize !== undefined 
@@ -742,7 +783,10 @@ const handleSyncItems = async (itemType) => {
                               ⬇️ 1. SYNC ACTIVE CUSTOMERS
                               <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls all active customers mapped to Subsidiary {nsSubsidiaryId}.</div>
                           </button>
-                          
+                          <button onClick={handleSyncVendors} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#17a2b8', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+          ⬇️ 1.5 SYNC ACTIVE VENDORS (CO-OP CRM)
+          <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls all active external vendors/co-ops from NetSuite.</div>
+      </button>
                           <button onClick={() => handleSyncItems('Inventory')} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#007bff', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                               ⬇️ 2. SYNC INVENTORY / COMPONENTS
                               <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls non-assembly items where "Sync to CPQ App" is checked.</div>
