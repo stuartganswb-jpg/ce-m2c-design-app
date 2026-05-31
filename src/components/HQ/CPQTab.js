@@ -30,7 +30,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                 if (child.isMesh && child.userData.originalMaterial) {
                     const meshName = child.name.toLowerCase();
 
-                    // --- VISIBILITY LOGIC (UPGRADED FOR BLENDER .001 DUPLICATES) ---
+                    // --- VISIBILITY LOGIC ---
                     let isVis = child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
@@ -42,7 +42,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     }
                     child.visible = isVis;
 
-                    // --- TEXTURE LOGIC (UPGRADED FOR BLENDER .001 DUPLICATES) ---
+                    // --- TEXTURE LOGIC ---
                     let matchedTexUrl = null;
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
                         for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
@@ -142,6 +142,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [jobData, setJobData] = useState({ customerId: '', jobName: '', sidemark: '' });
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
+  const [virtualFeeSteps, setVirtualFeeSteps] = useState([]);
 
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
   const [activeAssembly, setActiveAssembly] = useState(null);
@@ -218,7 +219,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       return () => unsub();
   }, [activeAssemblyId, liveAssemblies]);
 
-  const currentStep = activeFlow?.steps?.[currentStepIndex];
+  const allActiveSteps = useMemo(() => {
+      if (!activeFlow) return [];
+      return [...(activeFlow.steps || []), ...virtualFeeSteps];
+  }, [activeFlow, virtualFeeSteps]);
+
+  const currentStep = allActiveSteps[currentStepIndex];
   const availableProductTypes = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.productType).filter(Boolean))];
 
   const getOptionsForStep = (step) => {
@@ -258,21 +264,28 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       return options;
   };
 
+  // 🚀 FIXED: Robust Draft Loader & Quantity Injection
   const handleResumeDraft = (draftId) => {
       const draft = previousDrafts.find(d => d.id === draftId);
-      if (!draft) return;
-
+      if (!draft) return alert("Draft not found.");
+      
       let targetFlow = null;
-      if (draft.category === 'PILLOW') targetFlow = cpqFlows.find(f => f.name.includes("PILLOW"));
-      if (draft.category === 'HARDWARE') targetFlow = cpqFlows.find(f => f.name.includes("HARDWARE"));
+      if (draft.flowId || draft.cpqFlowId || draft.linkedCpqFlowId) {
+          targetFlow = cpqFlows.find(f => f.id === (draft.flowId || draft.cpqFlowId || draft.linkedCpqFlowId));
+      }
+      
+      if (!targetFlow) {
+          if (draft.category === 'PILLOW') targetFlow = cpqFlows.find(f => f.name.includes("PILLOW"));
+          if (draft.category === 'HARDWARE' || draft.category === 'HARDWARE_ASSEMBLY') targetFlow = cpqFlows.find(f => f.name.includes("HARDWARE"));
+      }
 
-      if (!targetFlow) return alert("Cannot resume draft: No matching CPQ flow setup for this category in Tab 10.");
+      if (!targetFlow) return alert("Cannot resume draft: No matching CPQ flow setup for this product.");
 
       setActiveFlowId(targetFlow.id);
-      
       const translatedParams = {};
-      targetFlow.steps.forEach(step => {
-          if (draft.category === 'PILLOW') {
+      
+      if (draft.category === 'PILLOW') {
+          targetFlow.steps.forEach(step => {
               if (step.title.toLowerCase().includes("size")) translatedParams[step.id] = draft.specs?.size;
               if (step.title.toLowerCase().includes("fill")) translatedParams[step.id] = draft.specs?.fill;
               if (step.title.toLowerCase().includes("fabric")) translatedParams[step.id] = draft.specs?.fabrics?.[0]; 
@@ -280,10 +293,54 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               if (step.title.toLowerCase().includes("trim") && draft.specs?.outerTrim?.trimId) translatedParams[step.id] = draft.specs.outerTrim.trimId;
               if (step.title.toLowerCase().includes("stitch")) translatedParams[step.id] = draft.specs?.stitch;
               if (step.title.toLowerCase().includes("seam") && draft.specs?.seamCount) translatedParams[step.id] = draft.specs.seamCount;
-          }
-      });
+          });
+      } else {
+          // Hardware is explicitly mapped by Step ID
+          Object.keys(draft.specs || {}).forEach(key => {
+              if (key !== 'collection' && key !== 'quantities') {
+                  translatedParams[key] = draft.specs[key];
+              }
+          });
+      }
 
+      const newVirtualSteps = [];
+      const quantities = draft.specs?.quantities || draft.cpqData?.quantities || {};
+
+      if (quantities) {
+          const createVirtualStep = (feeKey, title, dataSourceType) => {
+              if (quantities[feeKey] > 0) {
+                  const virtualId = `VIRTUAL_FEE_${feeKey.toUpperCase()}`;
+                  newVirtualSteps.push({
+                      id: virtualId,
+                      title: title,
+                      type: 'READ_ONLY_FEE',
+                      isVirtual: true,
+                      qty: quantities[feeKey]
+                  });
+                  const feeItem = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === dataSourceType);
+                  if (feeItem) {
+                      translatedParams[virtualId] = feeItem.id;
+                  }
+              }
+          };
+
+          createVirtualStep('splice', 'Appended Splice Fee', 'SPLICE');
+          createVirtualStep('miter', 'Appended Miter Cut Fee', 'MITER_CUT');
+          createVirtualStep('bend', 'Appended Bent Return Fee', 'BENT_RETURN');
+          createVirtualStep('miterReturn', 'Appended Miter Return Fee', 'MITER_RETURN');
+          createVirtualStep('customProj', 'Appended Custom Proj Setup', 'CUSTOM_PROJ');
+      }
+
+      setVirtualFeeSteps(newVirtualSteps);
       setDynamicConfigParams(translatedParams);
+      
+      // 🚀 INJECT LIVE QUANTITIES INTO UI STATE
+      setStepQuantities(quantities);
+      
+      if (draft.cpqData?.dimensions || draft.spatialData) {
+          setDimensionInputs(draft.cpqData?.dimensions || draft.spatialData);
+      }
+
       setShowCloneModal(false);
       setCurrentStepIndex(0);
       alert("Draft visual data translated and mapped to CPQ Flow!");
@@ -377,78 +434,66 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       });
   };
 
-  useEffect(() => {
-      if (!activeFlow) return;
+  // 🚀 FIXED: Dynamic Pricing pulls perfectly mapped Live Quantities
+  const currentTotal = useMemo(() => {
+      if (!activeFlow) return 0;
+      let total = parseFloat(activeFlow.basePrice) || 0;
       
-      let total = activeAssembly?.manufacturingSpecs?.basePrice ? parseFloat(activeAssembly.manufacturingSpecs.basePrice) : 0;
-      if (!activeAssembly && activeFlow.basePrice) total = parseFloat(activeFlow.basePrice);
+      const quantities = stepQuantities; // Always use the UI state!
 
-      activeFlow.steps.forEach(step => {
-          const selectedValue = dynamicConfigParams[step.id];
-          
-          let rawQty = stepQuantities[step.id];
-          let qty = 1;
-          if (rawQty === undefined || rawQty === '') {
-              qty = activeBomPins.find(p => p.partId === step.linkedPinId)?.defaultQty || 1;
-          } else {
-              qty = parseInt(rawQty) || 0; 
-          }
+      allActiveSteps.forEach(step => {
+          const selectedValueId = dynamicConfigParams[step.id];
+          if (selectedValueId || step.type === 'DIMENSIONS') {
+              let qtyMultiplier = step.isVirtual ? step.qty : (quantities[step.id] !== undefined ? quantities[step.id] : 1);
 
-          if (selectedValue || step.type === 'DIMENSIONS') {
-              let stepPrice = 0;
-              let multiplier = 1.0;
+              if (step.priceOverride) {
+                  total += parseFloat(step.priceOverride) * qtyMultiplier;
+              } else if (selectedValueId) {
+                  let stepPrice = 0;
+                  const partObj = libraryParts.find(p => p.id === selectedValueId) || 
+                                  dynamicAssets.find(a => a.id === selectedValueId) ||
+                                  globalFinishes.find(f => f.id === selectedValueId) ||
+                                  outsourceFinishes.find(f => f.id === selectedValueId);
 
-              if (selectedValue) {
-                  const partObj = libraryParts.find(p => p.id === selectedValue) || 
-                                  dynamicAssets.find(a => a.id === selectedValue) ||
-                                  globalFinishes.find(f => f.id === selectedValue) ||
-                                  outsourceFinishes.find(f => f.id === selectedValue);
-
-                  let nativePrice = 0;
                   if (partObj) {
-                      if (partObj.manufacturingSpecs?.basePrice) nativePrice = parseFloat(partObj.manufacturingSpecs.basePrice);
-                      else if (partObj.basePrice) nativePrice = parseFloat(partObj.basePrice);
+                      if (partObj.manufacturingSpecs?.basePrice) stepPrice = parseFloat(partObj.manufacturingSpecs.basePrice);
+                      else if (partObj.basePrice) stepPrice = parseFloat(partObj.basePrice);
                   }
 
                   if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
                       const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
                       if (cp && cp.price !== undefined && cp.price !== "") {
-                          nativePrice = parseFloat(cp.price);
+                          stepPrice = parseFloat(cp.price);
                       }
                   }
 
                   let upcharge = 0;
-                  if (step.priceMap && step.priceMap[selectedValue]) {
-                      upcharge = parseFloat(step.priceMap[selectedValue]) || 0;
+                  if (step.priceMap && step.priceMap[selectedValueId]) {
+                      upcharge = parseFloat(step.priceMap[selectedValueId]) || 0;
                   }
 
-                  stepPrice = nativePrice + upcharge;
-
-                  if (partObj && partObj.multiplier && parseFloat(partObj.multiplier) > 1.0) {
-                      multiplier = parseFloat(partObj.multiplier);
-                  }
+                  let finalP = stepPrice + upcharge;
+                  let mlt = (partObj && partObj.multiplier) ? parseFloat(partObj.multiplier) : 1.0;
+                  total += (finalP * mlt * qtyMultiplier);
               }
-
-              if (step.priceOverride !== undefined && step.priceOverride !== "") {
-                  stepPrice = parseFloat(step.priceOverride);
-              }
-              
-              total += (stepPrice * multiplier * qty);
           }
       });
+      return total;
+  }, [dynamicConfigParams, stepQuantities, activeFlow, libraryParts, dynamicAssets, globalFinishes, outsourceFinishes, allActiveSteps, jobData.customerId]);
 
-      setPricing({ base: total, finalPrice: total });
-  }, [dynamicConfigParams, stepQuantities, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, activeBomPins, globalFinishes]);
+  useEffect(() => {
+      setPricing({ base: currentTotal, finalPrice: currentTotal });
+  }, [currentTotal]);
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
 
   const handleNextStep = () => {
       if (!activeFlow) return;
       let nextIndex = currentStepIndex + 1;
-      while (nextIndex < activeFlow.steps.length && engineFlags.disabledSteps.includes(activeFlow.steps[nextIndex].title)) {
+      while (nextIndex < allActiveSteps.length && engineFlags.disabledSteps.includes(allActiveSteps[nextIndex].title)) {
           nextIndex++;
       }
-      if (nextIndex < activeFlow.steps.length) setCurrentStepIndex(nextIndex);
+      if (nextIndex < allActiveSteps.length) setCurrentStepIndex(nextIndex);
   };
 
   const handleFinalizeQuote = async () => {
@@ -486,6 +531,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           }
           setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); 
           setActiveAssemblyId(""); setShowCheckoutModal(false); setJobData({ customerId: '', jobName: '', sidemark: '' });
+          setVirtualFeeSteps([]);
       } catch (err) { console.error(err); alert("Failed to save quote."); }
   };
 
@@ -499,7 +545,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                   <h4 style="margin: 0 0 10px 0; color: #856404; text-transform: uppercase;">⚠️ DIMENSIONAL SHOP CUT SHEET</h4>
                   <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
                       ${Object.entries(job.cpqData.dimensions).map(([stepId, dims]) => `
-                          <tr><td colspan="2" style="padding: 10px; font-weight: bold; background: #e9ecef; border-top: 2px solid #000;">${activeFlow?.steps?.find(s => s.id === stepId)?.title || stepId}</td></tr>
+                          <tr><td colspan="2" style="padding: 10px; font-weight: bold; background: #e9ecef; border-top: 2px solid #000;">${allActiveSteps.find(s => s.id === stepId)?.title || stepId}</td></tr>
                           
                           ${Object.entries(dims).filter(([k,v]) => !k.startsWith('calc_') && v !== '').map(([key, val]) => `
                               <tr>
@@ -564,7 +610,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               <div class="spec-header">BILL OF MATERIALS (BOM)</div>
               <div class="spec-row" style="background:#eee; font-weight:bold;"><span>COMPONENT</span><span>QTY</span></div>
               ${Object.entries(job.cpqData.configuration).map(([stepId, valueId]) => {
-                  const step = activeFlow?.steps?.find(s => s.id === stepId);
+                  const step = allActiveSteps?.find(s => s.id === stepId);
                   const qty = job.cpqData.quantities[stepId] || 1;
                   const partObj = libraryParts.find(p => p.id === valueId) || dynamicAssets.find(a => a.id === valueId) || globalFinishes.find(f => f.id === valueId) || outsourceFinishes.find(f => f.id === valueId);
                   return `<div class="spec-row"><span>${step?.title}: <strong>${partObj?.itemName || partObj?.name || valueId}</strong></span><span>${qty}</span></div>`;
@@ -579,7 +625,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       printWindow.document.close();
   };
 
-  const renderOptionPrice = (opt, currentStep) => {
+  const renderOptionPrice = (opt, step) => {
       const partObj = libraryParts.find(p => p.id === opt.id) || 
                       dynamicAssets.find(a => a.id === opt.id) ||
                       globalFinishes.find(f => f.id === opt.id) ||
@@ -591,16 +637,16 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           else if (partObj.basePrice) nativeP = parseFloat(partObj.basePrice);
       }
 
-      if (currentStep.useClientPricing && jobData.customerId && partObj?.clientPricing) {
+      if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
           const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
           if (cp && cp.price !== undefined && cp.price !== "") nativeP = parseFloat(cp.price);
       }
 
-      let upP = currentStep.priceMap?.[opt.id] ? parseFloat(currentStep.priceMap[opt.id]) : 0;
+      let upP = step.priceMap?.[opt.id] ? parseFloat(step.priceMap[opt.id]) : 0;
       let finalP = nativeP + upP;
 
-      if (currentStep.priceOverride !== undefined && currentStep.priceOverride !== "") {
-          finalP = parseFloat(currentStep.priceOverride);
+      if (step.priceOverride !== undefined && step.priceOverride !== "") {
+          finalP = parseFloat(step.priceOverride);
       }
 
       if (finalP > 0) return ` (+$${finalP.toFixed(2)})`;
@@ -630,7 +676,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const get3DTextureOverrides = () => {
       const overrides = {};
       Object.entries(dynamicConfigParams).forEach(([stepId, valueId]) => {
-          const step = activeFlow?.steps?.find(s => s.id === stepId);
+          const step = allActiveSteps?.find(s => s.id === stepId);
           if (!step || !step.targetNodes) return; 
 
           const foundAsset = dynamicAssets.find(a => a.id === valueId) || globalFinishes.find(f => f.id === valueId) || outsourceFinishes.find(f => f.id === valueId) || libraryParts.find(p => p.id === valueId);
@@ -645,7 +691,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
   const get3DVisibilityOverrides = () => {
       const overrides = {};
-      activeFlow?.steps?.forEach(step => {
+      allActiveSteps?.forEach(step => {
           if (step.geometryMap && Object.keys(step.geometryMap).length > 0) {
               Object.values(step.geometryMap).forEach(meshString => {
                   if (meshString) {
@@ -681,7 +727,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '8px 15px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer' }}>📥 RESUME DRAFT / CLONE QUOTE</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); }} style={{ padding: '8px 15px', background: '#fff', color: '#d9534f', fontWeight: 'bold', border: '2px solid #d9534f', cursor: 'pointer' }}>🗑️ CLEAR QUOTE</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setVirtualFeeSteps([]); }} style={{ padding: '8px 15px', background: '#fff', color: '#d9534f', fontWeight: 'bold', border: '2px solid #d9534f', cursor: 'pointer' }}>🗑️ CLEAR QUOTE</button>
         </div>
       </div>
 
@@ -707,7 +753,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                  <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     
                     {cpqFlows.length > 0 && (
-                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem', background: '#e6f2ff' }}>
+                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setVirtualFeeSteps([]); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem', background: '#e6f2ff' }}>
                             <option value="">-- Launch Custom CPQ Flow --</option>
                             {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                         </select>
@@ -728,12 +774,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               {activeFlow && currentStep && (
                   <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #28a745', flex: 1 }}>
                       <div style={{ padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', justifyContent: 'space-between' }}>
-                          <span>STEP {currentStepIndex + 1} OF {activeFlow.steps.length}: {currentStep.title}</span>
+                          <span>STEP {currentStepIndex + 1} OF {allActiveSteps.length}: {currentStep.title}</span>
                       </div>
                       
                       <div style={{ padding: '20px', flex: 1, overflowY: 'auto', maxHeight: '400px' }}>
                           
-                          {(currentStep.type === 'VISUAL_GRID' || currentStep.type === 'VISUAL_DIMENSIONS') && (
+                          {(currentStep.type === 'VISUAL_GRID' || currentStep.type === 'VISUAL_DIMENSIONS') && !currentStep.isVirtual && (
                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
                                   {getOptionsForStep(currentStep).map(opt => (
                                       <div key={opt.id} onClick={() => handleParamChange(currentStep.id, opt.id)} style={{ border: `2px solid ${dynamicConfigParams[currentStep.id] === opt.id ? '#007bff' : '#ccc'}`, padding: '10px', textAlign: 'center', cursor: 'pointer', background: dynamicConfigParams[currentStep.id] === opt.id ? '#e6f2ff' : '#fff' }}>
@@ -744,7 +790,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                               </div>
                           )}
 
-                          {(currentStep.type === 'DROPDOWN' || currentStep.type === 'DIMENSIONS') && currentStep.type !== 'VISUAL_DIMENSIONS' && currentStep.dataSource && (
+                          {(currentStep.type === 'DROPDOWN' || currentStep.type === 'DIMENSIONS') && currentStep.type !== 'VISUAL_DIMENSIONS' && currentStep.dataSource && !currentStep.isVirtual && (
                               <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #000', fontSize: '1rem', marginBottom: '15px' }}>
                                   <option value="">-- Select Option --</option>
                                   {getOptionsForStep(currentStep).map(opt => (
@@ -753,7 +799,16 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                               </select>
                           )}
 
-                          {(currentStep.calculatorTemplate || currentStep.type === 'DIMENSIONS' || currentStep.type === 'VISUAL_DIMENSIONS') && (
+                          {currentStep.isVirtual && (
+                              <div style={{ padding: '20px', background: '#eafaf1', border: '1px solid #28a745', textAlign: 'center' }}>
+                                  <div style={{ fontSize: '2rem', marginBottom: '10px' }}>✅</div>
+                                  <div style={{ fontWeight: 'bold', color: '#1e7e34', fontSize: '1.1rem' }}>FEE AUTO-APPENDED</div>
+                                  <div style={{ color: '#666', fontSize: '0.8rem', marginTop: '5px' }}>Quantity: {currentStep.qty}x</div>
+                                  <div style={{ color: '#999', fontSize: '0.7rem', marginTop: '10px', fontStyle: 'italic' }}>This fee was detected from the Vision Engine and mathematically locked to the quote.</div>
+                              </div>
+                          )}
+
+                          {!currentStep.isVirtual && (currentStep.calculatorTemplate || currentStep.type === 'DIMENSIONS' || currentStep.type === 'VISUAL_DIMENSIONS') && (
                               <div style={{ padding: '15px', background: '#eafaf1', borderTop: '2px solid #000', borderBottom: '2px solid #000' }}>
                                   <h4 style={{ margin: '0 0 10px 0', color: '#1e7e34' }}>📐 DIMENSIONAL INPUT</h4>
                                   
@@ -817,38 +872,40 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           )}
                       </div>
 
-                      <div style={{ padding: '15px', background: '#f8f9fa', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <div style={{ fontSize: '0.8rem', color: '#666', lineHeight: '1.4', flex: 1, paddingRight: '15px' }}>
-                              <strong>STEP QUANTITY:</strong><br/>
-                              <span style={{ fontSize: '0.7rem' }}>{currentStep.qtyHelperText || 'Adjust to multiply option logic (e.g. 4 rings per foot).'}</span>
+                      {!currentStep.isVirtual && (
+                          <div style={{ padding: '15px', background: '#f8f9fa', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ fontSize: '0.8rem', color: '#666', lineHeight: '1.4', flex: 1, paddingRight: '15px' }}>
+                                  <strong>STEP QUANTITY:</strong><br/>
+                                  <span style={{ fontSize: '0.7rem' }}>{currentStep.qtyHelperText || 'Adjust to multiply option logic (e.g. 4 rings per foot).'}</span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                  <button onClick={() => {
+                                      let current = stepQuantities[currentStep.id];
+                                      if (current === undefined || current === '') current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
+                                      else current = parseInt(current);
+                                      setStepQuantities({...stepQuantities, [currentStep.id]: Math.max(1, current - 1)});
+                                  }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>-</button>
+                                  
+                                  <input 
+                                      type="number" 
+                                      min="1" 
+                                      value={stepQuantities[currentStep.id] !== undefined ? stepQuantities[currentStep.id] : (activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1)} 
+                                      onChange={e => {
+                                          const val = e.target.value;
+                                          setStepQuantities({...stepQuantities, [currentStep.id]: val === '' ? '' : parseInt(val)});
+                                      }} 
+                                      style={{ width: '50px', padding: '10px', border: '2px solid #000', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem', outline: 'none' }} 
+                                  />
+                                  
+                                  <button onClick={() => {
+                                      let current = stepQuantities[currentStep.id];
+                                      if (current === undefined || current === '') current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
+                                      else current = parseInt(current);
+                                      setStepQuantities({...stepQuantities, [currentStep.id]: current + 1});
+                                  }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>+</button>
+                              </div>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                              <button onClick={() => {
-                                  let current = stepQuantities[currentStep.id];
-                                  if (current === undefined || current === '') current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
-                                  else current = parseInt(current);
-                                  setStepQuantities({...stepQuantities, [currentStep.id]: Math.max(1, current - 1)});
-                              }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>-</button>
-                              
-                              <input 
-                                  type="number" 
-                                  min="1" 
-                                  value={stepQuantities[currentStep.id] !== undefined ? stepQuantities[currentStep.id] : (activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1)} 
-                                  onChange={e => {
-                                      const val = e.target.value;
-                                      setStepQuantities({...stepQuantities, [currentStep.id]: val === '' ? '' : parseInt(val)});
-                                  }} 
-                                  style={{ width: '50px', padding: '10px', border: '2px solid #000', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem', outline: 'none' }} 
-                              />
-                              
-                              <button onClick={() => {
-                                  let current = stepQuantities[currentStep.id];
-                                  if (current === undefined || current === '') current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
-                                  else current = parseInt(current);
-                                  setStepQuantities({...stepQuantities, [currentStep.id]: current + 1});
-                              }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>+</button>
-                          </div>
-                      </div>
+                      )}
 
                       {engineFlags.warnings.length > 0 && (
                            <div style={{ background: '#fff3cd', borderTop: '2px solid #ffc107', padding: '10px 15px' }}>
@@ -859,10 +916,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                       <div style={{ padding: '15px', display: 'flex', justifyContent: 'space-between' }}>
                           <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} disabled={currentStepIndex === 0} style={{ padding: '10px 20px', border: '2px solid #000', background: '#fff', fontWeight: 'bold', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer' }}>BACK</button>
                           
-                          {currentStepIndex < activeFlow.steps.length - 1 ? (
-                              <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS'} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
+                          {currentStepIndex < allActiveSteps.length - 1 ? (
+                              <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
                           ) : (
-                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS'} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
+                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
                           )}
                       </div>
                   </div>
