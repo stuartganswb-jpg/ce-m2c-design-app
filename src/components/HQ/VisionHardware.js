@@ -52,7 +52,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
     jobName: '', sidemark: '', shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'FINIAL', proj: "", poleDiameter: 1.0, finialW: 3.5, bracketW: 3.0,           
+    endStyle: 'FINIAL', proj: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   });
 
@@ -85,6 +85,22 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const activeFlow = useMemo(() => {
       return cpqFlows.find(f => f.id === quoteFlowId);
   }, [quoteFlowId, cpqFlows]);
+
+  // 🚀 ROBUST STEP CATEGORY SCANNER
+  const getStepCategory = (step) => {
+      if (!step) return '';
+      const t = (step.title || '').toLowerCase();
+      const ds = (step.dataSource || '').toLowerCase();
+      if (t.includes('pole') || t.includes('tube') || t.includes('rod') || ds.includes('pole')) return 'POLE';
+      if (t.includes('bracket') || ds.includes('bracket')) return 'BRACKET';
+      if (t.includes('finial') || ds.includes('finial')) return 'FINIAL';
+      if (t.includes('ring') || ds.includes('ring')) return 'RING';
+      if (t.includes('splice') || ds.includes('splice')) return 'SPLICE';
+      return 'OTHER';
+  };
+
+  const bracketStep = activeFlow?.steps.find(s => getStepCategory(s) === 'BRACKET');
+  const selectedBracketId = bracketStep ? dynamicConfigParams[bracketStep.id] : null;
 
   useEffect(() => {
       if (!activeFlow?.linkedAssemblyId) { setFlowPins([]); return; }
@@ -127,6 +143,30 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (detectedProj) setIsCustomProj(false);
   }, [activeFlow, flowPins, libraryParts]);
 
+  // 🚀 DYNAMIC BRACKET MATH SYNC
+  useEffect(() => {
+      if (selectedBracketId) {
+          const part = libraryParts.find(p => p.id === selectedBracketId);
+          if (part) {
+              const cData = part.manufacturingSpecs?.customData || {};
+              const pData = part.manufacturingSpecs?.parametric || {};
+              
+              const proj = parseFloat(cData.projection) || parseFloat(engData.proj) || 0;
+              const bw = parseFloat(cData.bracketW || pData.width || pData.bracketW) || 3.0;
+              const bt = parseFloat(cData.bracketThickness || pData.thickness || pData.bracketThickness) || 0.25;
+
+              setEngData(prev => {
+                  let changed = false;
+                  let updates = { ...prev };
+                  if (proj && prev.proj !== proj) { updates.proj = proj; changed = true; }
+                  if (bw && prev.bracketW !== bw) { updates.bracketW = bw; changed = true; }
+                  if (bt && prev.bracketThickness !== bt) { updates.bracketThickness = bt; changed = true; }
+                  return changed ? updates : prev;
+              });
+          }
+      }
+  }, [selectedBracketId, libraryParts]);
+
   const safeProj = parseFloat(engData.proj) || 0;
 
   const getOptionsForStep = (step) => {
@@ -139,7 +179,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (isProdType || isRoutingType) {
           options = libraryParts.filter(p => {
               if (p.manufacturingSpecs?.customData?.feeType) return false;
-              
               if (isProdType && p.manufacturingSpecs?.productType !== step.dataSource && p.productType !== step.dataSource) return false;
               if (isRoutingType && p.routingType !== step.dataSource) return false;
               
@@ -151,7 +190,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   if (!upperCollections.includes('N/A')) return false; 
               }
 
-              if (!isCustomProj && p.manufacturingSpecs?.customData?.projection) {
+              // 🚀 FIX: We DO NOT filter by projection if the step itself is selecting a Bracket.
+              // Selecting the bracket establishes the projection!
+              const cat = getStepCategory(step);
+              if (!isCustomProj && p.manufacturingSpecs?.customData?.projection && safeProj > 0 && cat !== 'BRACKET') {
                   if (parseFloat(p.manufacturingSpecs.customData.projection) !== safeProj) return false;
               }
 
@@ -179,6 +221,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       }
       return options;
   };
+
+  const bracketOptions = bracketStep ? getOptionsForStep(bracketStep) : [];
 
   const uniqueProjections = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.customData?.projection).filter(Boolean))].sort((a,b) => parseFloat(a) - parseFloat(b));
 
@@ -243,21 +287,19 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   
   const recRings = Math.ceil(systemO2O / 12) * 4;
 
-  // 🚀 FIX: AUTO-BIND QUANTITIES TO CPQ STEPS
+  // 🚀 SYNC QUANTITIES TO CPQ STEPS
   useEffect(() => {
       if (!activeFlow) return;
       
       setStepQuantities(prev => {
           const updates = { ...prev };
           activeFlow.steps.forEach(step => {
-              const t = step.title.toLowerCase();
-              if (t.includes('pole') || t.includes('tube')) updates[step.id] = poleFeetQty;
-              else if (t.includes('bracket')) updates[step.id] = qtyBrackets;
-              else if (t.includes('splice')) updates[step.id] = qtySplices;
-              else if (t.includes('finial') && !disableFinials) updates[step.id] = qtyFinials;
-              else if (t.includes('ring')) {
-                  if (prev[step.id] === undefined) updates[step.id] = recRings;
-              }
+              const cat = getStepCategory(step);
+              if (cat === 'POLE') updates[step.id] = poleFeetQty;
+              else if (cat === 'BRACKET') updates[step.id] = qtyBrackets;
+              else if (cat === 'SPLICE') updates[step.id] = qtySplices;
+              else if (cat === 'FINIAL' && !disableFinials) updates[step.id] = qtyFinials;
+              else if (cat === 'RING') { if (prev[step.id] === undefined) updates[step.id] = recRings; }
               else if (!updates[step.id]) updates[step.id] = 1; 
           });
           return updates;
@@ -551,8 +593,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       const hasMissingRequirements = activeFlow?.steps?.some(step => {
           if (step.type === 'DIMENSIONS') return false; 
           if (step.required && !dynamicConfigParams[step.id]) {
-              const t = step.title.toLowerCase();
-              if (t.includes('finial') && disableFinials) return false;
+              const cat = getStepCategory(step);
+              if (cat === 'FINIAL' && disableFinials) return false;
               return true;
           }
           return false;
@@ -573,11 +615,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
       if (activeFlow) {
           activeFlow.steps.forEach(step => {
-              const t = step.title.toLowerCase();
-              if (t.includes('pole') || t.includes('tube')) mappedQuantities[step.id] = poleFeetQty;
-              else if (t.includes('bracket')) mappedQuantities[step.id] = qtyBrackets;
-              else if (t.includes('finial') && !disableFinials) mappedQuantities[step.id] = qtyFinials;
-              else if (t.includes('ring')) mappedQuantities[step.id] = stepQuantities[step.id] || recRings;
+              const cat = getStepCategory(step);
+              if (cat === 'POLE') mappedQuantities[step.id] = poleFeetQty;
+              else if (cat === 'BRACKET') mappedQuantities[step.id] = qtyBrackets;
+              else if (cat === 'FINIAL' && !disableFinials) mappedQuantities[step.id] = qtyFinials;
+              else if (cat === 'RING') mappedQuantities[step.id] = stepQuantities[step.id] || recRings;
               else mappedQuantities[step.id] = 1;
           });
       }
@@ -586,6 +628,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           id: draftId, brandId: activeBrand, category: 'HARDWARE', status: 'DRAFT_FROM_VISION', 
           jobName: engData.jobName, sidemark: engData.sidemark, 
           linkedAssemblyId: activeFlow?.linkedAssemblyId || null,
+          linkedCpqFlowId: activeFlow?.id || null, 
+          flowId: activeFlow?.id || null,          
+          cpqFlowId: activeFlow?.id || null,       
           specs: {
               collection: quoteSelections.collection,
               quantities: mappedQuantities,
@@ -719,14 +764,23 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                         <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>3. FABRICATION SETTINGS</div>
                         <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             <div style={{ display: 'flex', gap: '10px' }}>
-                                <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>PROJECTION (IN):</label>
-                                    <select value={isCustomProj ? "CUSTOM" : engData.proj} onChange={e => { if (e.target.value === "CUSTOM") setIsCustomProj(true); else { setIsCustomProj(false); setEngData({...engData, proj: e.target.value}); } }} style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box', marginBottom: isCustomProj ? '5px' : '0' }}>
-                                        <option value="">-- AUTO-SYNC W/ FLOW --</option>
-                                        {uniqueProjections.map(p => <option key={p} value={p}>{p}" STD PROJ</option>)}
-                                        <option value="CUSTOM">-- CUSTOM PROJ. --</option>
+                                <div style={{ flex: 1.5 }}>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>SELECT BRACKET (AUTO-SYNCS DIMS):</label>
+                                    <select 
+                                        value={selectedBracketId || ''} 
+                                        onChange={e => {
+                                            if (bracketStep) setDynamicConfigParams(prev => ({ ...prev, [bracketStep.id]: e.target.value }));
+                                        }}
+                                        disabled={!bracketStep}
+                                        style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box' }}
+                                    >
+                                        <option value="">{bracketStep ? '-- SELECT BRACKET --' : '-- SELECT CPQ FLOW FIRST --'}</option>
+                                        {bracketOptions.map(b => <option key={b.id} value={b.id}>{b.itemName}</option>)}
                                     </select>
-                                    {isCustomProj && <input type="number" step="0.125" placeholder="Enter custom..." value={engData.proj} onChange={e => setEngData({...engData, proj: e.target.value})} style={{ width: '100%', padding: '6px', border: '2px dashed #d9534f', boxSizing: 'border-box', background: '#ffcccc' }} />}
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROJECTION (IN):</label>
+                                    <input type="number" step="0.125" value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
                                 </div>
                                 <div style={{ flex: 1 }}>
                                     <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>END STYLE:</label>
@@ -955,18 +1009,18 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                   </div>
                               ) : (
                                   activeFlow.steps.map((step, idx) => {
-                                      if (step.type === 'DIMENSIONS') return null;
+                                      if (step.type === 'DIMENSIONS' || step.type === 'VISUAL_GRID' || step.type === 'VISUAL_DIMENSIONS') return null;
                                       
                                       const options = getOptionsForStep(step);
-                                      const t = step.title.toLowerCase();
+                                      const cat = getStepCategory(step);
                                       
                                       let qtyLabel = "";
-                                      if (t.includes('pole') || t.includes('tube')) qtyLabel = `${poleFeetQty} FT REQ`;
-                                      else if (t.includes('bracket')) qtyLabel = `QTY: ${qtyBrackets}`;
-                                      else if (t.includes('finial') && !disableFinials) qtyLabel = `QTY: ${qtyFinials}`;
-                                      else if (t.includes('finial') && disableFinials) qtyLabel = `N/A (BENT RETURN)`;
+                                      if (cat === 'POLE') qtyLabel = `${poleFeetQty} FT REQ`;
+                                      else if (cat === 'BRACKET') qtyLabel = `QTY: ${qtyBrackets}`;
+                                      else if (cat === 'FINIAL' && !disableFinials) qtyLabel = `QTY: ${qtyFinials}`;
+                                      else if (cat === 'FINIAL' && disableFinials) qtyLabel = `N/A (BENT RETURN)`;
                                       
-                                      if (t.includes('ring')) {
+                                      if (cat === 'RING') {
                                           return (
                                               <div key={step.id} style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
                                                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
@@ -987,8 +1041,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                           );
                                       }
 
+                                      // Standard Component Step
                                       return (
-                                          <div key={step.id} style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', opacity: (t.includes('finial') && disableFinials) ? 0.5 : 1 }}>
+                                          <div key={step.id} style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', opacity: (cat === 'FINIAL' && disableFinials) ? 0.5 : 1 }}>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
                                                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{idx + 1}. {step.title.toUpperCase()}:</label>
                                                   {qtyLabel && <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>{qtyLabel}</span>}
@@ -996,7 +1051,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                               <select 
                                                   value={dynamicConfigParams[step.id] || ''} 
                                                   onChange={e => setDynamicConfigParams({...dynamicConfigParams, [step.id]: e.target.value})} 
-                                                  disabled={t.includes('finial') && disableFinials}
+                                                  disabled={cat === 'FINIAL' && disableFinials}
                                                   style={{ width: '100%', padding: '10px', border: '1px solid #000' }}
                                               >
                                                   <option value="">-- SELECT OPTION --</option>
