@@ -37,7 +37,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [collectionsData, setCollectionsData] = useState([]);
 
-  const [quoteSelections, setQuoteSelections] = useState({ collection: '', finish: '', poleId: '', bracketId: '', finialId: '', ringId: '', ringsPerFoot: 4 });
+  // 🚀 PATH B FIX: finishId replaces the string 'finish'
+  const [quoteSelections, setQuoteSelections] = useState({ collection: '', finishId: '', poleId: '', bracketId: '', finialId: '', ringId: '', ringsPerFoot: 4 });
 
   const [engData, setEngData] = useState({
     jobName: '', sidemark: '', shape: 'STRAIGHT', inputMode: 'ORDERING',   
@@ -359,29 +360,37 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       setPlacedItems(placedItems.filter(i => i.id !== id)); if (activePlacedId === id) setActivePlacedId(null); 
   };
 
+  // 🚀 PATH B FIX: Push Payload directly mimics CPQTab's cpqData dictionary using strict IDs
   const handlePushToCPQ = async () => {
       if (!quoteSelections.poleId) return alert("Please select a Pole/Tube to build the quote.");
       setIsPushingToCPQ(true);
       const draftId = `QUOTE-${Date.now()}`;
       
-      const bomItems = [];
-      bomItems.push({ partId: quoteSelections.poleId, qty: poleFeetQty, type: 'POLE' });
-      if (qtyBrackets > 0 && quoteSelections.bracketId) bomItems.push({ partId: quoteSelections.bracketId, qty: qtyBrackets, type: 'BRACKET' });
-      if (qtyFinials > 0 && quoteSelections.finialId) bomItems.push({ partId: quoteSelections.finialId, qty: qtyFinials, type: 'FINIAL' });
-      if (qtyRings > 0 && quoteSelections.ringId) bomItems.push({ partId: quoteSelections.ringId, qty: qtyRings, type: 'RING' });
-
-      const feesPayload = {
-          splices: { qty: qtySplices, sku: feeSkuSplice?.legacyErpId || '' },
-          miters: { qty: qtyMiters, sku: feeSkuMiter?.legacyErpId || '' },
-          bends: { qty: qtyBends, sku: feeSkuBend?.legacyErpId || '' },
-          miterReturns: { qty: qtyMiterReturns, sku: feeSkuMiterReturn?.legacyErpId || '' },
-          customProjections: { qty: qtyCustomProjBrackets, sku: feeSkuCustomProj?.legacyErpId || '' }
-      };
-
       const payload = { 
-          id: draftId, brandId: activeBrand, category: 'HARDWARE_ASSEMBLY', status: 'DRAFT_FROM_VISION', 
-          jobName: engData.jobName, sidemark: engData.sidemark, systemFinish: quoteSelections.finish, collection: quoteSelections.collection,
-          bom: bomItems, services: feesPayload, spatialData: { ...engData, attachments, shopNotes }, author: currentUser, createdAt: serverTimestamp() 
+          id: draftId, brandId: activeBrand, category: 'HARDWARE', status: 'DRAFT_FROM_VISION', 
+          jobName: engData.jobName, sidemark: engData.sidemark, 
+          specs: {
+              finishId: quoteSelections.finishId,
+              collection: quoteSelections.collection,
+              poleId: quoteSelections.poleId,
+              bracketId: quoteSelections.bracketId,
+              finialId: quoteSelections.finialId,
+              ringId: quoteSelections.ringId,
+              ringsPerFoot: quoteSelections.ringsPerFoot,
+              quantities: {
+                  pole: poleFeetQty,
+                  bracket: qtyBrackets,
+                  finial: qtyFinials,
+                  ring: qtyRings,
+                  splice: qtySplices,
+                  miter: qtyMiters,
+                  bend: qtyBends,
+                  miterReturn: qtyMiterReturns,
+                  customProj: qtyCustomProjBrackets
+              }
+          }, 
+          spatialData: { ...engData, attachments, shopNotes }, 
+          author: currentUser, createdAt: serverTimestamp() 
       };
       
       try { await setDoc(doc(db, "cpq_drafts", draftId), payload); alert("✅ Configuration pushed to CPQ Cart!"); setShowQuotePanel(false); } 
@@ -737,35 +746,71 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                               <div>
                                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>COLLECTION (FILTERS HARDWARE):</label>
-                                  <select value={quoteSelections.collection} onChange={e => setQuoteSelections({...quoteSelections, collection: e.target.value, finish: '', poleId: '', bracketId: '', finialId: ''})} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold', background: '#e6f2ff' }}>
+                                  <select value={quoteSelections.collection} onChange={e => setQuoteSelections({...quoteSelections, collection: e.target.value, finishId: '', poleId: '', bracketId: '', finialId: ''})} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold', background: '#e6f2ff' }}>
                                       <option value="">-- NO COLLECTION RESTRICTION --</option>
                                       {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                   </select>
                               </div>
                               <div>
                                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>SYSTEM FINISH:</label>
-                                  <select value={quoteSelections.finish} onChange={e => setQuoteSelections({...quoteSelections, finish: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold' }}>
+                                  <select value={quoteSelections.finishId} onChange={e => setQuoteSelections({...quoteSelections, finishId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold' }}>
                                       <option value="">-- SELECT FINISH --</option>
-                                      {standardCollectionFinishes.length > 0 && <optgroup label={`★ Standard Finishes (${quoteSelections.collection})`}>{standardCollectionFinishes.map(f => <option key={`std-${f.id}`} value={f.name}>{f.name} {f.code && `(${f.code})`}</option>)}</optgroup>}
-                                      <optgroup label={quoteSelections.collection ? "Other Available Finishes" : "All Available Finishes"}>{otherSystemFinishes.map(f => <option key={`oth-${f.id}`} value={f.name}>{f.name} {f.code && `(${f.code})`}</option>)}</optgroup>
+                                      {standardCollectionFinishes.length > 0 && <optgroup label={`★ Standard Finishes (${quoteSelections.collection})`}>{standardCollectionFinishes.map(f => <option key={`std-${f.id}`} value={f.id}>{f.name} {f.code && `(${f.code})`}</option>)}</optgroup>}
+                                      <optgroup label={quoteSelections.collection ? "Other Available Finishes" : "All Available Finishes"}>{otherSystemFinishes.map(f => <option key={`oth-${f.id}`} value={f.id}>{f.name} {f.code && `(${f.code})`}</option>)}</optgroup>
                                   </select>
                               </div>
                           </div>
                       </div>
 
+                      {/* 🚀 PATH B FIX: Waterfall BOM UI layout for NetSuite logic */}
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>2. REQUIRED COMPONENTS</h4>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>2. REQUIRED COMPONENTS & FABRICATION</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                              <div>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>MAIN TUBE / COMPONENT:</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>{poleFeetQty} FT REQ</span></div>
+                              
+                              <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>MAIN TUBE / POLE:</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>{poleFeetQty} FT REQ</span></div>
                                   <select value={quoteSelections.poleId} onChange={e => setQuoteSelections({...quoteSelections, poleId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}><option value="">-- SELECT TUBE/POLE --</option>{getFilteredParts('POLE').map(p => <option key={p.id} value={p.id}>{p.itemName} [{p.legacyErpId}]</option>)}</select>
                               </div>
-                              {qtyBrackets > 0 && (
-                                  <div>
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>BRACKETS ({isCustomProj ? "CUSTOM" : `${engData.proj}"`} PROJ):</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>QTY: {qtyBrackets}</span></div>
-                                      <select value={quoteSelections.bracketId} onChange={e => setQuoteSelections({...quoteSelections, bracketId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}><option value="">-- SELECT BRACKET --</option>{getFilteredParts('BRACKET').map(p => <option key={p.id} value={p.id}>{p.itemName} [{p.legacyErpId}]</option>)}</select>
+
+                              {(qtyBends > 0 || qtyMiterReturns > 0 || qtyMiters > 0) && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px dotted #ccc', alignItems: 'center' }}>
+                                      <div>
+                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block' }}>FABRICATION SERVICE:</span>
+                                          {qtyBends > 0 && <span style={{ fontSize: '0.65rem', color: '#856404' }}>RETURN BEND {feeSkuBend ? `[${feeSkuBend.legacyErpId}]` : '[UNMAPPED]'}</span>}
+                                          {qtyMiterReturns > 0 && <span style={{ fontSize: '0.65rem', color: '#856404' }}>MITER RETURN {feeSkuMiterReturn ? `[${feeSkuMiterReturn.legacyErpId}]` : '[UNMAPPED]'}</span>}
+                                          {qtyMiters > 0 && <span style={{ fontSize: '0.65rem', color: '#856404' }}>MITER CUT {feeSkuMiter ? `[${feeSkuMiter.legacyErpId}]` : '[UNMAPPED]'}</span>}
+                                      </div>
+                                      <strong style={{ color: '#1e7e34' }}>{(qtyBends || qtyMiterReturns || qtyMiters)}x</strong>
                                   </div>
                               )}
+
+                              {qtySplices > 0 && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px dotted #ccc', alignItems: 'center' }}>
+                                      <div>
+                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block' }}>SPLICE SERVICE:</span>
+                                          <span style={{ fontSize: '0.65rem', color: '#856404' }}>{feeSkuSplice ? `[${feeSkuSplice.legacyErpId}]` : '[UNMAPPED]'}</span>
+                                      </div>
+                                      <strong style={{ color: '#1e7e34' }}>{qtySplices}x</strong>
+                                  </div>
+                              )}
+
+                              {qtyBrackets > 0 && (
+                                  <div>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>BRACKETS ({isCustomProj ? "CUSTOM" : `${engData.proj}"`} PROJ):</label>
+                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>QTY: {qtyBrackets}</span>
+                                      </div>
+                                      <select value={quoteSelections.bracketId} onChange={e => setQuoteSelections({...quoteSelections, bracketId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}><option value="">-- SELECT BRACKET --</option>{getFilteredParts('BRACKET').map(p => <option key={p.id} value={p.id}>{p.itemName} [{p.legacyErpId}]</option>)}</select>
+                                      
+                                      {qtyCustomProjBrackets > 0 && (
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px', marginTop: '5px', background: '#fff0f0' }}>
+                                              <span style={{ fontSize: '0.65rem', color: '#d9534f', fontWeight: 'bold' }}>CUSTOM PROJ. SETUP {feeSkuCustomProj ? `[${feeSkuCustomProj.legacyErpId}]` : '[UNMAPPED]'}</span>
+                                              <strong style={{ color: '#d9534f', fontSize: '0.7rem' }}>{qtyCustomProjBrackets}x</strong>
+                                          </div>
+                                      )}
+                                  </div>
+                              )}
+
                               {qtyFinials > 0 && (
                                   <div style={{ opacity: disableFinials ? 0.5 : 1 }}>
                                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>FINIALS:</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: disableFinials ? '#999' : '#1e7e34' }}>{disableFinials ? "N/A (RETURN BEND SELECTED)" : `QTY: ${qtyFinials}`}</span></div>
@@ -782,18 +827,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                               <select value={quoteSelections.ringId} onChange={e => setQuoteSelections({...quoteSelections, ringId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000' }}><option value="">-- NO RINGS / TRAVERSE --</option>{getFilteredParts('RING').map(p => <option key={p.id} value={p.id}>{p.itemName} [{p.legacyErpId}]</option>)}</select>
                               {quoteSelections.ringId && <div style={{ textAlign: 'right', fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>CALCULATED QTY: {qtyRings} RINGS</div>}
                           </div>
-                      </div>
-
-                      <div style={{ background: '#fff3cd', border: '2px solid #ffc107', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 10px 0', color: '#856404', borderBottom: '2px solid #ffeeba', paddingBottom: '5px' }}>4. POLE FABRICATION FEES</h4>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '0.8rem' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>SPLICE SERVICES <span style={{fontSize:'0.6rem', color:'#856404'}}>{feeSkuSplice ? `[${feeSkuSplice.legacyErpId}]` : '[UNMAPPED]'}</span>:</span><strong>{qtySplices}x</strong></div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>MITER CUTS <span style={{fontSize:'0.6rem', color:'#856404'}}>{feeSkuMiter ? `[${feeSkuMiter.legacyErpId}]` : '[UNMAPPED]'}</span>:</span><strong>{qtyMiters}x</strong></div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>RETURN BENDS <span style={{fontSize:'0.6rem', color:'#856404'}}>{feeSkuBend ? `[${feeSkuBend.legacyErpId}]` : '[UNMAPPED]'}</span>:</span><strong>{qtyBends}x</strong></div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>MITERED RETURNS <span style={{fontSize:'0.6rem', color:'#856404'}}>{feeSkuMiterReturn ? `[${feeSkuMiterReturn.legacyErpId}]` : '[UNMAPPED]'}</span>:</span><strong>{qtyMiterReturns}x</strong></div>
-                              {qtyCustomProjBrackets > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', color: '#d9534f', fontWeight: 'bold' }}><span>CUSTOM PROJ. BRACKETS <span style={{fontSize:'0.6rem', color:'#d9534f'}}>{feeSkuCustomProj ? `[${feeSkuCustomProj.legacyErpId}]` : '[UNMAPPED]'}</span>:</span><strong>{qtyCustomProjBrackets}x</strong></div>}
-                          </div>
-                          <p style={{ fontSize: '0.65rem', color: '#666', marginTop: '10px', fontStyle: 'italic', marginBottom: 0 }}>These fabrication fees will be automatically appended to the quote based on master pricing rules.</p>
                       </div>
 
                   </div>
