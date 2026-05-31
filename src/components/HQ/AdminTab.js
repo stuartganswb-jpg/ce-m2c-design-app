@@ -270,7 +270,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       try {
           const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
           
-          // 🚀 FIXED: Removed the 'preferredvendor' restriction and used MAX() grouping to catch ANY vendor attached to the part.
+          // 🚀 BACK TO BASICS: A clean, simple query that NetSuite accepts.
           const q = `
               SELECT 
                   item.id, 
@@ -281,9 +281,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
                   BUILTIN.DF(item.stockunit) AS uom,
                   item.custitem9 AS baseprice,
-                  MAX(BUILTIN.DF(ItemVendor.vendor)) AS vendor_name,
-                  MAX(ItemVendor.vendorcode) AS vendor_part_number,
-                  MAX(ItemVendor.purchaseprice) AS lastpurchaseprice
+                  BUILTIN.DF(ItemVendor.vendor) AS vendor_name,
+                  ItemVendor.vendorcode AS vendor_part_number,
+                  ItemVendor.purchaseprice AS lastpurchaseprice
               FROM 
                   item
               LEFT JOIN 
@@ -292,21 +292,26 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   item.custitem_sync_to_cpq = 'T' 
                   AND item.isinactive = 'F' 
                   AND ${typeFilter}
-              GROUP BY
-                  item.id, 
-                  item.itemid, 
-                  item.displayname,
-                  item.custitem_bit_product_type,
-                  item.custitem_bit_itemcollection,
-                  item.custitem_bit_watchlist,
-                  item.stockunit,
-                  item.custitem9
           `;
           
           const result = await executeSuiteQL(q);
-          const records = result.items || [];
+          const rawRecords = result.items || [];
           
-          addLog(`Downloaded ${records.length} items with enriched metadata. Updating Library...`, 'success');
+          // 🚀 THE DEDUPLICATION ENGINE: Filters duplicates and upgrades empty fields in milliseconds!
+          const uniqueRecordsMap = {};
+          for (const row of rawRecords) {
+              if (!uniqueRecordsMap[row.id]) {
+                  uniqueRecordsMap[row.id] = row; // Save first instance
+              } else {
+                  // If we already saved this item, but it had a blank vendor, and THIS duplicate row has a vendor, upgrade it!
+                  if (!uniqueRecordsMap[row.id].vendor_name && row.vendor_name) {
+                      uniqueRecordsMap[row.id] = row;
+                  }
+              }
+          }
+          const records = Object.values(uniqueRecordsMap);
+          
+          addLog(`Downloaded ${records.length} unique items with enriched metadata. Updating Library...`, 'success');
 
           let successCount = 0;
           for (const item of records) {
@@ -362,7 +367,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                       ...existingMatch.manufacturingSpecs,
                       basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0,
                       cost: parseFloat(item.lastpurchaseprice) || existingMatch.manufacturingSpecs?.cost || 0,
-                      // 🚀 FIXED: Forcefully overwrite the existing UI setting if NetSuite declares a vendor!
                       isInHouse: hasVendor ? false : (existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : true),
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
