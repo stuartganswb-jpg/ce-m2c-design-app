@@ -45,7 +45,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [quoteFlowId, setQuoteFlowId] = useState("");
   const [quoteSelections, setQuoteSelections] = useState({ collection: '' });
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
-  const [stepQuantities, setStepQuantities] = useState({});
+  const [stepQuantities, setStepQuantities] = useState({}); 
   const [flowPins, setFlowPins] = useState([]);
 
   const [engData, setEngData] = useState({
@@ -133,10 +133,16 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (!step || !step.dataSource) return [];
       let options = [];
 
-      if (globalLists.inventoryTypes?.includes(step.dataSource) || globalLists.assemblyTypes?.includes(step.dataSource)) {
+      // 🚀 NEW: Updated to respect prodTypes
+      const isProdType = globalLists.prodTypes?.includes(step.dataSource);
+      const isRoutingType = globalLists.inventoryTypes?.includes(step.dataSource) || globalLists.assemblyTypes?.includes(step.dataSource);
+
+      if (isProdType || isRoutingType) {
           options = libraryParts.filter(p => {
               if (p.manufacturingSpecs?.customData?.feeType) return false;
-              if (p.routingType !== step.dataSource) return false;
+              
+              if (isProdType && p.manufacturingSpecs?.productType !== step.dataSource && p.productType !== step.dataSource) return false;
+              if (isRoutingType && p.routingType !== step.dataSource) return false;
               
               const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
               const upperCollections = collectionsArray.map(c => c.toUpperCase());
@@ -174,22 +180,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       }
       return options;
   };
-
-  useEffect(() => {
-      if (!activeFlow) return;
-      setDynamicConfigParams(prev => {
-          let updates = { ...prev };
-          let changed = false;
-          activeFlow.steps.forEach(step => {
-              const opts = getOptionsForStep(step);
-              if (opts.length === 1 && prev[step.id] !== opts[0].id) {
-                  updates[step.id] = opts[0].id;
-                  changed = true;
-              }
-          });
-          return changed ? updates : prev;
-      });
-  }, [activeFlow, quoteSelections.collection, libraryParts, engData.proj]);
 
   const uniqueProjections = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.customData?.projection).filter(Boolean))].sort((a,b) => parseFloat(a) - parseFloat(b));
 
@@ -238,18 +228,48 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const rawLeft = engData.shape === 'MITERED' ? pole1 + addL_RAW : 0; const rawRight = engData.shape === 'MITERED' ? pole3 + addR_RAW : 0;
   const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 + addL_RAW + addR_RAW : pole2;
   
-  // 🚀 C2C FIXED: Was accidentally stripped in the last refactor causing the white screen!
   const systemC2C = orderL + orderC + orderR;
   const systemO2O = tolLeft + tolCenter + tolRight;
   const totalPoleRawInches = rawLeft + rawCenter + rawRight;
+  
   const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
-
   const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;
   const qtySplices = attachments.filter(a => a.type === 'splice').length;
   const qtyMiters = engData.shape === 'MITERED' ? 2 : 0;
   const qtyBends = engData.endStyle === 'RETURN_BEND' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
   const qtyMiterReturns = engData.endStyle === 'RETURN_MITER' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
   const qtyCustomProjBrackets = isCustomProj ? qtyBrackets : 0;
+
+  // 🚀 SYNC QUANTITIES DIRECTLY FROM MATH ENGINE
+  useEffect(() => {
+      if (!activeFlow) return;
+      
+      setStepQuantities(prev => {
+          const updates = { ...prev };
+          activeFlow.steps.forEach(step => {
+              const t = step.title.toLowerCase();
+              if (t.includes('pole') || t.includes('tube')) updates[step.id] = poleFeetQty;
+              else if (t.includes('bracket')) updates[step.id] = qtyBrackets;
+              else if (t.includes('splice')) updates[step.id] = qtySplices;
+              else if (!updates[step.id]) updates[step.id] = 1; 
+          });
+          return updates;
+      });
+
+      setDynamicConfigParams(prev => {
+          let updates = { ...prev };
+          let changed = false;
+          activeFlow.steps.forEach(step => {
+              const opts = getOptionsForStep(step);
+              if (opts.length === 1 && prev[step.id] !== opts[0].id) {
+                  updates[step.id] = opts[0].id;
+                  changed = true;
+              }
+          });
+          return changed ? updates : prev;
+      });
+
+  }, [activeFlow, poleFeetQty, qtyBrackets, qtySplices, quoteSelections.collection, libraryParts, safeProj]);
 
   const feeSkuSplice = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'SPLICE');
   const feeSkuMiter = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'MITER_CUT');

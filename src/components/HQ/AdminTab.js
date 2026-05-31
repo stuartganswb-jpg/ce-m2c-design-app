@@ -25,7 +25,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
 
-  // CRM Master Dictionaries
   const [crmDiscounts, setCrmDiscounts] = useState([]);
   const [newDiscount, setNewDiscount] = useState({ code: '', description: '', percent: '' });
   const [crmListInput, setCrmListInput] = useState({ salesReps: '', paymentTerms: '' });
@@ -55,7 +54,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeFormType, setActiveFormType] = useState('QUOTE');
   const [formEditor, setFormEditor] = useState({ header: '', footer: '', terms: '' });
 
-  // NetSuite Sync State
   const [nsSubsidiaryId, setNsSubsidiaryId] = useState("3"); 
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncLog, setSyncLog] = useState([]);
@@ -63,7 +61,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const DOCUMENT_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE', 'FACTORY_ROUTER'];
   const BRANDS_LIST = ['m2c', 'uniquity', 'ce', 'leyla']; 
 
-  // LIVE FIREBASE CLOUD FUNCTION URL
   const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app"; 
 
   useEffect(() => {
@@ -157,7 +154,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       return () => unsub();
   }, [flowSettings.linkedAssemblyId, masterAssemblies]);
 
-  // --- NETSUITE AUTHENTICATION & SYNC ENGINE ---
   const addLog = (msg, type = 'info') => {
       const time = new Date().toLocaleTimeString();
       setSyncLog(prev => [{ time, msg, type }, ...prev]);
@@ -269,9 +265,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
       try {
           const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
-          
-          // 🚀 THE SNIPER QUERY: Joins the actual Vendor Address Book to force the text string,
-          // and pulls the 'preferredvendor' checkbox to ensure perfect row matching!
           const q = `
               SELECT 
                   item.id, 
@@ -301,22 +294,17 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           const result = await executeSuiteQL(q);
           const rawRecords = result.items || [];
           
-          // 🚀 THE INTELLIGENT SORTER: 
-          // Guarantees Name, Part Number, and Price are perfectly locked to the exact same vendor.
           const uniqueRecordsMap = {};
           for (const row of rawRecords) {
               const itemId = row.id;
               if (!uniqueRecordsMap[itemId]) {
-                  uniqueRecordsMap[itemId] = row; // Save the first one we see
+                  uniqueRecordsMap[itemId] = row;
               } else {
-                  // If we find another vendor for the same part, check if it's the "Preferred" one.
                   const isNewPreferred = row.preferredvendor === 'T';
                   const isOldPreferred = uniqueRecordsMap[itemId].preferredvendor === 'T';
                   const oldHasVendor = !!uniqueRecordsMap[itemId].vendor_name;
                   const newHasVendor = !!row.vendor_name;
 
-                  // Overwrite the saved data ONLY if this new row is the Official Preferred Vendor, 
-                  // or if the old row was blank and this one actually has data.
                   if (isNewPreferred && !isOldPreferred) {
                       uniqueRecordsMap[itemId] = row;
                   } else if (!oldHasVendor && newHasVendor && !isOldPreferred) {
@@ -335,7 +323,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               const existingMatch = allApprovedDesigns.find(d => d.legacyErpId === item.itemid);
               const targetDocId = existingMatch ? existingMatch.id : newId;
 
-              // Smart Routing Logic
               const pTypeClean = (item.product_type || '').toLowerCase().trim();
               const uomClean = (item.uom || '').toLowerCase().trim();
               
@@ -343,7 +330,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               const autoPartHandling = isPoleOrLinear ? 'Custom' : 'Small Parts';
               const autoIsCutToSize = isPoleOrLinear; 
               
-              // Verify Vendor exists
               const hasVendor = item.vendor_name && item.vendor_name.trim() !== '';
 
               const payload = {
@@ -415,7 +401,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       setIsSyncing(false);
   };
 
-  // --- CRM Dictionary Handlers ---
   const handleAddDiscount = async () => {
       if (!newDiscount.code || !newDiscount.percent) return alert("Code and Percentage are required.");
       const updated = [...crmDiscounts, { ...newDiscount, code: newDiscount.code.toUpperCase(), percent: parseFloat(newDiscount.percent) || 0 }];
@@ -748,6 +733,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   };
 
+  // 🚀 FIXED: Added Product Types, Inventory Types, and Assembly Types directly from Master Library Data
   const getDataSourceItems = (source) => {
       if (!source) return [];
       if (source === 'master_finishes') {
@@ -756,6 +742,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               ...outsourceFinishes.map(f => ({ id: f.id, name: f.name }))
           ];
       }
+      
+      if (globalLists.prodTypes?.includes(source)) {
+          return libraryParts.filter(p => p.manufacturingSpecs?.productType === source || p.productType === source).map(p => ({ id: p.id, name: p.itemName }));
+      }
+      if (globalLists.inventoryTypes?.includes(source) || globalLists.assemblyTypes?.includes(source)) {
+          return libraryParts.filter(p => p.routingType === source).map(p => ({ id: p.id, name: p.itemName }));
+      }
+
       const customAssets = dynamicAssets.filter(a => a.windowId === source);
       if (customAssets.length > 0) return customAssets.map(a => ({ id: a.id, name: a.name }));
       if (globalLists[source]) return globalLists[source].map(v => ({ id: v, name: v }));
@@ -992,10 +986,18 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             <option value="DIMENSIONS">Dimensional Input Only (Math)</option>
                                         </select>
                                         
+                                        {/* 🚀 FIXED: Added Product Types and Routing Types to data source options! */}
                                         <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} disabled={newStep.type === 'DIMENSIONS'} style={{ flex: 1, padding: '8px', border: '2px solid #007bff', fontWeight: 'bold', opacity: newStep.type === 'DIMENSIONS' ? 0.5 : 1 }}>
                                             <option value="">-- SELECT DATA SOURCE --</option>
                                             <optgroup label="Core Libraries">
                                                 <option value="master_finishes">Master Finishes (In-House & Outsource)</option>
+                                            </optgroup>
+                                            <optgroup label="Master Library: Product Types">
+                                                {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>Product Type: {pt}</option>)}
+                                            </optgroup>
+                                            <optgroup label="Master Library: Routing Types">
+                                                {(globalLists.inventoryTypes || []).map(it => <option key={it} value={it}>Routing: {it} (Inventory)</option>)}
+                                                {(globalLists.assemblyTypes || []).map(at => <option key={at} value={at}>Routing: {at} (Assembly)</option>)}
                                             </optgroup>
                                             {customDataWindows.length > 0 && (
                                                 <optgroup label="CPQ Asset Dictionaries (Tab 4)">
