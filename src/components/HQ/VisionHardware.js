@@ -26,7 +26,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [visScale, setVisScale] = useState(1.0); 
   const [visPan, setVisPan] = useState({ x: 0, y: 0 });
   
-  const [engScale, setEngScale] = useState(1.25); 
+  // 🚀 FIXED: Default zoom increased to 1.7 to make a 144" pole fill the screen
+  const [engScale, setEngScale] = useState(1.7); 
   const [engPan, setEngPan] = useState({ x: 0, y: 0 });
   const [engTool, setEngTool] = useState("pan"); 
   const [attachments, setAttachments] = useState([]); 
@@ -78,7 +79,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
     return () => { unsubParts(); unsubFinishes(); unsubOutsource(); unsubCollections(); };
   }, [activeBrand]);
 
-  // Extract unique projections from library for the dropdown
   const uniqueProjections = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.customData?.projection).filter(Boolean))]
                             .sort((a,b) => parseFloat(a) - parseFloat(b));
 
@@ -147,6 +147,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const qtyFinials = engData.endStyle === 'FINIAL' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
   const qtyRings = quoteSelections.ringId ? Math.ceil((tolLeft + tolCenter + tolRight) / 12) * quoteSelections.ringsPerFoot : 0;
   const qtyCustomProjBrackets = isCustomProj ? qtyBrackets : 0;
+
+  // Search Library for matched fee SKUs
+  const feeSkuSplice = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'SPLICE');
+  const feeSkuMiter = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'MITER_CUT');
+  const feeSkuBend = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'BENT_RETURN');
+  const feeSkuMiterReturn = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'MITER_RETURN');
+  const feeSkuCustomProj = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'CUSTOM_PROJ');
 
 
   const P2 = { x: 500 - (wall2 * S)/2, y: 250 }; const P3 = { x: 500 + (wall2 * S)/2, y: 250 };
@@ -395,6 +402,15 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (qtyFinials > 0 && quoteSelections.finialId) bomItems.push({ partId: quoteSelections.finialId, qty: qtyFinials, type: 'FINIAL' });
       if (qtyRings > 0 && quoteSelections.ringId) bomItems.push({ partId: quoteSelections.ringId, qty: qtyRings, type: 'RING' });
 
+      // 🚀 ADDED: Push exact ERP SKUs for the applied services so they quote properly
+      const feesPayload = {
+          splices: { qty: qtySplices, sku: feeSkuSplice?.legacyErpId || '' },
+          miters: { qty: qtyMiters, sku: feeSkuMiter?.legacyErpId || '' },
+          bends: { qty: qtyBends, sku: feeSkuBend?.legacyErpId || '' },
+          miterReturns: { qty: qtyMiterReturns, sku: feeSkuMiterReturn?.legacyErpId || '' },
+          customProjections: { qty: qtyCustomProjBrackets, sku: feeSkuCustomProj?.legacyErpId || '' }
+      };
+
       const payload = { 
           id: draftId, 
           brandId: activeBrand, 
@@ -405,8 +421,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           systemFinish: quoteSelections.finish,
           collection: quoteSelections.collection,
           bom: bomItems,
-          // 🚀 ADDED: Custom Projection Fee
-          fees: { splices: qtySplices, miters: qtyMiters, bends: qtyBends, miterReturns: qtyMiterReturns, customProjections: qtyCustomProjBrackets },
+          fees: feesPayload,
           spatialData: { ...engData, attachments, shopNotes }, 
           author: currentUser, 
           createdAt: serverTimestamp() 
@@ -417,19 +432,23 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       finally { setIsPushingToCPQ(false); }
   };
 
-  // --- UI FILTERING ENGINES ---
+  // --- 🚀 UPGRADED: BULLETPROOF FILTERING ENGINE ---
   const getFilteredParts = (type) => {
       return libraryParts.filter(p => {
-          const t = p.manufacturingSpecs?.productType?.toUpperCase() || "";
+          const t = (p.manufacturingSpecs?.productType || "").toUpperCase();
           
-          // Must match the core component type
-          if (!t.includes(type) && t !== type) return false;
+          // Strict Type Enforcement
+          if (type === 'POLE' && !(t === 'POLE' || t === 'POLES' || t === 'TUBE')) return false;
+          if (type === 'BRACKET' && t !== 'BRACKET') return false;
+          if (type === 'FINIAL' && t !== 'FINIAL') return false;
+          if (type === 'RING' && t !== 'RING') return false;
           
-          // 🚀 FIXED: Dynamic Collection Filtering
-          const partCollection = p.manufacturingSpecs?.customData?.collection || p.manufacturingSpecs?.collection || 'N/A';
-          if (quoteSelections.collection && partCollection !== quoteSelections.collection && partCollection !== 'N/A') return false;
+          // Strict Case-Insensitive Collection Enforcement
+          const partCollection = (p.manufacturingSpecs?.customData?.collection || p.manufacturingSpecs?.collection || 'N/A').toUpperCase();
+          const selCollection = (quoteSelections.collection || "").toUpperCase();
+          if (selCollection && partCollection !== selCollection && partCollection !== 'N/A') return false;
           
-          // 🚀 FIXED: Dynamic Bracket Projection Filtering
+          // Strict Bracket Projection Rules
           if (type === 'BRACKET') {
               if (!isCustomProj && p.manufacturingSpecs?.customData?.projection) {
                   if (parseFloat(p.manufacturingSpecs.customData.projection) !== parseFloat(engData.proj)) return false;
@@ -438,7 +457,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               if (engData.shape === 'STRAIGHT') {
                   const needsCeiling = engData.mountLeft === 'CEILING' || engData.mountRight === 'CEILING';
                   const needsInside = engData.mountLeft === 'INSIDE' || engData.mountRight === 'INSIDE';
-                  const bt = p.manufacturingSpecs?.customData?.bracketType?.toUpperCase() || 'WALL';
+                  const bt = (p.manufacturingSpecs?.customData?.bracketType || 'WALL').toUpperCase();
                   if (needsCeiling && bt !== 'CEILING') return false;
                   if (needsInside && bt !== 'INSIDE MOUNT') return false;
               }
@@ -447,16 +466,16 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       });
   };
 
-  // 🚀 FIXED: Dynamic System Finish Splitting based on Collection
-  const activeColData = collectionsData.find(c => c.name === quoteSelections.collection);
-  const allowedFinishes = activeColData?.allowedFinishes || [];
+  // 🚀 UPGRADED: Dynamic System Finish Splitting based on Collection
+  const activeColData = collectionsData.find(c => c.name.toUpperCase() === quoteSelections.collection.toUpperCase());
+  const allowedFinishes = (activeColData?.allowedFinishes || []).map(f => f.toUpperCase());
   
   const allAvailableFinishes = [...globalFinishes, ...outsourceFinishes];
   const standardCollectionFinishes = [];
   const otherSystemFinishes = [];
 
   allAvailableFinishes.forEach(f => {
-      if (quoteSelections.collection && allowedFinishes.length > 0 && allowedFinishes.includes(f.name)) {
+      if (quoteSelections.collection && allowedFinishes.length > 0 && allowedFinishes.includes(f.name.toUpperCase())) {
           standardCollectionFinishes.push(f);
       } else {
           otherSystemFinishes.push(f);
@@ -612,8 +631,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                     <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>2. FABRICATION SETTINGS</div>
                     <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                         <div style={{ display: 'flex', gap: '10px' }}>
-                            
-                            {/* 🚀 FIXED: Dynamic Projection Selection */}
                             <div style={{ flex: 1 }}>
                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>PROJECTION (IN):</label>
                                 <select 
@@ -654,232 +671,253 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                 </div>
               )}
 
-              <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '10px 10px 0 #000' }}>
-                  
-                  {viewMode === 'VISUAL' ? (
-                      <div style={{ padding: '10px 15px', background: '#f4f4f4', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <button onClick={() => setVisualTool("pan")} style={{ padding: '6px 12px', background: visualTool === "pan" ? '#000' : '#fff', color: visualTool === "pan" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>✋ PAN VIEWPORT</button>
-                        <div style={{ display: 'flex', gap: '5px' }}>
-                            <button onClick={() => setVisScale(s => Math.min(s + 0.25, 4))} style={{ padding: '4px 10px', fontWeight: 'bold', cursor: 'pointer' }}>➕</button>
-                            <button onClick={() => setVisScale(s => Math.max(s - 0.25, 0.5))} style={{ padding: '4px 10px', fontWeight: 'bold', cursor: 'pointer' }}>➖</button>
-                            <button onClick={() => { setVisScale(1); setVisPan({x:0, y:0}); }} style={{ padding: '4px 10px', cursor: 'pointer', fontSize: '0.7rem' }}>RESET</button>
-                        </div>
-                      </div>
-                  ) : (
-                      <div style={{ padding: '10px 15px', background: '#e9ecef', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>JOB:</label><input type="text" value={engData.jobName} onChange={e => setEngData({...engData, jobName: e.target.value})} style={{ width: '120px', padding: '4px', fontSize: '0.7rem', border: '1px solid #ccc' }} /></div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>SIDEMARK:</label><input type="text" value={engData.sidemark} onChange={e => setEngData({...engData, sidemark: e.target.value})} style={{ width: '120px', padding: '4px', fontSize: '0.7rem', border: '1px solid #ccc' }} /></div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '5px' }}>
-                            <button onClick={() => setEngTool("pan")} style={{ padding: '4px 8px', background: engTool === "pan" ? '#000' : '#fff', color: engTool === "pan" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✋ PAN</button>
-                            <button onClick={() => setEngTool("bracket")} style={{ padding: '4px 8px', background: engTool === "bracket" ? '#28a745' : '#fff', color: engTool === "bracket" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📍 BRACKET</button>
-                            <button onClick={() => setEngTool("splice")} style={{ padding: '4px 8px', background: engTool === "splice" ? '#d9534f' : '#fff', color: engTool === "splice" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✂️ SPLICE</button>
-                            <button onClick={() => setEngTool("note")} style={{ padding: '4px 8px', background: engTool === "note" ? '#ffc107' : '#fff', color: '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📝 NOTE</button>
-                            <button onClick={() => {setAttachments([]); setShopNotes([]);}} style={{ padding: '4px 8px', background: '#fff', border: '1px solid #ccc', fontSize: '0.7rem', cursor: 'pointer' }}>CLEAR</button>
-                        </div>
-                      </div>
-                  )}
-
-                  <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: viewMode === 'VISUAL' ? '#1e1e1e' : '#f8f9fa', minHeight: '600px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      
-                      {viewMode === 'VISUAL' && !activeBg && (
-                          <div style={{ color: '#666', textAlign: 'center' }}><div style={{ fontSize: '3rem', marginBottom: '10px' }}>🖼️</div><h3 style={{ margin: 0, color: '#999' }}>NO PLAN LOADED</h3></div>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '10px 10px 0 #000', minHeight: '500px', flex: 1 }}>
+                      {viewMode === 'VISUAL' ? (
+                          <div style={{ padding: '10px 15px', background: '#f4f4f4', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <button onClick={() => setVisualTool("pan")} style={{ padding: '6px 12px', background: visualTool === "pan" ? '#000' : '#fff', color: visualTool === "pan" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>✋ PAN VIEWPORT</button>
+                            <div style={{ display: 'flex', gap: '5px' }}>
+                                <button onClick={() => setVisScale(s => Math.min(s + 0.25, 4))} style={{ padding: '4px 10px', fontWeight: 'bold', cursor: 'pointer' }}>➕</button>
+                                <button onClick={() => setVisScale(s => Math.max(s - 0.25, 0.5))} style={{ padding: '4px 10px', fontWeight: 'bold', cursor: 'pointer' }}>➖</button>
+                                <button onClick={() => { setVisScale(1); setVisPan({x:0, y:0}); }} style={{ padding: '4px 10px', cursor: 'pointer', fontSize: '0.7rem' }}>RESET</button>
+                            </div>
+                          </div>
+                      ) : (
+                          <div style={{ padding: '10px 15px', background: '#e9ecef', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>JOB:</label><input type="text" value={engData.jobName} onChange={e => setEngData({...engData, jobName: e.target.value})} style={{ width: '120px', padding: '4px', fontSize: '0.7rem', border: '1px solid #ccc' }} /></div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>SIDEMARK:</label><input type="text" value={engData.sidemark} onChange={e => setEngData({...engData, sidemark: e.target.value})} style={{ width: '120px', padding: '4px', fontSize: '0.7rem', border: '1px solid #ccc' }} /></div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '5px' }}>
+                                <button onClick={() => setEngTool("pan")} style={{ padding: '4px 8px', background: engTool === "pan" ? '#000' : '#fff', color: engTool === "pan" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✋ PAN</button>
+                                <button onClick={() => setEngTool("bracket")} style={{ padding: '4px 8px', background: engTool === "bracket" ? '#28a745' : '#fff', color: engTool === "bracket" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📍 BRACKET</button>
+                                <button onClick={() => setEngTool("splice")} style={{ padding: '4px 8px', background: engTool === "splice" ? '#d9534f' : '#fff', color: engTool === "splice" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✂️ SPLICE</button>
+                                <button onClick={() => setEngTool("note")} style={{ padding: '4px 8px', background: engTool === "note" ? '#ffc107' : '#fff', color: '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📝 NOTE</button>
+                                <button onClick={() => {setAttachments([]); setShopNotes([]);}} style={{ padding: '4px 8px', background: '#fff', border: '1px solid #ccc', fontSize: '0.7rem', cursor: 'pointer' }}>CLEAR</button>
+                            </div>
+                          </div>
                       )}
 
-                      {(viewMode === 'ENGINEERING' || activeBg) && (
-                          <svg ref={svgRef} viewBox="0 0 1000 600" style={{ width: '100%', height: '100%', display: 'block', cursor: (viewMode==='VISUAL'?visualTool:engTool) === 'pan' ? (isPanning?'grabbing':'grab') : 'crosshair', touchAction: 'none' }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
-                              
-                              <g ref={innerGroupRef} transform={`translate(${viewMode==='VISUAL'?visPan.x:engPan.x}, ${viewMode==='VISUAL'?visPan.y:engPan.y}) translate(500, 300) scale(${viewMode==='VISUAL'?visScale:engScale}) translate(-500, -300)`}>
-                                  
-                                  {/* --- VISUAL BACKGROUND ELEMENTS --- */}
-                                  {viewMode === 'VISUAL' && activeBg && (
-                                      <g>
-                                          <image href={activeBg.url} x="0" y="0" width="1000" height="600" preserveAspectRatio="xMidYMid slice" opacity="0.85" />
-                                          {calPoints.map((pt, i) => (
-                                              <g key={`cal-${i}`} transform={`translate(${pt.x}, ${pt.y})`}><circle cx="0" cy="0" r="1.5" fill="#007bff" /><line x1="-6" y1="0" x2="-2" y2="0" stroke="#007bff" strokeWidth="1.5" /><line x1="2" y1="0" x2="6" y2="0" stroke="#007bff" strokeWidth="1.5" /><line x1="0" y1="-6" x2="0" y2="-2" stroke="#007bff" strokeWidth="1.5" /><line x1="0" y1="2" x2="0" y2="6" stroke="#007bff" strokeWidth="1.5" /></g>
-                                          ))}
-                                          {calPoints.length === 2 && (() => {
-                                              const midX = (calPoints[0].x + calPoints[1].x) / 2; const midY = (calPoints[0].y + calPoints[1].y) / 2;
-                                              const dx = calPoints[1].x - calPoints[0].x; const dy = calPoints[1].y - calPoints[0].y;
-                                              const len = Math.sqrt(dx * dx + dy * dy); const nx = -dy / len; const ny = dx / len;
-                                              const offX = midX + nx * 40; const offY = midY + ny * 40;
-                                              return (
-                                                  <g>
-                                                      <line x1={calPoints[0].x} y1={calPoints[0].y} x2={calPoints[1].x} y2={calPoints[1].y} stroke="#007bff" strokeWidth="2" strokeDasharray="3,3" />
-                                                      <line x1={midX} y1={midY} x2={offX} y2={offY} stroke="#007bff" strokeWidth="1.5" />
-                                                      <rect x={offX - 35} y={offY - 12} width="70" height="24" fill="#fff" stroke="#007bff" strokeWidth="1.5" />
-                                                      <text x={offX} y={offY + 4} fill="#000" fontSize="10" fontWeight="bold" textAnchor="middle">{realInches}" SPEC</text>
+                      <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: viewMode === 'VISUAL' ? '#1e1e1e' : '#f8f9fa', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {viewMode === 'VISUAL' && !activeBg && (
+                              <div style={{ color: '#666', textAlign: 'center' }}><div style={{ fontSize: '3rem', marginBottom: '10px' }}>🖼️</div><h3 style={{ margin: 0, color: '#999' }}>NO PLAN LOADED</h3></div>
+                          )}
+
+                          {(viewMode === 'ENGINEERING' || activeBg) && (
+                              <svg ref={svgRef} viewBox="0 0 1000 600" style={{ width: '100%', height: '100%', display: 'block', cursor: (viewMode==='VISUAL'?visualTool:engTool) === 'pan' ? (isPanning?'grabbing':'grab') : 'crosshair', touchAction: 'none' }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
+                                  <g ref={innerGroupRef} transform={`translate(${viewMode==='VISUAL'?visPan.x:engPan.x}, ${viewMode==='VISUAL'?visPan.y:engPan.y}) translate(500, 300) scale(${viewMode==='VISUAL'?visScale:engScale}) translate(-500, -300)`}>
+                                      
+                                      {viewMode === 'VISUAL' && activeBg && (
+                                          <g>
+                                              <image href={activeBg.url} x="0" y="0" width="1000" height="600" preserveAspectRatio="xMidYMid slice" opacity="0.85" />
+                                              {calPoints.map((pt, i) => (
+                                                  <g key={`cal-${i}`} transform={`translate(${pt.x}, ${pt.y})`}><circle cx="0" cy="0" r="1.5" fill="#007bff" /><line x1="-6" y1="0" x2="-2" y2="0" stroke="#007bff" strokeWidth="1.5" /><line x1="2" y1="0" x2="6" y2="0" stroke="#007bff" strokeWidth="1.5" /><line x1="0" y1="-6" x2="0" y2="-2" stroke="#007bff" strokeWidth="1.5" /><line x1="0" y1="2" x2="0" y2="6" stroke="#007bff" strokeWidth="1.5" /></g>
+                                              ))}
+                                              {calPoints.length === 2 && (() => {
+                                                  const midX = (calPoints[0].x + calPoints[1].x) / 2; const midY = (calPoints[0].y + calPoints[1].y) / 2;
+                                                  const dx = calPoints[1].x - calPoints[0].x; const dy = calPoints[1].y - calPoints[0].y;
+                                                  const len = Math.sqrt(dx * dx + dy * dy); const nx = -dy / len; const ny = dx / len;
+                                                  const offX = midX + nx * 40; const offY = midY + ny * 40;
+                                                  return (
+                                                      <g>
+                                                          <line x1={calPoints[0].x} y1={calPoints[0].y} x2={calPoints[1].x} y2={calPoints[1].y} stroke="#007bff" strokeWidth="2" strokeDasharray="3,3" />
+                                                          <line x1={midX} y1={midY} x2={offX} y2={offY} stroke="#007bff" strokeWidth="1.5" />
+                                                          <rect x={offX - 35} y={offY - 12} width="70" height="24" fill="#fff" stroke="#007bff" strokeWidth="1.5" />
+                                                          <text x={offX} y={offY + 4} fill="#000" fontSize="10" fontWeight="bold" textAnchor="middle">{realInches}" SPEC</text>
+                                                      </g>
+                                                  );
+                                              })()}
+                                              {showEngOverlay && (
+                                                  <g transform={`translate(${engOverlayPos.x}, ${engOverlayPos.y}) scale(${pixelsPerInch / S}) translate(-500, 0)`} onClick={(e) => { e.stopPropagation(); setActivePlacedId('ENG_OVERLAY'); }} style={{ cursor: 'move' }}>
+                                                      <rect x="0" y="-30" width="1000" height="60" fill="transparent" stroke={activePlacedId === 'ENG_OVERLAY' ? '#fff' : 'none'} strokeWidth="2" strokeDasharray="4,4" />
+                                                      {renderHardwareElevation()}
                                                   </g>
-                                              );
-                                          })()}
-                                          {showEngOverlay && (
-                                              <g transform={`translate(${engOverlayPos.x}, ${engOverlayPos.y}) scale(${pixelsPerInch / S}) translate(-500, 0)`} onClick={(e) => { e.stopPropagation(); setActivePlacedId('ENG_OVERLAY'); }} style={{ cursor: 'move' }}>
-                                                  <rect x="0" y="-30" width="1000" height="60" fill="transparent" stroke={activePlacedId === 'ENG_OVERLAY' ? '#fff' : 'none'} strokeWidth="2" strokeDasharray="4,4" />
-                                                  {renderHardwareElevation()}
-                                              </g>
-                                          )}
-                                          {placedItems.map(item => {
-                                              const isSelected = item.id === activePlacedId;
-                                              return (
-                                                  <g key={item.id} transform={`translate(${item.x}, ${item.y})`} onClick={(e) => { e.stopPropagation(); setActivePlacedId(item.id); }} style={{ cursor: 'move' }}>
-                                                  <rect x="0" y="0" width={item.width} height={item.height} fill={item.color} fillOpacity="0.6" stroke={isSelected ? '#fff' : '#000'} strokeWidth={isSelected ? '4' : '2'} strokeDasharray={isSelected ? 'none' : '2,2'} />
-                                                  <circle cx={item.width} cy={0} r="3" fill={item.color} stroke="#fff" strokeWidth="1.5" />
-                                                  <path d={`M ${item.width} 0 L ${item.width + 10} -10 L ${item.width + 20} -10`} fill="none" stroke={item.color} strokeWidth="2" />
-                                                  <foreignObject x={item.width + 20} y="-22" width="100" height="40" style={{ overflow: 'visible' }}>
-                                                      <div style={{ background: '#fff', border: `2px solid ${item.color}`, padding: '3px 5px', boxShadow: `2px 2px 0 ${item.color}` }}>
-                                                      <div style={{ fontWeight: 'bold', fontSize: '7px', color: '#000', lineHeight: '1.1' }}>{item.label}</div>
-                                                      <div style={{ fontSize: '6px', color: '#666', marginTop: '2px', borderTop: '1px solid #ccc', paddingTop: '2px' }}>W: {item.realWidth}"</div>
-                                                      </div>
-                                                  </foreignObject>
-                                                  </g>
-                                              );
-                                          })}
-                                      </g>
-                                  )}
-
-                                  {/* --- ENGINEERING BACKGROUND GRID --- */}
-                                  {viewMode === 'ENGINEERING' && (
-                                      <g>
-                                          {Array.from({ length: 15 }).map((_, i) => <line key={`h-${i}`} x1="0" y1={i * 40} x2="1000" y2={i * 40} stroke="#e0e0e0" strokeWidth="1" />)}
-                                          {Array.from({ length: 25 }).map((_, i) => <line key={`v-${i}`} x1={i * 40} y1="0" x2={i * 40} y2="600" stroke="#e0e0e0" strokeWidth="1" />)}
-                                      </g>
-                                  )}
-
-                                  {/* --- 🚀 FIXED: MASSIVE SHOP FLOOR CUSTOM PROJECTION WARNING --- */}
-                                  {viewMode === 'ENGINEERING' && isCustomProj && (
-                                      <g transform="translate(500, 50)">
-                                          <rect x="-225" y="-20" width="450" height="30" fill="#ffcccc" stroke="#d9534f" strokeWidth="2" rx="5" />
-                                          <text x="0" y="0" fill="#d9534f" fontSize="14" fontWeight="bold" textAnchor="middle">⚠️ CUSTOM PROJECTION REQUESTED: {engData.proj}" ⚠️</text>
-                                      </g>
-                                  )}
-
-                                  {/* --- COMMON HARDWARE RENDERING FOR ENGINEERING MODE --- */}
-                                  {viewMode === 'ENGINEERING' && (
-                                      <g>
-                                          {engData.shape === 'STRAIGHT' && (
-                                              <g>
-                                                  <line x1={P2.x} y1={P2.y} x2={P3.x} y2={P3.y} stroke="#aaa" strokeWidth="3" />
-                                                  <text x={500} y={P2.y - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text>
-                                                  <text x={500} y={HS.y + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text>
-                                              </g>
-                                          )}
-                                          {engData.shape === 'MITERED' && (
-                                              <g>
-                                                  <polyline points={`${P1.x},${P1.y} ${P2.x},${P2.y} ${P3.x},${P3.y} ${P4.x},${P4.y}`} fill="none" stroke="#aaa" strokeWidth="3" />
-                                                  <text x={500} y={P2.y - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text>
-                                                  <text x={500} y={HC1.y + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text>
-                                                  <text x={(P1.x+P2.x)/2 - 10} y={(P1.y+P2.y)/2 - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">WALL A: {wall1.toFixed(1)}"</text>
-                                                  <text x={(HS.x+HC1.x)/2 + 10} y={(HS.y+HC1.y)/2 + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE A CUT: {rawLeft.toFixed(2)}"</text>
-                                                  <text x={(P3.x+P4.x)/2 + 10} y={(P3.y+P4.y)/2 - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">WALL C: {wall3.toFixed(1)}"</text>
-                                                  <text x={(HC2.x+HE.x)/2 - 10} y={(HC2.y+HE.y)/2 + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE C CUT: {rawRight.toFixed(2)}"</text>
-                                              </g>
-                                          )}
-                                          {engData.shape === 'BOW' && (
-                                              <g>
-                                                  <path d={bowWallPath} fill="none" stroke="#aaa" strokeWidth="3" />
-                                                  <text x={500} y={P2.y - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">CHORD B: {wall2.toFixed(1)}"</text>
-                                                  <text x={500} y={HS.y + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text>
-                                              </g>
-                                          )}
-
-                                          {engData.shape === 'STRAIGHT' && renderDimLine(HS, HE, {x:0,y:1}, 40, `C-to-C: ${(pole2).toFixed(1)}"`)}
-                                          {engData.shape === 'MITERED' && (
-                                              <g>
-                                                  {renderDimLine(HS, HC1, {x:-nL.x, y:-nL.y}, 35, `C-to-C: ${(pole1).toFixed(1)}"`)}
-                                                  {renderDimLine(HC1, HC2, {x:0, y:1}, 35, `C-to-C: ${(pole2).toFixed(1)}"`)}
-                                                  {renderDimLine(HC2, HE, {x:-nR.x, y:-nR.y}, 35, `C-to-C: ${(pole3).toFixed(1)}"`)}
-                                              </g>
-                                          )}
-
-                                          {engData.shape === 'STRAIGHT' && <line x1={drawHS.x} y1={drawHS.y} x2={drawHE.x} y2={drawHE.y} stroke="#d4af37" strokeWidth="1.5" />}
-                                          {engData.shape === 'MITERED' && <polyline points={`${drawHS.x},${drawHS.y} ${HC1.x},${HC1.y} ${HC2.x},${HC2.y} ${drawHE.x},${drawHE.y}`} fill="none" stroke="#d4af37" strokeWidth="1.5" />}
-                                          {engData.shape === 'BOW' && bowHWPath && <path d={bowHWPath} fill="none" stroke="#d4af37" strokeWidth="1.5" />}
-
-                                          {engData.shape === 'MITERED' && sawAngle1 > 0 && (
-                                              <g>
-                                                  <line x1={HC1.x} y1={HC1.y + 15} x2={HC1.x + 60} y2={HC1.y + 100} stroke="#666" strokeWidth="1" strokeDasharray="2,2" />
-                                                  <rect x={HC1.x + 30} y={HC1.y + 93} width="60" height="14" fill="#fff" stroke="#666" strokeWidth="1" />
-                                                  <text x={HC1.x + 60} y={HC1.y + 103} fill="#000" fontSize="8" fontWeight="bold" textAnchor="middle">{sawAngle1.toFixed(1)}° MITER</text>
-                                              </g>
-                                          )}
-                                          {engData.shape === 'MITERED' && sawAngle2 > 0 && (
-                                              <g>
-                                                  <line x1={HC2.x} y1={HC2.y + 15} x2={HC2.x - 60} y2={HC2.y + 100} stroke="#666" strokeWidth="1" strokeDasharray="2,2" />
-                                                  <rect x={HC2.x - 90} y={HC2.y + 93} width="60" height="14" fill="#fff" stroke="#666" strokeWidth="1" />
-                                                  <text x={HC2.x - 60} y={HC2.y + 103} fill="#000" fontSize="8" fontWeight="bold" textAnchor="middle">{sawAngle2.toFixed(1)}° MITER</text>
-                                              </g>
-                                          )}
-
-                                          {attachments.map(att => {
-                                              let seg = null;
-                                              if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" }; }
-                                              else if (engData.shape === 'MITERED') {
-                                                  if (att.segId===1) seg = { pA: HS, pB: HC1, len: pole1, norm: nL, nA: "L.Edge", nB: "L.Miter" };
-                                                  if (att.segId===2) seg = { pA: HC1, pB: HC2, len: pole2, norm: {x:0, y:-1}, nA: "L.Miter", nB: "R.Miter" };
-                                                  if (att.segId===3) seg = { pA: HC2, pB: HE, len: pole3, norm: nR, nA: "R.Miter", nB: "R.Edge" };
-                                              } else if (engData.shape === 'BOW') {
-                                                  seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge", isBow: true };
-                                              }
-                                              if (!seg) return null;
-
-                                              const distFromA = att.ref === 'START' ? att.distInches : (seg.len - att.distInches);
-                                              const t = distFromA / seg.len;
-                                              let x = 0; let y = 0;
-                                              if (seg.isBow) {
-                                                  const angle = bowStartAngle + t * (bowEndAngle - bowStartAngle);
-                                                  const rH_px = bowHW_R * S;
-                                                  x = bowCX + rH_px * Math.cos(angle); y = bowCY + rH_px * Math.sin(angle);
-                                              } else {
-                                                  x = seg.pA.x + t * (seg.pB.x - seg.pA.x); y = seg.pA.y + t * (seg.pB.y - seg.pA.y);
-                                              }
-
-                                              return (
-                                                  <g key={att.id}>
-                                                      {att.type === 'bracket' ? (
-                                                          <g>
-                                                              <circle cx={x} cy={y} r="3" fill="#28a745" />
-                                                              <line x1={x} y1={y} x2={x + seg.norm.x * (engData.proj * S)} y2={y + seg.norm.y * (engData.proj * S)} stroke="#999" strokeWidth="2" />
-                                                          </g>
-                                                      ) : (
-                                                          <g>
-                                                              <line x1={x - seg.norm.x*6 - seg.norm.y*3} y1={y - seg.norm.y*6 + seg.norm.x*3} x2={x + seg.norm.x*6 - seg.norm.y*3} y2={y + seg.norm.y*6 + seg.norm.x*3} stroke="#d9534f" strokeWidth="1.5" />
-                                                              <line x1={x - seg.norm.x*6 + seg.norm.y*3} y1={y - seg.norm.y*6 - seg.norm.x*3} x2={x + seg.norm.x*6 + seg.norm.y*3} y2={y + seg.norm.y*6 - seg.norm.x*3} stroke="#d9534f" strokeWidth="1.5" />
-                                                          </g>
-                                                      )}
-                                                      
-                                                      <line x1={x} y1={y-5} x2={x} y2={y-80} stroke={att.type==='bracket'?'#28a745':'#d9534f'} strokeWidth="1" strokeDasharray="2,2" />
-                                                      <foreignObject x={x - 45} y={y - 125} width="90" height="45" style={{ overflow: 'visible' }}>
-                                                          <div style={{ background: '#fff', border: `1px solid ${att.type==='bracket'?'#28a745':'#d9534f'}`, display: 'flex', flexDirection: 'column', padding: '3px', borderRadius: '4px', boxShadow: '0 2px 5px rgba(0,0,0,0.3)' }}>
-                                                              <input type="number" value={att.distInches} step="0.125" onChange={(e) => handleUpdateAttachmentDist(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '10px', fontWeight: 'bold', textAlign: 'center', border: 'none', background: '#e9ecef', outline: 'none' }} />
-                                                              <span style={{ fontSize: '6px', color: '#666', textAlign: 'center', margin: '2px 0' }}>from {att.ref === 'START' ? seg.nA : seg.nB}</span>
-                                                              <input type="text" placeholder="Notes..." value={att.note||''} onChange={(e) => handleUpdateAttachmentNote(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '8px', border: '1px solid #ccc', outline: 'none', textAlign: 'center' }} />
+                                              )}
+                                              {placedItems.map(item => {
+                                                  const isSelected = item.id === activePlacedId;
+                                                  return (
+                                                      <g key={item.id} transform={`translate(${item.x}, ${item.y})`} onClick={(e) => { e.stopPropagation(); setActivePlacedId(item.id); }} style={{ cursor: 'move' }}>
+                                                      <rect x="0" y="0" width={item.width} height={item.height} fill={item.color} fillOpacity="0.6" stroke={isSelected ? '#fff' : '#000'} strokeWidth={isSelected ? '4' : '2'} strokeDasharray={isSelected ? 'none' : '2,2'} />
+                                                      <circle cx={item.width} cy={0} r="3" fill={item.color} stroke="#fff" strokeWidth="1.5" />
+                                                      <path d={`M ${item.width} 0 L ${item.width + 10} -10 L ${item.width + 20} -10`} fill="none" stroke={item.color} strokeWidth="2" />
+                                                      <foreignObject x={item.width + 20} y="-22" width="100" height="40" style={{ overflow: 'visible' }}>
+                                                          <div style={{ background: '#fff', border: `2px solid ${item.color}`, padding: '3px 5px', boxShadow: `2px 2px 0 ${item.color}` }}>
+                                                          <div style={{ fontWeight: 'bold', fontSize: '7px', color: '#000', lineHeight: '1.1' }}>{item.label}</div>
+                                                          <div style={{ fontSize: '6px', color: '#666', marginTop: '2px', borderTop: '1px solid #ccc', paddingTop: '2px' }}>W: {item.realWidth}"</div>
                                                           </div>
                                                       </foreignObject>
+                                                      </g>
+                                                  );
+                                              })}
+                                          </g>
+                                      )}
+
+                                      {viewMode === 'ENGINEERING' && (
+                                          <g>
+                                              {Array.from({ length: 15 }).map((_, i) => <line key={`h-${i}`} x1="0" y1={i * 40} x2="1000" y2={i * 40} stroke="#e0e0e0" strokeWidth="1" />)}
+                                              {Array.from({ length: 25 }).map((_, i) => <line key={`v-${i}`} x1={i * 40} y1="0" x2={i * 40} y2="600" stroke="#e0e0e0" strokeWidth="1" />)}
+                                          </g>
+                                      )}
+
+                                      {/* 🚀 FIXED: Custom Projection Warning */}
+                                      {viewMode === 'ENGINEERING' && isCustomProj && (
+                                          <g transform="translate(500, 50)">
+                                              <rect x="-225" y="-20" width="450" height="30" fill="#ffcccc" stroke="#d9534f" strokeWidth="2" rx="5" />
+                                              <text x="0" y="0" fill="#d9534f" fontSize="14" fontWeight="bold" textAnchor="middle">⚠️ CUSTOM PROJECTION REQUESTED: {engData.proj}" ⚠️</text>
+                                          </g>
+                                      )}
+
+                                      {viewMode === 'ENGINEERING' && (
+                                          <g>
+                                              {engData.shape === 'STRAIGHT' && (
+                                                  <g>
+                                                      <line x1={P2.x} y1={P2.y} x2={P3.x} y2={P3.y} stroke="#aaa" strokeWidth="3" />
+                                                      <text x={500} y={P2.y - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text>
+                                                      <text x={500} y={HS.y + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text>
                                                   </g>
-                                              );
-                                          })}
+                                              )}
+                                              {engData.shape === 'MITERED' && (
+                                                  <g>
+                                                      <polyline points={`${P1.x},${P1.y} ${P2.x},${P2.y} ${P3.x},${P3.y} ${P4.x},${P4.y}`} fill="none" stroke="#aaa" strokeWidth="3" />
+                                                      <text x={500} y={P2.y - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text>
+                                                      <text x={500} y={HC1.y + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text>
+                                                      <text x={(P1.x+P2.x)/2 - 10} y={(P1.y+P2.y)/2 - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">WALL A: {wall1.toFixed(1)}"</text>
+                                                      <text x={(HS.x+HC1.x)/2 + 10} y={(HS.y+HC1.y)/2 + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE A CUT: {rawLeft.toFixed(2)}"</text>
+                                                      <text x={(P3.x+P4.x)/2 + 10} y={(P3.y+P4.y)/2 - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">WALL C: {wall3.toFixed(1)}"</text>
+                                                      <text x={(HC2.x+HE.x)/2 - 10} y={(HC2.y+HE.y)/2 + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE C CUT: {rawRight.toFixed(2)}"</text>
+                                                  </g>
+                                              )}
+                                              {engData.shape === 'BOW' && (
+                                                  <g>
+                                                      <path d={bowWallPath} fill="none" stroke="#aaa" strokeWidth="3" />
+                                                      <text x={500} y={P2.y - 30} fill="#666" fontSize="10" fontWeight="bold" textAnchor="middle">CHORD B: {wall2.toFixed(1)}"</text>
+                                                      <text x={500} y={HS.y + 40} fill="#b8860b" fontSize="10" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text>
+                                                  </g>
+                                              )}
 
-                                          {shopNotes.map(n => (
-                                              <g key={n.id}>
-                                              <circle cx={n.x} cy={n.y} r="3" fill="#ffc107" />
-                                              <line x1={n.x} y1={n.y} x2={n.x + 20} y2={n.y - 60} stroke="#ffc107" strokeWidth="1.5" />
-                                              <foreignObject x={n.x + 20} y={n.y - 105} width="140" height="45" style={{ overflow: 'visible' }}>
-                                                  <textarea value={n.text} placeholder="Type shop floor note here..." onChange={(e) => handleUpdateShopNote(n.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', height: '100%', fontSize: '9px', fontWeight: 'bold', border: '1px solid #ffc107', background: '#fff3cd', outline: 'none', resize: 'none', padding: '4px', boxShadow: '0 2px 5px rgba(0,0,0,0.2)' }} />
-                                              </foreignObject>
-                                              </g>
-                                          ))}
+                                              {engData.shape === 'STRAIGHT' && renderDimLine(HS, HE, {x:0,y:1}, 40, `C-to-C: ${(pole2).toFixed(1)}"`)}
+                                              {engData.shape === 'MITERED' && (
+                                                  <g>
+                                                      {renderDimLine(HS, HC1, {x:-nL.x, y:-nL.y}, 35, `C-to-C: ${(pole1).toFixed(1)}"`)}
+                                                      {renderDimLine(HC1, HC2, {x:0, y:1}, 35, `C-to-C: ${(pole2).toFixed(1)}"`)}
+                                                      {renderDimLine(HC2, HE, {x:-nR.x, y:-nR.y}, 35, `C-to-C: ${(pole3).toFixed(1)}"`)}
+                                                  </g>
+                                              )}
 
-                                          {renderEndTreatment(true)}
-                                          {renderEndTreatment(false)}
-                                      </g>
-                                  )}
-                              </g>
-                          </svg>
+                                              {engData.shape === 'STRAIGHT' && <line x1={drawHS.x} y1={drawHS.y} x2={drawHE.x} y2={drawHE.y} stroke="#d4af37" strokeWidth="1.5" />}
+                                              {engData.shape === 'MITERED' && <polyline points={`${drawHS.x},${drawHS.y} ${HC1.x},${HC1.y} ${HC2.x},${HC2.y} ${drawHE.x},${drawHE.y}`} fill="none" stroke="#d4af37" strokeWidth="1.5" />}
+                                              {engData.shape === 'BOW' && bowHWPath && <path d={bowHWPath} fill="none" stroke="#d4af37" strokeWidth="1.5" />}
+
+                                              {engData.shape === 'MITERED' && sawAngle1 > 0 && (
+                                                  <g>
+                                                      <line x1={HC1.x} y1={HC1.y + 15} x2={HC1.x + 60} y2={HC1.y + 100} stroke="#666" strokeWidth="1" strokeDasharray="2,2" />
+                                                      <rect x={HC1.x + 30} y={HC1.y + 93} width="60" height="14" fill="#fff" stroke="#666" strokeWidth="1" />
+                                                      <text x={HC1.x + 60} y={HC1.y + 103} fill="#000" fontSize="8" fontWeight="bold" textAnchor="middle">{sawAngle1.toFixed(1)}° MITER</text>
+                                                  </g>
+                                              )}
+                                              {engData.shape === 'MITERED' && sawAngle2 > 0 && (
+                                                  <g>
+                                                      <line x1={HC2.x} y1={HC2.y + 15} x2={HC2.x - 60} y2={HC2.y + 100} stroke="#666" strokeWidth="1" strokeDasharray="2,2" />
+                                                      <rect x={HC2.x - 90} y={HC2.y + 93} width="60" height="14" fill="#fff" stroke="#666" strokeWidth="1" />
+                                                      <text x={HC2.x - 60} y={HC2.y + 103} fill="#000" fontSize="8" fontWeight="bold" textAnchor="middle">{sawAngle2.toFixed(1)}° MITER</text>
+                                                  </g>
+                                              )}
+
+                                              {attachments.map(att => {
+                                                  let seg = null;
+                                                  if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" }; }
+                                                  else if (engData.shape === 'MITERED') {
+                                                      if (att.segId===1) seg = { pA: HS, pB: HC1, len: pole1, norm: nL, nA: "L.Edge", nB: "L.Miter" };
+                                                      if (att.segId===2) seg = { pA: HC1, pB: HC2, len: pole2, norm: {x:0, y:-1}, nA: "L.Miter", nB: "R.Miter" };
+                                                      if (att.segId===3) seg = { pA: HC2, pB: HE, len: pole3, norm: nR, nA: "R.Miter", nB: "R.Edge" };
+                                                  } else if (engData.shape === 'BOW') {
+                                                      seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge", isBow: true };
+                                                  }
+                                                  if (!seg) return null;
+
+                                                  const distFromA = att.ref === 'START' ? att.distInches : (seg.len - att.distInches);
+                                                  const t = distFromA / seg.len;
+                                                  let x = 0; let y = 0;
+                                                  if (seg.isBow) {
+                                                      const angle = bowStartAngle + t * (bowEndAngle - bowStartAngle);
+                                                      const rH_px = bowHW_R * S;
+                                                      x = bowCX + rH_px * Math.cos(angle); y = bowCY + rH_px * Math.sin(angle);
+                                                  } else {
+                                                      x = seg.pA.x + t * (seg.pB.x - seg.pA.x); y = seg.pA.y + t * (seg.pB.y - seg.pA.y);
+                                                  }
+
+                                                  return (
+                                                      <g key={att.id}>
+                                                          {att.type === 'bracket' ? (
+                                                              <g>
+                                                                  <circle cx={x} cy={y} r="3" fill="#28a745" />
+                                                                  <line x1={x} y1={y} x2={x + seg.norm.x * (engData.proj * S)} y2={y + seg.norm.y * (engData.proj * S)} stroke="#999" strokeWidth="2" />
+                                                              </g>
+                                                          ) : (
+                                                              <g>
+                                                                  <line x1={x - seg.norm.x*6 - seg.norm.y*3} y1={y - seg.norm.y*6 + seg.norm.x*3} x2={x + seg.norm.x*6 - seg.norm.y*3} y2={y + seg.norm.y*6 + seg.norm.x*3} stroke="#d9534f" strokeWidth="1.5" />
+                                                                  <line x1={x - seg.norm.x*6 + seg.norm.y*3} y1={y - seg.norm.y*6 - seg.norm.x*3} x2={x + seg.norm.x*6 + seg.norm.y*3} y2={y + seg.norm.y*6 - seg.norm.x*3} stroke="#d9534f" strokeWidth="1.5" />
+                                                              </g>
+                                                          )}
+                                                          
+                                                          <line x1={x} y1={y-5} x2={x} y2={y-80} stroke={att.type==='bracket'?'#28a745':'#d9534f'} strokeWidth="1" strokeDasharray="2,2" />
+                                                          <foreignObject x={x - 45} y={y - 125} width="90" height="45" style={{ overflow: 'visible' }}>
+                                                              <div style={{ background: '#fff', border: `1px solid ${att.type==='bracket'?'#28a745':'#d9534f'}`, display: 'flex', flexDirection: 'column', padding: '3px', borderRadius: '4px', boxShadow: '0 2px 5px rgba(0,0,0,0.3)' }}>
+                                                                  <input type="number" value={att.distInches} step="0.125" onChange={(e) => handleUpdateAttachmentDist(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '10px', fontWeight: 'bold', textAlign: 'center', border: 'none', background: '#e9ecef', outline: 'none' }} />
+                                                                  <span style={{ fontSize: '6px', color: '#666', textAlign: 'center', margin: '2px 0' }}>from {att.ref === 'START' ? seg.nA : seg.nB}</span>
+                                                                  <input type="text" placeholder="Notes..." value={att.note||''} onChange={(e) => handleUpdateAttachmentNote(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '8px', border: '1px solid #ccc', outline: 'none', textAlign: 'center' }} />
+                                                              </div>
+                                                          </foreignObject>
+                                                      </g>
+                                                  );
+                                              })}
+
+                                              {shopNotes.map(n => (
+                                                  <g key={n.id}>
+                                                  <circle cx={n.x} cy={n.y} r="3" fill="#ffc107" />
+                                                  <line x1={n.x} y1={n.y} x2={n.x + 20} y2={n.y - 60} stroke="#ffc107" strokeWidth="1.5" />
+                                                  <foreignObject x={n.x + 20} y={n.y - 105} width="140" height="45" style={{ overflow: 'visible' }}>
+                                                      <textarea value={n.text} placeholder="Type shop floor note here..." onChange={(e) => handleUpdateShopNote(n.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', height: '100%', fontSize: '9px', fontWeight: 'bold', border: '1px solid #ffc107', background: '#fff3cd', outline: 'none', resize: 'none', padding: '4px', boxShadow: '0 2px 5px rgba(0,0,0,0.2)' }} />
+                                                  </foreignObject>
+                                                  </g>
+                                              ))}
+
+                                              {renderEndTreatment(true)}
+                                              {renderEndTreatment(false)}
+                                          </g>
+                                      )}
+                                  </g>
+                              </svg>
+                          )}
+                      </div>
+
+                      {/* 🚀 FIXED: Engineering Dashboard restored at the bottom of the SVG */}
+                      {viewMode === 'ENGINEERING' && !showQuotePanel && (
+                          <div style={{ background: '#fff', borderTop: '2px solid #000', display: 'flex', minHeight: '120px' }}>
+                              <div style={{ flex: 1, padding: '15px', borderRight: '1px solid #ccc' }}>
+                                  <h4 style={{ margin: '0 0 10px 0', color: '#007bff' }}>📋 CLIENT DETAILS & ORDERING</h4>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '0.8rem' }}>
+                                      {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Left Segment C2C:</span><strong>{pole1.toFixed(2)}"</strong></div>}
+                                      <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{engData.shape === 'STRAIGHT' ? 'Ordering Length / C2C:' : 'Center Segment C2C:'}</span><strong>{pole2.toFixed(2)}"</strong></div>
+                                      {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Right Segment C2C:</span><strong>{pole3.toFixed(2)}"</strong></div>}
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#666', marginTop: '5px' }}><span>End Style:</span><strong>{engData.endStyle.replace('_', ' ')}</strong></div>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#666' }}><span>Projection:</span><strong>{isCustomProj ? `CUSTOM (${engData.proj}")` : `${engData.proj}"`}</strong></div>
+                                  </div>
+                              </div>
+                              <div style={{ flex: 1, padding: '15px', background: '#f8f9fa' }}>
+                                  <h4 style={{ margin: '0 0 10px 0', color: '#b8860b' }}>⚙️ SHOP FLOOR BOM & RAW CUTS</h4>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '0.8rem' }}>
+                                      {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>TUBE A RAW CUT:</span><strong>{rawLeft.toFixed(2)}"</strong></div>}
+                                      <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{engData.shape === 'STRAIGHT' ? 'MAIN TUBE RAW CUT:' : 'TUBE B RAW CUT:'}</span><strong>{rawCenter.toFixed(2)}"</strong></div>
+                                      {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>TUBE C RAW CUT:</span><strong>{rawRight.toFixed(2)}"</strong></div>}
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#6f42c1', marginTop: '5px' }}><span>Total Splices Req:</span><strong>{qtySplices}</strong></div>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#28a745' }}><span>Total Brackets Req:</span><strong>{qtyBrackets}</strong></div>
+                                  </div>
+                              </div>
+                          </div>
                       )}
                   </div>
               </div>
-          </div>
 
           {/* --- RIGHT SIDEBAR: CONFIGURE & QUOTE --- */}
           {showQuotePanel && (
@@ -989,12 +1027,27 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                       <div style={{ background: '#fff3cd', border: '2px solid #ffc107', padding: '15px' }}>
                           <h4 style={{ margin: '0 0 10px 0', color: '#856404', borderBottom: '2px solid #ffeeba', paddingBottom: '5px' }}>4. AUTO-APPLIED FEES</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '0.8rem' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>SPLICE SERVICES:</span><strong>{qtySplices}x</strong></div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>MITER CUTS:</span><strong>{qtyMiters}x</strong></div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>RETURN BENDS:</span><strong>{qtyBends}x</strong></div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}><span>MITERED RETURNS:</span><strong>{qtyMiterReturns}x</strong></div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}>
+                                  <span>SPLICE SERVICES <span style={{fontSize:'0.6rem', color:'#856404'}}>{feeSkuSplice ? `[${feeSkuSplice.legacyErpId}]` : '[UNMAPPED]'}</span>:</span>
+                                  <strong>{qtySplices}x</strong>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}>
+                                  <span>MITER CUTS <span style={{fontSize:'0.6rem', color:'#856404'}}>{feeSkuMiter ? `[${feeSkuMiter.legacyErpId}]` : '[UNMAPPED]'}</span>:</span>
+                                  <strong>{qtyMiters}x</strong>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}>
+                                  <span>RETURN BENDS <span style={{fontSize:'0.6rem', color:'#856404'}}>{feeSkuBend ? `[${feeSkuBend.legacyErpId}]` : '[UNMAPPED]'}</span>:</span>
+                                  <strong>{qtyBends}x</strong>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted #ccc', paddingBottom: '3px' }}>
+                                  <span>MITERED RETURNS <span style={{fontSize:'0.6rem', color:'#856404'}}>{feeSkuMiterReturn ? `[${feeSkuMiterReturn.legacyErpId}]` : '[UNMAPPED]'}</span>:</span>
+                                  <strong>{qtyMiterReturns}x</strong>
+                              </div>
                               {qtyCustomProjBrackets > 0 && (
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', color: '#d9534f', fontWeight: 'bold' }}><span>CUSTOM PROJ. BRACKETS:</span><strong>{qtyCustomProjBrackets}x</strong></div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', color: '#d9534f', fontWeight: 'bold' }}>
+                                      <span>CUSTOM PROJ. BRACKETS <span style={{fontSize:'0.6rem', color:'#d9534f'}}>{feeSkuCustomProj ? `[${feeSkuCustomProj.legacyErpId}]` : '[UNMAPPED]'}</span>:</span>
+                                      <strong>{qtyCustomProjBrackets}x</strong>
+                                  </div>
                               )}
                           </div>
                           <p style={{ fontSize: '0.65rem', color: '#666', marginTop: '10px', fontStyle: 'italic', marginBottom: 0 }}>These fabrication fees will be automatically appended to the quote based on master pricing rules.</p>
