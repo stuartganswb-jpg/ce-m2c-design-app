@@ -86,16 +86,21 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return cpqFlows.find(f => f.id === quoteFlowId);
   }, [quoteFlowId, cpqFlows]);
 
-  // 🚀 ROBUST STEP CATEGORY SCANNER
+  // 🚀 FIXED: Added strict hierarchy so "Bracket Finish" isn't misclassified as "Bracket"
   const getStepCategory = (step) => {
       if (!step) return '';
       const t = (step.title || '').toLowerCase();
       const ds = (step.dataSource || '').toLowerCase();
+      
+      // Strict override: if it's a finish, return immediately
+      if (ds === 'master_finishes' || t.includes('finish') || t.includes('color') || t.includes('patina')) return 'FINISH';
+      
       if (t.includes('pole') || t.includes('tube') || t.includes('rod') || ds.includes('pole')) return 'POLE';
       if (t.includes('bracket') || ds.includes('bracket')) return 'BRACKET';
       if (t.includes('finial') || ds.includes('finial')) return 'FINIAL';
       if (t.includes('ring') || ds.includes('ring')) return 'RING';
       if (t.includes('splice') || ds.includes('splice')) return 'SPLICE';
+      
       return 'OTHER';
   };
 
@@ -143,7 +148,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (detectedProj) setIsCustomProj(false);
   }, [activeFlow, flowPins, libraryParts]);
 
-  // 🚀 DYNAMIC BRACKET MATH SYNC
   useEffect(() => {
       if (selectedBracketId) {
           const part = libraryParts.find(p => p.id === selectedBracketId);
@@ -190,8 +194,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   if (!upperCollections.includes('N/A')) return false; 
               }
 
-              // 🚀 FIX: We DO NOT filter by projection if the step itself is selecting a Bracket.
-              // Selecting the bracket establishes the projection!
               const cat = getStepCategory(step);
               if (!isCustomProj && p.manufacturingSpecs?.customData?.projection && safeProj > 0 && cat !== 'BRACKET') {
                   if (parseFloat(p.manufacturingSpecs.customData.projection) !== safeProj) return false;
@@ -287,7 +289,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   
   const recRings = Math.ceil(systemO2O / 12) * 4;
 
-  // 🚀 SYNC QUANTITIES TO CPQ STEPS
   useEffect(() => {
       if (!activeFlow) return;
       
@@ -1009,7 +1010,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                   </div>
                               ) : (
                                   activeFlow.steps.map((step, idx) => {
-                                      if (step.type === 'DIMENSIONS' || step.type === 'VISUAL_GRID' || step.type === 'VISUAL_DIMENSIONS') return null;
+                                      if (step.type === 'DIMENSIONS') return null;
                                       
                                       const options = getOptionsForStep(step);
                                       const cat = getStepCategory(step);
@@ -1041,7 +1042,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                           );
                                       }
 
-                                      // Standard Component Step
                                       return (
                                           <div key={step.id} style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', opacity: (cat === 'FINIAL' && disableFinials) ? 0.5 : 1 }}>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
