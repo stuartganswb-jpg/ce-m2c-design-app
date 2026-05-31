@@ -133,7 +133,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (!step || !step.dataSource) return [];
       let options = [];
 
-      // 🚀 NEW: Updated to respect prodTypes
       const isProdType = globalLists.prodTypes?.includes(step.dataSource);
       const isRoutingType = globalLists.inventoryTypes?.includes(step.dataSource) || globalLists.assemblyTypes?.includes(step.dataSource);
 
@@ -239,8 +238,12 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const qtyBends = engData.endStyle === 'RETURN_BEND' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
   const qtyMiterReturns = engData.endStyle === 'RETURN_MITER' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
   const qtyCustomProjBrackets = isCustomProj ? qtyBrackets : 0;
+  const qtyFinials = engData.endStyle === 'FINIAL' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
+  const disableFinials = engData.endStyle === 'RETURN_BEND' || engData.endStyle === 'RETURN_MITER';
+  
+  const recRings = Math.ceil(systemO2O / 12) * 4;
 
-  // 🚀 SYNC QUANTITIES DIRECTLY FROM MATH ENGINE
+  // 🚀 FIX: AUTO-BIND QUANTITIES TO CPQ STEPS
   useEffect(() => {
       if (!activeFlow) return;
       
@@ -251,6 +254,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               if (t.includes('pole') || t.includes('tube')) updates[step.id] = poleFeetQty;
               else if (t.includes('bracket')) updates[step.id] = qtyBrackets;
               else if (t.includes('splice')) updates[step.id] = qtySplices;
+              else if (t.includes('finial') && !disableFinials) updates[step.id] = qtyFinials;
+              else if (t.includes('ring')) {
+                  if (prev[step.id] === undefined) updates[step.id] = recRings;
+              }
               else if (!updates[step.id]) updates[step.id] = 1; 
           });
           return updates;
@@ -269,7 +276,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           return changed ? updates : prev;
       });
 
-  }, [activeFlow, poleFeetQty, qtyBrackets, qtySplices, quoteSelections.collection, libraryParts, safeProj]);
+  }, [activeFlow, poleFeetQty, qtyBrackets, qtySplices, qtyFinials, disableFinials, recRings, libraryParts, safeProj, quoteSelections.collection]);
 
   const feeSkuSplice = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'SPLICE');
   const feeSkuMiter = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'MITER_CUT');
@@ -541,7 +548,16 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   };
 
   const handlePushToCPQ = async () => {
-      const hasMissingRequirements = activeFlow?.steps?.some(step => step.required && !dynamicConfigParams[step.id] && step.type !== 'DIMENSIONS');
+      const hasMissingRequirements = activeFlow?.steps?.some(step => {
+          if (step.type === 'DIMENSIONS') return false; 
+          if (step.required && !dynamicConfigParams[step.id]) {
+              const t = step.title.toLowerCase();
+              if (t.includes('finial') && disableFinials) return false;
+              return true;
+          }
+          return false;
+      });
+
       if (hasMissingRequirements) return alert("Please complete all required steps in the configuration before adding to cart.");
       
       setIsPushingToCPQ(true);
@@ -561,7 +577,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               if (t.includes('pole') || t.includes('tube')) mappedQuantities[step.id] = poleFeetQty;
               else if (t.includes('bracket')) mappedQuantities[step.id] = qtyBrackets;
               else if (t.includes('finial') && !disableFinials) mappedQuantities[step.id] = qtyFinials;
-              else if (t.includes('ring')) mappedQuantities[step.id] = stepQuantities[step.id] || 0;
+              else if (t.includes('ring')) mappedQuantities[step.id] = stepQuantities[step.id] || recRings;
               else mappedQuantities[step.id] = 1;
           });
       }
@@ -939,7 +955,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                   </div>
                               ) : (
                                   activeFlow.steps.map((step, idx) => {
-                                      if (step.type === 'DIMENSIONS' || step.type === 'VISUAL_GRID' || step.type === 'VISUAL_DIMENSIONS') return null;
+                                      if (step.type === 'DIMENSIONS') return null;
                                       
                                       const options = getOptionsForStep(step);
                                       const t = step.title.toLowerCase();
@@ -955,7 +971,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                               <div key={step.id} style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
                                                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
                                                       <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{idx + 1}. {step.title.toUpperCase()}:</label>
-                                                      {stepQuantities[step.id] > 0 && <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>{stepQuantities[step.id]} RINGS</span>}
+                                                      {stepQuantities[step.id] > 0 && <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>REC: {recRings} RINGS</span>}
                                                   </div>
                                                   <select value={dynamicConfigParams[step.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [step.id]: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}>
                                                       <option value="">-- SELECT OPTION --</option>
@@ -964,7 +980,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                                   {dynamicConfigParams[step.id] && (
                                                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff', padding: '5px', border: '1px solid #ccc' }}>
                                                           <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>TOTAL RINGS TO ORDER:</span>
-                                                          <input type="number" min="1" value={stepQuantities[step.id] || ''} onChange={e => setStepQuantities({...stepQuantities, [step.id]: parseInt(e.target.value) || 0})} style={{ width: '60px', padding: '5px', textAlign: 'center', border: '2px solid #000', fontWeight: 'bold' }} />
+                                                          <input type="number" min="1" value={stepQuantities[step.id] !== undefined ? stepQuantities[step.id] : recRings} onChange={e => setStepQuantities({...stepQuantities, [step.id]: parseInt(e.target.value) || 0})} style={{ width: '60px', padding: '5px', textAlign: 'center', border: '2px solid #000', fontWeight: 'bold' }} />
                                                       </div>
                                                   )}
                                               </div>
