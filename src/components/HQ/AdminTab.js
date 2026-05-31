@@ -277,7 +277,6 @@ const handleSyncItems = async (itemType) => {
       try {
           const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
           
-          // 🚀 ADDED: Vendor Name, Vendor Part # (vendorname), and Last Purchase Price
           const q = `
               SELECT 
                   id, 
@@ -311,15 +310,17 @@ const handleSyncItems = async (itemType) => {
               const existingMatch = allApprovedDesigns.find(d => d.legacyErpId === item.itemid);
               const targetDocId = existingMatch ? existingMatch.id : newId;
 
+              // Smart Routing Logic
               const pTypeClean = (item.product_type || '').toLowerCase().trim();
               const uomClean = (item.uom || '').toLowerCase().trim();
               
               const isPoleOrLinear = pTypeClean === 'pole' || pTypeClean === 'poles' || uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
               const autoPartHandling = isPoleOrLinear ? 'Custom' : 'Small Parts';
               const autoIsCutToSize = isPoleOrLinear; 
-// 🚀 NEW: OUTSOURCING ROUTING LOGIC
+              
               const hasVendor = !!item.vendor_name;
 
+              // ONLY ONE PAYLOAD DECLARATION HERE
               const payload = {
                   id: targetDocId,
                   itemId: targetDocId,
@@ -331,6 +332,63 @@ const handleSyncItems = async (itemType) => {
                   sharedBrands: [activeBrand]
               };
 
+              if (!existingMatch) {
+                  payload.manufacturingSpecs = {
+                      basePrice: parseFloat(item.baseprice) || 0, 
+                      cost: parseFloat(item.lastpurchaseprice) || 0, 
+                      isInHouse: !hasVendor, 
+                      status: "IMPORTED_FROM_ERP",
+                      productType: item.product_type || 'Uncategorized',
+                      uom: item.uom || 'EA',
+                      binNumber: 'Pending Map',
+                      partHandling: autoPartHandling, 
+                      parametric: { isCutToSize: autoIsCutToSize }, 
+                      vendorName: item.vendor_name || '', 
+                      vendorId: item.vendor_part_number || '', 
+                      customData: {
+                          collection: item.collection || '',
+                          watchlist: item.watchlist || ''
+                      },
+                      dynamicDicts: {}
+                  };
+                  payload.createdAt = new Date().toISOString();
+              } else {
+                  payload.manufacturingSpecs = {
+                      ...existingMatch.manufacturingSpecs,
+                      basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0,
+                      cost: parseFloat(item.lastpurchaseprice) || existingMatch.manufacturingSpecs?.cost || 0,
+                      isInHouse: existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : !hasVendor,
+                      productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
+                      uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
+                      partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
+                      vendorName: item.vendor_name || existingMatch.manufacturingSpecs?.vendorName || '',
+                      vendorId: item.vendor_part_number || existingMatch.manufacturingSpecs?.vendorId || '',
+                      parametric: {
+                          ...(existingMatch.manufacturingSpecs?.parametric || {}),
+                          isCutToSize: existingMatch.manufacturingSpecs?.parametric?.isCutToSize !== undefined 
+                                       ? existingMatch.manufacturingSpecs.parametric.isCutToSize 
+                                       : autoIsCutToSize
+                      },
+                      customData: {
+                          ...(existingMatch.manufacturingSpecs?.customData || {}),
+                          collection: item.collection || existingMatch.manufacturingSpecs?.customData?.collection || '',
+                          watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || ''
+                      }
+                  };
+                  payload.updatedAt = new Date().toISOString();
+              }
+
+              await setDoc(doc(db, "Approved_Designs", targetDocId), payload, { merge: true });
+              successCount++;
+          }
+          addLog(`✅ Successfully synced and enriched ${successCount} library items.`, 'success');
+
+      } catch (err) {
+          console.error(err);
+          addLog(`❌ FAILED: ${err.message}`, 'error');
+      }
+      setIsSyncing(false);
+  };
               if (!existingMatch) {
                   payload.manufacturingSpecs = {
                       basePrice: parseFloat(item.baseprice) || 0, 
