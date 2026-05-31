@@ -43,8 +43,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
   // QUOTING ENGINE STATE
   const [quoteFlowId, setQuoteFlowId] = useState("");
-  const [quoteSelections, setQuoteSelections] = useState({ collection: '', ringsPerFoot: 4 });
+  const [quoteSelections, setQuoteSelections] = useState({ collection: '' });
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
+  const [stepQuantities, setStepQuantities] = useState({}); // 🚀 NEW: Tracks dynamic step quantities
   const [flowPins, setFlowPins] = useState([]);
 
   const [engData, setEngData] = useState({
@@ -94,14 +95,12 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return () => unsub();
   }, [activeFlow, libraryParts]);
 
-  // 🚀 INTELLIGENT SNIFFER + TEXT FALLBACK FOR FRENCH RETURNS
   useEffect(() => {
       if (!activeFlow) return;
 
       let detectedProj = null;
       let detectedEndStyle = null;
 
-      // 1. Check metadata of pinned components
       flowPins.forEach(pin => {
           const part = libraryParts.find(p => p.id === pin.partId || p.legacyErpId === pin.legacyErpId);
           if (part) {
@@ -113,7 +112,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           }
       });
 
-      // 2. Text-matcher fallback if library metadata is incomplete
       if (!detectedEndStyle && activeFlow.name.toUpperCase().includes("FRENCH RETURN")) {
           detectedEndStyle = 'RETURN_BEND';
       }
@@ -177,23 +175,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return options;
   };
 
-  // 🚀 AUTO-SELECTOR: If a step has exactly 1 valid option, select it automatically to prevent validation blockers.
-  useEffect(() => {
-      if (!activeFlow) return;
-      setDynamicConfigParams(prev => {
-          let updates = { ...prev };
-          let changed = false;
-          activeFlow.steps.forEach(step => {
-              const opts = getOptionsForStep(step);
-              if (opts.length === 1 && prev[step.id] !== opts[0].id) {
-                  updates[step.id] = opts[0].id;
-                  changed = true;
-              }
-          });
-          return changed ? updates : prev;
-      });
-  }, [activeFlow, quoteSelections.collection, libraryParts, engData.proj]);
-
   const uniqueProjections = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.customData?.projection).filter(Boolean))].sort((a,b) => parseFloat(a) - parseFloat(b));
 
   const rad = (deg) => (deg * Math.PI) / 180;
@@ -241,27 +222,52 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const rawLeft = engData.shape === 'MITERED' ? pole1 + addL_RAW : 0; const rawRight = engData.shape === 'MITERED' ? pole3 + addR_RAW : 0;
   const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 + addL_RAW + addR_RAW : pole2;
   
-  const systemC2C = orderL + orderC + orderR;
   const systemO2O = tolLeft + tolCenter + tolRight;
   const totalPoleRawInches = rawLeft + rawCenter + rawRight;
+  
+  // 🚀 MATH ENGINE QUANTITIES
   const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
-
   const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;
   const qtySplices = attachments.filter(a => a.type === 'splice').length;
   const qtyMiters = engData.shape === 'MITERED' ? 2 : 0;
   const qtyBends = engData.endStyle === 'RETURN_BEND' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
   const qtyMiterReturns = engData.endStyle === 'RETURN_MITER' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
-  const qtyFinials = engData.endStyle === 'FINIAL' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
-  
-  // RINGS calculation. This is dynamic based on user text input for rings per foot.
-  const qtyRings = Math.ceil(systemO2O / 12) * quoteSelections.ringsPerFoot;
   const qtyCustomProjBrackets = isCustomProj ? qtyBrackets : 0;
 
-  const feeSkuSplice = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'SPLICE');
-  const feeSkuMiter = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'MITER_CUT');
-  const feeSkuBend = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'BENT_RETURN');
-  const feeSkuMiterReturn = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'MITER_RETURN');
-  const feeSkuCustomProj = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'CUSTOM_PROJ');
+  // 🚀 FIX: AUTO-BIND QUANTITIES TO CPQ STEPS
+  // This constantly synchronizes the background math engine to the active CPQ steps
+  // so the cart validates correctly when "Required: true" is checked.
+  useEffect(() => {
+      if (!activeFlow) return;
+      
+      setStepQuantities(prev => {
+          const updates = { ...prev };
+          activeFlow.steps.forEach(step => {
+              const t = step.title.toLowerCase();
+              if (t.includes('pole') || t.includes('tube')) updates[step.id] = poleFeetQty;
+              else if (t.includes('bracket')) updates[step.id] = qtyBrackets;
+              else if (t.includes('splice')) updates[step.id] = qtySplices;
+              else if (!updates[step.id]) updates[step.id] = 1; // Default to 1 for generic items like finishes
+          });
+          return updates;
+      });
+
+      // 🚀 AUTO-SELECTOR FOR SINGLE OPTIONS
+      setDynamicConfigParams(prev => {
+          let updates = { ...prev };
+          let changed = false;
+          activeFlow.steps.forEach(step => {
+              const opts = getOptionsForStep(step);
+              if (opts.length === 1 && prev[step.id] !== opts[0].id) {
+                  updates[step.id] = opts[0].id;
+                  changed = true;
+              }
+          });
+          return changed ? updates : prev;
+      });
+
+  }, [activeFlow, poleFeetQty, qtyBrackets, qtySplices, quoteSelections.collection, libraryParts, safeProj]);
+
 
   const P2 = { x: 500 - (wall2 * S)/2, y: 250 }; const P3 = { x: 500 + (wall2 * S)/2, y: 250 };
   let P1 = P2, P4 = P3, HS = {x: 0, y: 0}, HE = {x: 0, y: 0}, HC1 = {x: 0, y: 0}, HC2 = {x: 0, y: 0}, nL = {x: 0, y: -1}, nR = {x: 0, y: -1}; 
@@ -345,7 +351,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               {engData.shape === 'MITERED' && ( <g><polyline points={`${eHSx},0 ${HC1.x},0 ${HC2.x},0 ${eHEx},0`} fill="none" stroke="#d4af37" strokeWidth="8" strokeLinejoin="miter" /><line x1={HC1.x} y1="-5" x2={HC1.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" /><line x1={HC2.x} y1="-5" x2={HC2.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" /></g> )}
               {engData.shape === 'BOW' && <line x1={eHSx} y1="0" x2={eHEx} y2="0" stroke="#d4af37" strokeWidth="8" />}
               
-              {/* 🚀 CRASH FIX: Hardened rendering loop for attachments */}
               {attachments.map(att => {
                   let seg = null;
                   if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" }; }
@@ -386,7 +391,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                       </g>
                   );
               })}
-
               <g transform={`translate(${-perspectiveStretch.L}, 0)`}>{renderEndTreatment(true, true)}</g>
               <g transform={`translate(${perspectiveStretch.R}, 0)`}>{renderEndTreatment(false, true)}</g>
           </g>
@@ -427,7 +431,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
     if (viewMode === 'ENGINEERING' && engTool === "pan") { setIsPanning(true); setPanStart({ clientX: e.clientX, clientY: e.clientY }); return; }
 
     const pt = getAdjustedSvgPoint(e.clientX, e.clientY);
-    if (!pt) return; // 🚀 CRASH PREVENTION
+    if (!pt) return; 
 
     if (viewMode === 'VISUAL' && visualTool === "calibrate") {
       if (calPoints.length >= 2) { setCalPoints([pt]); setIsCalibrated(false); } 
@@ -447,7 +451,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
         if (engTool === 'note') { setShopNotes([...shopNotes, { id: Date.now(), x: pt.x, y: pt.y, text: '' }]); setEngTool('pan'); return; }
         if (engTool === 'bracket' || engTool === 'splice') {
             const hwSegments = [];
-            // 🚀 FIXED: All segments MUST have a normal vector (norm) to prevent the SVG line draw crash!
             if (engData.shape === 'STRAIGHT') { hwSegments.push({ id: 2, pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" }); }
             else if (engData.shape === 'MITERED') {
                 hwSegments.push({ id: 1, pA: HS, pB: HC1, len: pole1, norm: nL, nA: "L.Edge", nB: "L.Miter" });
@@ -536,7 +539,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       setIsPushingToCPQ(true);
       const draftId = `QUOTE-${Date.now()}`;
       
-      // 🚀 PATH B: Map calculated engineering quantities into the payload
       const mappedQuantities = {
           splice: qtySplices,
           miter: qtyMiters,
@@ -551,7 +553,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               if (t.includes('pole') || t.includes('tube')) mappedQuantities[step.id] = poleFeetQty;
               else if (t.includes('bracket')) mappedQuantities[step.id] = qtyBrackets;
               else if (t.includes('finial') && !disableFinials) mappedQuantities[step.id] = qtyFinials;
-              else if (t.includes('ring')) mappedQuantities[step.id] = qtyRings;
+              
+              // 🚀 FIX: Rings now map to the direct input field
+              else if (t.includes('ring')) mappedQuantities[step.id] = stepQuantities[step.id] || 0;
+              
               else mappedQuantities[step.id] = 1;
           });
       }
@@ -591,7 +596,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           {!showQuotePanel && (
             <div style={{ width: viewMode === 'VISUAL' ? '340px' : '480px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '15px' }}>
                 
-                {/* 🚀 STEP 1: FLOW SELECTION ELEVATED TO MAIN UI */}
                 {viewMode === 'ENGINEERING' && (
                     <div style={{ background: '#e6f2ff', border: '2px solid #007bff' }}>
                         <div style={{ padding: '10px', background: '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>1. SYSTEM ARCHITECTURE (CPQ FLOW)</div>
@@ -815,7 +819,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                       {engData.shape === 'MITERED' && sawAngle1 > 0 && <g><line x1={HC1.x} y1={HC1.y + 15} x2={HC1.x + 60} y2={HC1.y + 100} stroke="#666" strokeWidth="1" strokeDasharray="2,2" /><rect x={HC1.x + 30} y={HC1.y + 93} width="60" height="14" fill="#fff" stroke="#666" strokeWidth="1" /><text x={HC1.x + 60} y={HC1.y + 103} fill="#000" fontSize="10" fontWeight="bold" textAnchor="middle">{sawAngle1.toFixed(1)}° MITER</text></g>}
                                       {engData.shape === 'MITERED' && sawAngle2 > 0 && <g><line x1={HC2.x} y1={HC2.y + 15} x2={HC2.x - 60} y2={HC2.y + 100} stroke="#666" strokeWidth="1" strokeDasharray="2,2" /><rect x={HC2.x - 90} y={HC2.y + 93} width="60" height="14" fill="#fff" stroke="#666" strokeWidth="1" /><text x={HC2.x - 60} y={HC2.y + 103} fill="#000" fontSize="10" fontWeight="bold" textAnchor="middle">{sawAngle2.toFixed(1)}° MITER</text></g>}
 
-                                      {/* 🚀 CRASH FIX: Vector normals are safely enforced before drawing */}
                                       {attachments.map(att => {
                                           let seg = null;
                                           if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" }; }
@@ -907,7 +910,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa' }}>
                       
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>COLLECTION & FLOW ASSIGNMENT</h4>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>COLLECTION ASSIGNMENT</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                               <div>
                                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>COLLECTION (FILTERS HARDWARE):</label>
@@ -942,7 +945,28 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                       else if (t.includes('bracket')) qtyLabel = `QTY: ${qtyBrackets}`;
                                       else if (t.includes('finial') && !disableFinials) qtyLabel = `QTY: ${qtyFinials}`;
                                       else if (t.includes('finial') && disableFinials) qtyLabel = `N/A (BENT RETURN)`;
-                                      else if (t.includes('ring') && quoteSelections.ringsPerFoot) qtyLabel = `${qtyRings} RINGS REQ`;
+                                      
+                                      // Special handling for the rings input step
+                                      if (t.includes('ring')) {
+                                          return (
+                                              <div key={step.id} style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                                                      <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{idx + 1}. {step.title.toUpperCase()}:</label>
+                                                      {stepQuantities[step.id] > 0 && <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>{stepQuantities[step.id]} RINGS</span>}
+                                                  </div>
+                                                  <select value={dynamicConfigParams[step.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [step.id]: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}>
+                                                      <option value="">-- SELECT OPTION --</option>
+                                                      {options.map(opt => <option key={opt.id} value={opt.id}>{opt.itemName} {opt.code ? `[${opt.code}]` : ''}</option>)}
+                                                  </select>
+                                                  {dynamicConfigParams[step.id] && (
+                                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff', padding: '5px', border: '1px solid #ccc' }}>
+                                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>TOTAL RINGS TO ORDER:</span>
+                                                          <input type="number" min="1" value={stepQuantities[step.id] || ''} onChange={e => setStepQuantities({...stepQuantities, [step.id]: parseInt(e.target.value) || 0})} style={{ width: '60px', padding: '5px', textAlign: 'center', border: '2px solid #000', fontWeight: 'bold' }} />
+                                                      </div>
+                                                  )}
+                                              </div>
+                                          );
+                                      }
 
                                       return (
                                           <div key={step.id} style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', opacity: (t.includes('finial') && disableFinials) ? 0.5 : 1 }}>
@@ -992,13 +1016,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                       <strong style={{ color: '#d9534f', fontSize: '0.7rem' }}>{qtyCustomProjBrackets}x</strong>
                                   </div>
                               )}
-                          </div>
-                      </div>
-
-                      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#6f42c1', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>RINGS CONFIGURATION</h4>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>RINGS PER FOOT:</label><input type="number" value={quoteSelections.ringsPerFoot} onChange={e => setQuoteSelections({...quoteSelections, ringsPerFoot: parseInt(e.target.value)||0})} style={{ width: '60px', padding: '5px', textAlign: 'center', fontWeight: 'bold', border: '1px solid #000' }} /></div>
                           </div>
                       </div>
 
