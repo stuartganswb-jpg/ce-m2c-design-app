@@ -57,10 +57,12 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                   const qty = job.cpqData.quantities?.[stepId] || 1;
                   
                   if (masterPart) {
-                      const nsId = masterPart.legacyErpId || masterPart.itemId;
+                      // 🚀 NEW: Prioritize the numeric internal ID for NetSuite API compatibility
+                      const nsId = masterPart.netSuiteInternalId || masterPart.legacyErpId; 
+                      
                       if (nsId && nsId !== 'PENDING') {
                           lineItems.push({
-                              item: { id: nsId }, 
+                              item: { id: nsId.toString() }, // API requires a stringified numeric ID
                               quantity: qty,
                               rate: masterPart.manufacturingSpecs?.basePrice || 0,
                               description: `${masterPart.itemName} (Mapped from CPQ)`

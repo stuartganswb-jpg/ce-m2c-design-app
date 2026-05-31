@@ -233,7 +233,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       try {
           const typeFilter = itemType === 'Inventory' ? "itemtype = 'InvtPart'" : "itemtype = 'Assembly'";
           
-          // 🚀 THE GOLDILOCKS QUERY: Custom fields + Base Price + Native Stock Unit
           const q = `
               SELECT 
                   id, 
@@ -268,6 +267,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   id: targetDocId,
                   itemId: targetDocId,
                   legacyErpId: item.itemid || item.id,
+                  netSuiteInternalId: item.id, // 🚀 NEW: Explicitly save the numeric ID for pushing orders!
                   itemName: item.displayname || item.itemid,
                   brandId: activeBrand,
                   partClass: itemType,
@@ -275,7 +275,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               };
 
               if (!existingMatch) {
-                  // Brand new item: Insert all the fresh NetSuite data
                   payload.manufacturingSpecs = {
                       basePrice: parseFloat(item.baseprice) || 0, 
                       cost: 0,
@@ -293,7 +292,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   };
                   payload.createdAt = new Date().toISOString();
               } else {
-                  // Existing item: Update ERP data without erasing any manual UI edits
                   payload.manufacturingSpecs = {
                       ...existingMatch.manufacturingSpecs,
                       basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0,
@@ -318,14 +316,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           addLog(`❌ FAILED: ${err.message}`, 'error');
       }
       setIsSyncing(false);
-  };
-
-  // --- CRM Dictionary Handlers ---
-  const handleAddDiscount = async () => {
-      if (!newDiscount.code || !newDiscount.percent) return alert("Code and Percentage are required.");
-      const updated = [...crmDiscounts, { ...newDiscount, code: newDiscount.code.toUpperCase(), percent: parseFloat(newDiscount.percent) || 0 }];
-      await setDoc(doc(db, "system", "crm_discounts"), { list: updated }, { merge: true });
-      setNewDiscount({ code: '', description: '', percent: '' });
   };
 
   const handleRemoveDiscount = async (code) => {
