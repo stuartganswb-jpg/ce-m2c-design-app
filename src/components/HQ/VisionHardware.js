@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc, serverTimestamp, collection, onSnapshot, query } from "firebase/firestore";
+import { doc, setDoc, serverTimestamp, collection, onSnapshot, query, where } from "firebase/firestore";
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [viewMode, setViewMode] = useState('ENGINEERING');
@@ -43,14 +43,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
   // 🚀 QUOTING ENGINE STATE
   const [quoteFlowId, setQuoteFlowId] = useState("");
-  const [quoteSelections, setQuoteSelections] = useState({ collection: '' });
+  const [quoteSelections, setQuoteSelections] = useState({ collection: '', finishId: '', poleId: '', bracketId: '', finialId: '', ringId: '', ringsPerFoot: 4 });
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
 
   const [engData, setEngData] = useState({
     jobName: '', sidemark: '', shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'RETURN_BEND', proj: "", poleDiameter: 1.0, finialW: 3.5, bracketW: 3.0,           
+    endStyle: 'FINIAL', proj: "", poleDiameter: 1.0, finialW: 3.5, bracketW: 3.0,           
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   });
 
@@ -70,8 +70,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
     const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (docSnap) => { if (docSnap.exists() && docSnap.data().finishes) setGlobalFinishes(docSnap.data().finishes); });
     const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => { setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))); });
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => { setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()}))); });
-    
-    // Fetch Admin Data
     const unsubFlows = onSnapshot(query(collection(db, "cpq_flows")), (snap) => {
         const flows = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(f => f.brandId === activeBrand);
         setCpqFlows(flows);
@@ -86,27 +84,48 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return cpqFlows.find(f => f.id === quoteFlowId);
   }, [quoteFlowId, cpqFlows]);
 
-  // Safely cast projection so math doesn't result in NaN if empty string
-  const safeProj = parseFloat(engData.proj) || 0;
+  // 🚀 FLOW-FIRST INTELLIGENCE: Sniff the selected CPQ Flow and auto-set Projection and End Style
+  useEffect(() => {
+      if (!activeFlow) return;
 
-  // 🚀 DYNAMIC FLOW FILTER: Scans flows, finds their Master Assembly, and checks if settings match
-  const hardwareFlows = useMemo(() => {
-      return cpqFlows.filter(f => {
-          if (!f.linkedAssemblyId) return true; // Keep standalone flows visible just in case
-          
-          const asm = libraryParts.find(p => p.id === f.linkedAssemblyId);
-          if (!asm) return true;
-          
-          const cData = asm.manufacturingSpecs?.customData || {};
-          
-          // Strict filtering based on engineering parameters
-          if (cData.endStyle && cData.endStyle !== engData.endStyle) return false;
-          if (cData.projection && parseFloat(cData.projection) !== safeProj) return false;
-          if (cData.poleDiameter && parseFloat(cData.poleDiameter) !== parseFloat(engData.poleDiameter)) return false;
+      let detectedProj = null;
+      let detectedEndStyle = null;
 
-          return true;
+      activeFlow.steps.forEach(step => {
+          if (step.allowedOptions && step.allowedOptions.length > 0) {
+              step.allowedOptions.forEach(optId => {
+                  const part = libraryParts.find(p => p.id === optId);
+                  if (part) {
+                      const cData = part.manufacturingSpecs?.customData || {};
+                      if (!detectedProj && cData.projection) detectedProj = parseFloat(cData.projection);
+                      if (cData.feeType === 'BENT_RETURN') detectedEndStyle = 'RETURN_BEND';
+                      if (cData.feeType === 'MITER_RETURN') detectedEndStyle = 'RETURN_MITER';
+                      if (!detectedEndStyle && part.manufacturingSpecs?.productType === 'FINIAL') detectedEndStyle = 'FINIAL';
+                  }
+              });
+          } else if (step.dataSource) {
+              const matches = libraryParts.filter(p => p.routingType === step.dataSource);
+              matches.forEach(part => {
+                  const cData = part.manufacturingSpecs?.customData || {};
+                  if (!detectedProj && cData.projection) detectedProj = parseFloat(cData.projection);
+                  if (cData.feeType === 'BENT_RETURN') detectedEndStyle = 'RETURN_BEND';
+                  if (cData.feeType === 'MITER_RETURN') detectedEndStyle = 'RETURN_MITER';
+                  if (!detectedEndStyle && part.manufacturingSpecs?.productType === 'FINIAL') detectedEndStyle = 'FINIAL';
+              });
+          }
       });
-  }, [cpqFlows, libraryParts, engData.endStyle, safeProj, engData.poleDiameter]);
+
+      setEngData(prev => ({
+          ...prev,
+          proj: detectedProj ? detectedProj : prev.proj,
+          endStyle: detectedEndStyle ? detectedEndStyle : prev.endStyle
+      }));
+      
+      if (detectedProj) setIsCustomProj(false);
+  }, [activeFlow, libraryParts]);
+
+  // Safely cast projection so math doesn't crash if empty string
+  const safeProj = parseFloat(engData.proj) || 0;
 
   const getOptionsForStep = (step) => {
       if (!step || !step.dataSource) return [];
@@ -117,16 +136,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               if (p.manufacturingSpecs?.customData?.feeType) return false;
               if (p.routingType !== step.dataSource) return false;
               
-              // 🚀 BRIMAR SIGNATURE FIX: Check collections array properly
               const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
               const upperCollections = collectionsArray.map(c => c.toUpperCase());
               const selCollection = (quoteSelections.collection || "").toUpperCase();
               
               if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
-                  if (!upperCollections.includes('N/A')) return false; // N/A means it applies to all collections
+                  if (!upperCollections.includes('N/A')) return false; 
               }
 
-              // Match bracket projection if it's a bracket
               if (!isCustomProj && p.manufacturingSpecs?.customData?.projection) {
                   if (parseFloat(p.manufacturingSpecs.customData.projection) !== safeProj) return false;
               }
@@ -305,16 +322,23 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               {engData.shape === 'BOW' && <line x1={eHSx} y1="0" x2={eHEx} y2="0" stroke="#d4af37" strokeWidth="8" />}
               {attachments.filter(a => a.type === 'bracket').map(att => {
                   let seg = null;
-                  if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2 }; }
+                  // 🚀 FIXED: The CRASH occurred because 'norm' was missing here! Added to all segments.
+                  if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" }; }
                   else if (engData.shape === 'MITERED') {
-                      if (att.segId===1) seg = { pA: HS, pB: HC1, len: pole1 };
-                      if (att.segId===2) seg = { pA: HC1, pB: HC2, len: pole2 };
-                      if (att.segId===3) seg = { pA: HC2, pB: HE, len: pole3 };
-                  } else if (engData.shape === 'BOW') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2, isBow: true }; }
+                      if (att.segId===1) seg = { pA: HS, pB: HC1, len: pole1, norm: nL, nA: "L.Edge", nB: "L.Miter" };
+                      if (att.segId===2) seg = { pA: HC1, pB: HC2, len: pole2, norm: {x:0, y:-1}, nA: "L.Miter", nB: "R.Miter" };
+                      if (att.segId===3) seg = { pA: HC2, pB: HE, len: pole3, norm: nR, nA: "R.Miter", nB: "R.Edge" };
+                  } else if (engData.shape === 'BOW') {
+                      seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge", isBow: true };
+                  }
                   if (!seg) return null;
-                  const distFromA = att.ref === 'START' ? att.distInches : (seg.len - att.distInches); const t = distFromA / seg.len; let bx = 0;
+                  
+                  const distFromA = att.ref === 'START' ? att.distInches : (seg.len - att.distInches); 
+                  const t = distFromA / seg.len; let bx = 0;
+                  
                   if (seg.isBow) { const angle = bowStartAngle + t * (bowEndAngle - bowStartAngle); bx = bowCX + (bowHW_R*S) * Math.cos(angle); } 
                   else { bx = seg.pA.x + t * (seg.pB.x - seg.pA.x); if (att.segId === 1) bx -= perspectiveStretch.L * (1-t); if (att.segId === 3) bx += perspectiveStretch.R * t; }
+                  
                   return <line key={att.id} x1={bx} y1="-12" x2={bx} y2="12" stroke="#666" strokeWidth="4" />;
               })}
               <g transform={`translate(${-perspectiveStretch.L}, 0)`}>{renderEndTreatment(true, true)}</g>
@@ -343,18 +367,12 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const handleUpdateShopNote = (id, text) => { setShopNotes(notes => notes.map(n => n.id === id ? { ...n, text: text } : n)); };
 
   const getAdjustedSvgPoint = (clientX, clientY) => {
-    if (!svgRef.current || !innerGroupRef.current) return null;
+    const svg = svgRef.current; const group = innerGroupRef.current;
+    if (!svg || !group) return null; 
     try {
-        const svg = svgRef.current;
-        const ctm = innerGroupRef.current.getScreenCTM();
-        if (!ctm) return null;
-        const pt = svg.createSVGPoint(); 
-        pt.x = clientX; pt.y = clientY;
-        const transformed = pt.matrixTransform(ctm.inverse());
-        return { x: transformed.x, y: transformed.y };
-    } catch (e) {
-        return null;
-    }
+        const pt = svg.createSVGPoint(); pt.x = clientX; pt.y = clientY;
+        return pt.matrixTransform(group.getScreenCTM().inverse());
+    } catch(err) { return null; }
   };
 
   const onPointerDown = (e) => {
@@ -363,7 +381,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
     if (viewMode === 'ENGINEERING' && engTool === "pan") { setIsPanning(true); setPanStart({ clientX: e.clientX, clientY: e.clientY }); return; }
 
     const pt = getAdjustedSvgPoint(e.clientX, e.clientY);
-    if (!pt) return; // 🚀 FIX: White screen crash protection
+    if (!pt) return; // 🚀 CRASH PREVENTION
 
     if (viewMode === 'VISUAL' && visualTool === "calibrate") {
       if (calPoints.length >= 2) { setCalPoints([pt]); setIsCalibrated(false); } 
@@ -383,12 +401,15 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
         if (engTool === 'note') { setShopNotes([...shopNotes, { id: Date.now(), x: pt.x, y: pt.y, text: '' }]); setEngTool('pan'); return; }
         if (engTool === 'bracket' || engTool === 'splice') {
             const hwSegments = [];
-            if (engData.shape === 'STRAIGHT') hwSegments.push({ id: 2, pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" });
+            // 🚀 FIXED: All segments MUST have a normal vector (norm) to prevent the SVG line draw crash!
+            if (engData.shape === 'STRAIGHT') { hwSegments.push({ id: 2, pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" }); }
             else if (engData.shape === 'MITERED') {
                 hwSegments.push({ id: 1, pA: HS, pB: HC1, len: pole1, norm: nL, nA: "L.Edge", nB: "L.Miter" });
                 hwSegments.push({ id: 2, pA: HC1, pB: HC2, len: pole2, norm: {x:0, y:-1}, nA: "L.Miter", nB: "R.Miter" });
                 hwSegments.push({ id: 3, pA: HC2, pB: HE, len: pole3, norm: nR, nA: "R.Miter", nB: "R.Edge" });
-            } else if (engData.shape === 'BOW') { hwSegments.push({ id: 2, pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge", isBow: true }); }
+            } else if (engData.shape === 'BOW') { 
+                hwSegments.push({ id: 2, pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge", isBow: true }); 
+            }
             
             let closestSeg = null; let minDist = Infinity; let distFromA = 0;
             hwSegments.forEach(seg => {
@@ -512,6 +533,20 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           
           {!showQuotePanel && (
             <div style={{ width: viewMode === 'VISUAL' ? '340px' : '480px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                
+                {/* 🚀 STEP 1: FLOW SELECTION ELEVATED TO MAIN UI */}
+                {viewMode === 'ENGINEERING' && (
+                    <div style={{ background: '#e6f2ff', border: '2px solid #007bff' }}>
+                        <div style={{ padding: '10px', background: '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>1. SYSTEM ARCHITECTURE (CPQ FLOW)</div>
+                        <div style={{ padding: '15px' }}>
+                            <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem' }}>
+                                <option value="">-- SELECT MATCHING CPQ FLOW --</option>
+                                {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                            </select>
+                        </div>
+                    </div>
+                )}
+
                 {viewMode === 'VISUAL' ? (
                   <>
                     <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column' }}>
@@ -519,7 +554,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                         <div style={{ padding: '15px' }}><input type="file" accept="image/png, image/jpeg" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} /><button onClick={() => fileInputRef.current.click()} style={{ width: '100%', padding: '10px', background: '#fff', color: '#007bff', fontWeight: 'bold', border: '2px dashed #007bff', cursor: 'pointer' }}>📂 SELECT FRONT ELEVATION</button></div>
                     </div>
                     <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', opacity: activeBg ? 1 : 0.5 }}>
-                        <div style={{ padding: '10px', background: visualTool === 'calibrate' ? '#007bff' : '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>STEP 1: CALIBRATE SCALE</div>
+                        <div style={{ padding: '10px', background: visualTool === 'calibrate' ? '#007bff' : '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>CALIBRATE SCALE</div>
                         <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>KNOWN DIMENSION (INCHES):</label><input type="number" value={realInches} onChange={(e) => { const val = e.target.value; setRealInches(val); if(calPoints.length===2 && parseFloat(val) > 0) { setPixelsPerInch(Math.sqrt(Math.pow(calPoints[1].x - calPoints[0].x, 2) + Math.pow(calPoints[1].y - calPoints[0].y, 2)) / parseFloat(val)); setEngData(prev => ({ ...prev, w2: val })); } }} disabled={!activeBg} style={{ width: '100%', padding: '8px', border: '2px solid #000', fontWeight: 'bold', fontSize: '1rem', background: activeBg ? '#fff' : '#eee', boxSizing: 'border-box' }} /></div>
                             <div style={{ display: 'flex', gap: '5px' }}>
@@ -529,7 +564,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                         </div>
                     </div>
                     <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', opacity: isCalibrated ? 1 : 0.5 }}>
-                        <div style={{ padding: '10px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>STEP 2: DROP CPQ CONFIG</div>
+                        <div style={{ padding: '10px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>DROP CPQ CONFIG</div>
                         <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             <select value={selectedConfigId} onChange={(e) => setSelectedConfigId(e.target.value)} disabled={!isCalibrated || visionConfigs.length === 0} style={{ width: '100%', padding: '10px', border: '2px solid #000', fontWeight: 'bold', background: isCalibrated ? '#fff' : '#eee', boxSizing: 'border-box' }}>
                                 {visionConfigs.length === 0 && <option value="">No configs found.</option>}
@@ -563,7 +598,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   <>
                     <div style={{ background: '#fff', border: '2px solid #000' }}>
                         <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
-                            <span>1. SPATIAL PARAMETERS</span>
+                            <span>2. SPATIAL PARAMETERS</span>
                             <select value={engData.inputMode} onChange={e => setEngData({...engData, inputMode: e.target.value})} style={{ fontSize: '0.65rem', background: '#444', color: '#fff', border: 'none', outline: 'none' }}><option value="ORDERING">USE ORDERING LENGTH (POLE)</option><option value="WALL">USE WALL DIMENSIONS</option></select>
                         </div>
                         <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -599,7 +634,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                         </div>
                     </div>
                     <div style={{ background: '#fff', border: '2px solid #000' }}>
-                        <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>2. FABRICATION SETTINGS</div>
+                        <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>3. FABRICATION SETTINGS</div>
                         <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             <div style={{ display: 'flex', gap: '10px' }}>
                                 <div style={{ flex: 1 }}>
@@ -707,6 +742,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                   <g transform="translate(500, 50)"><rect x="-225" y="-20" width="450" height="30" fill="#ffcccc" stroke="#d9534f" strokeWidth="2" rx="5" /><text x="0" y="0" fill="#d9534f" fontSize="16" fontWeight="bold" textAnchor="middle">⚠️ CUSTOM PROJECTION REQUESTED: {engData.proj}" ⚠️</text></g>
                               )}
 
+                              {/* 🚀 FIX: Offsets pushed out to 65 to prevent Tube Cut yellow text overlap */}
                               {viewMode === 'ENGINEERING' && (
                                   <g>
                                       {engData.shape === 'STRAIGHT' && <g><line x1={P2.x} y1={P2.y} x2={P3.x} y2={P3.y} stroke="#aaa" strokeWidth="3" /><text x={500} y={P2.y - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text><text x={500} y={HS.y + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text></g>}
@@ -725,13 +761,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
                                       {attachments.map(att => {
                                           let seg = null;
-                                          if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2 }; }
+                                          if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" }; }
                                           else if (engData.shape === 'MITERED') {
-                                              if (att.segId===1) seg = { pA: HS, pB: HC1, len: pole1 };
-                                              if (att.segId===2) seg = { pA: HC1, pB: HC2, len: pole2 };
-                                              if (att.segId===3) seg = { pA: HC2, pB: HE, len: pole3 };
+                                              if (att.segId===1) seg = { pA: HS, pB: HC1, len: pole1, norm: nL, nA: "L.Edge", nB: "L.Miter" };
+                                              if (att.segId===2) seg = { pA: HC1, pB: HC2, len: pole2, norm: {x:0, y:-1}, nA: "L.Miter", nB: "R.Miter" };
+                                              if (att.segId===3) seg = { pA: HC2, pB: HE, len: pole3, norm: nR, nA: "R.Miter", nB: "R.Edge" };
                                           } else if (engData.shape === 'BOW') {
-                                              seg = { pA: HS, pB: HE, len: pole2, isBow: true };
+                                              seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge", isBow: true };
                                           }
                                           if (!seg) return null;
 
@@ -801,19 +837,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa' }}>
                       
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>1. HARDWARE SYSTEM (CPQ FLOW)</h4>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>COLLECTION & FLOW ASSIGNMENT</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                               <div>
-                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>SYSTEM ARCHITECTURE:</label>
-                                  <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '10px', border: '2px solid #007bff', fontWeight: 'bold', background: '#e6f2ff' }}>
-                                      <option value="">-- SELECT MATCHING CPQ FLOW --</option>
-                                      {hardwareFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                                  </select>
-                                  {hardwareFlows.length === 0 && <div style={{ fontSize: '0.65rem', color: '#d9534f', marginTop: '5px' }}>No flows match your current Projection, End Style, and Pole Diameter.</div>}
-                              </div>
-                              <div>
-                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>COLLECTION (FILTERS OPTIONS):</label>
-                                  <select value={quoteSelections.collection} onChange={e => { setQuoteSelections({...quoteSelections, collection: e.target.value}); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold' }}>
+                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>COLLECTION (FILTERS HARDWARE):</label>
+                                  <select value={quoteSelections.collection} onChange={e => { setQuoteSelections({...quoteSelections, collection: e.target.value}); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold', background: '#e6f2ff' }}>
                                       <option value="">-- NO COLLECTION RESTRICTION --</option>
                                       {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                   </select>
@@ -822,12 +850,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                       </div>
 
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>2. CONFIGURE OPTIONS</h4>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>REQUIRED COMPONENTS & FABRICATION</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                               
                               {!activeFlow ? (
                                   <div style={{ color: '#d9534f', fontSize: '0.8rem', fontWeight: 'bold', fontStyle: 'italic', padding: '10px', border: '1px dashed #d9534f' }}>
-                                      ⚠️ WARNING: Please select a CPQ Flow above to begin configuring components.
+                                      ⚠️ WARNING: No CPQ Flow is linked to this Master Assembly.
+                                      <br/><br/>
+                                      To configure options, please open the <b>Admin Tab</b> &rarr; <b>CPQ Flow Builder</b> and assign a flow to this Master Assembly.
                                   </div>
                               ) : (
                                   activeFlow.steps.map((step, idx) => {
