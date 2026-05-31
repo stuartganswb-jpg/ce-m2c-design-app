@@ -268,10 +268,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
 
       try {
-          // 🚀 FIXED: Added "item." prefix to prevent ambiguous column errors during the JOIN
           const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
           
-          // 🚀 FIXED: Added the ItemVendor JOIN to correctly pull the Preferred Vendor data!
+          // 🚀 FIXED: Removed the 'preferredvendor' restriction and used MAX() grouping to catch ANY vendor attached to the part.
           const q = `
               SELECT 
                   item.id, 
@@ -282,17 +281,26 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
                   BUILTIN.DF(item.stockunit) AS uom,
                   item.custitem9 AS baseprice,
-                  BUILTIN.DF(ItemVendor.vendor) AS vendor_name,
-                  ItemVendor.vendorcode AS vendor_part_number,
-                  ItemVendor.purchaseprice AS lastpurchaseprice
+                  MAX(BUILTIN.DF(ItemVendor.vendor)) AS vendor_name,
+                  MAX(ItemVendor.vendorcode) AS vendor_part_number,
+                  MAX(ItemVendor.purchaseprice) AS lastpurchaseprice
               FROM 
                   item
               LEFT JOIN 
-                  ItemVendor ON ItemVendor.item = item.id AND ItemVendor.preferredvendor = 'T'
+                  ItemVendor ON ItemVendor.item = item.id
               WHERE 
                   item.custitem_sync_to_cpq = 'T' 
                   AND item.isinactive = 'F' 
                   AND ${typeFilter}
+              GROUP BY
+                  item.id, 
+                  item.itemid, 
+                  item.displayname,
+                  item.custitem_bit_product_type,
+                  item.custitem_bit_itemcollection,
+                  item.custitem_bit_watchlist,
+                  item.stockunit,
+                  item.custitem9
           `;
           
           const result = await executeSuiteQL(q);
@@ -315,7 +323,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               const autoPartHandling = isPoleOrLinear ? 'Custom' : 'Small Parts';
               const autoIsCutToSize = isPoleOrLinear; 
               
-              const hasVendor = !!item.vendor_name;
+              // Verify Vendor exists
+              const hasVendor = item.vendor_name && item.vendor_name.trim() !== '';
 
               const payload = {
                   id: targetDocId,
@@ -353,7 +362,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                       ...existingMatch.manufacturingSpecs,
                       basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0,
                       cost: parseFloat(item.lastpurchaseprice) || existingMatch.manufacturingSpecs?.cost || 0,
-                      isInHouse: existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : !hasVendor,
+                      // 🚀 FIXED: Forcefully overwrite the existing UI setting if NetSuite declares a vendor!
+                      isInHouse: hasVendor ? false : (existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : true),
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
                       partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
