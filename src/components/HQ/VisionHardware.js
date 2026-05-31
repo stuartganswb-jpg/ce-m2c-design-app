@@ -41,14 +41,21 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [globalLists, setGlobalLists] = useState({});
 
-  // QUOTING ENGINE STATE
+  // 🚀 HARDWARE QUOTING STATE (Restored Native Controls + Finishes)
   const [quoteFlowId, setQuoteFlowId] = useState("");
-  const [quoteSelections, setQuoteSelections] = useState({ collection: '' });
+  const [quoteSelections, setQuoteSelections] = useState({ 
+      collection: '', 
+      poleId: '', poleFinishId: '', 
+      bracketFinishId: '', 
+      finialId: '', finialFinishId: '', 
+      ringId: '', ringFinishId: '' 
+  });
+  
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
-  const [stepQuantities, setStepQuantities] = useState({}); 
+  const [stepQuantities, setStepQuantities] = useState({ rings: 0 }); 
   const [flowPins, setFlowPins] = useState([]);
 
-  // 🚀 FIXED: Added bracketId to core engineering state for seamless two-way binding
+  // 🚀 ENGINEERING MATH STATE
   const [engData, setEngData] = useState({
     jobName: '', sidemark: '', shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
@@ -87,7 +94,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return cpqFlows.find(f => f.id === quoteFlowId);
   }, [quoteFlowId, cpqFlows]);
 
-  // 🚀 ROBUST STEP CATEGORY SCANNER (Prevents "Bracket Finish" from being misclassified as Bracket)
+  // Utility to scan dynamic step categories
   const getStepCategory = (step) => {
       if (!step) return '';
       const t = (step.title || '').toLowerCase();
@@ -102,8 +109,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return 'OTHER';
   };
 
-  const bracketStep = activeFlow?.steps.find(s => getStepCategory(s) === 'BRACKET');
-
   useEffect(() => {
       if (!activeFlow?.linkedAssemblyId) { setFlowPins([]); return; }
       const linkedAsm = libraryParts.find(p => p.id === activeFlow.linkedAssemblyId);
@@ -113,7 +118,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return () => unsub();
   }, [activeFlow, libraryParts]);
 
-  // 🚀 FLOW-FIRST INTELLIGENCE: Auto-set Projection and End Style based on Master Assembly pins
+  // 🚀 INTELLIGENT FLOW SNIFFER: Sets Projection & French Return
   useEffect(() => {
       if (!activeFlow) return;
 
@@ -131,11 +136,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           }
       });
 
-      // Fallbacks
-      activeFlow.steps.forEach(step => {
-          if (step.calculatorTemplate === 'calc_french_return_1in') detectedEndStyle = 'RETURN_BEND';
-      });
-
       if (!detectedEndStyle && activeFlow.name.toUpperCase().includes("FRENCH RETURN")) {
           detectedEndStyle = 'RETURN_BEND';
       }
@@ -143,7 +143,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       setEngData(prev => {
           const updates = { ...prev };
           let changed = false;
-          // Only auto-update projection if we haven't actively locked a bracket in
           if (detectedProj && !prev.bracketId && prev.proj !== detectedProj) { updates.proj = detectedProj; changed = true; }
           if (detectedEndStyle && prev.endStyle !== detectedEndStyle) { updates.endStyle = detectedEndStyle; changed = true; }
           return changed ? updates : prev;
@@ -152,7 +151,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (detectedProj && !engData.bracketId) setIsCustomProj(false);
   }, [activeFlow, flowPins, libraryParts]);
 
-  // 🚀 SEAMLESS TWO-WAY BINDING: When bracketId changes in engData, update the math dimensions AND the CPQ cart.
+  // 🚀 SEAMLESS TWO-WAY BINDING FOR BRACKET SELECTION
   useEffect(() => {
       if (engData.bracketId) {
           const part = libraryParts.find(p => p.id === engData.bracketId);
@@ -178,20 +177,15 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       }
   }, [engData.bracketId, libraryParts]);
 
-  // Sync CPQ Cart bracket selection down to Engineering
-  useEffect(() => {
-      if (bracketStep && dynamicConfigParams[bracketStep.id] && dynamicConfigParams[bracketStep.id] !== engData.bracketId) {
-          setEngData(prev => ({ ...prev, bracketId: dynamicConfigParams[bracketStep.id] }));
-      }
-  }, [dynamicConfigParams, bracketStep]);
-
   const safeProj = parseFloat(engData.proj) || 0;
 
-  // 🚀 NEW: Standalone Bracket Options Fetcher (Always available regardless of CPQ Flow)
-  const allBrackets = useMemo(() => {
+  // 🚀 NATIVE COMPONENT FILTER LOGIC
+  const getNativeOptions = (categoryString) => {
       return libraryParts.filter(p => {
-          const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
-          if (!pt.includes('BRACKET')) return false;
+          if (p.manufacturingSpecs?.customData?.feeType) return false;
+          
+          const pType = (p.manufacturingSpecs?.productType || p.productType || '').toUpperCase();
+          if (!pType.includes(categoryString)) return false;
 
           const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
           const upperCollections = collectionsArray.map(c => c.toUpperCase());
@@ -200,67 +194,17 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
               if (!upperCollections.includes('N/A')) return false; 
           }
-
-          // If a bracket step exists in the flow, enforce its allowed options
-          if (bracketStep && bracketStep.allowedOptions?.length > 0) {
-              if (!bracketStep.allowedOptions.includes(p.id)) return false;
-          }
-
           return true;
       });
-  }, [libraryParts, quoteSelections.collection, bracketStep]);
-
-  const getOptionsForStep = (step) => {
-      if (!step || !step.dataSource) return [];
-      let options = [];
-
-      const isProdType = globalLists.prodTypes?.includes(step.dataSource);
-      const isRoutingType = globalLists.inventoryTypes?.includes(step.dataSource) || globalLists.assemblyTypes?.includes(step.dataSource);
-
-      if (isProdType || isRoutingType) {
-          options = libraryParts.filter(p => {
-              if (p.manufacturingSpecs?.customData?.feeType) return false;
-              if (isProdType && p.manufacturingSpecs?.productType !== step.dataSource && p.productType !== step.dataSource) return false;
-              if (isRoutingType && p.routingType !== step.dataSource) return false;
-              
-              const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
-              const upperCollections = collectionsArray.map(c => c.toUpperCase());
-              const selCollection = (quoteSelections.collection || "").toUpperCase();
-              
-              if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
-                  if (!upperCollections.includes('N/A')) return false; 
-              }
-
-              // 🚀 CRITICAL FIX: Do NOT filter by projection if the step is picking a bracket!
-              const cat = getStepCategory(step);
-              if (!isCustomProj && p.manufacturingSpecs?.customData?.projection && safeProj > 0 && cat !== 'BRACKET') {
-                  if (parseFloat(p.manufacturingSpecs.customData.projection) !== safeProj) return false;
-              }
-
-              return true;
-          }).map(p => ({
-              id: p.id,
-              itemName: p.itemName,
-              code: p.legacyErpId
-          }));
-      } else if (step.dataSource === 'master_finishes') {
-          const inHouse = globalFinishes.map(f => ({ id: f.id, itemName: f.name, code: f.code }));
-          const outsource = outsourceFinishes.map(f => ({ id: f.id, itemName: f.name }));
-          options = [...inHouse, ...outsource];
-      } else {
-          const customAssets = dynamicAssets.filter(a => a.windowId === step.dataSource);
-          if (customAssets.length > 0) {
-              options = customAssets.map(a => ({ id: a.id, itemName: a.name, code: a.code }));
-          } else if (globalLists[step.dataSource]) {
-              options = globalLists[step.dataSource].map(val => ({ id: val, itemName: val }));
-          }
-      }
-
-      if (step.allowedOptions && step.allowedOptions.length > 0) {
-          return options.filter(opt => step.allowedOptions.includes(opt.id));
-      }
-      return options;
   };
+
+  const allBrackets = useMemo(() => {
+      return getNativeOptions('BRACKET');
+  }, [libraryParts, quoteSelections.collection]);
+
+  const allFinishes = useMemo(() => [...globalFinishes, ...outsourceFinishes].map(f => ({ id: f.id, name: f.name, code: f.code })), [globalFinishes, outsourceFinishes]);
+
+  const uniqueProjections = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.customData?.projection).filter(Boolean))].sort((a,b) => parseFloat(a) - parseFloat(b));
 
   const rad = (deg) => (deg * Math.PI) / 180;
   const S = 3.5; 
@@ -323,39 +267,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   
   const recRings = Math.ceil(systemO2O / 12) * 4;
 
-  // 🚀 SYNC QUANTITIES TO CPQ STEPS
   useEffect(() => {
-      if (!activeFlow) return;
-      
-      setStepQuantities(prev => {
-          const updates = { ...prev };
-          activeFlow.steps.forEach(step => {
-              const cat = getStepCategory(step);
-              if (cat === 'POLE') updates[step.id] = poleFeetQty;
-              else if (cat === 'BRACKET') updates[step.id] = qtyBrackets;
-              else if (cat === 'SPLICE') updates[step.id] = qtySplices;
-              else if (cat === 'FINIAL' && !disableFinials) updates[step.id] = qtyFinials;
-              else if (cat === 'RING') { if (prev[step.id] === undefined) updates[step.id] = recRings; }
-              else if (!updates[step.id]) updates[step.id] = 1; 
-          });
-          return updates;
-      });
-
-      // 🚀 AUTO-SELECT FIX: If 1 valid option, instantly assign it to clear the blocker
-      setDynamicConfigParams(prev => {
-          let updates = { ...prev };
-          let changed = false;
-          activeFlow.steps.forEach(step => {
-              const opts = getOptionsForStep(step);
-              if (opts.length === 1 && prev[step.id] !== opts[0].id) {
-                  updates[step.id] = opts[0].id;
-                  changed = true;
-              }
-          });
-          return changed ? updates : prev;
-      });
-
-  }, [activeFlow, poleFeetQty, qtyBrackets, qtySplices, qtyFinials, disableFinials, recRings, libraryParts, safeProj, quoteSelections.collection]);
+      setStepQuantities(prev => ({ ...prev, rings: prev.rings || recRings }));
+  }, [recRings]);
 
   const feeSkuSplice = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'SPLICE');
   const feeSkuMiter = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'MITER_CUT');
@@ -445,7 +359,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               {engData.shape === 'MITERED' && ( <g><polyline points={`${eHSx},0 ${HC1.x},0 ${HC2.x},0 ${eHEx},0`} fill="none" stroke="#d4af37" strokeWidth="8" strokeLinejoin="miter" /><line x1={HC1.x} y1="-5" x2={HC1.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" /><line x1={HC2.x} y1="-5" x2={HC2.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" /></g> )}
               {engData.shape === 'BOW' && <line x1={eHSx} y1="0" x2={eHEx} y2="0" stroke="#d4af37" strokeWidth="8" />}
               
-              {/* 🚀 CRASH FIX: Vector normals safely enforced before drawing */}
               {attachments.map(att => {
                   let seg = null;
                   if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" }; }
@@ -628,22 +541,29 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   };
 
   const handlePushToCPQ = async () => {
+      if (!quoteSelections.poleId) return alert("Please select a Pole / Tube to proceed.");
+      if (!engData.bracketId) return alert("Please select a Bracket in the Fabrication Settings to proceed.");
+
       const hasMissingRequirements = activeFlow?.steps?.some(step => {
           if (step.type === 'DIMENSIONS') return false; 
-          if (step.required && !dynamicConfigParams[step.id]) {
-              const cat = getStepCategory(step);
-              if (cat === 'FINIAL' && disableFinials) return false;
-              return true;
-          }
+          
+          const cat = getStepCategory(step);
+          if (['POLE','BRACKET','FINIAL','RING'].includes(cat)) return false; // Handled natively
+          
+          if (step.required && !dynamicConfigParams[step.id]) return true;
           return false;
       });
 
-      if (hasMissingRequirements) return alert("Please complete all required steps in the configuration before adding to cart.");
+      if (hasMissingRequirements) return alert("Please complete all required dynamic options in the configuration.");
       
       setIsPushingToCPQ(true);
       const draftId = `QUOTE-${Date.now()}`;
       
       const mappedQuantities = {
+          pole: poleFeetQty,
+          bracket: qtyBrackets,
+          ring: stepQuantities.rings || recRings,
+          finial: qtyFinials,
           splice: qtySplices,
           miter: qtyMiters,
           bend: qtyBends,
@@ -654,11 +574,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (activeFlow) {
           activeFlow.steps.forEach(step => {
               const cat = getStepCategory(step);
-              if (cat === 'POLE') mappedQuantities[step.id] = poleFeetQty;
-              else if (cat === 'BRACKET') mappedQuantities[step.id] = qtyBrackets;
-              else if (cat === 'FINIAL' && !disableFinials) mappedQuantities[step.id] = qtyFinials;
-              else if (cat === 'RING') mappedQuantities[step.id] = stepQuantities[step.id] || recRings;
-              else mappedQuantities[step.id] = 1;
+              if (!['POLE','BRACKET','FINIAL','RING'].includes(cat)) {
+                  mappedQuantities[step.id] = stepQuantities[step.id] || 1;
+              }
           });
       }
 
@@ -671,6 +589,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           cpqFlowId: activeFlow?.id || null,       
           specs: {
               collection: quoteSelections.collection,
+              poleId: quoteSelections.poleId,
+              poleFinishId: quoteSelections.poleFinishId,
+              bracketId: engData.bracketId,
+              bracketFinishId: quoteSelections.bracketFinishId,
+              finialId: quoteSelections.finialId,
+              finialFinishId: quoteSelections.finialFinishId,
+              ringId: quoteSelections.ringId,
+              ringFinishId: quoteSelections.ringFinishId,
               quantities: mappedQuantities,
               ...dynamicConfigParams
           }, 
@@ -806,34 +732,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                     <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>SELECT BRACKET (AUTO-SYNCS DIMS):</label>
                                     <select 
                                         value={engData.bracketId || ''} 
-                                        onChange={e => {
-                                            const val = e.target.value;
-                                            setEngData(prev => ({ ...prev, bracketId: val }));
-                                            if (bracketStep && val) {
-                                                setDynamicConfigParams(prev => ({ ...prev, [bracketStep.id]: val }));
-                                            }
-                                        }}
+                                        onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))}
                                         style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box' }}
                                     >
                                         <option value="">-- SELECT BRACKET --</option>
-                                        {libraryParts.filter(p => {
-                                            const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
-                                            if (!pt.includes('BRACKET')) return false;
-
-                                            const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
-                                            const upperCollections = collectionsArray.map(c => c.toUpperCase());
-                                            const selCollection = (quoteSelections.collection || "").toUpperCase();
-                                            
-                                            if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
-                                                if (!upperCollections.includes('N/A')) return false; 
-                                            }
-
-                                            if (bracketStep && bracketStep.allowedOptions?.length > 0) {
-                                                if (!bracketStep.allowedOptions.includes(p.id)) return false;
-                                            }
-
-                                            return true;
-                                        }).map(b => <option key={b.id} value={b.id}>{b.itemName}</option>)}
+                                        {allBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
                                     </select>
                                 </div>
                                 <div style={{ flex: 1 }}>
@@ -952,6 +855,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                       {engData.shape === 'MITERED' && sawAngle1 > 0 && <g><line x1={HC1.x} y1={HC1.y + 15} x2={HC1.x + 60} y2={HC1.y + 100} stroke="#666" strokeWidth="1" strokeDasharray="2,2" /><rect x={HC1.x + 30} y={HC1.y + 93} width="60" height="14" fill="#fff" stroke="#666" strokeWidth="1" /><text x={HC1.x + 60} y={HC1.y + 103} fill="#000" fontSize="10" fontWeight="bold" textAnchor="middle">{sawAngle1.toFixed(1)}° MITER</text></g>}
                                       {engData.shape === 'MITERED' && sawAngle2 > 0 && <g><line x1={HC2.x} y1={HC2.y + 15} x2={HC2.x - 60} y2={HC2.y + 100} stroke="#666" strokeWidth="1" strokeDasharray="2,2" /><rect x={HC2.x - 90} y={HC2.y + 93} width="60" height="14" fill="#fff" stroke="#666" strokeWidth="1" /><text x={HC2.x - 60} y={HC2.y + 103} fill="#000" fontSize="10" fontWeight="bold" textAnchor="middle">{sawAngle2.toFixed(1)}° MITER</text></g>}
 
+                                      {/* 🚀 CRASH FIX: Vector normals safely enforced before drawing */}
                                       {attachments.map(att => {
                                           let seg = null;
                                           if (engData.shape === 'STRAIGHT') { if(att.segId===2) seg = { pA: HS, pB: HE, len: pole2, norm: {x:0, y:-1}, nA: "L.Edge", nB: "R.Edge" }; }
@@ -992,11 +896,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                               </g>
                                           );
                                       })}
-
                                       {shopNotes.map(n => (
                                           <g key={n.id}><circle cx={n.x} cy={n.y} r="4" fill="#ffc107" /><line x1={n.x} y1={n.y} x2={n.x + 20} y2={n.y - 70} stroke="#ffc107" strokeWidth="2" /><foreignObject x={n.x + 20} y={n.y - 120} width="160" height="50" style={{ overflow: 'visible' }}><textarea value={n.text} placeholder="Type shop floor note here..." onChange={(e) => handleUpdateShopNote(n.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', height: '100%', fontSize: '12px', fontWeight: 'bold', border: '2px solid #ffc107', background: '#fff3cd', outline: 'none', resize: 'none', padding: '6px', boxShadow: '0 2px 5px rgba(0,0,0,0.2)' }} /></foreignObject></g>
                                       ))}
-
                                       {renderEndTreatment(true)}
                                       {renderEndTreatment(false)}
                                   </g>
@@ -1043,8 +945,15 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa' }}>
                       
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>COLLECTION ASSIGNMENT</h4>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>SYSTEM & COLLECTION</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                              <div>
+                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>CPQ FLOW / CONFIGURATOR:</label>
+                                  <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '10px', border: '2px solid #007bff', fontWeight: 'bold' }}>
+                                      <option value="">-- NO FLOW SELECTED --</option>
+                                      {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                                  </select>
+                              </div>
                               <div>
                                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>COLLECTION (FILTERS HARDWARE):</label>
                                   <select value={quoteSelections.collection} onChange={e => { setQuoteSelections({...quoteSelections, collection: e.target.value}); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold', background: '#e6f2ff' }}>
@@ -1055,104 +964,89 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                           </div>
                       </div>
 
+                      {/* 🚀 HYBRID HARDWARE BLOCKS - GUARANTEED TO RENDER */}
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>REQUIRED COMPONENTS & FABRICATION</h4>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>CORE HARDWARE & COMPONENTS</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                               
-                              {!activeFlow ? (
-                                  <div style={{ color: '#d9534f', fontSize: '0.8rem', fontWeight: 'bold', fontStyle: 'italic', padding: '10px', border: '1px dashed #d9534f' }}>
-                                      ⚠️ WARNING: No CPQ Flow selected.
-                                      <br/><br/>
-                                      To configure options, please select a CPQ Flow in the left panel.
+                              {/* POLE */}
+                              <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>MAIN TUBE / POLE:</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>{poleFeetQty} FT REQ</span></div>
+                                  <select value={quoteSelections.poleId} onChange={e => setQuoteSelections({...quoteSelections, poleId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}><option value="">-- SELECT TUBE/POLE --</option>{getNativeOptions('POLE').map(p => <option key={p.id} value={p.id}>{p.itemName} {p.legacyErpId ? `[${p.legacyErpId}]` : ''}</option>)}</select>
+                                  <select value={quoteSelections.poleFinishId} onChange={e => setQuoteSelections({...quoteSelections, poleFinishId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem' }}><option value="">-- SELECT FINISH --</option>{allFinishes.map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}</select>
+                              </div>
+
+                              {/* BRACKET */}
+                              {qtyBrackets > 0 && (
+                                  <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>BRACKETS ({isCustomProj ? "CUSTOM" : `${engData.proj}"`} PROJ):</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>QTY: {qtyBrackets}</span></div>
+                                      <select disabled value={engData.bracketId} style={{ width: '100%', padding: '10px', border: '1px dashed #ccc', marginBottom: '5px', background: '#f4f4f4' }}><option value="">-- SELECTED IN FAB SETTINGS --</option>{allBrackets.map(p => <option key={p.id} value={p.id}>{p.itemName}</option>)}</select>
+                                      <select value={quoteSelections.bracketFinishId} onChange={e => setQuoteSelections({...quoteSelections, bracketFinishId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem' }}><option value="">-- SELECT FINISH --</option>{allFinishes.map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}</select>
                                   </div>
-                              ) : (
-                                  activeFlow.steps.map((step, idx) => {
-                                      if (step.type === 'DIMENSIONS' || step.type === 'VISUAL_GRID' || step.type === 'VISUAL_DIMENSIONS') return null;
+                              )}
+
+                              {/* RINGS */}
+                              <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>OPTIONAL RINGS:</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>REC: {recRings} RINGS</span></div>
+                                  <select value={quoteSelections.ringId} onChange={e => setQuoteSelections({...quoteSelections, ringId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}><option value="">-- NO RINGS / TRAVERSE --</option>{getNativeOptions('RING').map(p => <option key={p.id} value={p.id}>{p.itemName} {p.legacyErpId ? `[${p.legacyErpId}]` : ''}</option>)}</select>
+                                  {quoteSelections.ringId && (
+                                      <>
+                                          <select value={quoteSelections.ringFinishId} onChange={e => setQuoteSelections({...quoteSelections, ringFinishId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem', marginBottom: '5px' }}><option value="">-- SELECT FINISH --</option>{allFinishes.map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}</select>
+                                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff', padding: '5px', border: '1px solid #ccc' }}>
+                                              <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>TOTAL RINGS TO ORDER:</span>
+                                              <input type="number" min="1" value={stepQuantities.rings} onChange={e => setStepQuantities({...stepQuantities, rings: parseInt(e.target.value) || 0})} style={{ width: '60px', padding: '5px', textAlign: 'center', border: '2px solid #000', fontWeight: 'bold' }} />
+                                          </div>
+                                      </>
+                                  )}
+                              </div>
+
+                              {/* FINIALS */}
+                              <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', opacity: disableFinials ? 0.5 : 1 }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>FINIALS:</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: disableFinials ? '#999' : '#1e7e34' }}>{disableFinials ? "N/A (BENT RETURN)" : `QTY: ${qtyFinials}`}</span></div>
+                                  <select disabled={disableFinials} value={quoteSelections.finialId} onChange={e => setQuoteSelections({...quoteSelections, finialId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}><option value="">-- SELECT FINIAL --</option>{getNativeOptions('FINIAL').map(p => <option key={p.id} value={p.id}>{p.itemName} {p.legacyErpId ? `[${p.legacyErpId}]` : ''}</option>)}</select>
+                                  {!disableFinials && quoteSelections.finialId && <select value={quoteSelections.finialFinishId} onChange={e => setQuoteSelections({...quoteSelections, finialFinishId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem' }}><option value="">-- SELECT FINISH --</option>{allFinishes.map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}</select>}
+                              </div>
+                          </div>
+                      </div>
+
+                      {/* DYNAMIC CPQ EXTRAS */}
+                      {activeFlow && activeFlow.steps.filter(s => { const cat = getStepCategory(s); return !['POLE','BRACKET','RING','FINIAL','FINISH'].includes(cat) && s.type !== 'DIMENSIONS'; }).length > 0 && (
+                          <div style={{ background: '#fff', border: '2px dashed #007bff', padding: '15px' }}>
+                              <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>EXTRA CPQ CONFIGURATIONS</h4>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                  {activeFlow.steps.map(step => {
+                                      const cat = getStepCategory(step);
+                                      if (['POLE','BRACKET','RING','FINIAL','FINISH'].includes(cat) || step.type === 'DIMENSIONS') return null;
                                       
                                       const options = getOptionsForStep(step);
-                                      const cat = getStepCategory(step);
-                                      
-                                      let qtyLabel = "";
-                                      if (cat === 'POLE') qtyLabel = `${poleFeetQty} FT REQ`;
-                                      else if (cat === 'BRACKET') qtyLabel = `QTY: ${qtyBrackets}`;
-                                      else if (cat === 'FINIAL' && !disableFinials) qtyLabel = `QTY: ${qtyFinials}`;
-                                      else if (cat === 'FINIAL' && disableFinials) qtyLabel = `N/A (BENT RETURN)`;
-                                      
-                                      if (cat === 'RING') {
-                                          return (
-                                              <div key={step.id} style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
-                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                                                      <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{idx + 1}. {step.title.toUpperCase()}:</label>
-                                                  </div>
-                                                  <select value={dynamicConfigParams[step.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [step.id]: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}>
-                                                      <option value="">-- SELECT OPTION --</option>
-                                                      {options.map(opt => <option key={opt.id} value={opt.id}>{opt.itemName} {opt.code ? `[${opt.code}]` : ''}</option>)}
-                                                  </select>
-                                                  {dynamicConfigParams[step.id] && (
-                                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff', padding: '5px', border: '1px solid #ccc' }}>
-                                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>TOTAL RINGS TO ORDER:</span>
-                                                          <input type="number" min="1" value={stepQuantities[step.id] !== undefined ? stepQuantities[step.id] : recRings} onChange={e => setStepQuantities({...stepQuantities, [step.id]: parseInt(e.target.value) || 0})} style={{ width: '60px', padding: '5px', textAlign: 'center', border: '2px solid #000', fontWeight: 'bold' }} />
-                                                      </div>
-                                                  )}
-                                              </div>
-                                          );
-                                      }
-
                                       return (
-                                          <div key={step.id} style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', opacity: (cat === 'FINIAL' && disableFinials) ? 0.5 : 1 }}>
-                                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{idx + 1}. {step.title.toUpperCase()}:</label>
-                                                  {qtyLabel && <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>{qtyLabel}</span>}
-                                              </div>
-                                              <select 
-                                                  value={dynamicConfigParams[step.id] || ''} 
-                                                  onChange={e => setDynamicConfigParams({...dynamicConfigParams, [step.id]: e.target.value})} 
-                                                  disabled={cat === 'FINIAL' && disableFinials}
-                                                  style={{ width: '100%', padding: '10px', border: '1px solid #000' }}
-                                              >
+                                          <div key={step.id}>
+                                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{step.title}:</label>
+                                              <select value={dynamicConfigParams[step.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [step.id]: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>
                                                   <option value="">-- SELECT OPTION --</option>
                                                   {options.map(opt => <option key={opt.id} value={opt.id}>{opt.itemName} {opt.code ? `[${opt.code}]` : ''}</option>)}
                                               </select>
                                           </div>
-                                      );
-                                  })
-                              )}
+                                      )
+                                  })}
+                              </div>
+                          </div>
+                      )}
 
-                              {(qtyBends > 0 || qtyMiterReturns > 0 || qtyMiters > 0) && (
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px dotted #ccc', alignItems: 'center' }}>
-                                      <div>
-                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block' }}>FABRICATION SERVICE:</span>
-                                          {qtyBends > 0 && <span style={{ fontSize: '0.65rem', color: '#856404' }}>RETURN BEND {feeSkuBend ? `[${feeSkuBend.legacyErpId}]` : '[UNMAPPED]'}</span>}
-                                          {qtyMiterReturns > 0 && <span style={{ fontSize: '0.65rem', color: '#856404' }}>MITER RETURN {feeSkuMiterReturn ? `[${feeSkuMiterReturn.legacyErpId}]` : '[UNMAPPED]'}</span>}
-                                          {qtyMiters > 0 && <span style={{ fontSize: '0.65rem', color: '#856404' }}>MITER CUT {feeSkuMiter ? `[${feeSkuMiter.legacyErpId}]` : '[UNMAPPED]'}</span>}
-                                      </div>
-                                      <strong style={{ color: '#1e7e34' }}>{(qtyBends || qtyMiterReturns || qtyMiters)}x</strong>
-                                  </div>
-                              )}
-
-                              {qtySplices > 0 && (
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px dotted #ccc', alignItems: 'center' }}>
-                                      <div>
-                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block' }}>SPLICE SERVICE:</span>
-                                          <span style={{ fontSize: '0.65rem', color: '#856404' }}>{feeSkuSplice ? `[${feeSkuSplice.legacyErpId}]` : '[UNMAPPED]'}</span>
-                                      </div>
-                                      <strong style={{ color: '#1e7e34' }}>{qtySplices}x</strong>
-                                  </div>
-                              )}
-
-                              {qtyCustomProjBrackets > 0 && (
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px', marginTop: '5px', background: '#fff0f0' }}>
-                                      <span style={{ fontSize: '0.65rem', color: '#d9534f', fontWeight: 'bold' }}>CUSTOM PROJ. SETUP {feeSkuCustomProj ? `[${feeSkuCustomProj.legacyErpId}]` : '[UNMAPPED]'}</span>
-                                      <strong style={{ color: '#d9534f', fontSize: '0.7rem' }}>{qtyCustomProjBrackets}x</strong>
-                                  </div>
-                              )}
+                      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#d9534f', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>FABRICATION FEES</h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.75rem' }}>
+                              {(qtyBends > 0 || qtyMiterReturns > 0 || qtyMiters > 0) && <div style={{ display: 'flex', justifyContent: 'space-between', color: '#856404', fontWeight: 'bold' }}><span>END FABRICATION:</span><strong>{(qtyBends || qtyMiterReturns || qtyMiters)}x</strong></div>}
+                              {qtySplices > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', color: '#856404', fontWeight: 'bold' }}><span>SPLICES:</span><strong>{qtySplices}x</strong></div>}
+                              {qtyCustomProjBrackets > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', color: '#d9534f', fontWeight: 'bold' }}><span>CUSTOM PROJ. BRACKETS:</span><strong>{qtyCustomProjBrackets}x</strong></div>}
+                              {!qtyBends && !qtyMiterReturns && !qtyMiters && !qtySplices && !qtyCustomProjBrackets && <div style={{ color: '#999', fontStyle: 'italic' }}>No additional fabrication fees detected.</div>}
                           </div>
                       </div>
 
                   </div>
                   
                   <div style={{ padding: '20px', background: '#000', borderTop: '2px solid #000' }}>
-                      <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeFlow} style={{ width: '100%', padding: '15px', background: (isPushingToCPQ || !activeFlow) ? '#666' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isPushingToCPQ || !activeFlow) ? 'not-allowed' : 'pointer', fontSize: '1.1rem', transition: '0.2s' }}>
+                      <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !quoteSelections.poleId || !engData.bracketId} style={{ width: '100%', padding: '15px', background: (isPushingToCPQ || !quoteSelections.poleId || !engData.bracketId) ? '#666' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isPushingToCPQ || !quoteSelections.poleId || !engData.bracketId) ? 'not-allowed' : 'pointer', fontSize: '1.1rem', transition: '0.2s' }}>
                           {isPushingToCPQ ? 'SAVING DRAFT...' : '🛒 SEND TO CPQ CART'}
                       </button>
                   </div>

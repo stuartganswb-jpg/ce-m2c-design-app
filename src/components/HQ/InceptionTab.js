@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Html, Bounds } from '@react-three/drei';
 
-// 🚀 NEW: The Airbag. This prevents corrupted 3D models from white-screening the entire app.
+// 🚀 The Airbag. This prevents corrupted 3D models from white-screening the entire app.
 class ErrorBoundary extends React.Component {
     constructor(props) { super(props); this.state = { hasError: false }; }
     static getDerivedStateFromError(error) { return { hasError: true }; }
@@ -110,6 +110,9 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
 
   const viewerContainerRef = useRef(null);
   const [viewerSize, setViewerSize] = useState({ width: 800, height: 600 });
+  
+  // 🚀 NEW: Mouse tracking state for precision crosshairs
+  const [mouseCoords, setMouseCoords] = useState({ x: -100, y: -100 });
 
   useEffect(() => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
@@ -442,7 +445,10 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       setActiveAssembly(prev => ({ ...prev, spatialCallouts: updatedCallouts }));
       setActiveCalloutId(newCallout.id);
       
+      // 🚀 CLEAN EXIT: Turn off targeting immediately so the user can start typing
+      setIsAddingCallout(false);
       if(!is3D) setActiveTool(TOOL_PAN);   
+
       try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: updatedCallouts }); } 
       catch (err) { console.error(err); }
   };
@@ -477,6 +483,13 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       setIsAddingCallout(true);
       setActiveTool(TOOL_NONE);
       setIsCanvasLocked(false);
+  };
+
+  // 🚀 MOUSE TRACKING FOR THE CROSSHAIRS
+  const handleMouseMove = (e) => {
+      if (!isAddingCallout || !viewerContainerRef.current) return;
+      const rect = viewerContainerRef.current.getBoundingClientRect();
+      setMouseCoords({ x: e.clientX - rect.left, y: e.clientY - rect.top });
   };
 
   const activeRevisions = activeAssembly?.revisions ? [...activeAssembly.revisions] : [];
@@ -567,7 +580,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                   
                   {imageMode === "UPLOAD" ? (
                       <>
-                          {/* 🚀 CHANGED TO ONLY ACCEPT .GLB */}
                           <input type="file" accept="image/*,.glb" onChange={(e) => setImageFile(e.target.files[0])} style={{ width: '100%' }} />
                           {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
                       </>
@@ -689,7 +701,9 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                  
                  {isCanvasMaximized && (
                      <div style={{ position: 'absolute', top: '15px', left: '50%', transform: 'translateX(-50%)', zIndex: 10000, background: '#fff', border: '2px solid #000', borderRadius: '30px', padding: '5px', display: 'flex', gap: '5px', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
-                        <button onClick={activatePinMode} style={{ padding: '8px 15px', background: isAddingCallout ? '#d9534f' : '#fff', color: isAddingCallout ? '#fff' : '#000', border: 'none', borderRadius: '20px', fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer' }}>📍 PIN</button>
+                        <button onClick={activatePinMode} style={{ padding: '8px 15px', background: isAddingCallout ? '#d9534f' : '#fff', color: isAddingCallout ? '#fff' : '#000', border: 'none', borderRadius: '20px', fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer', boxShadow: isAddingCallout ? 'inset 0 3px 5px rgba(0,0,0,0.5)' : 'none' }}>
+                            {isAddingCallout ? '🎯 TARGETING...' : '📍 PIN'}
+                        </button>
                         <button onClick={activatePanMode} style={{ padding: '8px 15px', background: !isAddingCallout ? '#007bff' : '#fff', color: !isAddingCallout ? '#fff' : '#000', border: 'none', borderRadius: '20px', fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer' }}>
                             {isCurrent3D ? '🔄 NAVIGATE' : '🖐️ PAN'}
                         </button>
@@ -745,7 +759,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                             )}
 
                             <div style={{ position: 'relative', marginRight: '10px' }}>
-                                {/* 🚀 CHANGED TO ONLY ACCEPT .GLB */}
                                 <input type="file" accept="image/*,.glb" onChange={handleRevisionUpload} style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} title="Upload 2D/3D Revision" />
                                 <button style={{ padding: '5px 10px', background: '#fff', color: '#d9534f', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', pointerEvents: 'none' }}>⬆️ UPLOAD</button>
                             </div>
@@ -765,7 +778,21 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                  
                  {uploadProgress > 0 && <div style={{ padding: '5px 15px', background: '#f8d7da', fontSize: '0.7rem', fontWeight: 'bold', color: '#721c24' }}>UPLOADING REVISION: {uploadProgress}%</div>}
                  
-                 <div ref={viewerContainerRef} style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
+                 {/* 🚀 ADDED: onMouseMove added to the container to track precision lines */}
+                 <div ref={viewerContainerRef} onMouseMove={handleMouseMove} style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
+                    
+                    {/* 🚀 ADDED: PRECISION TARGETING CROSSHAIRS FOR PIN PLACEMENT */}
+                    {isAddingCallout && (
+                        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 9999 }}>
+                            <div style={{ position: 'absolute', top: mouseCoords.y, left: 0, width: '100%', height: '1px', background: 'rgba(217, 83, 79, 0.9)' }} />
+                            <div style={{ position: 'absolute', top: 0, left: mouseCoords.x, width: '1px', height: '100%', background: 'rgba(217, 83, 79, 0.9)' }} />
+                            <div style={{ position: 'absolute', top: mouseCoords.y - 12, left: mouseCoords.x - 12, width: '24px', height: '24px', border: '2px solid rgba(217, 83, 79, 0.9)', borderRadius: '50%' }} />
+                            <div style={{ position: 'absolute', top: mouseCoords.y + 15, left: mouseCoords.x + 15, background: '#d9534f', color: '#fff', padding: '4px 8px', fontSize: '0.7rem', fontWeight: 'bold', borderRadius: '4px', boxShadow: '2px 2px 5px rgba(0,0,0,0.3)', textTransform: 'uppercase' }}>
+                                🎯 Click to Drop Pin
+                            </div>
+                        </div>
+                    )}
+
                     <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: isAddingCallout ? 'crosshair' : 'grab' }}>
                         
                         {showLockOverlay && (
@@ -787,7 +814,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                         {!currentRevisionObj?.url ? (
                             <div style={{ color: '#666', fontStyle: 'italic', padding: '40px', textAlign: 'center', fontSize: '0.8rem' }}>Upload an initial sketch or revision image using the "Upload Revision" button to start spatial notes.</div>
                         ) : isCurrent3D ? (
-                            // 🚀 THE AIRBAG IS INSTALLED AROUND THE CANVAS
                             <ErrorBoundary>
                                 <React.Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', fontWeight: 'bold', color: '#007bff' }}>⏳ LOADING 3D ENGINE...</div>}>
                                     <Canvas id="r3f-canvas-tab1" gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, 5, 5], fov: 50 }}>
@@ -818,8 +844,14 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                                 <span>{callout.user}</span>
                                                                 {isActive && <button onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0 }}>✖</button>}
                                                             </div>
+                                                            {/* 🚀 ADDED: Explicit FINALIZE NOTE button logic */}
                                                             {isActive ? (
-                                                                <textarea autoFocus placeholder="Type spatial note or RFI..." value={callout.text} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onBlur={saveCalloutTextToFirebase} style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} />
+                                                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                                    <textarea autoFocus placeholder="Type spatial note or RFI..." value={callout.text} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onBlur={saveCalloutTextToFirebase} style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} />
+                                                                    <button onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); }} style={{ background: '#28a745', color: '#fff', border: 'none', padding: '4px', fontSize: '0.65rem', fontWeight: 'bold', cursor: 'pointer', marginTop: '4px' }}>
+                                                                        ✅ FINALIZE NOTE
+                                                                    </button>
+                                                                </div>
                                                             ) : (
                                                                 <div onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} style={{ fontSize: '0.75rem', color: '#000', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px', cursor: 'pointer' }}>{callout.text || <span style={{color:'#ccc', fontStyle:'italic'}}>Empty Note</span>}</div>
                                                             )}
@@ -864,8 +896,14 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                             <span>{callout.user}</span>
                                                             {isActive && <button onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0 }}>✖</button>}
                                                         </div>
+                                                        {/* 🚀 ADDED: Explicit FINALIZE NOTE button logic */}
                                                         {isActive ? (
-                                                            <textarea autoFocus placeholder="Type spatial note or RFI..." value={callout.text} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onBlur={saveCalloutTextToFirebase} style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} />
+                                                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                                <textarea autoFocus placeholder="Type spatial note or RFI..." value={callout.text} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onBlur={saveCalloutTextToFirebase} style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} />
+                                                                <button onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); }} style={{ background: '#28a745', color: '#fff', border: 'none', padding: '4px', fontSize: '0.65rem', fontWeight: 'bold', cursor: 'pointer', marginTop: '4px' }}>
+                                                                    ✅ FINALIZE NOTE
+                                                                </button>
+                                                            </div>
                                                         ) : (
                                                             <div style={{ fontSize: '0.75rem', color: '#000', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px' }}>{callout.text || <span style={{color:'#ccc', fontStyle:'italic'}}>Empty Note</span>}</div>
                                                         )}
