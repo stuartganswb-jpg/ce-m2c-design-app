@@ -270,7 +270,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       try {
           const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
           
-          // 🚀 BACK TO BASICS: A clean, simple query that NetSuite accepts.
+          // 🚀 THE SNIPER QUERY: Joins the actual Vendor Address Book to force the text string,
+          // and pulls the 'preferredvendor' checkbox to ensure perfect row matching!
           const q = `
               SELECT 
                   item.id, 
@@ -281,13 +282,16 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
                   BUILTIN.DF(item.stockunit) AS uom,
                   item.custitem9 AS baseprice,
-                  BUILTIN.DF(ItemVendor.vendor) AS vendor_name,
+                  Vendor.companyname AS vendor_name,
                   ItemVendor.vendorcode AS vendor_part_number,
-                  ItemVendor.purchaseprice AS lastpurchaseprice
+                  ItemVendor.purchaseprice AS lastpurchaseprice,
+                  ItemVendor.preferredvendor
               FROM 
                   item
               LEFT JOIN 
                   ItemVendor ON ItemVendor.item = item.id
+              LEFT JOIN
+                  Vendor ON ItemVendor.vendor = Vendor.id
               WHERE 
                   item.custitem_sync_to_cpq = 'T' 
                   AND item.isinactive = 'F' 
@@ -297,15 +301,26 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           const result = await executeSuiteQL(q);
           const rawRecords = result.items || [];
           
-          // 🚀 THE DEDUPLICATION ENGINE: Filters duplicates and upgrades empty fields in milliseconds!
+          // 🚀 THE INTELLIGENT SORTER: 
+          // Guarantees Name, Part Number, and Price are perfectly locked to the exact same vendor.
           const uniqueRecordsMap = {};
           for (const row of rawRecords) {
-              if (!uniqueRecordsMap[row.id]) {
-                  uniqueRecordsMap[row.id] = row; // Save first instance
+              const itemId = row.id;
+              if (!uniqueRecordsMap[itemId]) {
+                  uniqueRecordsMap[itemId] = row; // Save the first one we see
               } else {
-                  // If we already saved this item, but it had a blank vendor, and THIS duplicate row has a vendor, upgrade it!
-                  if (!uniqueRecordsMap[row.id].vendor_name && row.vendor_name) {
-                      uniqueRecordsMap[row.id] = row;
+                  // If we find another vendor for the same part, check if it's the "Preferred" one.
+                  const isNewPreferred = row.preferredvendor === 'T';
+                  const isOldPreferred = uniqueRecordsMap[itemId].preferredvendor === 'T';
+                  const oldHasVendor = !!uniqueRecordsMap[itemId].vendor_name;
+                  const newHasVendor = !!row.vendor_name;
+
+                  // Overwrite the saved data ONLY if this new row is the Official Preferred Vendor, 
+                  // or if the old row was blank and this one actually has data.
+                  if (isNewPreferred && !isOldPreferred) {
+                      uniqueRecordsMap[itemId] = row;
+                  } else if (!oldHasVendor && newHasVendor && !isOldPreferred) {
+                      uniqueRecordsMap[itemId] = row;
                   }
               }
           }
