@@ -23,6 +23,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
+  const [libraryParts, setLibraryParts] = useState([]);
 
   const [crmDiscounts, setCrmDiscounts] = useState([]);
   const [newDiscount, setNewDiscount] = useState({ code: '', description: '', percent: '' });
@@ -31,7 +32,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [newStep, setNewStep] = useState({ 
       id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, 
       priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [],
-      useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '' 
+      useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '',
+      basePrice: '', linkedItemId: '' 
   });
 
   const [newFlowName, setNewFlowName] = useState("");
@@ -80,6 +82,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const unsubAssemblies = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
           const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           setAllApprovedDesigns(docs);
+          setLibraryParts(docs.filter(d => d.partClass === 'Inventory'));
       });
 
       const unsubWindowConfig = onSnapshot(doc(db, "system", "window_config"), (docSnap) => {
@@ -134,7 +137,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   basePrice: flow.basePrice || '',
                   linkedAssemblyId: flow.linkedAssemblyId || ''
               });
-              setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '' });
+              setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
           }
       }
       setInspectedNodes([]); 
@@ -559,23 +562,30 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       if (!window.confirm("Auto-generate CPQ steps for all components mapped to this Master Assembly?")) return;
       
       try {
-          const generatedSteps = linkedBomPins.map((pin, idx) => ({
-              id: `STEP-AUTO-${Date.now()}-${idx}`,
-              title: `Select Finish for ${pin.partName}`,
-              type: 'DROPDOWN',
-              dataSource: 'master_finishes',
-              required: true,
-              priceMap: {},
-              geometryMap: {},
-              targetNodes: pin.targetNode || pin.partName, 
-              linkedPinId: pin.partId,
-              allowedOptions: [],
-              useClientPricing: false,
-              priceOverride: '',
-              partHandling: '',
-              calculatorTemplate: '',
-              qtyHelperText: ''
-          }));
+          const generatedSteps = linkedBomPins.map((pin, idx) => {
+              const libPart = allApprovedDesigns.find(d => d.id === pin.partId);
+              const bp = libPart?.manufacturingSpecs?.basePrice || libPart?.basePrice || 0;
+
+              return {
+                  id: `STEP-AUTO-${Date.now()}-${idx}`,
+                  title: `Select Finish for ${pin.partName}`,
+                  type: 'DROPDOWN',
+                  dataSource: 'master_finishes',
+                  required: true,
+                  priceMap: {},
+                  geometryMap: {},
+                  targetNodes: pin.targetNode || pin.partName, 
+                  linkedPinId: pin.partId,
+                  linkedItemId: pin.partId, 
+                  basePrice: bp,
+                  allowedOptions: [],
+                  useClientPricing: false,
+                  priceOverride: '',
+                  partHandling: '',
+                  calculatorTemplate: '',
+                  qtyHelperText: ''
+              };
+          });
 
           const updatedSteps = [...(flow.steps || []), ...generatedSteps];
           await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps }, { merge: true });
@@ -598,7 +608,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               updatedSteps = [...(flow.steps || []), { ...newStep, id: `STEP-${Date.now()}` }];
           }
           await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
-          setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '' });
+          setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
       } catch (err) { console.error("Error saving step:", err); alert("Database Error."); }
   };
 
@@ -1038,6 +1048,29 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         />
                                     </div>
 
+                                    <div style={{ background: '#fff', padding: '10px', border: '1px solid #ccc', marginTop: '10px' }}>
+                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '10px' }}>
+                                            🏷️ STEP BASE PRICE / ITEM MAPPING
+                                        </label>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                            <div>
+                                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '4px' }}>LINK TO LIBRARY ITEM (AUTO-PULLS PRICE):</label>
+                                                 <select value={newStep.linkedItemId || newStep.linkedPinId || ''} onChange={e => {
+                                                     const part = allApprovedDesigns.find(p => p.id === e.target.value);
+                                                     const bp = part?.manufacturingSpecs?.basePrice || part?.basePrice || 0;
+                                                     setNewStep({...newStep, linkedItemId: e.target.value, basePrice: bp});
+                                                 }} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontWeight: 'bold' }}>
+                                                     <option value="">-- No Item Linked --</option>
+                                                     {allApprovedDesigns.filter(p => p.partClass === 'Inventory' || p.partClass === 'Assembly').map(p => <option key={p.id} value={p.id}>{p.itemName} {p.legacyErpId && p.legacyErpId !== 'PENDING' ? `[${p.legacyErpId}]` : ''}</option>)}
+                                                 </select>
+                                            </div>
+                                            <div>
+                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#333', display: 'block', marginBottom: '4px' }}>STEP BASE PRICE ($):</label>
+                                                <input type="number" step="0.01" value={newStep.basePrice || ''} onChange={e => setNewStep({...newStep, basePrice: e.target.value})} placeholder="e.g. 15.00" style={{ width: '100%', padding: '8px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     {newStep.dataSource && availableSourceItems.length > 0 && newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && (
                                         <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
@@ -1185,7 +1218,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             {newStep.id ? "💾 SAVE EDITS TO STEP" : "➕ MANUAL ADD STEP"}
                                         </button>
                                         {newStep.id && (
-                                            <button onClick={() => setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '' })} style={{ padding: '10px 20px', background: '#fff', color: '#333', border: '2px solid #ccc', fontWeight: 'bold', cursor: 'pointer' }}>
+                                            <button onClick={() => setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' })} style={{ padding: '10px 20px', background: '#fff', color: '#333', border: '2px solid #ccc', fontWeight: 'bold', cursor: 'pointer' }}>
                                                 CANCEL EDIT
                                             </button>
                                         )}
@@ -1201,6 +1234,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>
                                                 Type: <strong style={{ color: (step.type.includes('DIMENSIONS') || step.type === 'STATIC_FEE') ? '#e83e8c' : '#333'}}>{step.type}</strong> | Data: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{step.dataSource || 'N/A'}</span> | Required: {step.required ? 'Yes' : 'No'}
                                             </div>
+                                            {step.basePrice > 0 && <div style={{ fontSize: '0.65rem', color: '#28a745', marginTop: '3px', fontWeight: 'bold' }}>🏷️ BASE PRICE: ${parseFloat(step.basePrice).toFixed(2)}</div>}
                                             {step.allowedOptions && step.allowedOptions.length > 0 && (
                                                 <div style={{ fontSize: '0.65rem', color: '#CC6600', marginTop: '3px', fontWeight: 'bold' }}>🔍 RESTRICTED TO: {step.allowedOptions.length} specific options.</div>
                                             )}
