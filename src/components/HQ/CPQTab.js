@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, doc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, serverTimestamp, query, where, getDoc } from "firebase/firestore";
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
@@ -8,7 +8,6 @@ import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } fro
 const globalTextureCache = {};
 
 const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
-    // This tells the app to download Google's official decoder to unzip the file
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
     
@@ -30,7 +29,6 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                 if (child.isMesh && child.userData.originalMaterial) {
                     const meshName = child.name.toLowerCase();
 
-                    // --- VISIBILITY LOGIC ---
                     let isVis = child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
@@ -42,7 +40,6 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     }
                     child.visible = isVis;
 
-                    // --- TEXTURE LOGIC ---
                     let matchedTexUrl = null;
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
                         for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
@@ -142,10 +139,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [jobData, setJobData] = useState({ customerId: '', jobName: '', sidemark: '' });
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
-  const [virtualFeeSteps, setVirtualFeeSteps] = useState([]);
 
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
   const [activeAssembly, setActiveAssembly] = useState(null);
+  const [activeDraftId, setActiveDraftId] = useState(null);
 
   const [viewMode, setViewMode] = useState("3D");
 
@@ -154,7 +151,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       
       const unsubFlows = onSnapshot(query(collection(db, "cpq_flows"), where("brandId", "==", activeBrand)), (snap) => setCpqFlows(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       const unsubRules = onSnapshot(doc(db, "system", "cpq_rules"), (snap) => { if(snap.exists() && snap.data().rules) setCpqRules(snap.data().rules); });
-      const unsubDrafts = onSnapshot(query(collection(db, "cpq_drafts"), where("brandId", "==", activeBrand)), (snap) => setPreviousDrafts(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubDrafts = onSnapshot(query(collection(db, "cpq_drafts"), where("brandId", "==", activeBrand), where("status", "==", "DRAFT_FROM_VISION")), (snap) => setPreviousDrafts(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       
       const unsubParts = onSnapshot(query(collection(db, "Approved_Designs")), (snap) => {
           let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -221,8 +218,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
   const allActiveSteps = useMemo(() => {
       if (!activeFlow) return [];
-      return [...(activeFlow.steps || []), ...virtualFeeSteps];
-  }, [activeFlow, virtualFeeSteps]);
+      return activeFlow.steps || [];
+  }, [activeFlow]);
 
   const currentStep = allActiveSteps[currentStepIndex];
   const availableProductTypes = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.productType).filter(Boolean))];
@@ -231,26 +228,23 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (!step || !step.dataSource) return [];
       let options = [];
 
-      if (step.dataSource === 'master_finishes') {
-          const inHouse = globalFinishes.map(f => ({ id: f.id, itemName: f.name, finalImageUrl: f.textureUrl, code: f.code }));
-          const outsource = outsourceFinishes.map(f => ({ id: f.id, itemName: f.name, finalImageUrl: f.textureUrl, multiplier: f.multiplier }));
-          options = [...inHouse, ...outsource];
-      } else if (globalLists.inventoryTypes?.includes(step.dataSource)) {
-          options = libraryParts.filter(p => p.routingType === step.dataSource).map(p => ({
-              id: p.id,
-              itemName: p.itemName,
-              finalImageUrl: p.finalImageUrl || p.manufacturingSpecs?.finalImageUrl,
-              code: p.legacyErpId,
-              clientPricing: p.clientPricing,
-              basePrice: p.manufacturingSpecs?.basePrice
-          }));
+      if (globalLists.inventoryTypes?.includes(step.dataSource) || globalLists.assemblyTypes?.includes(step.dataSource) || globalLists.prodTypes?.includes(step.dataSource)) {
+          options = libraryParts.filter(p => {
+              if (p.manufacturingSpecs?.customData?.feeType) return false;
+              if (globalLists.prodTypes?.includes(step.dataSource) && p.manufacturingSpecs?.productType !== step.dataSource && p.productType !== step.dataSource) return false;
+              if ((globalLists.inventoryTypes?.includes(step.dataSource) || globalLists.assemblyTypes?.includes(step.dataSource)) && p.routingType !== step.dataSource) return false;
+              return true;
+          }).map(p => ({ id: p.id, itemName: p.itemName, code: p.legacyErpId, price: p.manufacturingSpecs?.basePrice || 0, img: p.finalImageUrl }));
+      } else if (step.dataSource === 'master_finishes') {
+          options = [
+              ...globalFinishes.map(f => ({ id: f.id, itemName: f.name, code: f.code })),
+              ...outsourceFinishes.map(f => ({ id: f.id, itemName: f.name }))
+          ];
       } else {
           const customAssets = dynamicAssets.filter(a => a.windowId === step.dataSource);
-          if (customAssets.length > 0) {
-              options = customAssets.map(a => ({ id: a.id, itemName: a.name, finalImageUrl: a.textureUrl, code: a.code, multiplier: a.multiplier }));
-          } else if (globalLists[step.dataSource]) {
-              options = globalLists[step.dataSource].map(val => ({ id: val, itemName: val }));
-          } else if (step.dataSource === 'master_fabrics') {
+          if (customAssets.length > 0) options = customAssets.map(a => ({ id: a.id, itemName: a.name, code: a.code, price: a.basePrice || 0, img: a.imageUrl }));
+          else if (globalLists[step.dataSource]) options = globalLists[step.dataSource].map(val => ({ id: val, itemName: val }));
+          else if (step.dataSource === 'master_fabrics') {
               options = libraryParts.filter(p => ['TEXTILE', 'FABRIC', 'RAW MATERIAL'].includes(p.manufacturingSpecs?.productType));
           } else if (step.dataSource === 'master_trims') {
               options = libraryParts.filter(p => ['TRIMMING', 'COMPONENT'].includes(p.manufacturingSpecs?.productType));
@@ -264,7 +258,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       return options;
   };
 
-  // 🚀 FIXED: Robust Draft Loader & Quantity Injection
   const handleResumeDraft = (draftId) => {
       const draft = previousDrafts.find(d => d.id === draftId);
       if (!draft) return alert("Draft not found.");
@@ -282,9 +275,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (!targetFlow) return alert("Cannot resume draft: No matching CPQ flow setup for this product.");
 
       setActiveFlowId(targetFlow.id);
-      const translatedParams = {};
+      setActiveDraftId(draft.id);
+      setJobData(prev => ({...prev, jobName: draft.jobName || '', sidemark: draft.sidemark || ''}));
       
       if (draft.category === 'PILLOW') {
+          const translatedParams = {};
           targetFlow.steps.forEach(step => {
               if (step.title.toLowerCase().includes("size")) translatedParams[step.id] = draft.specs?.size;
               if (step.title.toLowerCase().includes("fill")) translatedParams[step.id] = draft.specs?.fill;
@@ -294,56 +289,19 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               if (step.title.toLowerCase().includes("stitch")) translatedParams[step.id] = draft.specs?.stitch;
               if (step.title.toLowerCase().includes("seam") && draft.specs?.seamCount) translatedParams[step.id] = draft.specs.seamCount;
           });
+          setDynamicConfigParams(translatedParams);
       } else {
-          // Hardware is explicitly mapped by Step ID
-          Object.keys(draft.specs || {}).forEach(key => {
-              if (key !== 'collection' && key !== 'quantities') {
-                  translatedParams[key] = draft.specs[key];
-              }
-          });
+          setDynamicConfigParams({});
       }
 
-      const newVirtualSteps = [];
-      const quantities = draft.specs?.quantities || draft.cpqData?.quantities || {};
-
-      if (quantities) {
-          const createVirtualStep = (feeKey, title, dataSourceType) => {
-              if (quantities[feeKey] > 0) {
-                  const virtualId = `VIRTUAL_FEE_${feeKey.toUpperCase()}`;
-                  newVirtualSteps.push({
-                      id: virtualId,
-                      title: title,
-                      type: 'READ_ONLY_FEE',
-                      isVirtual: true,
-                      qty: quantities[feeKey]
-                  });
-                  const feeItem = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === dataSourceType);
-                  if (feeItem) {
-                      translatedParams[virtualId] = feeItem.id;
-                  }
-              }
-          };
-
-          createVirtualStep('splice', 'Appended Splice Fee', 'SPLICE');
-          createVirtualStep('miter', 'Appended Miter Cut Fee', 'MITER_CUT');
-          createVirtualStep('bend', 'Appended Bent Return Fee', 'BENT_RETURN');
-          createVirtualStep('miterReturn', 'Appended Miter Return Fee', 'MITER_RETURN');
-          createVirtualStep('customProj', 'Appended Custom Proj Setup', 'CUSTOM_PROJ');
-      }
-
-      setVirtualFeeSteps(newVirtualSteps);
-      setDynamicConfigParams(translatedParams);
-      
-      // 🚀 INJECT LIVE QUANTITIES INTO UI STATE
-      setStepQuantities(quantities);
-      
+      setStepQuantities({});
       if (draft.cpqData?.dimensions || draft.spatialData) {
           setDimensionInputs(draft.cpqData?.dimensions || draft.spatialData);
       }
 
       setShowCloneModal(false);
       setCurrentStepIndex(0);
-      alert("Draft visual data translated and mapped to CPQ Flow!");
+      alert("Engineering Math loaded! Please check the yellow notes on the left to complete your configuration.");
   };
 
   useEffect(() => {
@@ -392,59 +350,39 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           
           if (template === 'calc_french_return_1in') {
               let baseLength = parseFloat(updated.length) || 0;
-              
-              if (updated.type === 'C2C') {
-                  c2c = baseLength;
-                  o2o = baseLength + 1; 
-              } else {
-                  o2o = baseLength;
-                  c2c = baseLength - 1; 
-              }
-              
+              if (updated.type === 'C2C') { c2c = baseLength; o2o = baseLength + 1; } 
+              else { o2o = baseLength; c2c = baseLength - 1; }
               cutLength = o2o + 17; 
               calculatedQty = Math.max(1, Math.ceil(cutLength / 12)); 
-              
-              updated.calc_o2o = o2o;
-              updated.calc_c2c = c2c;
-              updated.calc_cutLength = cutLength;
-
+              updated.calc_o2o = o2o; updated.calc_c2c = c2c; updated.calc_cutLength = cutLength;
           } else if (template === 'calc_straight_pole') {
               let baseLength = parseFloat(updated.length) || 0;
               calculatedQty = Math.max(1, Math.ceil(baseLength / 12));
               updated.calc_cutLength = baseLength;
-
           } else if (template === 'calc_mitered_bay') {
-              let a = parseFloat(updated.wallA) || 0;
-              let b = parseFloat(updated.wallB) || 0;
-              let c = parseFloat(updated.wallC) || 0;
+              let a = parseFloat(updated.wallA) || 0; let b = parseFloat(updated.wallB) || 0; let c = parseFloat(updated.wallC) || 0;
               calculatedQty = Math.max(1, Math.ceil((a + b + c + 12) / 12)); 
               updated.calc_cutLength = a + b + c + 12; 
-
           } else if (template === 'calc_curved_bay') {
               let baseLength = parseFloat(updated.length) || 0;
               calculatedQty = Math.max(1, Math.ceil((baseLength + 12) / 12)); 
               updated.calc_cutLength = baseLength + 12;
           }
 
-          if (value !== '') {
-              setStepQuantities(sq => ({...sq, [stepId]: calculatedQty}));
-          }
-          
+          if (value !== '') setStepQuantities(sq => ({...sq, [stepId]: calculatedQty}));
           return { ...prev, [stepId]: updated };
       });
   };
 
-  // 🚀 FIXED: Dynamic Pricing pulls perfectly mapped Live Quantities
   const currentTotal = useMemo(() => {
       if (!activeFlow) return 0;
       let total = parseFloat(activeFlow.basePrice) || 0;
-      
-      const quantities = stepQuantities; // Always use the UI state!
+      const quantities = stepQuantities; 
 
       allActiveSteps.forEach(step => {
           const selectedValueId = dynamicConfigParams[step.id];
           if (selectedValueId || step.type === 'DIMENSIONS') {
-              let qtyMultiplier = step.isVirtual ? step.qty : (quantities[step.id] !== undefined ? quantities[step.id] : 1);
+              let qtyMultiplier = quantities[step.id] !== undefined ? quantities[step.id] : 1;
 
               if (step.priceOverride) {
                   total += parseFloat(step.priceOverride) * qtyMultiplier;
@@ -462,16 +400,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
                   if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
                       const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
-                      if (cp && cp.price !== undefined && cp.price !== "") {
-                          stepPrice = parseFloat(cp.price);
-                      }
+                      if (cp && cp.price !== undefined && cp.price !== "") stepPrice = parseFloat(cp.price);
                   }
 
-                  let upcharge = 0;
-                  if (step.priceMap && step.priceMap[selectedValueId]) {
-                      upcharge = parseFloat(step.priceMap[selectedValueId]) || 0;
-                  }
-
+                  let upcharge = step.priceMap?.[selectedValueId] ? parseFloat(step.priceMap[selectedValueId]) : 0;
                   let finalP = stepPrice + upcharge;
                   let mlt = (partObj && partObj.multiplier) ? parseFloat(partObj.multiplier) : 1.0;
                   total += (finalP * mlt * qtyMultiplier);
@@ -481,11 +413,21 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       return total;
   }, [dynamicConfigParams, stepQuantities, activeFlow, libraryParts, dynamicAssets, globalFinishes, outsourceFinishes, allActiveSteps, jobData.customerId]);
 
-  useEffect(() => {
-      setPricing({ base: currentTotal, finalPrice: currentTotal });
-  }, [currentTotal]);
+  useEffect(() => { setPricing({ base: currentTotal, finalPrice: currentTotal }); }, [currentTotal]);
 
-  const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
+  const handleParamChange = (stepId, value) => {
+      setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
+      
+      if (stepQuantities[stepId] === undefined) {
+          const step = allActiveSteps.find(s => s.id === stepId);
+          let defaultQty = 1;
+          if (step && activeBomPins.length > 0) {
+              const pin = activeBomPins.find(p => p.partId === step.linkedPinId);
+              if (pin && pin.defaultQty) defaultQty = pin.defaultQty;
+          }
+          setStepQuantities(prev => ({...prev, [stepId]: defaultQty}));
+      }
+  };
 
   const handleNextStep = () => {
       if (!activeFlow) return;
@@ -501,6 +443,18 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       const jobId = `QUOTE-${Date.now()}`;
       const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
       
+      const draftData = activeDraftId ? previousDrafts.find(d => d.id === activeDraftId) : null;
+      let fullQuantities = { ...stepQuantities };
+      
+      if (draftData?.specs?.engineeringNotes) {
+          const notes = draftData.specs.engineeringNotes;
+          if (notes.qtySplices > 0) fullQuantities['VIRTUAL_SPLICE'] = notes.qtySplices;
+          if (notes.qtyBends > 0) fullQuantities['VIRTUAL_BEND'] = notes.qtyBends;
+          if (notes.qtyMiters > 0) fullQuantities['VIRTUAL_MITER'] = notes.qtyMiters;
+          if (notes.qtyMiterReturns > 0) fullQuantities['VIRTUAL_MITER_RTN'] = notes.qtyMiterReturns;
+          if (notes.qtyCustomProjBrackets > 0) fullQuantities['VIRTUAL_CUSTOM_PROJ'] = notes.qtyCustomProjBrackets;
+      }
+
       const payload = {
           jobId: jobId, brandId: activeBrand, status: 'CONFIGURED',
           customer: { id: jobData.customerId, name: customerName },
@@ -511,7 +465,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           cpqData: { 
               totalPrice: pricing.finalPrice, 
               configuration: dynamicConfigParams,
-              quantities: stepQuantities, 
+              quantities: fullQuantities, 
               dimensions: dimensionInputs,
               appliedRules: engineFlags.warnings 
           },
@@ -521,17 +475,13 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       
       try {
           await setDoc(doc(db, "jobs", jobId), payload);
-          
           await generateFactoryRouter(payload);
-
-          if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
-              alert(`✅ COMPLEX QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
-          } else {
-              alert(`✅ STANDARD QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10 (External Coop) for standard approval.`);
-          }
+          if (activeAssembly?.manufacturingSpecs?.isProjectManaged) alert(`✅ COMPLEX QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
+          else alert(`✅ STANDARD QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10 (External Coop) for standard approval.`);
+          
           setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); 
           setActiveAssemblyId(""); setShowCheckoutModal(false); setJobData({ customerId: '', jobName: '', sidemark: '' });
-          setVirtualFeeSteps([]);
+          setActiveDraftId(null);
       } catch (err) { console.error(err); alert("Failed to save quote."); }
   };
 
@@ -546,14 +496,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                   <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
                       ${Object.entries(job.cpqData.dimensions).map(([stepId, dims]) => `
                           <tr><td colspan="2" style="padding: 10px; font-weight: bold; background: #e9ecef; border-top: 2px solid #000;">${allActiveSteps.find(s => s.id === stepId)?.title || stepId}</td></tr>
-                          
                           ${Object.entries(dims).filter(([k,v]) => !k.startsWith('calc_') && v !== '').map(([key, val]) => `
                               <tr>
                                   <td style="padding: 4px 8px; border-bottom: 1px solid #eee;">INPUT: ${key.toUpperCase()}</td>
                                   <td style="padding: 4px 8px; border-bottom: 1px solid #eee;">${val}</td>
                               </tr>
                           `).join('')}
-
                           ${dims.calc_cutLength ? `
                               <tr>
                                   <td style="padding: 8px; border-bottom: 1px dashed #d9534f; color: #d9534f; font-weight: bold; font-size: 14px;">SHOP RAW CUT LENGTH</td>
@@ -609,11 +557,21 @@ const CPQTab = ({ currentUser, activeBrand }) => {
             <div class="specs">
               <div class="spec-header">BILL OF MATERIALS (BOM)</div>
               <div class="spec-row" style="background:#eee; font-weight:bold;"><span>COMPONENT</span><span>QTY</span></div>
+              
               ${Object.entries(job.cpqData.configuration).map(([stepId, valueId]) => {
                   const step = allActiveSteps?.find(s => s.id === stepId);
+                  if (!step) return ''; 
+                  
                   const qty = job.cpqData.quantities[stepId] || 1;
                   const partObj = libraryParts.find(p => p.id === valueId) || dynamicAssets.find(a => a.id === valueId) || globalFinishes.find(f => f.id === valueId) || outsourceFinishes.find(f => f.id === valueId);
-                  return `<div class="spec-row"><span>${step?.title}: <strong>${partObj?.itemName || partObj?.name || valueId}</strong></span><span>${qty}</span></div>`;
+                  return `<div class="spec-row"><span>${step.title}: <strong>${partObj?.itemName || partObj?.name || valueId}</strong></span><span>${qty}</span></div>`;
+              }).join('')}
+              
+              ${Object.entries(job.cpqData.quantities).map(([key, qty]) => {
+                  if (key.startsWith('VIRTUAL_')) {
+                      return `<div class="spec-row"><span>AUTO-APPENDED FEE: <strong>${key.replace('VIRTUAL_', '')}</strong></span><span>${qty}</span></div>`;
+                  }
+                  return '';
               }).join('')}
             </div>
             ${dimensionHtml}
@@ -673,61 +631,51 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       return layers.sort((a, b) => a.zIndex - b.zIndex);
   };
 
-  const get3DTextureOverrides = () => {
+  const textureOverrides = useMemo(() => {
+      if (!activeFlow) return {};
       const overrides = {};
-      Object.entries(dynamicConfigParams).forEach(([stepId, valueId]) => {
-          const step = allActiveSteps?.find(s => s.id === stepId);
-          if (!step || !step.targetNodes) return; 
-
-          const foundAsset = dynamicAssets.find(a => a.id === valueId) || globalFinishes.find(f => f.id === valueId) || outsourceFinishes.find(f => f.id === valueId) || libraryParts.find(p => p.id === valueId);
-          
-          if (foundAsset) {
-              const tex = foundAsset.textureUrl || foundAsset.finalImageUrl;
-              if (tex) overrides[step.targetNodes] = tex;
+      
+      allActiveSteps.forEach(step => {
+          if (step.isVirtual) return; 
+          const selectedValueId = dynamicConfigParams[step.id];
+          if (selectedValueId && step.targetNodes) {
+              const allF = [...globalFinishes, ...outsourceFinishes];
+              const dynamicF = dynamicAssets;
+              const fData = allF.find(f => f.id === selectedValueId) || dynamicF.find(d => d.id === selectedValueId);
+              
+              if (fData?.textureUrl) overrides[step.targetNodes] = fData.textureUrl;
           }
       });
       return overrides;
-  };
+  }, [dynamicConfigParams, activeFlow, globalFinishes, outsourceFinishes, dynamicAssets, allActiveSteps]);
 
-  const get3DVisibilityOverrides = () => {
+  const visibilityOverrides = useMemo(() => {
+      if (!activeFlow) return {};
       const overrides = {};
-      allActiveSteps?.forEach(step => {
-          if (step.geometryMap && Object.keys(step.geometryMap).length > 0) {
-              Object.values(step.geometryMap).forEach(meshString => {
-                  if (meshString) {
-                      meshString.split(',').forEach(m => {
-                          if (m.trim()) overrides[m.trim().toLowerCase()] = false;
-                      });
-                  }
+      
+      allActiveSteps.forEach(step => {
+          if (step.isVirtual) return; 
+          const selectedValueId = dynamicConfigParams[step.id];
+          if (selectedValueId && step.geometryMap && Object.keys(step.geometryMap).length > 0) {
+              Object.keys(step.geometryMap).forEach(optId => {
+                  const targetMesh = step.geometryMap[optId];
+                  if (targetMesh) overrides[targetMesh] = (optId === selectedValueId);
               });
-
-              const selectedVal = dynamicConfigParams[step.id];
-              if (selectedVal && step.geometryMap[selectedVal]) {
-                  step.geometryMap[selectedVal].split(',').forEach(m => {
-                      if (m.trim()) overrides[m.trim().toLowerCase()] = true;
-                  });
-              }
           }
       });
       return overrides;
-  };
-
-  const availableAssemblies = liveAssemblies.filter(a => {
-      if (!productType) return true;
-      return a.manufacturingSpecs?.productType === productType; 
-  });
+  }, [dynamicConfigParams, activeFlow, allActiveSteps]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
       
       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
         <div>
-          <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>8. Dynamic CPQ Engine</h2>
-          <span style={{ fontSize: '0.7rem', color: '#666' }}>CONFIGURE, PRICE, QUOTE</span>
+            <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>8. Configure, Price, Quote (CPQ)</h2>
+            <span style={{ fontSize: '0.7rem', color: '#666' }}>PARAMETRIC PRICING & VISUALIZATION</span>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
-            <button onClick={() => setShowCloneModal(true)} style={{ padding: '8px 15px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer' }}>📥 RESUME DRAFT / CLONE QUOTE</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setVirtualFeeSteps([]); }} style={{ padding: '8px 15px', background: '#fff', color: '#d9534f', fontWeight: 'bold', border: '2px solid #d9534f', cursor: 'pointer' }}>🗑️ CLEAR QUOTE</button>
+        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', background: '#eafaf1', padding: '10px 20px', border: '2px solid #28a745', color: '#1e7e34', boxShadow: '3px 3px 0 #28a745' }}>
+            EST. MSRP: ${pricing.finalPrice.toFixed(2)}
         </div>
       </div>
 
@@ -753,7 +701,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                  <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     
                     {cpqFlows.length > 0 && (
-                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setVirtualFeeSteps([]); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem', background: '#e6f2ff' }}>
+                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setVirtualFeeSteps([]); setActiveDraftId(null); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem', background: '#e6f2ff' }}>
                             <option value="">-- Launch Custom CPQ Flow --</option>
                             {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                         </select>
@@ -881,7 +829,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                   <button onClick={() => {
                                       let current = stepQuantities[currentStep.id];
-                                      if (current === undefined || current === '') current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
+                                      if (current === undefined || current === '') current = 1;
                                       else current = parseInt(current);
                                       setStepQuantities({...stepQuantities, [currentStep.id]: Math.max(1, current - 1)});
                                   }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>-</button>
@@ -889,7 +837,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                   <input 
                                       type="number" 
                                       min="1" 
-                                      value={stepQuantities[currentStep.id] !== undefined ? stepQuantities[currentStep.id] : (activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1)} 
+                                      value={stepQuantities[currentStep.id] !== undefined ? stepQuantities[currentStep.id] : 1} 
                                       onChange={e => {
                                           const val = e.target.value;
                                           setStepQuantities({...stepQuantities, [currentStep.id]: val === '' ? '' : parseInt(val)});
@@ -899,7 +847,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                   
                                   <button onClick={() => {
                                       let current = stepQuantities[currentStep.id];
-                                      if (current === undefined || current === '') current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
+                                      if (current === undefined || current === '') current = 1;
                                       else current = parseInt(current);
                                       setStepQuantities({...stepQuantities, [currentStep.id]: current + 1});
                                   }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>+</button>
@@ -977,8 +925,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                               <Bounds fit clip margin={1.2}>
                                   <DynamicModel 
                                       url={activeAssembly.manufacturingSpecs.cadUrl} 
-                                      textureOverrides={get3DTextureOverrides()} 
-                                      visibilityOverrides={get3DVisibilityOverrides()}
+                                      textureOverrides={textureOverrides} 
+                                      visibilityOverrides={visibilityOverrides}
                                   />
                               </Bounds>
                           </Canvas>
@@ -997,6 +945,39 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                               ))}
                           </div>
                       )}
+                      
+                      {/* 🚀 NEW: The Floating Engineering Post-It Note */}
+                      {activeDraftId && previousDrafts.find(d => d.id === activeDraftId)?.specs?.engineeringNotes && (
+                          <div style={{
+                              position: 'absolute', bottom: '20px', left: '20px', width: '220px',
+                              background: '#fffcd6', padding: '15px', boxShadow: '3px 3px 10px rgba(0,0,0,0.3)',
+                              transform: 'rotate(-2deg)', border: '1px solid #e3e4a3', zIndex: 100,
+                              color: '#333'
+                          }}>
+                              <div style={{ fontWeight: 'bold', borderBottom: '1px solid #ccc', paddingBottom: '5px', marginBottom: '10px', fontSize: '0.8rem', color: '#007bff' }}>
+                                  📌 ENGINEERING SPECS
+                              </div>
+                              {(() => {
+                                  const draft = previousDrafts.find(d => d.id === activeDraftId);
+                                  const notes = draft.specs.engineeringNotes;
+                                  return (
+                                      <div style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '5px', fontFamily: 'monospace' }}>
+                                          {draft.jobName && <div><strong>JOB:</strong> {draft.jobName}</div>}
+                                          {draft.sidemark && <div><strong>MARK:</strong> {draft.sidemark}</div>}
+                                          <div style={{ marginTop: '5px', color: '#1e7e34' }}><strong>POLE:</strong> {notes.poleFeetQty} FT</div>
+                                          {notes.qtyBrackets > 0 && <div><strong>BRACKETS:</strong> {notes.qtyBrackets}</div>}
+                                          {notes.recRings > 0 && <div><strong>RINGS:</strong> {notes.recRings}</div>}
+                                          {notes.qtyFinials > 0 && <div><strong>FINIALS:</strong> {notes.qtyFinials}</div>}
+                                          {notes.qtySplices > 0 && <div style={{ color: '#d9534f' }}><strong>SPLICES:</strong> {notes.qtySplices}</div>}
+                                          {notes.qtyMiters > 0 && <div style={{ color: '#d9534f' }}><strong>MITERS:</strong> {notes.qtyMiters}</div>}
+                                          {notes.qtyBends > 0 && <div style={{ color: '#d9534f' }}><strong>BENDS:</strong> {notes.qtyBends}</div>}
+                                          {notes.qtyMiterReturns > 0 && <div style={{ color: '#d9534f' }}><strong>MITER RTN:</strong> {notes.qtyMiterReturns}</div>}
+                                      </div>
+                                  )
+                              })()}
+                          </div>
+                      )}
+
                   </div>
               </div>
 
