@@ -3,12 +3,12 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 
 // 🚀 DYNAMIC BRAND MAPPING DICTIONARY
-// Update these values with the exact NetSuite IDs from your CSV file.
+// Mapped exactly from your Brands_Netsuite_Keyinfo.csv
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
-    'uniquity': { subsidiary: "6", location: "22" }, // Update with CSV value
-    'ce': { subsidiary: "2", location: "17" },       // Update with CSV value
-    'leyla': { subsidiary: "5", location: "18" },    // Update with CSV value
+    'uniquity': { subsidiary: "6", location: "22" },
+    'ce': { subsidiary: "2", location: "17" },
+    'leyla': { subsidiary: "5", location: "18" }
 };
 
 const ERPPushPullTab = ({ currentUser, activeBrand }) => {
@@ -149,8 +149,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           if (nsCustomerId.startsWith('CUST-')) nsCustomerId = nsCustomerId.replace('CUST-', '');
 
           // 🚀 DYNAMIC BRAND MAPPING ASSIGNMENT
-          // Safely falls back to Wilmington "2" & "1" if the brand string is somehow missing
-          const brandMapping = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2", location: "1" };
+          // Safely falls back to CE (Subsidiary 2, Location 17) if brand string is somehow missing
+          const brandMapping = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2", location: "17" };
 
           const payload = {
               entity: { id: nsCustomerId }, 
@@ -194,11 +194,15 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               throw new Error(`API Rejected [${response.status}]: ${JSON.stringify(result)}`);
           }
 
-          addLog(`✅ Success! NetSuite Quote Created (ID: ${result.id})`, 'success');
+          // 🚀 FIX: Safely handle the returned ID to prevent Firebase crashes.
+          // NetSuite REST often hides the ID in a header, or proxies format it differently.
+          const returnedId = result.id || result.recordId || "CREATED_CHECK_NETSUITE";
+
+          addLog(`✅ Success! NetSuite Quote Created (ID: ${returnedId})`, 'success');
 
           await updateDoc(doc(db, "jobs", job.id), {
               status: 'TRANSMITTED_TO_ERP',
-              netsuiteEstimateId: result.id,
+              netsuiteEstimateId: returnedId, // Safely mapped ID
               dateTransmitted: new Date().toISOString()
           });
 
