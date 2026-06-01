@@ -3,11 +3,12 @@ import { db, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where } from "firebase/firestore";
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
-import { useGLTF, OrbitControls, Bounds, Environment, ContactShadows } from '@react-three/drei';
+import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
 
 const globalTextureCache = {};
 
 const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
+    // This tells the app to download Google's official decoder to unzip the file
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
     
@@ -29,6 +30,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                 if (child.isMesh && child.userData.originalMaterial) {
                     const meshName = child.name.toLowerCase();
 
+                    // --- VISIBILITY LOGIC ---
                     let isVis = child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
@@ -40,6 +42,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     }
                     child.visible = isVis;
 
+                    // --- TEXTURE LOGIC ---
                     let matchedTexUrl = null;
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
                         for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
@@ -144,6 +147,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
   const [activeAssembly, setActiveAssembly] = useState(null);
   const [activeDraftId, setActiveDraftId] = useState(null);
+  const [activeDraftSvg, setActiveDraftSvg] = useState(null);
 
   const [viewMode, setViewMode] = useState("3D");
 
@@ -276,6 +280,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       setActiveFlowId(targetFlow.id);
       setActiveDraftId(draft.id);
       
+      if (draft.specs?.engineeringNotes?.svgString) {
+          setActiveDraftSvg(draft.specs.engineeringNotes.svgString);
+      } else {
+          setActiveDraftSvg(null);
+      }
+      
       setJobData(prev => ({
           ...prev,
           jobName: draft.jobName || prev.jobName,
@@ -311,6 +321,18 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           try {
               await deleteDoc(doc(db, "cpq_drafts", id));
           } catch (err) {
+              console.error(err);
+          }
+      }
+  };
+
+  const handleClearAllDrafts = async () => {
+      if (window.confirm("⚠️ WARNING: This will permanently delete ALL abandoned drafts in the system. Are you sure?")) {
+          try {
+              const deletePromises = previousDrafts.map(d => deleteDoc(doc(db, "cpq_drafts", d.id)));
+              await Promise.all(deletePromises);
+              alert("✅ All drafts have been wiped from the system.");
+          } catch(err) {
               console.error(err);
           }
       }
@@ -543,11 +565,22 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       try {
           await setDoc(doc(db, "jobs", jobId), payload);
           
+          if (activeDraftSvg) {
+              await setDoc(doc(db, "crm_files", `DRAWING-${Date.now()}`), {
+                  customerId: jobData.customerId,
+                  jobId: jobId,
+                  sidemark: jobData.sidemark,
+                  dateSaved: new Date().toISOString(),
+                  type: 'VISION_DRAWING',
+                  svgData: activeDraftSvg
+              });
+          }
+          
           if (activeDraftId) {
               await deleteDoc(doc(db, "cpq_drafts", activeDraftId));
           }
 
-          await generateOrderDocuments(payload);
+          await generateOrderDocuments(payload, activeDraftSvg);
 
           if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
               alert(`✅ COMPLEX QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
@@ -556,11 +589,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           }
           setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); 
           setActiveAssemblyId(""); setShowCheckoutModal(false); setJobData({ customerId: '', jobName: '', sidemark: '' });
-          setActiveDraftId(null);
+          setActiveDraftId(null); setActiveDraftSvg(null);
       } catch (err) { console.error(err); alert("Failed to save quote."); }
   };
 
-  const generateOrderDocuments = async (job) => {
+  const generateOrderDocuments = async (job, draftSvg) => {
       const printWindow = window.open('', '_blank');
       
       let mathSection = '';
@@ -713,6 +746,29 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                 <div style="text-align:center; color:#999; font-size: 12px; margin-top: 50px;">*** END OF ROUTER ***</div>
             </div>
             
+            ${draftSvg ? `
+            <div class="page">
+                <div class="header">
+                  <div class="brand">${activeBrand}</div>
+                  <div class="doc-type" style="background:#007bff;">ENGINEERING DRAWING</div>
+                </div>
+                
+                <div class="meta-grid">
+                  <div><span class="label">Project / Sidemark:</span><br/><span class="val">${job.sidemark}</span></div>
+                  <div><span class="label">Work Order / Ref ID:</span><br/><span class="val">${job.jobId}</span></div>
+                </div>
+
+                <div style="width: 100%; border: 4px solid #000; background: #fff; padding: 10px; margin-top: 20px; box-sizing: border-box;">
+                    ${draftSvg}
+                </div>
+                
+                <div class="signature-block" style="margin-top: 60px;">
+                    <div class="sig-line">FABRICATION SIGN-OFF</div>
+                    <div class="sig-line" style="max-width: 200px;">DATE</div>
+                </div>
+            </div>
+            ` : ''}
+
             <script> 
                 window.onload = function() { 
                     setTimeout(() => window.print(), 500); 
@@ -821,7 +877,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                 EST. MSRP: ${pricing.finalPrice.toFixed(2)}
             </div>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '12px 20px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', fontSize: '1rem', boxShadow: '3px 3px 0 rgba(0,0,0,0.3)' }}>📥 RESUME DRAFT / CLONE QUOTE</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); }} style={{ padding: '12px 20px', background: '#fff', color: '#d9534f', fontWeight: 'bold', border: '2px solid #d9534f', cursor: 'pointer', fontSize: '1rem' }}>🗑️ CLEAR</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); }} style={{ padding: '12px 20px', background: '#fff', color: '#d9534f', fontWeight: 'bold', border: '2px solid #d9534f', cursor: 'pointer', fontSize: '1rem' }}>🗑️ CLEAR</button>
         </div>
       </div>
 
@@ -847,7 +903,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                  <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     
                     {cpqFlows.length > 0 && (
-                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem', background: '#e6f2ff' }}>
+                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); setActiveDraftSvg(null); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem', background: '#e6f2ff' }}>
                             <option value="">-- Launch Custom CPQ Flow --</option>
                             {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                         </select>
@@ -1226,6 +1282,13 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                     <h2 style={{ margin: 0, fontSize: '1.5rem', textTransform: 'uppercase' }}>📥 RESUME DRAFT / CLONE QUOTE</h2>
                     <button onClick={() => setShowCloneModal(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '2rem', cursor: 'pointer' }}>×</button>
                 </div>
+                
+                <div style={{ padding: '10px', background: '#f8f9fa', borderBottom: '2px solid #ccc', textAlign: 'right' }}>
+                    <button onClick={handleClearAllDrafts} style={{ padding: '8px 15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderRadius: '4px' }}>
+                        🗑️ WIPE ALL ABANDONED DRAFTS
+                    </button>
+                </div>
+
                 <div style={{ padding: '20px', flex: 1, overflowY: 'auto', background: '#f8f9fa' }}>
                     {previousDrafts.length === 0 ? <div style={{ color: '#666', fontStyle: 'italic' }}>No drafts pushed from Vision Tab yet.</div> : (
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>

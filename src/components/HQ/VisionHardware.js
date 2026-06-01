@@ -643,6 +643,15 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       setIsPushingToCPQ(true);
       const draftId = `QUOTE-${Date.now()}`;
 
+      // Snapshot the drawing SVG to pass to the CPQ cart
+      let capturedSvg = "";
+      if (svgRef.current) {
+          const clone = svgRef.current.cloneNode(true);
+          // Set a white background for clean PDF rendering later
+          clone.style.backgroundColor = "#ffffff";
+          capturedSvg = new XMLSerializer().serializeToString(clone);
+      }
+
       const payload = { 
           id: draftId, brandId: activeBrand, category: 'HARDWARE', status: 'DRAFT_FROM_VISION', 
           jobName: engData.jobName, sidemark: engData.sidemark, 
@@ -668,7 +677,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   systemC2C,
                   pole1,
                   pole2,
-                  pole3
+                  pole3,
+                  svgString: capturedSvg // Contains the visual blueprint
               },
               ...dynamicConfigParams
           }, 
