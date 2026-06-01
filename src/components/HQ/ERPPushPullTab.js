@@ -43,30 +43,47 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           return;
       }
 
-      if (!window.confirm(`Are you sure you want to push Job ${job.jobId || job.id} to NetSuite? This will create a live Estimate record.`)) return;
+      if (!window.confirm(`Push Quote ${job.jobId || job.id} to NetSuite? This will create a live Estimate.`)) return;
       
       setIsPushing(true);
       addLog(`Initiating NetSuite Cloud Proxy for Job: ${job.jobId || job.id}`, 'info');
 
       try {
           const lineItems = [];
+          let physicalItemsTotal = 0;
           
+          // 1. Process Physical Inventory Components
           if (job.cpqData?.configuration) {
               for (const [stepId, partId] of Object.entries(job.cpqData.configuration)) {
                   const masterPart = libraryParts.find(p => p.id === partId);
                   const qty = job.cpqData.quantities?.[stepId] || 1;
                   
                   if (masterPart) {
-                      // 🚀 NEW: Prioritize the numeric internal ID for NetSuite API compatibility
                       const nsId = masterPart.netSuiteInternalId || masterPart.legacyErpId; 
                       
                       if (nsId && nsId !== 'PENDING') {
-                          lineItems.push({
-                              item: { id: nsId.toString() }, // API requires a stringified numeric ID
+                          const itemRate = masterPart.manufacturingSpecs?.basePrice || 0;
+                          const lineTotal = itemRate * qty;
+                          physicalItemsTotal += lineTotal;
+
+                          // Extract specific custom columns
+                          const partCategory = masterPart.manufacturingSpecs?.partHandling || '';
+                          const projection = job.cpqData.dimensions?.[stepId]?.length || '';
+
+                          const linePayload = {
+                              item: { id: nsId.toString() }, 
                               quantity: qty,
-                              rate: masterPart.manufacturingSpecs?.basePrice || 0,
-                              description: `${masterPart.itemName} (Mapped from CPQ)`
-                          });
+                              rate: itemRate,
+                              description: `${masterPart.itemName} (Mapped from CPQ)`,
+                              custcol_part_category: partCategory
+                          };
+
+                          // Only append projection if it exists for this step
+                          if (projection) {
+                              linePayload.custcol_bracket_projection = projection.toString();
+                          }
+
+                          lineItems.push(linePayload);
                       } else {
                           addLog(`WARNING: Skipping "${masterPart.itemName}". No NetSuite ID mapped in Library.`, 'warn');
                       }
@@ -74,21 +91,25 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               }
           }
 
-          if (lineItems.length === 0) {
-              throw new Error("No valid items with NetSuite ERP IDs were found in this configuration.");
-          }
+          // 2. Calculate "Silent Costs" (Fees, Base Price, Upcharges)
+          const cpqGrandTotal = job.cpqData.totalPrice || 0;
+          const silentFeeBalance = Math.max(0, cpqGrandTotal - physicalItemsTotal);
 
+          // 3. Construct the NetSuite Header & Payload
           let nsCustomerId = job.customer?.id || "";
           if (nsCustomerId.startsWith('CUST-')) nsCustomerId = nsCustomerId.replace('CUST-', '');
 
           const payload = {
               entity: { id: nsCustomerId || "12345" }, 
               memo: `[HQ APP CONFIG] ${job.jobName || ''} - ${job.sidemark || ''}`.trim(),
+              custbody50: job.jobId || job.id, // Injects Quote ID for inbound sync routing
               item: {
                   items: [
                       {
-                          item: { id: "123" }, // TODO: Update to a real Non-Inventory Item ID from NetSuite
+                          // Master Assembly / Fee Roll-up Line
+                          item: { id: "61502" }, 
                           quantity: 1,
+                          rate: silentFeeBalance,
                           description: `=== CPQ BUILD: ${job.sidemark?.toUpperCase() || 'CUSTOM CONFIGURATION'} ===`
                       },
                       ...lineItems
@@ -96,9 +117,9 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               }
           };
 
-          addLog(`Payload constructed with ${lineItems.length} child items.`, 'success');
+          addLog(`Payload constructed. Silent Fees/Assembly assigned $${silentFeeBalance.toFixed(2)}`, 'success');
 
-          // --- 🌐 SECURE CLOUD PROXY CALL ---
+          // 4. Fire to Google Cloud Proxy
           const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
           addLog(`Transmitting to NetSuite via Google Cloud...`, 'info');
 
@@ -224,14 +245,14 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                                 </thead>
                                 <tbody>
                                     <tr>
-                                        <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontWeight: 'bold', color: '#007bff' }}>HEADER_NON_INV</td>
+                                        <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontWeight: 'bold', color: '#007bff' }}>61502</td>
                                         <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontStyle: 'italic' }}>=== CPQ BUILD: {activeJob.sidemark?.toUpperCase()} ===</td>
                                         <td style={{ padding: '8px', borderBottom: '1px solid #eee', textAlign: 'center' }}>1</td>
                                     </tr>
                                     {Object.entries(activeJob.cpqData?.configuration || {}).map(([stepId, partId], idx) => {
                                         const masterPart = libraryParts.find(p => p.id === partId);
                                         const qty = activeJob.cpqData?.quantities?.[stepId] || 1;
-                                        const nsId = masterPart?.legacyErpId || masterPart?.itemId || 'UNMAPPED';
+                                        const nsId = masterPart?.netSuiteInternalId || masterPart?.legacyErpId || masterPart?.itemId || 'UNMAPPED';
                                         
                                         return (
                                             <tr key={idx}>
