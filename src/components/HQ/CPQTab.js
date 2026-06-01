@@ -138,7 +138,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [pricing, setPricing] = useState({ base: 0, finalPrice: 0 });
   const [jobData, setJobData] = useState({ customerId: '', jobName: '', sidemark: '' });
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
-  const [showCloneModal, setShowCloneModal] = useState(false);
   const [virtualFeeSteps, setVirtualFeeSteps] = useState([]);
 
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
@@ -239,7 +238,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       });
   }, [activeFlow]);
 
-  const currentStep = allActiveSteps[currentStepIndex];
+  // 🚀 FIXED: Renamed back to activeStep so JSX logic works without crashing
+  const activeStep = allActiveSteps[currentStepIndex];
+  
   const availableProductTypes = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.productType).filter(Boolean))];
 
   const getOptionsForStep = (step) => {
@@ -316,6 +317,35 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           });
       }
 
+      const newVirtualSteps = [];
+      const quantities = draft.specs?.quantities || draft.cpqData?.quantities || {};
+
+      if (quantities) {
+          const createVirtualStep = (feeKey, title, dataSourceType) => {
+              if (quantities[feeKey] > 0) {
+                  const virtualId = `VIRTUAL_FEE_${feeKey.toUpperCase()}`;
+                  newVirtualSteps.push({
+                      id: virtualId,
+                      title: title,
+                      type: 'READ_ONLY_FEE',
+                      isVirtual: true,
+                      qty: quantities[feeKey]
+                  });
+                  const feeItem = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === dataSourceType);
+                  if (feeItem) {
+                      translatedParams[virtualId] = feeItem.id;
+                  }
+              }
+          };
+
+          createVirtualStep('splice', 'Appended Splice Fee', 'SPLICE');
+          createVirtualStep('miter', 'Appended Miter Cut Fee', 'MITER_CUT');
+          createVirtualStep('bend', 'Appended Bent Return Fee', 'BENT_RETURN');
+          createVirtualStep('miterReturn', 'Appended Miter Return Fee', 'MITER_RETURN');
+          createVirtualStep('customProj', 'Appended Custom Proj Setup', 'CUSTOM_PROJ');
+      }
+
+      setVirtualFeeSteps(newVirtualSteps);
       setDynamicConfigParams(translatedParams);
       
       // EXPLICIT QUANTITY INJECTION (From Post-It Note Data)
@@ -340,7 +370,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           setDimensionInputs(draft.cpqData?.dimensions || draft.spatialData);
       }
 
-      setShowCloneModal(false);
       setCurrentStepIndex(0);
       alert("Engineering Data Loaded! Please follow the Post-It Note on the left to complete your selections.");
   };
@@ -418,11 +447,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const currentTotal = useMemo(() => {
       if (!activeFlow) return 0;
       let total = parseFloat(activeFlow.basePrice) || 0;
-      
+      const quantities = stepQuantities; 
+
       allActiveSteps.forEach(step => {
           const selectedValueId = dynamicConfigParams[step.id];
           if (selectedValueId || step.type === 'DIMENSIONS') {
-              let qtyMultiplier = stepQuantities[step.id] !== undefined ? stepQuantities[step.id] : 1;
+              let qtyMultiplier = step.isVirtual ? step.qty : (quantities[step.id] !== undefined ? quantities[step.id] : 1);
 
               if (step.priceOverride) {
                   total += parseFloat(step.priceOverride) * qtyMultiplier;
@@ -443,7 +473,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                       if (cp && cp.price !== undefined && cp.price !== "") stepPrice = parseFloat(cp.price);
                   }
 
-                  let upcharge = step.priceMap?.[selectedValueId] ? parseFloat(step.priceMap[selectedValueId]) : 0;
+                  let upcharge = 0;
+                  if (step.priceMap && step.priceMap[selectedValueId]) {
+                      upcharge = parseFloat(step.priceMap[selectedValueId]) || 0;
+                  }
+
                   let finalP = stepPrice + upcharge;
                   let mlt = (partObj && partObj.multiplier) ? parseFloat(partObj.multiplier) : 1.0;
                   total += (finalP * mlt * qtyMultiplier);
@@ -534,7 +568,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               <div style="margin-top: 20px; border: 2px dashed #000; padding: 15px; background: #fff3cd;">
                   <h4 style="margin: 0 0 10px 0; color: #856404; text-transform: uppercase;">⚠️ DIMENSIONAL SHOP CUT SHEET</h4>
                   <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-                      ${Object.entries(job.cpqData.dimensions || {}).map(([stepId, dims]) => `
+                      ${Object.entries(job.cpqData.dimensions).map(([stepId, dims]) => `
                           <tr><td colspan="2" style="padding: 10px; font-weight: bold; background: #e9ecef; border-top: 2px solid #000;">${allActiveSteps.find(s => s.id === stepId)?.title || stepId}</td></tr>
                           ${Object.entries(dims).filter(([k,v]) => !k.startsWith('calc_') && v !== '').map(([key, val]) => `
                               <tr>
@@ -759,55 +793,79 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                  </div>
               </div>
 
-              {activeFlow && currentStep && (
+              {/* 🚀 RESTORED: The Import Drafts Panel is now permanently visible here when no flow is selected */}
+              {!activeFlowId && (
+                  <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
+                      <div style={{ padding: '10px', background: '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', textTransform: 'uppercase' }}>
+                          📥 IMPORT ENGINEERING DRAFTS
+                      </div>
+                      <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto' }}>
+                          {previousDrafts.length === 0 ? <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem' }}>No pending drafts from the Vision tab.</div> : (
+                              previousDrafts.map(draft => (
+                                  <div key={draft.id} onClick={() => handleResumeDraft(draft.id)} style={{ background: '#f8f9fa', border: '1px solid #ccc', padding: '10px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '5px', transition: '0.2s' }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                          <span style={{ fontWeight: 'bold', color: '#007bff', fontSize: '0.85rem' }}>{draft.category} DRAFT</span>
+                                          <span style={{ fontSize: '0.65rem', color: '#fff', background: '#28a745', padding: '3px 6px', fontWeight: 'bold' }}>IMPORT</span>
+                                      </div>
+                                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{draft.sidemark || draft.jobName || 'Unnamed Job'}</div>
+                                      <div style={{ fontSize: '0.65rem', color: '#666' }}>{new Date(draft.createdAt?.seconds * 1000).toLocaleString()}</div>
+                                  </div>
+                              ))
+                          )}
+                      </div>
+                  </div>
+              )}
+
+              {/* 🚀 FIXED: Safe evaluation of activeStep to prevent crash */}
+              {activeFlow && activeStep && (
                   <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #28a745', flex: 1 }}>
                       <div style={{ padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', justifyContent: 'space-between' }}>
-                          <span>STEP {currentStepIndex + 1} OF {allActiveSteps.length}: {currentStep.title}</span>
+                          <span>STEP {currentStepIndex + 1} OF {allActiveSteps.length}: {activeStep.title}</span>
                       </div>
                       
                       <div style={{ padding: '20px', flex: 1, overflowY: 'auto', maxHeight: '400px' }}>
                           
-                          {(currentStep.type === 'VISUAL_GRID' || currentStep.type === 'VISUAL_DIMENSIONS') && !currentStep.isVirtual && (
+                          {(activeStep.type === 'VISUAL_GRID' || activeStep.type === 'VISUAL_DIMENSIONS') && !activeStep.isVirtual && (
                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
-                                  {getOptionsForStep(currentStep).map(opt => (
-                                      <div key={opt.id} onClick={() => handleParamChange(currentStep.id, opt.id)} style={{ border: `2px solid ${dynamicConfigParams[currentStep.id] === opt.id ? '#007bff' : '#ccc'}`, padding: '10px', textAlign: 'center', cursor: 'pointer', background: dynamicConfigParams[currentStep.id] === opt.id ? '#e6f2ff' : '#fff' }}>
+                                  {getOptionsForStep(activeStep).map(opt => (
+                                      <div key={opt.id} onClick={() => handleParamChange(activeStep.id, opt.id)} style={{ border: `2px solid ${dynamicConfigParams[activeStep.id] === opt.id ? '#007bff' : '#ccc'}`, padding: '10px', textAlign: 'center', cursor: 'pointer', background: dynamicConfigParams[activeStep.id] === opt.id ? '#e6f2ff' : '#fff' }}>
                                           <div style={{ width: '100%', height: '80px', background: opt.finalImageUrl ? `url(${opt.finalImageUrl}) center/cover` : '#eee', marginBottom: '10px' }} />
-                                          <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</div>
+                                          <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{opt.itemName}{renderOptionPrice(opt, activeStep)}</div>
                                       </div>
                                   ))}
                               </div>
                           )}
 
-                          {(currentStep.type === 'DROPDOWN' || currentStep.type === 'DIMENSIONS') && currentStep.type !== 'VISUAL_DIMENSIONS' && currentStep.dataSource && !currentStep.isVirtual && (
-                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #000', fontSize: '1rem', marginBottom: '15px' }}>
+                          {(activeStep.type === 'DROPDOWN' || activeStep.type === 'DIMENSIONS') && activeStep.type !== 'VISUAL_DIMENSIONS' && activeStep.dataSource && !activeStep.isVirtual && (
+                              <select value={dynamicConfigParams[activeStep.id] || ''} onChange={(e) => handleParamChange(activeStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #000', fontSize: '1rem', marginBottom: '15px' }}>
                                   <option value="">-- Select Option --</option>
-                                  {getOptionsForStep(currentStep).map(opt => (
-                                      <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</option>
+                                  {getOptionsForStep(activeStep).map(opt => (
+                                      <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, activeStep)}</option>
                                   ))}
                               </select>
                           )}
 
-                          {currentStep.isVirtual && (
+                          {activeStep.isVirtual && (
                               <div style={{ padding: '20px', background: '#eafaf1', border: '1px solid #28a745', textAlign: 'center' }}>
                                   <div style={{ fontSize: '2rem', marginBottom: '10px' }}>✅</div>
                                   <div style={{ fontWeight: 'bold', color: '#1e7e34', fontSize: '1.1rem' }}>FEE AUTO-APPENDED</div>
-                                  <div style={{ color: '#666', fontSize: '0.8rem', marginTop: '5px' }}>Quantity: {currentStep.qty}x</div>
+                                  <div style={{ color: '#666', fontSize: '0.8rem', marginTop: '5px' }}>Quantity: {activeStep.qty}x</div>
                                   <div style={{ color: '#999', fontSize: '0.7rem', marginTop: '10px', fontStyle: 'italic' }}>This fee was detected from the Vision Engine and mathematically locked to the quote.</div>
                               </div>
                           )}
 
-                          {!currentStep.isVirtual && (currentStep.calculatorTemplate || currentStep.type === 'DIMENSIONS' || currentStep.type === 'VISUAL_DIMENSIONS') && (
+                          {!activeStep.isVirtual && (activeStep.calculatorTemplate || activeStep.type === 'DIMENSIONS' || activeStep.type === 'VISUAL_DIMENSIONS') && (
                               <div style={{ padding: '15px', background: '#eafaf1', borderTop: '2px solid #000', borderBottom: '2px solid #000' }}>
                                   <h4 style={{ margin: '0 0 10px 0', color: '#1e7e34' }}>📐 DIMENSIONAL INPUT</h4>
                                   
-                                  {(currentStep.calculatorTemplate === 'calc_french_return_1in' || currentStep.calculatorTemplate === 'calc_straight_pole' || currentStep.calculatorTemplate === 'calc_curved_bay') && (
+                                  {(activeStep.calculatorTemplate === 'calc_french_return_1in' || activeStep.calculatorTemplate === 'calc_straight_pole' || activeStep.calculatorTemplate === 'calc_curved_bay') && (
                                       <div style={{ display: 'flex', gap: '15px' }}>
-                                          {currentStep.calculatorTemplate !== 'calc_straight_pole' && (
+                                          {activeStep.calculatorTemplate !== 'calc_straight_pole' && (
                                               <div style={{ flex: 1 }}>
                                                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>MEASUREMENT TYPE:</label>
                                                   <select 
-                                                      value={dimensionInputs[currentStep.id]?.type || 'O2O'} 
-                                                      onChange={(e) => handleDimensionChange(currentStep.id, 'type', e.target.value, currentStep.calculatorTemplate)}
+                                                      value={dimensionInputs[activeStep.id]?.type || 'O2O'} 
+                                                      onChange={(e) => handleDimensionChange(activeStep.id, 'type', e.target.value, activeStep.calculatorTemplate)}
                                                       style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }}
                                                   >
                                                       <option value="O2O">A. Outside Edge to Outside Edge (O2O)</option>
@@ -819,78 +877,77 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                               <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>FINISHED LENGTH (INCHES):</label>
                                               <input 
                                                   type="number" min="0" placeholder="e.g. 84"
-                                                  value={dimensionInputs[currentStep.id]?.length || ''} 
-                                                  onChange={(e) => handleDimensionChange(currentStep.id, 'length', e.target.value, currentStep.calculatorTemplate)}
+                                                  value={dimensionInputs[activeStep.id]?.length || ''} 
+                                                  onChange={(e) => handleDimensionChange(activeStep.id, 'length', e.target.value, activeStep.calculatorTemplate)}
                                                   style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}
                                               />
                                           </div>
                                       </div>
                                   )}
 
-                                  {currentStep.calculatorTemplate === 'calc_mitered_bay' && (
+                                  {activeStep.calculatorTemplate === 'calc_mitered_bay' && (
                                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
                                           <div>
                                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>WALL A (Left):</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallA || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallA', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[activeStep.id]?.wallA || ''} onChange={(e) => handleDimensionChange(activeStep.id, 'wallA', e.target.value, activeStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
                                           </div>
                                           <div>
                                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>WALL B (Center):</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallB || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallB', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[activeStep.id]?.wallB || ''} onChange={(e) => handleDimensionChange(activeStep.id, 'wallB', e.target.value, activeStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
                                           </div>
                                           <div>
                                               <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>WALL C (Right):</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallC || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallC', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[activeStep.id]?.wallC || ''} onChange={(e) => handleDimensionChange(activeStep.id, 'wallC', e.target.value, activeStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
                                           </div>
                                       </div>
                                   )}
 
-                                  {dimensionInputs[currentStep.id]?.length > 0 && currentStep.calculatorTemplate === 'calc_french_return_1in' && (
+                                  {dimensionInputs[activeStep.id]?.length > 0 && activeStep.calculatorTemplate === 'calc_french_return_1in' && (
                                       <div style={{ marginTop: '10px', fontSize: '0.75rem', color: '#1e7e34', background: '#fff', padding: '10px', border: '2px solid #28a745', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}>
                                           <strong style={{display:'block', marginBottom:'5px', color:'#000'}}>MATH LOGIC (1" French Return):</strong> 
                                           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'5px'}}>
-                                              <div style={{background:'#eee', padding:'5px', textAlign:'center'}}><strong>O2O:</strong> {dimensionInputs[currentStep.id].calc_o2o}"</div>
-                                              <div style={{background:'#eee', padding:'5px', textAlign:'center'}}><strong>C2C:</strong> {dimensionInputs[currentStep.id].calc_c2c}"</div>
-                                              <div style={{background:'#ffeeba', padding:'5px', textAlign:'center', color:'#856404', border:'1px solid #856404'}}><strong>CUT LENGTH:</strong> {dimensionInputs[currentStep.id].calc_cutLength}"</div>
+                                              <div style={{background:'#eee', padding:'5px', textAlign:'center'}}><strong>O2O:</strong> {dimensionInputs[activeStep.id].calc_o2o}"</div>
+                                              <div style={{background:'#eee', padding:'5px', textAlign:'center'}}><strong>C2C:</strong> {dimensionInputs[activeStep.id].calc_c2c}"</div>
+                                              <div style={{background:'#ffeeba', padding:'5px', textAlign:'center', color:'#856404', border:'1px solid #856404'}}><strong>CUT LENGTH:</strong> {dimensionInputs[activeStep.id].calc_cutLength}"</div>
                                           </div>
                                           Required raw pole is +17" over O2O length. Sold per foot (rounded up). 
-                                          Calculated Purchase Quantity: <strong>{stepQuantities[currentStep.id] || 1} Feet</strong>.
+                                          Calculated Purchase Quantity: <strong>{stepQuantities[activeStep.id] || 1} Feet</strong>.
                                       </div>
                                   )}
                               </div>
                           )}
                       </div>
 
-                      {/* 🚀 FIXED: Guarded activeStep before reading .isVirtual */}
-                      {(activeStep && !activeStep.isVirtual) && (
+                      {!activeStep.isVirtual && (
                           <div style={{ padding: '15px', background: '#f8f9fa', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div style={{ fontSize: '0.8rem', color: '#666', lineHeight: '1.4', flex: 1, paddingRight: '15px' }}>
                                   <strong>STEP QUANTITY:</strong><br/>
-                                  <span style={{ fontSize: '0.7rem' }}>{currentStep.qtyHelperText || 'Adjust to multiply option logic (e.g. 4 rings per foot).'}</span>
+                                  <span style={{ fontSize: '0.7rem' }}>{activeStep.qtyHelperText || 'Adjust to multiply option logic (e.g. 4 rings per foot).'}</span>
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                   <button onClick={() => {
-                                      let current = stepQuantities[currentStep.id];
+                                      let current = stepQuantities[activeStep.id];
                                       if (current === undefined || current === '') current = 1;
                                       else current = parseInt(current);
-                                      setStepQuantities({...stepQuantities, [currentStep.id]: Math.max(1, current - 1)});
+                                      setStepQuantities({...stepQuantities, [activeStep.id]: Math.max(1, current - 1)});
                                   }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>-</button>
                                   
                                   <input 
                                       type="number" 
                                       min="1" 
-                                      value={stepQuantities[currentStep.id] !== undefined ? stepQuantities[currentStep.id] : 1} 
+                                      value={stepQuantities[activeStep.id] !== undefined ? stepQuantities[activeStep.id] : 1} 
                                       onChange={e => {
                                           const val = e.target.value;
-                                          setStepQuantities({...stepQuantities, [currentStep.id]: val === '' ? '' : parseInt(val)});
+                                          setStepQuantities({...stepQuantities, [activeStep.id]: val === '' ? '' : parseInt(val)});
                                       }} 
                                       style={{ width: '50px', padding: '10px', border: '2px solid #000', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem', outline: 'none' }} 
                                   />
                                   
                                   <button onClick={() => {
-                                      let current = stepQuantities[currentStep.id];
+                                      let current = stepQuantities[activeStep.id];
                                       if (current === undefined || current === '') current = 1;
                                       else current = parseInt(current);
-                                      setStepQuantities({...stepQuantities, [currentStep.id]: current + 1});
+                                      setStepQuantities({...stepQuantities, [activeStep.id]: current + 1});
                                   }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>+</button>
                               </div>
                           </div>
@@ -903,12 +960,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                       )}
 
                       <div style={{ padding: '15px', display: 'flex', justifyContent: 'space-between' }}>
-                          <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} disabled={currentStepIndex === 0} style={{ padding: '10px 20px', border: '2px solid #000', background: '#fff', fontWeight: 'bold', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer' }}>BACK</button>
+                          <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} disabled={currentStepIndex === 0} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStepIndex === 0 ? '#333' : '#fff', color: currentStepIndex === 0 ? '#fff' : '#000', fontWeight: 'bold', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer' }}>BACK</button>
                           
                           {currentStepIndex < allActiveSteps.length - 1 ? (
-                              <button onClick={handleNextStep} disabled={currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
+                              <button onClick={handleNextStep} disabled={activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual} style={{ padding: '10px 20px', border: '2px solid #000', background: activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
                           ) : (
-                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
+                              <button onClick={() => setShowCheckoutModal(true)} disabled={activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual} style={{ padding: '10px 20px', border: '2px solid #28a745', background: activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
                           )}
                       </div>
                   </div>
@@ -987,7 +1044,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           </div>
                       )}
                       
-                      {/* 🚀 FIXED: The Floating Engineering Post-It Note securely checks draft specs */}
                       {activeDraftId && previousDrafts.find(d => d.id === activeDraftId)?.specs?.engineeringNotes && (
                           <div style={{
                               position: 'absolute', bottom: '20px', left: '20px', width: '220px',
