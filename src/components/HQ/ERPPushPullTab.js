@@ -8,7 +8,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const [activeJob, setActiveJob] = useState(null);
   
   const [libraryParts, setLibraryParts] = useState([]);
-  const [cpqFlows, setCpqFlows] = useState([]); // 🚀 Added to trace step mappings
+  const [cpqFlows, setCpqFlows] = useState([]); 
   const [isPushing, setIsPushing] = useState(false);
   const [syncLog, setSyncLog] = useState([]);
 
@@ -40,13 +40,12 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       setSyncLog(prev => [{ time, msg, type }, ...prev]);
   };
 
-  // 🎯 THE ZIP CODE FIX: Intelligent Line Item Extractor
+  // 🎯 Intelligent Line Item Extractor
   const getJobLineItems = (job) => {
       if (!job || !job.cpqData) return [];
       
       const flow = cpqFlows.find(f => f.id === job.flowId);
       
-      // Look at all steps that have either a configuration selection OR a quantity
       const activeStepIds = new Set([
           ...Object.keys(job.cpqData?.configuration || {}),
           ...Object.keys(job.cpqData?.quantities || {})
@@ -61,8 +60,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
           if (qty === undefined || qty === null || qty === '') qty = 1;
 
-          // 1st Priority: Did you hard-link an inventory item to this step in Tab 11?
-          // 2nd Priority: Is the user's dropdown selection an inventory item?
           const targetPartId = step?.linkedItemId || step?.linkedPinId || userSelectionId;
 
           if (targetPartId) {
@@ -94,7 +91,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           return;
       }
 
-      if (!window.confirm(`Push Quote ${job.jobId || job.id} to NetSuite? This will create a live Estimate.`)) return;
+      if (!window.confirm(`Push Quote ${job.jobId || job.id} to NetSuite? This will create a live Quote/Estimate.`)) return;
       
       setIsPushing(true);
       addLog(`Initiating NetSuite Cloud Proxy for Job: ${job.jobId || job.id}`, 'info');
@@ -103,7 +100,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           const lineItems = [];
           let physicalItemsTotal = 0;
           
-          // 1. Process Physical Inventory Components using our clean extractor
+          // 1. Process Physical Inventory Components
           for (const line of linesToPush) {
               if (line.nsId !== 'UNMAPPED' && line.nsId !== 'PENDING') {
                   const itemRate = line.masterPart.manufacturingSpecs?.basePrice || 0;
@@ -114,6 +111,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       item: { id: line.nsId.toString() }, 
                       quantity: line.qty,
                       rate: itemRate,
+                      price: { id: "-1" }, // 🚀 FORCE CUSTOM PRICE LEVEL
                       description: `${line.masterPart.itemName} (Mapped from CPQ)`,
                       custcol_part_category: line.partCategory
                   };
@@ -141,16 +139,17 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           if (nsCustomerId.startsWith('CUST-')) nsCustomerId = nsCustomerId.replace('CUST-', '');
 
           const payload = {
-              entity: { id: nsCustomerId || "12345" }, 
+              entity: { id: nsCustomerId }, 
+              subsidiary: { id: "2" }, // 🚀 ENFORCE SUBSIDIARY ALIGNMENT
               memo: `[HQ APP CONFIG] ${job.jobName || ''} - ${job.sidemark || ''}`.trim(),
-              custbody50: job.jobId || job.id, // Injects Quote ID for inbound sync routing
+              custbody50: job.jobId || job.id, 
               item: {
                   items: [
                       {
-                          // Master Assembly / Fee Roll-up Line (Internal ID 61502)
                           item: { id: "61502" }, 
                           quantity: 1,
                           rate: silentFeeBalance,
+                          price: { id: "-1" }, // 🚀 FORCE CUSTOM PRICE LEVEL
                           description: `=== CPQ BUILD: ${job.sidemark?.toUpperCase() || 'CUSTOM CONFIGURATION'} ===`
                       },
                       ...lineItems
@@ -180,7 +179,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               throw new Error(`API Rejected [${response.status}]: ${JSON.stringify(result)}`);
           }
 
-          addLog(`✅ Success! NetSuite Estimate Created (ID: ${result.id})`, 'success');
+          addLog(`✅ Success! NetSuite Quote Created (ID: ${result.id})`, 'success');
 
           await updateDoc(doc(db, "jobs", job.id), {
               status: 'TRANSMITTED_TO_ERP',
@@ -193,7 +192,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       } catch (error) {
           console.error("NetSuite Push Error:", error);
           addLog(`❌ FAILED: ${error.message}`, 'error');
-          alert("Failed to push to NetSuite. Please check the logs on the right side of the screen.");
       }
       
       setIsPushing(false);
