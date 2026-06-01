@@ -223,7 +223,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
   useEffect(() => {
       if (!activeFlow) return;
-      
       setStepQuantities(prev => {
           const updates = { ...prev };
           let changed = false;
@@ -270,7 +269,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (step.allowedOptions && step.allowedOptions.length > 0) {
           return options.filter(opt => step.allowedOptions.includes(opt.id));
       }
-
       return options;
   };
 
@@ -912,7 +910,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           )}
                       </div>
 
-                      {!activeStep.isVirtual && (
+                      {activeStep && !activeStep.isVirtual && (
                           <div style={{ padding: '15px', background: '#f8f9fa', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div style={{ fontSize: '0.8rem', color: '#666', lineHeight: '1.4', flex: 1, paddingRight: '15px' }}>
                                   <strong>STEP QUANTITY:</strong><br/>
@@ -957,9 +955,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} disabled={currentStepIndex === 0} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStepIndex === 0 ? '#333' : '#fff', color: currentStepIndex === 0 ? '#fff' : '#000', fontWeight: 'bold', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer' }}>BACK</button>
                           
                           {currentStepIndex < allActiveSteps.length - 1 ? (
-                              <button onClick={handleNextStep} disabled={activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual} style={{ padding: '10px 20px', border: '2px solid #000', background: activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
+                              <button onClick={handleNextStep} disabled={activeStep?.required && !dynamicConfigParams[activeStep?.id] && activeStep?.type !== 'DIMENSIONS' && !activeStep?.isVirtual} style={{ padding: '10px 20px', border: '2px solid #000', background: activeStep?.required && !dynamicConfigParams[activeStep?.id] && activeStep?.type !== 'DIMENSIONS' && !activeStep?.isVirtual ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: activeStep?.required && !dynamicConfigParams[activeStep?.id] && activeStep?.type !== 'DIMENSIONS' && !activeStep?.isVirtual ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
                           ) : (
-                              <button onClick={() => setShowCheckoutModal(true)} disabled={activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual} style={{ padding: '10px 20px', border: '2px solid #28a745', background: activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: activeStep.required && !dynamicConfigParams[activeStep.id] && activeStep.type !== 'DIMENSIONS' && !activeStep.isVirtual ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
+                              <button onClick={() => setShowCheckoutModal(true)} disabled={activeStep?.required && !dynamicConfigParams[activeStep?.id] && activeStep?.type !== 'DIMENSIONS' && !activeStep?.isVirtual} style={{ padding: '10px 20px', border: '2px solid #28a745', background: activeStep?.required && !dynamicConfigParams[activeStep?.id] && activeStep?.type !== 'DIMENSIONS' && !activeStep?.isVirtual ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: activeStep?.required && !dynamicConfigParams[activeStep?.id] && activeStep?.type !== 'DIMENSIONS' && !activeStep?.isVirtual ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
                           )}
                       </div>
                   </div>
