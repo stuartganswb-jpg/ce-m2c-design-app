@@ -108,7 +108,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
   const getStepForCategory = (cat) => {
       if (!activeFlow) return null;
-      // 🚀 FIXED: Added strict OR [] array fallbacks to prevent undefined iteration crashes
       return (activeFlow.steps || []).find(s => {
           const isFinish = (s.dataSource || '').toLowerCase() === 'master_finishes' || (s.title || '').toLowerCase().includes('finish');
           if (isFinish) return false; 
@@ -215,11 +214,97 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       }
   }, [engData.bracketId, libraryParts]);
 
+  // 🚀 MATH AND GEOMETRY LOGIC ELEVATED HERE (So HS/HE are defined before being used)
   const safeProj = parseFloat(engData.proj) || 0;
+  const rad = (deg) => (deg * Math.PI) / 180;
+  const S = 3.5; 
+  let mDeduct1=0, mDeduct2=0, wall1=engData.w1, wall2=engData.w2, wall3=engData.w3, pole1=0, pole2=0, pole3=0, sawAngle1=0, sawAngle2=0;
+  let bowCX=500, bowCY=250, bowR=0, bowHW_R=0, bowStartAngle=0, bowEndAngle=0, bowWallPath="", bowHWPath="";
+
+  const isLeftInside = engData.shape === 'STRAIGHT' ? engData.mountLeft === 'INSIDE' : engData.mountOuter === 'INSIDE';
+  const isRightInside = engData.shape === 'STRAIGHT' ? engData.mountRight === 'INSIDE' : engData.mountOuter === 'INSIDE';
+  
+  const bendDeductL = (!isLeftInside && engData.endStyle === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
+  const bendDeductR = (!isRightInside && engData.endStyle === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
+  const imDeductL = isLeftInside ? engData.insideMountDeduct : 0;
+  const imDeductR = isRightInside ? engData.insideMountDeduct : 0;
+
+  if (engData.shape === 'STRAIGHT') {
+      if (engData.inputMode === 'WALL') { wall2 = engData.w2; pole2 = wall2 - bendDeductL - bendDeductR - imDeductL - imDeductR; } 
+      else { pole2 = engData.w2 - bendDeductL - bendDeductR - imDeductL - imDeductR; wall2 = engData.w2; }
+  } else if (engData.shape === 'MITERED') {
+      mDeduct1 = engData.a1 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a1) / 2));
+      mDeduct2 = engData.a2 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a2) / 2));
+      if (engData.inputMode === 'WALL') { pole1 = Math.max(0, wall1 - mDeduct1 - imDeductL); pole2 = Math.max(0, wall2 - mDeduct1 - mDeduct2); pole3 = Math.max(0, wall3 - mDeduct2 - imDeductR); } 
+      else { pole1 = engData.w1 - bendDeductL - imDeductL; wall1 = pole1 + mDeduct1 + imDeductL; pole2 = engData.w2; wall2 = pole2 + mDeduct1 + mDeduct2; pole3 = engData.w3 - bendDeductR - imDeductR; wall3 = pole3 + mDeduct2 + imDeductR; }
+      sawAngle1 = engData.a1 === 180 ? 0 : 90 - (engData.a1 / 2); sawAngle2 = engData.a2 === 180 ? 0 : 90 - (engData.a2 / 2);
+  } else if (engData.shape === 'BOW') {
+      if (engData.bowDepth > 0) {
+          const rW_px = bowR * S; const rH_px = bowHW_R * S; bowCX = 500; bowCY = P2.y + rW_px - engData.bowDepth * S;
+          bowStartAngle = Math.atan2(P2.y - bowCY, P2.x - bowCX); bowEndAngle = Math.atan2(P3.y - bowCY, P3.x - bowCX);
+          if (bowEndAngle < bowStartAngle) bowEndAngle += 2 * Math.PI;
+          HS = { x: bowCX + rH_px * Math.cos(bowStartAngle), y: bowCY + rH_px * Math.sin(bowStartAngle) }; HE = { x: bowCX + rH_px * Math.cos(bowEndAngle), y: bowCY + rH_px * Math.sin(bowEndAngle) };
+          const ndxL = P2.x - HS.x; const ndyL = P2.y - HS.y; const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1; nL = { x: ndxL/nlenL, y: ndyL/nlenL };
+          const ndxR = P3.x - HE.x; const ndyR = P3.y - HE.y; const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1; nR = { x: ndxR/nlenR, y: ndyR/nlenR };
+          bowWallPath = `M ${P2.x} ${P2.y} A ${rW_px} ${rW_px} 0 0 1 ${P3.x} ${P3.y}`; bowHWPath = `M ${HS.x} ${HS.y} A ${rH_px} ${rH_px} 0 0 1 ${HE.x} ${HE.y}`;
+      }
+  }
+
+  let endFootprint = 0; let endRawAdd = 0;    
+  if (engData.endStyle === 'FINIAL') { endFootprint = engData.finialW; endRawAdd = 0; } 
+  else if (engData.endStyle === 'RETURN_MITER') { endFootprint = Math.max(0, (engData.bracketW - engData.poleDiameter) / 2); endRawAdd = 0; } 
+  else if (engData.endStyle === 'RETURN_BEND') { endFootprint = Math.max(0, (engData.bracketW - engData.poleDiameter) / 2); endRawAdd = engData.gripAllowance; }
+
+  const addL_TOL = isLeftInside ? 0 : endFootprint; const addR_TOL = isRightInside ? 0 : endFootprint;
+  const addL_RAW = isLeftInside ? 0 : endRawAdd; const addR_RAW = isRightInside ? 0 : endRawAdd;
+  const orderL = pole1 + bendDeductL + imDeductL; const orderR = pole3 + bendDeductR + imDeductR;
+  const orderC = engData.shape === 'STRAIGHT' ? (pole2 + bendDeductL + bendDeductR + imDeductL + imDeductR) : (engData.shape === 'BOW' ? pole2 + imDeductL + imDeductR : pole2);
+  const tolLeft = engData.shape === 'MITERED' ? orderL + addL_TOL : 0; const tolRight = engData.shape === 'MITERED' ? orderR + addR_TOL : 0;
+  const tolCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? orderC + addL_TOL + addR_TOL : orderC;
+  const rawLeft = engData.shape === 'MITERED' ? pole1 + addL_RAW : 0; const rawRight = engData.shape === 'MITERED' ? pole3 + addR_RAW : 0;
+  const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 + addL_RAW + addR_RAW : pole2;
+  
+  const systemC2C = orderL + orderC + orderR;
+  const systemO2O = tolLeft + tolCenter + tolRight;
+  const totalPoleRawInches = rawLeft + rawCenter + rawRight;
+  
+  const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
+  const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;
+  const qtySplices = attachments.filter(a => a.type === 'splice').length;
+  const qtyMiters = engData.shape === 'MITERED' ? 2 : 0;
+  const qtyBends = engData.endStyle === 'RETURN_BEND' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
+  const qtyMiterReturns = engData.endStyle === 'RETURN_MITER' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
+  const qtyCustomProjBrackets = isCustomProj ? qtyBrackets : 0;
+  const qtyFinials = engData.endStyle === 'FINIAL' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
+  const disableFinials = engData.endStyle === 'RETURN_BEND' || engData.endStyle === 'RETURN_MITER';
+  
+  const recRings = Math.ceil(systemO2O / 12) * 4;
+
+  const P2 = { x: 500 - (wall2 * S)/2, y: 250 }; const P3 = { x: 500 + (wall2 * S)/2, y: 250 };
+  let P1 = P2, P4 = P3, HS = {x: 0, y: 0}, HE = {x: 0, y: 0}, HC1 = {x: 0, y: 0}, HC2 = {x: 0, y: 0}, nL = {x: 0, y: -1}, nR = {x: 0, y: -1}; 
+
+  if (engData.shape === 'STRAIGHT') {
+      HS = { x: 500 - (pole2 * S)/2, y: P2.y + safeProj * S }; HE = { x: 500 + (pole2 * S)/2, y: P3.y + safeProj * S }; nL = { x: 0, y: -1 }; nR = { x: 0, y: -1 };
+  } else if (engData.shape === 'MITERED') {
+      const t1 = rad(180 - engData.a1); const t2 = rad(180 - engData.a2);
+      P1 = { x: P2.x - (wall1 * S) * Math.cos(t1), y: P2.y + (wall1 * S) * Math.sin(t1) }; P4 = { x: P3.x + (wall3 * S) * Math.cos(t2), y: P3.y + (wall3 * S) * Math.sin(t2) };
+      HC1 = { x: P2.x + (mDeduct1 * S), y: P2.y + (safeProj * S) }; HC2 = { x: P3.x - (mDeduct2 * S), y: P3.y + (safeProj * S) };
+      HS = { x: HC1.x - (pole1 * S) * Math.cos(t1), y: HC1.y + (pole1 * S) * Math.sin(t1) }; HE = { x: HC2.x + (pole3 * S) * Math.cos(t2), y: HC2.y + (pole3 * S) * Math.sin(t2) };
+      const ndxL = P1.x - HS.x; const ndyL = P1.y - HS.y; const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1; nL = { x: ndxL/nlenL, y: ndyL/nlenL };
+      const ndxR = P4.x - HE.x; const ndyR = P4.y - HE.y; const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1; nR = { x: ndxR/nlenR, y: ndyR/nlenR };
+  } else if (engData.shape === 'BOW') {
+      if (engData.bowDepth > 0) {
+          const rW_px = bowR * S; const rH_px = bowHW_R * S; bowCX = 500; bowCY = P2.y + rW_px - engData.bowDepth * S;
+          bowStartAngle = Math.atan2(P2.y - bowCY, P2.x - bowCX); bowEndAngle = Math.atan2(P3.y - bowCY, P3.x - bowCX);
+          if (bowEndAngle < bowStartAngle) bowEndAngle += 2 * Math.PI;
+          HS = { x: bowCX + rH_px * Math.cos(bowStartAngle), y: bowCY + rH_px * Math.sin(bowStartAngle) }; HE = { x: bowCX + rH_px * Math.cos(bowEndAngle), y: bowCY + rH_px * Math.sin(bowEndAngle) };
+          const ndxL = P2.x - HS.x; const ndyL = P2.y - HS.y; const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1; nL = { x: ndxL/nlenL, y: ndyL/nlenL };
+          const ndxR = P3.x - HE.x; const ndyR = P3.y - HE.y; const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1; nR = { x: ndxR/nlenR, y: ndyR/nlenR };
+      }
+  }
 
   const getNativeOptions = (categoryString) => {
       const step = getStepForCategory(categoryString);
-
       return libraryParts.filter(p => {
           if (p.manufacturingSpecs?.customData?.feeType) return false;
           
@@ -237,7 +322,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           if (step && step.allowedOptions?.length > 0) {
               if (!step.allowedOptions.includes(p.id)) return false;
           }
-
           return true;
       });
   };
@@ -269,7 +353,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           if (step && step.allowedOptions?.length > 0) {
               if (!step.allowedOptions.includes(p.id)) return false;
           }
-
           return true;
       });
   }, [libraryParts, quoteSelections.collection, activeFlow]);
@@ -321,39 +404,74 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return options;
   };
 
-  const rad = (deg) => (deg * Math.PI) / 180;
-  const S = 3.5; 
-  let mDeduct1=0, mDeduct2=0, wall1=engData.w1, wall2=engData.w2, wall3=engData.w3, pole1=0, pole2=0, pole3=0, sawAngle1=0, sawAngle2=0;
-  let bowCX=500, bowCY=250, bowR=0, bowHW_R=0, bowStartAngle=0, bowEndAngle=0, bowWallPath="", bowHWPath="";
+  useEffect(() => {
+      setStepQuantities(prev => ({ ...prev, rings: prev.rings || recRings }));
+  }, [recRings]);
 
-  const isLeftInside = engData.shape === 'STRAIGHT' ? engData.mountLeft === 'INSIDE' : engData.mountOuter === 'INSIDE';
-  const isRightInside = engData.shape === 'STRAIGHT' ? engData.mountRight === 'INSIDE' : engData.mountOuter === 'INSIDE';
-  
-  const bendDeductL = (!isLeftInside && engData.endStyle === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
-  const bendDeductR = (!isRightInside && engData.endStyle === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
-  const imDeductL = isLeftInside ? engData.insideMountDeduct : 0;
-  const imDeductR = isRightInside ? engData.insideMountDeduct : 0;
+  // 🚀 UPDATE QUANTITIES TO MATCH LIVE ENGINEERING MATH
+  useEffect(() => {
+      if (!activeFlow) return;
 
-  if (engData.shape === 'STRAIGHT') {
-      if (engData.inputMode === 'WALL') { wall2 = engData.w2; pole2 = wall2 - bendDeductL - bendDeductR - imDeductL - imDeductR; } 
-      else { pole2 = engData.w2 - bendDeductL - bendDeductR - imDeductL - imDeductR; wall2 = engData.w2; }
-  } else if (engData.shape === 'MITERED') {
-      mDeduct1 = engData.a1 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a1) / 2));
-      mDeduct2 = engData.a2 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a2) / 2));
-      if (engData.inputMode === 'WALL') { pole1 = Math.max(0, wall1 - mDeduct1 - imDeductL); pole2 = Math.max(0, wall2 - mDeduct1 - mDeduct2); pole3 = Math.max(0, wall3 - mDeduct2 - imDeductR); } 
-      else { pole1 = engData.w1 - bendDeductL - imDeductL; wall1 = pole1 + mDeduct1 + imDeductL; pole2 = engData.w2; wall2 = pole2 + mDeduct1 + mDeduct2; pole3 = engData.w3 - bendDeductR - imDeductR; wall3 = pole3 + mDeduct2 + imDeductR; }
-      sawAngle1 = engData.a1 === 180 ? 0 : 90 - (engData.a1 / 2); sawAngle2 = engData.a2 === 180 ? 0 : 90 - (engData.a2 / 2);
-  } else if (engData.shape === 'BOW') {
-      if (engData.bowDepth > 0) {
-          const rW_px = bowR * S; const rH_px = bowHW_R * S; bowCX = 500; bowCY = P2.y + rW_px - engData.bowDepth * S;
-          bowStartAngle = Math.atan2(P2.y - bowCY, P2.x - bowCX); bowEndAngle = Math.atan2(P3.y - bowCY, P3.x - bowCX);
-          if (bowEndAngle < bowStartAngle) bowEndAngle += 2 * Math.PI;
-          HS = { x: bowCX + rH_px * Math.cos(bowStartAngle), y: bowCY + rH_px * Math.sin(bowStartAngle) }; HE = { x: bowCX + rH_px * Math.cos(bowEndAngle), y: bowCY + rH_px * Math.sin(bowEndAngle) };
-          const ndxL = P2.x - HS.x; const ndyL = P2.y - HS.y; const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1; nL = { x: ndxL/nlenL, y: ndyL/nlenL };
-          const ndxR = P3.x - HE.x; const ndyR = P3.y - HE.y; const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1; nR = { x: ndxR/nlenR, y: ndyR/nlenR };
-          bowWallPath = `M ${P2.x} ${P2.y} A ${rW_px} ${rW_px} 0 0 1 ${P3.x} ${P3.y}`; bowHWPath = `M ${HS.x} ${HS.y} A ${rH_px} ${rH_px} 0 0 1 ${HE.x} ${HE.y}`;
+      let changedQuotes = false;
+      let updatesQ = { ...quoteSelections };
+
+      const poleOpts = getNativeOptions('POLE');
+      if (poleOpts.length === 1 && updatesQ.poleId !== poleOpts[0].id) { updatesQ.poleId = poleOpts[0].id; changedQuotes = true; }
+
+      const ringOpts = getNativeOptions('RING');
+      if (ringOpts.length === 1 && updatesQ.ringId !== ringOpts[0].id) { updatesQ.ringId = ringOpts[0].id; changedQuotes = true; }
+
+      const finialOpts = getNativeOptions('FINIAL');
+      if (finialOpts.length === 1 && updatesQ.finialId !== finialOpts[0].id && !disableFinials) { updatesQ.finialId = finialOpts[0].id; changedQuotes = true; }
+
+      const poleFinOpts = getFinishOptions('pole');
+      if (poleFinOpts.length === 1 && updatesQ.poleFinishId !== poleFinOpts[0].id) { updatesQ.poleFinishId = poleFinOpts[0].id; changedQuotes = true; }
+
+      const brFinOpts = getFinishOptions('bracket');
+      if (brFinOpts.length === 1 && updatesQ.bracketFinishId !== brFinOpts[0].id) { updatesQ.bracketFinishId = brFinOpts[0].id; changedQuotes = true; }
+
+      const ringFinOpts = getFinishOptions('ring');
+      if (ringFinOpts.length === 1 && updatesQ.ringFinishId !== ringFinOpts[0].id) { updatesQ.ringFinishId = ringFinOpts[0].id; changedQuotes = true; }
+
+      const finialFinOpts = getFinishOptions('finial');
+      if (finialFinOpts.length === 1 && updatesQ.finialFinishId !== finialFinOpts[0].id && !disableFinials) { updatesQ.finialFinishId = finialFinOpts[0].id; changedQuotes = true; }
+
+      if (changedQuotes) setQuoteSelections(updatesQ);
+      
+      if (allBrackets.length === 1 && engData.bracketId !== allBrackets[0].id) {
+          setEngData(prev => ({...prev, bracketId: allBrackets[0].id}));
       }
-  }
+
+      setStepQuantities(prev => {
+          const updates = { ...prev };
+          (activeFlow.steps || []).forEach(step => {
+              const cat = getStepCategory(step);
+              if (cat === 'SPLICE') updates[step.id] = qtySplices;
+              else if (!updates[step.id] && !['POLE','BRACKET','FINIAL','RING','FINISH'].includes(cat)) updates[step.id] = 1; 
+          });
+          return updates;
+      });
+
+      setDynamicConfigParams(prev => {
+          let updates = { ...prev };
+          let changed = false;
+          (activeFlow.steps || []).forEach(step => {
+              const opts = getOptionsForStep(step);
+              if (opts.length === 1 && prev[step.id] !== opts[0].id) {
+                  updates[step.id] = opts[0].id;
+                  changed = true;
+              }
+          });
+          return changed ? updates : prev;
+      });
+
+  }, [activeFlow, qtySplices, disableFinials, libraryParts, globalFinishes, outsourceFinishes, quoteSelections.collection, allBrackets]);
+
+  const feeSkuSplice = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'SPLICE');
+  const feeSkuMiter = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'MITER_CUT');
+  const feeSkuBend = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'BENT_RETURN');
+  const feeSkuMiterReturn = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'MITER_RETURN');
+  const feeSkuCustomProj = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'CUSTOM_PROJ');
 
   let drawHS = { ...HS }; let drawHE = { ...HE };
   if (engData.endStyle === 'RETURN_BEND') {
@@ -1018,6 +1136,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                   </div>
                               ) : (
                                   <>
+                                      {/* POLE */}
                                       {poleStep && (
                                           <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
@@ -1037,6 +1156,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                           </div>
                                       )}
 
+                                      {/* BRACKET */}
                                       {bracketStep && qtyBrackets > 0 && (
                                           <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
@@ -1064,6 +1184,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                           </div>
                                       )}
 
+                                      {/* RINGS */}
                                       {ringStep && (
                                           <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
@@ -1091,6 +1212,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                           </div>
                                       )}
 
+                                      {/* FINIALS */}
                                       {finialStep && (
                                           <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', opacity: disableFinials ? 0.5 : 1 }}>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
@@ -1143,6 +1265,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                           </div>
                       </div>
 
+                      {/* DYNAMIC CPQ EXTRAS */}
                       {activeFlow && (activeFlow.steps || []).filter(s => { 
                           const cat = getStepCategory(s); 
                           return !['POLE','BRACKET','RING','FINIAL','FINISH'].includes(cat) && s.type !== 'DIMENSIONS'; 
