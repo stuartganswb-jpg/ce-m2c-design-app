@@ -103,14 +103,15 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           // 1. Process Physical Inventory Components
           for (const line of linesToPush) {
               if (line.nsId !== 'UNMAPPED' && line.nsId !== 'PENDING') {
-                  const itemRate = line.masterPart.manufacturingSpecs?.basePrice || 0;
+                  const rawRate = line.masterPart.manufacturingSpecs?.basePrice || 0;
+                  const itemRate = parseFloat(rawRate); 
                   const lineTotal = itemRate * line.qty;
                   physicalItemsTotal += lineTotal;
 
                   const linePayload = {
                       item: { id: line.nsId.toString() }, 
                       quantity: line.qty,
-                      rate: itemRate,
+                      rate: parseFloat(itemRate.toFixed(2)), // 🚀 FORCE STRICT FLOAT
                       price: { id: "-1" }, // 🚀 FORCE CUSTOM PRICE LEVEL
                       description: `${line.masterPart.itemName} (Mapped from CPQ)`,
                       custcol_part_category: line.partCategory
@@ -131,7 +132,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           }
 
           // 2. Calculate "Silent Costs" (Fees, Base Price, Upcharges)
-          const cpqGrandTotal = job.cpqData.totalPrice || 0;
+          const cpqGrandTotal = parseFloat(job.cpqData.totalPrice || 0);
           const silentFeeBalance = Math.max(0, cpqGrandTotal - physicalItemsTotal);
 
           // 3. Construct the NetSuite Header & Payload
@@ -148,7 +149,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       {
                           item: { id: "61502" }, 
                           quantity: 1,
-                          rate: silentFeeBalance,
+                          rate: parseFloat(silentFeeBalance.toFixed(2)), // 🚀 FORCE STRICT FLOAT
                           price: { id: "-1" }, // 🚀 FORCE CUSTOM PRICE LEVEL
                           description: `=== CPQ BUILD: ${job.sidemark?.toUpperCase() || 'CUSTOM CONFIGURATION'} ===`
                       },
