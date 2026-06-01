@@ -3,7 +3,6 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 
 // 🚀 DYNAMIC BRAND MAPPING DICTIONARY
-// Mapped exactly from your Brands_Netsuite_Keyinfo.csv
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
     'uniquity': { subsidiary: "6", location: "22" },
@@ -120,8 +119,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                   const linePayload = {
                       item: { id: line.nsId.toString() }, 
                       quantity: line.qty,
-                      rate: parseFloat(itemRate.toFixed(2)), // 🚀 FORCE STRICT FLOAT
-                      price: { id: "-1" }, // 🚀 FORCE CUSTOM PRICE LEVEL
+                      rate: parseFloat(itemRate.toFixed(2)), 
+                      price: { id: "-1" }, 
                       description: `${line.masterPart.itemName} (Mapped from CPQ)`,
                       custcol_part_category: line.partCategory
                   };
@@ -148,14 +147,16 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           let nsCustomerId = job.customer?.id || "";
           if (nsCustomerId.startsWith('CUST-')) nsCustomerId = nsCustomerId.replace('CUST-', '');
 
-          // 🚀 DYNAMIC BRAND MAPPING ASSIGNMENT
-          // Safely falls back to CE (Subsidiary 2, Location 17) if brand string is somehow missing
           const brandMapping = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2", location: "17" };
+
+          // 🚀 DYNAMIC DESCRIPTION
+          const flowName = cpqFlows.find(f => f.id === job.flowId)?.name || 'Custom Assembly';
+          const headerDesc = `${flowName} labor portion of quote# ${job.jobId || job.id} for Job: ${job.jobName || 'N/A'} Sidemark: ${job.sidemark || 'N/A'}`;
 
           const payload = {
               entity: { id: nsCustomerId }, 
-              subsidiary: { id: brandMapping.subsidiary }, // 🚀 DYNAMIC INJECTION
-              location: { id: brandMapping.location },     // 🚀 DYNAMIC INJECTION
+              subsidiary: { id: brandMapping.subsidiary }, 
+              location: { id: brandMapping.location },     
               memo: `[HQ APP CONFIG] ${job.jobName || ''} - ${job.sidemark || ''}`.trim(),
               custbody50: job.jobId || job.id, 
               item: {
@@ -165,7 +166,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                           quantity: 1,
                           rate: parseFloat(silentFeeBalance.toFixed(2)), 
                           price: { id: "-1" }, 
-                          description: `=== CPQ BUILD: ${job.sidemark?.toUpperCase() || 'CUSTOM CONFIGURATION'} ===`
+                          description: headerDesc // 🚀 INJECTED HERE
                       },
                       ...lineItems
                   ]
@@ -194,15 +195,13 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               throw new Error(`API Rejected [${response.status}]: ${JSON.stringify(result)}`);
           }
 
-          // 🚀 FIX: Safely handle the returned ID to prevent Firebase crashes.
-          // NetSuite REST often hides the ID in a header, or proxies format it differently.
           const returnedId = result.id || result.recordId || "CREATED_CHECK_NETSUITE";
 
           addLog(`✅ Success! NetSuite Quote Created (ID: ${returnedId})`, 'success');
 
           await updateDoc(doc(db, "jobs", job.id), {
               status: 'TRANSMITTED_TO_ERP',
-              netsuiteEstimateId: returnedId, // Safely mapped ID
+              netsuiteEstimateId: returnedId, 
               dateTransmitted: new Date().toISOString()
           });
 
@@ -304,7 +303,10 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                                 <tbody>
                                     <tr>
                                         <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontWeight: 'bold', color: '#007bff' }}>61502</td>
-                                        <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontStyle: 'italic' }}>=== CPQ BUILD: {activeJob.sidemark?.toUpperCase()} ===</td>
+                                        {/* 🚀 DYNAMIC PREVIEW TEXT INJECTED HERE */}
+                                        <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontStyle: 'italic' }}>
+                                            {cpqFlows.find(f => f.id === activeJob.flowId)?.name || 'Custom Assembly'} labor portion of quote# {activeJob.jobId || activeJob.id} for Job: {activeJob.jobName || 'N/A'} Sidemark: {activeJob.sidemark || 'N/A'}
+                                        </td>
                                         <td style={{ padding: '8px', borderBottom: '1px solid #eee', textAlign: 'center' }}>1</td>
                                     </tr>
                                     {getJobLineItems(activeJob).map((line, idx) => (

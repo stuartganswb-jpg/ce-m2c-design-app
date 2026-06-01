@@ -6,7 +6,61 @@ import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
 
 const globalTextureCache = {};
+// 🚀 NEW: Searchable Customer Dropdown Component
+const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, style }) => {
+    const [search, setSearch] = useState('');
+    const [isOpen, setIsOpen] = useState(false);
 
+    useEffect(() => {
+        if (value) {
+            const c = customers.find(x => x.id === value);
+            if (c) setSearch(`${c.name} (${c.id})`);
+        } else {
+            setSearch('');
+        }
+    }, [value, customers]);
+
+    const filtered = customers.filter(c => 
+        c.name.toLowerCase().includes(search.toLowerCase()) || 
+        c.id.toLowerCase().includes(search.toLowerCase())
+    );
+
+    return (
+        <div style={{ position: 'relative', flex: 1 }}>
+            <input 
+                type="text"
+                value={search}
+                onChange={(e) => {
+                    setSearch(e.target.value);
+                    setIsOpen(true);
+                    if (e.target.value === '') onChange('');
+                }}
+                onFocus={() => setIsOpen(true)}
+                onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+                placeholder={placeholder}
+                style={{ ...style, width: '100%', boxSizing: 'border-box' }}
+            />
+            {isOpen && (
+                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid #ccc', maxHeight: '250px', overflowY: 'auto', zIndex: 10000, boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}>
+                    {filtered.length === 0 && <div style={{ padding: '10px', color: '#999', fontStyle: 'italic' }}>No matches found...</div>}
+                    {filtered.map(c => (
+                        <div 
+                            key={c.id}
+                            onMouseDown={() => {
+                                onChange(c.id);
+                                setSearch(`${c.name} (${c.id})`);
+                                setIsOpen(false);
+                            }}
+                            style={{ padding: '12px', borderBottom: '1px solid #eee', cursor: 'pointer', background: value === c.id ? '#eafaf1' : '#fff', color: '#000', fontSize: '0.9rem', fontWeight: 'bold' }}
+                        >
+                            {c.name} <span style={{color: '#666', fontSize: '0.75rem', fontWeight: 'normal'}}>({c.id})</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
 const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
     // This tells the app to download Google's official decoder to unzip the file
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
