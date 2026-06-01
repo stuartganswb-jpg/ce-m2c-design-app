@@ -2,6 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 
+// 🚀 DYNAMIC BRAND MAPPING DICTIONARY
+// Update these values with the exact NetSuite IDs from your CSV file.
+const BRAND_NETSUITE_MAP = {
+    'm2c': { subsidiary: "3", location: "19" },
+    'uniquity': { subsidiary: "6", location: "22" }, // Update with CSV value
+    'ce': { subsidiary: "2", location: "17" },       // Update with CSV value
+    'leyla': { subsidiary: "5", location: "18" },    // Update with CSV value
+};
+
 const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const [approvedJobs, setApprovedJobs] = useState([]);
   const [syncedJobs, setSyncedJobs] = useState([]);
@@ -139,9 +148,14 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           let nsCustomerId = job.customer?.id || "";
           if (nsCustomerId.startsWith('CUST-')) nsCustomerId = nsCustomerId.replace('CUST-', '');
 
+          // 🚀 DYNAMIC BRAND MAPPING ASSIGNMENT
+          // Safely falls back to Wilmington "2" & "1" if the brand string is somehow missing
+          const brandMapping = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2", location: "1" };
+
           const payload = {
               entity: { id: nsCustomerId }, 
-              subsidiary: { id: "2" }, // 🚀 ENFORCE SUBSIDIARY ALIGNMENT
+              subsidiary: { id: brandMapping.subsidiary }, // 🚀 DYNAMIC INJECTION
+              location: { id: brandMapping.location },     // 🚀 DYNAMIC INJECTION
               memo: `[HQ APP CONFIG] ${job.jobName || ''} - ${job.sidemark || ''}`.trim(),
               custbody50: job.jobId || job.id, 
               item: {
@@ -149,8 +163,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       {
                           item: { id: "61502" }, 
                           quantity: 1,
-                          rate: parseFloat(silentFeeBalance.toFixed(2)), // 🚀 FORCE STRICT FLOAT
-                          price: { id: "-1" }, // 🚀 FORCE CUSTOM PRICE LEVEL
+                          rate: parseFloat(silentFeeBalance.toFixed(2)), 
+                          price: { id: "-1" }, 
                           description: `=== CPQ BUILD: ${job.sidemark?.toUpperCase() || 'CUSTOM CONFIGURATION'} ===`
                       },
                       ...lineItems
