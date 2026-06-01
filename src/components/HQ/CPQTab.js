@@ -139,6 +139,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [engineFlags, setEngineFlags] = useState({ disabledSteps: [], warnings: [] });
   
   const [pricing, setPricing] = useState({ base: 0, finalPrice: 0 });
+  const [pricingBreakdown, setPricingBreakdown] = useState([]);
   const [jobData, setJobData] = useState({ customerId: '', jobName: '', sidemark: '' });
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
@@ -275,7 +276,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       setActiveFlowId(targetFlow.id);
       setActiveDraftId(draft.id);
       
-      // Auto-populate Job Data from Draft
       setJobData(prev => ({
           ...prev,
           jobName: draft.jobName || prev.jobName,
@@ -293,8 +293,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               if (step.title.toLowerCase().includes("stitch")) translatedParams[step.id] = draft.specs?.stitch;
               if (step.title.toLowerCase().includes("seam") && draft.specs?.seamCount) translatedParams[step.id] = draft.specs.seamCount;
           }
-          // Hardware intentionally bypassed to prevent messy auto-population.
-          // Hardware will use the sticky note for clean manual entry.
       });
 
       setDynamicConfigParams(translatedParams);
@@ -399,8 +397,15 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   useEffect(() => {
       if (!activeFlow) return;
       
-      let total = activeAssembly?.manufacturingSpecs?.basePrice ? parseFloat(activeAssembly.manufacturingSpecs.basePrice) : 0;
-      if (!activeAssembly && activeFlow.basePrice) total = parseFloat(activeFlow.basePrice);
+      let breakdown = [];
+      let baseAssemblyPrice = activeAssembly?.manufacturingSpecs?.basePrice ? parseFloat(activeAssembly.manufacturingSpecs.basePrice) : 0;
+      if (!activeAssembly && activeFlow.basePrice) baseAssemblyPrice = parseFloat(activeFlow.basePrice);
+
+      if (baseAssemblyPrice > 0) {
+          breakdown.push({ name: activeAssembly ? activeAssembly.itemName : activeFlow.name, qty: 1, price: baseAssemblyPrice, total: baseAssemblyPrice });
+      }
+
+      let total = baseAssemblyPrice;
 
       activeFlow.steps.forEach(step => {
           const selectedValue = dynamicConfigParams[step.id];
@@ -416,12 +421,15 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           if (selectedValue || step.type === 'DIMENSIONS' || step.type === 'STATIC_FEE') {
               let stepPrice = 0;
               let multiplier = 1.0;
+              let itemName = step.title;
 
               if (selectedValue) {
                   const partObj = libraryParts.find(p => p.id === selectedValue) || 
                                   dynamicAssets.find(a => a.id === selectedValue) ||
                                   globalFinishes.find(f => f.id === selectedValue) ||
                                   outsourceFinishes.find(f => f.id === selectedValue);
+
+                  if (partObj) itemName = partObj.itemName || partObj.name;
 
                   let nativePrice = 0;
                   if (partObj) {
@@ -452,11 +460,17 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                   stepPrice = parseFloat(step.priceOverride);
               }
               
-              total += (stepPrice * multiplier * qty);
+              let lineTotal = stepPrice * multiplier * qty;
+              if (lineTotal > 0 || stepPrice > 0) {
+                  breakdown.push({ name: itemName, qty: qty, price: stepPrice * multiplier, total: lineTotal });
+              }
+
+              total += lineTotal;
           }
       });
 
       setPricing({ base: total, finalPrice: total });
+      setPricingBreakdown(breakdown);
   }, [dynamicConfigParams, stepQuantities, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, activeBomPins, globalFinishes]);
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
@@ -622,7 +636,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           finalP = parseFloat(currentStep.priceOverride);
       }
 
-      if (finalP > 0) return ` (+$${finalP.toFixed(2)})`;
+      if (finalP > 0) return ` ($${finalP.toFixed(2)})`;
       return '';
   };
 
@@ -987,6 +1001,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                               <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '4px' }}>
                                                   REQ. PURCHASE LENGTH = {notes.poleFeetQty} FT
                                               </div>
+                                              
                                               {notes.qtyBrackets > 0 && <div>BRACKETS: {notes.qtyBrackets}</div>}
                                               {notes.recRings > 0 && <div>RINGS (Rec): {notes.recRings}</div>}
                                               {notes.qtyFinials > 0 && <div>FINIALS: {notes.qtyFinials}</div>}
@@ -1015,8 +1030,19 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                       <div style={{ fontSize: '0.8rem', color: '#666', fontWeight: 'bold', marginBottom: '5px' }}>ESTIMATED UNIT PRICE</div>
                       <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#d9534f' }}>${pricing.finalPrice.toFixed(2)}</div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', textAlign: 'right', fontSize: '0.8rem' }}>
-                      <div>Total Dynamic Sum: <span style={{ fontWeight: 'bold' }}>${pricing.base.toFixed(2)}</span></div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', textAlign: 'right', fontSize: '0.75rem', maxWidth: '300px' }}>
+                      <div style={{ fontWeight: 'bold', borderBottom: '1px solid #ccc', paddingBottom: '3px', marginBottom: '3px', color: '#000' }}>PRICING BREAKDOWN</div>
+                      <div style={{ maxHeight: '60px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px', paddingRight: '5px' }}>
+                          {pricingBreakdown.map((item, i) => (
+                              <div key={i} style={{ display: 'flex', justifyContent: 'flex-end', gap: '15px' }}>
+                                  <span style={{ color: '#666', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' }}>{item.name} (x{item.qty}):</span>
+                                  <span style={{ fontWeight: 'bold', minWidth: '50px' }}>${item.total.toFixed(2)}</span>
+                              </div>
+                          ))}
+                      </div>
+                      <div style={{ borderTop: '1px solid #000', marginTop: '2px', paddingTop: '2px', fontSize: '0.85rem' }}>
+                          Total Dynamic Sum: <span style={{ fontWeight: 'bold', color: '#d9534f' }}>${pricing.base.toFixed(2)}</span>
+                      </div>
                   </div>
               </div>
           </div>

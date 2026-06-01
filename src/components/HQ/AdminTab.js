@@ -1147,22 +1147,33 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <div style={{ background: '#fff', padding: '10px', border: '1px solid #007bff' }}>
                                             <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff', marginBottom: '10px' }}>OPTION PROPERTIES: COST UPCHARGES & GEOMETRY SWAPPING</div>
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: '10px', maxHeight: '250px', overflowY: 'auto' }}>
-                                                <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>OPTION NAME</div>
+                                                <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>OPTION NAME (BASE PRICE)</div>
                                                 <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>PRICE UPCHARGE ($)</div>
                                                 <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>ASSOC. MESH (VISIBILITY)</div>
                                                 
-                                                {optionsToMap.map(opt => (
-                                                    <React.Fragment key={opt.id}>
-                                                        <div style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{opt.name}</div>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                                            <span style={{ fontWeight: 'bold' }}>+$</span>
-                                                            <input type="number" step="0.5" value={newStep.priceMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, priceMap: { ...prev.priceMap, [opt.id]: parseFloat(e.target.value) || 0 } }))} placeholder="0.00" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold' }} disabled={newStep.useClientPricing || !!newStep.priceOverride} />
-                                                        </div>
-                                                        <div>
-                                                            <input value={newStep.geometryMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, geometryMap: { ...prev.geometryMap, [opt.id]: e.target.value } }))} placeholder="Mesh to Show (e.g. Bracket_Deluxe)" style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }} />
-                                                        </div>
-                                                    </React.Fragment>
-                                                ))}
+                                                {optionsToMap.map(opt => {
+                                                    const partObj = libraryParts.find(p => p.id === opt.id) || dynamicAssets.find(a => a.id === opt.id) || globalFinishes.find(f => f.id === opt.id) || outsourceFinishes.find(f => f.id === opt.id);
+                                                    let bp = 0;
+                                                    if (partObj) {
+                                                        if (partObj.manufacturingSpecs?.basePrice) bp = parseFloat(partObj.manufacturingSpecs.basePrice);
+                                                        else if (partObj.basePrice) bp = parseFloat(partObj.basePrice);
+                                                    }
+
+                                                    return (
+                                                        <React.Fragment key={opt.id}>
+                                                            <div style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                                                                {opt.name} {bp > 0 && <span style={{ color: '#28a745', marginLeft: '5px', fontWeight: 'bold' }}>(${bp.toFixed(2)})</span>}
+                                                            </div>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                                                <span style={{ fontWeight: 'bold' }}>+$</span>
+                                                                <input type="number" step="0.5" value={newStep.priceMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, priceMap: { ...prev.priceMap, [opt.id]: parseFloat(e.target.value) || 0 } }))} placeholder="0.00" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold' }} disabled={newStep.useClientPricing || !!newStep.priceOverride} />
+                                                            </div>
+                                                            <div>
+                                                                <input value={newStep.geometryMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, geometryMap: { ...prev.geometryMap, [opt.id]: e.target.value } }))} placeholder="Mesh to Show (e.g. Bracket_Deluxe)" style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }} />
+                                                            </div>
+                                                        </React.Fragment>
+                                                    );
+                                                })}
                                             </div>
                                         </div>
                                     )}
