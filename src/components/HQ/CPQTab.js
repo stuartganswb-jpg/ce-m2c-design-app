@@ -985,15 +985,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                           
                                           <div style={{ background: '#fff9c4', padding: '8px', border: '1px solid #d4b106', marginTop: '5px' }}>
                                               <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '4px' }}>
-                                                  {notes.shape === 'MITERED' 
-                                                      ? `RAW DIMS: L:${notes.rawW1}" | C:${notes.rawW2}" | R:${notes.rawW3}"`
-                                                      : `RAW LENGTH: ${notes.rawW2 || 0}"`
-                                                  }
+                                                  REQ. PURCHASE LENGTH = {notes.poleFeetQty} FT
                                               </div>
-                                              
-                                              {/* Fallback just in case they load a very old draft that didn't have raw dimensions */}
-                                              {notes.rawW2 === undefined && <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '4px' }}>POLE CUT: {notes.poleFeetQty} FT</div>}
-
                                               {notes.qtyBrackets > 0 && <div>BRACKETS: {notes.qtyBrackets}</div>}
                                               {notes.recRings > 0 && <div>RINGS (Rec): {notes.recRings}</div>}
                                               {notes.qtyFinials > 0 && <div>FINIALS: {notes.qtyFinials}</div>}
