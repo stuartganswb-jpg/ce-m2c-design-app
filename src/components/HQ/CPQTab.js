@@ -139,6 +139,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [jobData, setJobData] = useState({ customerId: '', jobName: '', sidemark: '' });
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
+  const [virtualFeeSteps, setVirtualFeeSteps] = useState([]);
 
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
   const [activeAssembly, setActiveAssembly] = useState(null);
@@ -218,7 +219,24 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
   const allActiveSteps = useMemo(() => {
       if (!activeFlow) return [];
-      return activeFlow.steps || [];
+      return [...(activeFlow.steps || []), ...virtualFeeSteps];
+  }, [activeFlow, virtualFeeSteps]);
+
+  // SAFE QUANTITY INIT
+  useEffect(() => {
+      if (!activeFlow) return;
+      
+      setStepQuantities(prev => {
+          const updates = { ...prev };
+          let changed = false;
+          (activeFlow.steps || []).forEach(step => {
+              if (updates[step.id] === undefined) {
+                  updates[step.id] = 1;
+                  changed = true;
+              }
+          });
+          return changed ? updates : prev;
+      });
   }, [activeFlow]);
 
   const currentStep = allActiveSteps[currentStepIndex];
@@ -278,9 +296,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       setActiveDraftId(draft.id);
       setJobData(prev => ({...prev, jobName: draft.jobName || '', sidemark: draft.sidemark || ''}));
       
+      const translatedParams = {};
+      
       if (draft.category === 'PILLOW') {
-          const translatedParams = {};
-          targetFlow.steps.forEach(step => {
+          (targetFlow.steps || []).forEach(step => {
               if (step.title.toLowerCase().includes("size")) translatedParams[step.id] = draft.specs?.size;
               if (step.title.toLowerCase().includes("fill")) translatedParams[step.id] = draft.specs?.fill;
               if (step.title.toLowerCase().includes("fabric")) translatedParams[step.id] = draft.specs?.fabrics?.[0]; 
@@ -289,19 +308,41 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               if (step.title.toLowerCase().includes("stitch")) translatedParams[step.id] = draft.specs?.stitch;
               if (step.title.toLowerCase().includes("seam") && draft.specs?.seamCount) translatedParams[step.id] = draft.specs.seamCount;
           });
-          setDynamicConfigParams(translatedParams);
       } else {
-          setDynamicConfigParams({});
+          Object.keys(draft.specs || {}).forEach(key => {
+              if (key !== 'collection' && key !== 'quantities' && key !== 'engineeringNotes') {
+                  translatedParams[key] = draft.specs[key];
+              }
+          });
       }
 
-      setStepQuantities({});
+      setDynamicConfigParams(translatedParams);
+      
+      // EXPLICIT QUANTITY INJECTION (From Post-It Note Data)
+      let initialQuantities = {};
+      if (draft.specs?.engineeringNotes) {
+          const notes = draft.specs.engineeringNotes;
+          (targetFlow.steps || []).forEach(step => {
+              const t = (step.title || '').toLowerCase();
+              if (t.includes('pole') || t.includes('tube')) initialQuantities[step.id] = notes.poleFeetQty || 1;
+              else if (t.includes('bracket')) initialQuantities[step.id] = notes.qtyBrackets || 1;
+              else if (t.includes('ring')) initialQuantities[step.id] = notes.recRings || 1;
+              else if (t.includes('finial')) initialQuantities[step.id] = notes.qtyFinials || 1;
+              else initialQuantities[step.id] = 1;
+          });
+      } else if (draft.specs?.quantities || draft.cpqData?.quantities) {
+          initialQuantities = draft.specs?.quantities || draft.cpqData?.quantities;
+      }
+
+      setStepQuantities(initialQuantities);
+      
       if (draft.cpqData?.dimensions || draft.spatialData) {
           setDimensionInputs(draft.cpqData?.dimensions || draft.spatialData);
       }
 
       setShowCloneModal(false);
       setCurrentStepIndex(0);
-      alert("Engineering Math loaded! Please check the yellow notes on the left to complete your configuration.");
+      alert("Engineering Data Loaded! Please follow the Post-It Note on the left to complete your selections.");
   };
 
   useEffect(() => {
@@ -377,12 +418,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const currentTotal = useMemo(() => {
       if (!activeFlow) return 0;
       let total = parseFloat(activeFlow.basePrice) || 0;
-      const quantities = stepQuantities; 
-
+      
       allActiveSteps.forEach(step => {
           const selectedValueId = dynamicConfigParams[step.id];
           if (selectedValueId || step.type === 'DIMENSIONS') {
-              let qtyMultiplier = quantities[step.id] !== undefined ? quantities[step.id] : 1;
+              let qtyMultiplier = stepQuantities[step.id] !== undefined ? stepQuantities[step.id] : 1;
 
               if (step.priceOverride) {
                   total += parseFloat(step.priceOverride) * qtyMultiplier;
@@ -494,7 +534,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               <div style="margin-top: 20px; border: 2px dashed #000; padding: 15px; background: #fff3cd;">
                   <h4 style="margin: 0 0 10px 0; color: #856404; text-transform: uppercase;">⚠️ DIMENSIONAL SHOP CUT SHEET</h4>
                   <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-                      ${Object.entries(job.cpqData.dimensions).map(([stepId, dims]) => `
+                      ${Object.entries(job.cpqData.dimensions || {}).map(([stepId, dims]) => `
                           <tr><td colspan="2" style="padding: 10px; font-weight: bold; background: #e9ecef; border-top: 2px solid #000;">${allActiveSteps.find(s => s.id === stepId)?.title || stepId}</td></tr>
                           ${Object.entries(dims).filter(([k,v]) => !k.startsWith('calc_') && v !== '').map(([key, val]) => `
                               <tr>
@@ -558,7 +598,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               <div class="spec-header">BILL OF MATERIALS (BOM)</div>
               <div class="spec-row" style="background:#eee; font-weight:bold;"><span>COMPONENT</span><span>QTY</span></div>
               
-              ${Object.entries(job.cpqData.configuration).map(([stepId, valueId]) => {
+              ${Object.entries(job.cpqData.configuration || {}).map(([stepId, valueId]) => {
                   const step = allActiveSteps?.find(s => s.id === stepId);
                   if (!step) return ''; 
                   
@@ -567,7 +607,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                   return `<div class="spec-row"><span>${step.title}: <strong>${partObj?.itemName || partObj?.name || valueId}</strong></span><span>${qty}</span></div>`;
               }).join('')}
               
-              ${Object.entries(job.cpqData.quantities).map(([key, qty]) => {
+              ${Object.entries(job.cpqData.quantities || {}).map(([key, qty]) => {
                   if (key.startsWith('VIRTUAL_')) {
                       return `<div class="spec-row"><span>AUTO-APPENDED FEE: <strong>${key.replace('VIRTUAL_', '')}</strong></span><span>${qty}</span></div>`;
                   }
@@ -820,7 +860,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           )}
                       </div>
 
-                      {!currentStep.isVirtual && (
+                      {/* 🚀 FIXED: Guarded activeStep before reading .isVirtual */}
+                      {(activeStep && !activeStep.isVirtual) && (
                           <div style={{ padding: '15px', background: '#f8f9fa', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div style={{ fontSize: '0.8rem', color: '#666', lineHeight: '1.4', flex: 1, paddingRight: '15px' }}>
                                   <strong>STEP QUANTITY:</strong><br/>
@@ -865,9 +906,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} disabled={currentStepIndex === 0} style={{ padding: '10px 20px', border: '2px solid #000', background: '#fff', fontWeight: 'bold', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer' }}>BACK</button>
                           
                           {currentStepIndex < allActiveSteps.length - 1 ? (
-                              <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
+                              <button onClick={handleNextStep} disabled={currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
                           ) : (
-                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && !currentStep.isVirtual ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
+                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep?.required && !dynamicConfigParams[currentStep?.id] && currentStep?.type !== 'DIMENSIONS' && !currentStep?.isVirtual ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
                           )}
                       </div>
                   </div>
@@ -925,8 +966,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                               <Bounds fit clip margin={1.2}>
                                   <DynamicModel 
                                       url={activeAssembly.manufacturingSpecs.cadUrl} 
-                                      textureOverrides={textureOverrides} 
-                                      visibilityOverrides={visibilityOverrides}
+                                      textureOverrides={get3DTextureOverrides()} 
+                                      visibilityOverrides={get3DVisibilityOverrides()}
                                   />
                               </Bounds>
                           </Canvas>
@@ -946,7 +987,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           </div>
                       )}
                       
-                      {/* 🚀 NEW: The Floating Engineering Post-It Note */}
+                      {/* 🚀 FIXED: The Floating Engineering Post-It Note securely checks draft specs */}
                       {activeDraftId && previousDrafts.find(d => d.id === activeDraftId)?.specs?.engineeringNotes && (
                           <div style={{
                               position: 'absolute', bottom: '20px', left: '20px', width: '220px',

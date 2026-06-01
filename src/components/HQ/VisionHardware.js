@@ -44,7 +44,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [quoteFlowId, setQuoteFlowId] = useState("");
   const [quoteSelections, setQuoteSelections] = useState({ collection: '' });
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
-  const [stepQuantities, setStepQuantities] = useState({}); 
   const [flowPins, setFlowPins] = useState([]);
 
   const [engData, setEngData] = useState({
@@ -84,6 +83,65 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const activeFlow = useMemo(() => {
       return cpqFlows.find(f => f.id === quoteFlowId);
   }, [quoteFlowId, cpqFlows]);
+
+  const getStepCategory = (step) => {
+      if (!step) return '';
+      const t = (step.title || '').toLowerCase();
+      const ds = (step.dataSource || '').toLowerCase();
+      
+      if (ds === 'master_finishes' || t.includes('finish') || t.includes('color') || t.includes('patina')) return 'FINISH';
+      if (t.includes('pole') || t.includes('tube') || t.includes('rod') || ds.includes('pole')) return 'POLE';
+      if (t.includes('bracket') || ds.includes('bracket')) return 'BRACKET';
+      if (t.includes('finial') || ds.includes('finial')) return 'FINIAL';
+      if (t.includes('ring') || ds.includes('ring')) return 'RING';
+      if (t.includes('splice') || ds.includes('splice')) return 'SPLICE';
+      return 'OTHER';
+  };
+
+  const getOptionsForStep = (step) => {
+      if (!step || !step.dataSource) return [];
+      let options = [];
+
+      const isProdType = globalLists.prodTypes?.includes(step.dataSource);
+      const isRoutingType = globalLists.inventoryTypes?.includes(step.dataSource) || globalLists.assemblyTypes?.includes(step.dataSource);
+
+      if (isProdType || isRoutingType) {
+          options = libraryParts.filter(p => {
+              if (p.manufacturingSpecs?.customData?.feeType) return false;
+              if (isProdType && p.manufacturingSpecs?.productType !== step.dataSource && p.productType !== step.dataSource) return false;
+              if (isRoutingType && p.routingType !== step.dataSource) return false;
+              
+              const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
+              const upperCollections = collectionsArray.map(c => c.toUpperCase());
+              const selCollection = (quoteSelections.collection || "").toUpperCase();
+              
+              if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
+                  if (!upperCollections.includes('N/A')) return false; 
+              }
+
+              if (step && step.allowedOptions?.length > 0) {
+                  if (!step.allowedOptions.includes(p.id)) return false;
+              }
+              return true;
+          }).map(p => ({ id: p.id, itemName: p.itemName, code: p.legacyErpId }));
+      } else if (step.dataSource === 'master_finishes') {
+          const inHouse = globalFinishes.map(f => ({ id: f.id, itemName: f.name, code: f.code }));
+          const outsource = outsourceFinishes.map(f => ({ id: f.id, itemName: f.name }));
+          options = [...inHouse, ...outsource];
+      } else {
+          const customAssets = dynamicAssets.filter(a => a.windowId === step.dataSource);
+          if (customAssets.length > 0) {
+              options = customAssets.map(a => ({ id: a.id, itemName: a.name, code: a.code }));
+          } else if (globalLists[step.dataSource]) {
+              options = globalLists[step.dataSource].map(val => ({ id: val, itemName: val }));
+          }
+      }
+
+      if (step.allowedOptions && step.allowedOptions.length > 0) {
+          return options.filter(opt => step.allowedOptions.includes(opt.id));
+      }
+      return options;
+  };
 
   useEffect(() => {
       if (!activeFlow?.linkedAssemblyId) { setFlowPins([]); return; }
@@ -149,7 +207,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       }
   }, [engData.bracketId, libraryParts]);
 
-  // 🚀 FIXED: Extremely strict bracket filtering based on flowPins
+  // 🚀 STRICT BRACKET FILTERING BASED ON FLOW PINS
   const allBrackets = useMemo(() => {
       if (!activeFlow || flowPins.length === 0) return [];
       
@@ -157,7 +215,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
           if (!pt.includes('BRACKET')) return false;
 
-          // Must be explicitly pinned in the Master Assembly linked to this flow
           const isPinned = flowPins.some(pin => pin.partId === p.id || pin.legacyErpId === p.legacyErpId);
           return isPinned;
       });
@@ -186,6 +243,54 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (engData.inputMode === 'WALL') { pole1 = Math.max(0, wall1 - mDeduct1 - imDeductL); pole2 = Math.max(0, wall2 - mDeduct1 - mDeduct2); pole3 = Math.max(0, wall3 - mDeduct2 - imDeductR); } 
       else { pole1 = engData.w1 - bendDeductL - imDeductL; wall1 = pole1 + mDeduct1 + imDeductL; pole2 = engData.w2; wall2 = pole2 + mDeduct1 + mDeduct2; pole3 = engData.w3 - bendDeductR - imDeductR; wall3 = pole3 + mDeduct2 + imDeductR; }
       sawAngle1 = engData.a1 === 180 ? 0 : 90 - (engData.a1 / 2); sawAngle2 = engData.a2 === 180 ? 0 : 90 - (engData.a2 / 2);
+  } else if (engData.shape === 'BOW') {
+      if (engData.bowDepth > 0) {
+          const rW_px = bowR * S; const rH_px = bowHW_R * S; bowCX = 500; bowCY = P2.y + rW_px - engData.bowDepth * S;
+          bowStartAngle = Math.atan2(P2.y - bowCY, P2.x - bowCX); bowEndAngle = Math.atan2(P3.y - bowCY, P3.x - bowCX);
+          if (bowEndAngle < bowStartAngle) bowEndAngle += 2 * Math.PI;
+          HS = { x: bowCX + rH_px * Math.cos(bowStartAngle), y: bowCY + rH_px * Math.sin(bowStartAngle) }; HE = { x: bowCX + rH_px * Math.cos(bowEndAngle), y: bowCY + rH_px * Math.sin(bowEndAngle) };
+          const ndxL = P2.x - HS.x; const ndyL = P2.y - HS.y; const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1; nL = { x: ndxL/nlenL, y: ndyL/nlenL };
+          const ndxR = P3.x - HE.x; const ndyR = P3.y - HE.y; const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1; nR = { x: ndxR/nlenR, y: ndyR/nlenR };
+      }
+  }
+
+  const addL_TOL = isLeftInside ? 0 : (engData.endStyle === 'FINIAL' ? engData.finialW : (engData.endStyle.includes('RETURN') ? Math.max(0, (engData.bracketW - engData.poleDiameter) / 2) : 0));
+  const addR_TOL = isRightInside ? 0 : addL_TOL;
+  const addL_RAW = isLeftInside ? 0 : (engData.endStyle === 'RETURN_BEND' ? engData.gripAllowance : 0);
+  const addR_RAW = isRightInside ? 0 : addL_RAW;
+  const orderL = pole1 + bendDeductL + imDeductL; const orderR = pole3 + bendDeductR + imDeductR;
+  const orderC = engData.shape === 'STRAIGHT' ? (pole2 + bendDeductL + bendDeductR + imDeductL + imDeductR) : (engData.shape === 'BOW' ? pole2 + imDeductL + imDeductR : pole2);
+  const tolLeft = engData.shape === 'MITERED' ? orderL + addL_TOL : 0; const tolRight = engData.shape === 'MITERED' ? orderR + addR_TOL : 0;
+  const tolCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? orderC + addL_TOL + addR_TOL : orderC;
+  const rawLeft = engData.shape === 'MITERED' ? pole1 + addL_RAW : 0; const rawRight = engData.shape === 'MITERED' ? pole3 + addR_RAW : 0;
+  const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 + addL_RAW + addR_RAW : pole2;
+  
+  const systemC2C = orderL + orderC + orderR;
+  const systemO2O = tolLeft + tolCenter + tolRight;
+  const totalPoleRawInches = rawLeft + rawCenter + rawRight;
+  
+  const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
+  const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;
+  const qtySplices = attachments.filter(a => a.type === 'splice').length;
+  const qtyMiters = engData.shape === 'MITERED' ? 2 : 0;
+  const qtyBends = engData.endStyle === 'RETURN_BEND' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
+  const qtyMiterReturns = engData.endStyle === 'RETURN_MITER' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
+  const qtyCustomProjBrackets = isCustomProj ? qtyBrackets : 0;
+  const qtyFinials = engData.endStyle === 'FINIAL' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
+  const recRings = Math.ceil(systemO2O / 12) * 4;
+
+  const P2 = { x: 500 - (wall2 * S)/2, y: 250 }; const P3 = { x: 500 + (wall2 * S)/2, y: 250 };
+  let P1 = P2, P4 = P3, HS = {x: 0, y: 0}, HE = {x: 0, y: 0}, HC1 = {x: 0, y: 0}, HC2 = {x: 0, y: 0}, nL = {x: 0, y: -1}, nR = {x: 0, y: -1}; 
+
+  if (engData.shape === 'STRAIGHT') {
+      HS = { x: 500 - (pole2 * S)/2, y: P2.y + safeProj * S }; HE = { x: 500 + (pole2 * S)/2, y: P3.y + safeProj * S }; nL = { x: 0, y: -1 }; nR = { x: 0, y: -1 };
+  } else if (engData.shape === 'MITERED') {
+      const t1 = rad(180 - engData.a1); const t2 = rad(180 - engData.a2);
+      P1 = { x: P2.x - (wall1 * S) * Math.cos(t1), y: P2.y + (wall1 * S) * Math.sin(t1) }; P4 = { x: P3.x + (wall3 * S) * Math.cos(t2), y: P3.y + (wall3 * S) * Math.sin(t2) };
+      HC1 = { x: P2.x + (mDeduct1 * S), y: P2.y + (safeProj * S) }; HC2 = { x: P3.x - (mDeduct2 * S), y: P3.y + (safeProj * S) };
+      HS = { x: HC1.x - (pole1 * S) * Math.cos(t1), y: HC1.y + (pole1 * S) * Math.sin(t1) }; HE = { x: HC2.x + (pole3 * S) * Math.cos(t2), y: HC2.y + (pole3 * S) * Math.sin(t2) };
+      const ndxL = P1.x - HS.x; const ndyL = P1.y - HS.y; const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1; nL = { x: ndxL/nlenL, y: ndyL/nlenL };
+      const ndxR = P4.x - HE.x; const ndyR = P4.y - HE.y; const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1; nR = { x: ndxR/nlenR, y: ndyR/nlenR };
   } else if (engData.shape === 'BOW') {
       if (engData.bowDepth > 0) {
           const rW_px = bowR * S; const rH_px = bowHW_R * S; bowCX = 500; bowCY = P2.y + rW_px - engData.bowDepth * S;
@@ -436,7 +541,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       setPlacedItems(placedItems.filter(i => i.id !== id)); if (activePlacedId === id) setActivePlacedId(null); 
   };
 
-  // 🚀 FIXED: Bypasses complex CPQ Step validation. You just push the raw math payload.
+  // 🚀 FIXED: Simple push that packages engineering notes without battling CPQ validation
   const handlePushToCPQ = async () => {
       if (!quoteFlowId) return alert("Please select a CPQ Flow in Step 1.");
       if (engData.proj > 0 && !engData.bracketId) return alert("Please select a Bracket in the Fabrication Settings to proceed.");
@@ -858,7 +963,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   </div>
                   
                   <div style={{ padding: '20px', background: '#000', borderTop: '2px solid #000' }}>
-                      <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeFlow} style={{ width: '100%', padding: '15px', background: (isPushingToCPQ || !activeFlow) ? '#666' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isPushingToCPQ || !activeFlow) ? 'not-allowed' : 'pointer', fontSize: '1.1rem', transition: '0.2s' }}>
+                      <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeFlow || !engData.bracketId} style={{ width: '100%', padding: '15px', background: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? '#666' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? 'not-allowed' : 'pointer', fontSize: '1.1rem', transition: '0.2s' }}>
                           {isPushingToCPQ ? 'SAVING DRAFT...' : '🛒 SEND TO CPQ CART'}
                       </button>
                   </div>
