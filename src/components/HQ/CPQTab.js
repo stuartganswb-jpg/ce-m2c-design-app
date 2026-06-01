@@ -231,8 +231,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           const inHouse = globalFinishes.map(f => ({ id: f.id, itemName: f.name, finalImageUrl: f.textureUrl, code: f.code }));
           const outsource = outsourceFinishes.map(f => ({ id: f.id, itemName: f.name, finalImageUrl: f.textureUrl, multiplier: f.multiplier }));
           options = [...inHouse, ...outsource];
-      } else if (globalLists.inventoryTypes?.includes(step.dataSource)) {
-          options = libraryParts.filter(p => p.routingType === step.dataSource).map(p => ({
+      } else if (globalLists.inventoryTypes?.includes(step.dataSource) || globalLists.assemblyTypes?.includes(step.dataSource) || globalLists.prodTypes?.includes(step.dataSource)) {
+          const allParts = [...libraryParts, ...liveAssemblies];
+          options = allParts.filter(p => p.routingType === step.dataSource || p.manufacturingSpecs?.productType === step.dataSource || p.productType === step.dataSource).map(p => ({
               id: p.id,
               itemName: p.itemName,
               finalImageUrl: p.finalImageUrl || p.manufacturingSpecs?.finalImageUrl,
@@ -247,9 +248,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           } else if (globalLists[step.dataSource]) {
               options = globalLists[step.dataSource].map(val => ({ id: val, itemName: val }));
           } else if (step.dataSource === 'master_fabrics') {
-              options = libraryParts.filter(p => ['TEXTILE', 'FABRIC', 'RAW MATERIAL'].includes(p.manufacturingSpecs?.productType));
+              const allParts = [...libraryParts, ...liveAssemblies];
+              options = allParts.filter(p => ['TEXTILE', 'FABRIC', 'RAW MATERIAL'].includes(p.manufacturingSpecs?.productType));
           } else if (step.dataSource === 'master_trims') {
-              options = libraryParts.filter(p => ['TRIMMING', 'COMPONENT'].includes(p.manufacturingSpecs?.productType));
+              const allParts = [...libraryParts, ...liveAssemblies];
+              options = allParts.filter(p => ['TRIMMING', 'COMPONENT'].includes(p.manufacturingSpecs?.productType));
           }
       }
 
@@ -311,8 +314,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       let newFlags = { disabledSteps: [], warnings: [] };
       const selectedItemIds = Object.values(dynamicConfigParams);
       
+      const allParts = [...libraryParts, ...liveAssemblies];
+      
       const selectedParts = selectedItemIds.map(id => {
-          return libraryParts.find(p => p.id === id) || 
+          return allParts.find(p => p.id === id) || 
                  dynamicAssets.find(a => a.id === id) || 
                  globalFinishes.find(f => f.id === id) ||
                  outsourceFinishes.find(f => f.id === id) ||
@@ -338,7 +343,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           });
       });
       setEngineFlags(newFlags);
-  }, [dynamicConfigParams, cpqRules, libraryParts, dynamicAssets, globalFinishes, outsourceFinishes]);
+  }, [dynamicConfigParams, cpqRules, libraryParts, liveAssemblies, dynamicAssets, globalFinishes, outsourceFinishes]);
 
   const handleDimensionChange = (stepId, key, value, template) => {
       setDimensionInputs(prev => {
@@ -406,6 +411,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       }
 
       let total = baseAssemblyPrice;
+      const allParts = [...libraryParts, ...liveAssemblies];
 
       activeFlow.steps.forEach(step => {
           const selectedValue = dynamicConfigParams[step.id];
@@ -424,7 +430,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               let itemName = step.title;
 
               if (selectedValue) {
-                  const partObj = libraryParts.find(p => p.id === selectedValue) || 
+                  const partObj = allParts.find(p => p.id === selectedValue) || 
                                   dynamicAssets.find(a => a.id === selectedValue) ||
                                   globalFinishes.find(f => f.id === selectedValue) ||
                                   outsourceFinishes.find(f => f.id === selectedValue);
@@ -471,7 +477,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
       setPricing({ base: total, finalPrice: total });
       setPricingBreakdown(breakdown);
-  }, [dynamicConfigParams, stepQuantities, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, activeBomPins, globalFinishes]);
+  }, [dynamicConfigParams, stepQuantities, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, liveAssemblies, activeBomPins, globalFinishes]);
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
 
@@ -599,7 +605,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               ${Object.entries(job.cpqData.configuration).map(([stepId, valueId]) => {
                   const step = activeFlow?.steps?.find(s => s.id === stepId);
                   const qty = job.cpqData.quantities[stepId] || 1;
-                  const partObj = libraryParts.find(p => p.id === valueId) || dynamicAssets.find(a => a.id === valueId) || globalFinishes.find(f => f.id === valueId) || outsourceFinishes.find(f => f.id === valueId);
+                  const allParts = [...libraryParts, ...liveAssemblies];
+                  const partObj = allParts.find(p => p.id === valueId) || dynamicAssets.find(a => a.id === valueId) || globalFinishes.find(f => f.id === valueId) || outsourceFinishes.find(f => f.id === valueId);
                   return `<div class="spec-row"><span>${step?.title}: <strong>${partObj?.itemName || partObj?.name || valueId}</strong></span><span>${qty}</span></div>`;
               }).join('')}
             </div>
@@ -613,7 +620,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   };
 
   const renderOptionPrice = (opt, currentStep) => {
-      const partObj = libraryParts.find(p => p.id === opt.id) || 
+      const allParts = [...libraryParts, ...liveAssemblies];
+      const partObj = allParts.find(p => p.id === opt.id) || 
                       dynamicAssets.find(a => a.id === opt.id) ||
                       globalFinishes.find(f => f.id === opt.id) ||
                       outsourceFinishes.find(f => f.id === opt.id);
@@ -649,7 +657,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           let foundAsset = dynamicAssets.find(a => a.id === valueId) || globalFinishes.find(f => f.id === valueId) || outsourceFinishes.find(f => f.id === valueId);
           let zIdx = foundAsset ? 30 : 10;
           if (!foundAsset) {
-              const libPart = libraryParts.find(p => p.id === valueId);
+              const allParts = [...libraryParts, ...liveAssemblies];
+              const libPart = allParts.find(p => p.id === valueId);
               if (libPart) { foundAsset = libPart; zIdx = parseInt(libPart.manufacturingSpecs?.layeringSequence) || 10; }
           }
           if (foundAsset) {

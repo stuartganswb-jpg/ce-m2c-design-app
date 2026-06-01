@@ -23,7 +23,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
-  const [libraryParts, setLibraryParts] = useState([]);
 
   const [crmDiscounts, setCrmDiscounts] = useState([]);
   const [newDiscount, setNewDiscount] = useState({ code: '', description: '', percent: '' });
@@ -81,7 +80,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const unsubAssemblies = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
           const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           setAllApprovedDesigns(docs);
-          setLibraryParts(docs.filter(d => d.partClass === 'Inventory'));
       });
 
       const unsubWindowConfig = onSnapshot(doc(db, "system", "window_config"), (docSnap) => {
@@ -743,17 +741,17 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
       
       if (globalLists.prodTypes?.includes(source)) {
-          return libraryParts.filter(p => p.manufacturingSpecs?.productType === source || p.productType === source).map(p => ({ id: p.id, name: p.itemName }));
+          return allApprovedDesigns.filter(p => p.manufacturingSpecs?.productType === source || p.productType === source).map(p => ({ id: p.id, name: p.itemName }));
       }
       if (globalLists.inventoryTypes?.includes(source) || globalLists.assemblyTypes?.includes(source)) {
-          return libraryParts.filter(p => p.routingType === source).map(p => ({ id: p.id, name: p.itemName }));
+          return allApprovedDesigns.filter(p => p.routingType === source).map(p => ({ id: p.id, name: p.itemName }));
       }
 
       const customAssets = dynamicAssets.filter(a => a.windowId === source);
       if (customAssets.length > 0) return customAssets.map(a => ({ id: a.id, name: a.name }));
       if (globalLists[source]) return globalLists[source].map(v => ({ id: v, name: v }));
-      if (source === 'master_fabrics') return libraryParts.filter(p => ['TEXTILE', 'FABRIC', 'RAW MATERIAL'].includes(p.manufacturingSpecs?.productType)).map(p => ({ id: p.id, name: p.itemName }));
-      if (source === 'master_trims') return libraryParts.filter(p => ['TRIMMING', 'COMPONENT'].includes(p.manufacturingSpecs?.productType)).map(p => ({ id: p.id, name: p.itemName }));
+      if (source === 'master_fabrics') return allApprovedDesigns.filter(p => ['TEXTILE', 'FABRIC', 'RAW MATERIAL'].includes(p.manufacturingSpecs?.productType)).map(p => ({ id: p.id, name: p.itemName }));
+      if (source === 'master_trims') return allApprovedDesigns.filter(p => ['TRIMMING', 'COMPONENT'].includes(p.manufacturingSpecs?.productType)).map(p => ({ id: p.id, name: p.itemName }));
       return [];
   };
 
@@ -1152,12 +1150,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                 <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>ASSOC. MESH (VISIBILITY)</div>
                                                 
                                                 {optionsToMap.map(opt => {
-                                                    const partObj = libraryParts.find(p => p.id === opt.id) || dynamicAssets.find(a => a.id === opt.id) || globalFinishes.find(f => f.id === opt.id) || outsourceFinishes.find(f => f.id === opt.id);
+                                                    const partObj = allApprovedDesigns.find(p => p.id === opt.id) || dynamicAssets.find(a => a.id === opt.id) || globalFinishes.find(f => f.id === opt.id) || outsourceFinishes.find(f => f.id === opt.id);
                                                     let bp = 0;
                                                     if (partObj) {
                                                         if (partObj.manufacturingSpecs?.basePrice) bp = parseFloat(partObj.manufacturingSpecs.basePrice);
                                                         else if (partObj.basePrice) bp = parseFloat(partObj.basePrice);
                                                     }
+                                                    if (isNaN(bp)) bp = 0;
 
                                                     return (
                                                         <React.Fragment key={opt.id}>
