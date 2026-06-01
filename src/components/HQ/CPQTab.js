@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, doc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where } from "firebase/firestore";
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
-import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
+import { useGLTF, OrbitControls, Bounds, Environment, ContactShadows } from '@react-three/drei';
 
 const globalTextureCache = {};
 
 const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
-    // This tells the app to download Google's official decoder to unzip the file
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
     
@@ -30,7 +29,6 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                 if (child.isMesh && child.userData.originalMaterial) {
                     const meshName = child.name.toLowerCase();
 
-                    // --- VISIBILITY LOGIC ---
                     let isVis = child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
@@ -42,7 +40,6 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     }
                     child.visible = isVis;
 
-                    // --- TEXTURE LOGIC ---
                     let matchedTexUrl = null;
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
                         for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
@@ -309,6 +306,16 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       }
   };
 
+  const handleDeleteDraft = async (id) => {
+      if (window.confirm("Permanently delete this draft from the system?")) {
+          try {
+              await deleteDoc(doc(db, "cpq_drafts", id));
+          } catch (err) {
+              console.error(err);
+          }
+      }
+  };
+
   useEffect(() => {
       if (!cpqRules || cpqRules.length === 0) return;
       let newFlags = { disabledSteps: [], warnings: [] };
@@ -510,6 +517,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       const jobId = `QUOTE-${Date.now()}`;
       const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
       
+      const draftObj = activeDraftId ? previousDrafts.find(d => d.id === activeDraftId) : null;
+      const engineeringNotes = draftObj ? draftObj.specs?.engineeringNotes : null;
+
       const payload = {
           jobId: jobId, brandId: activeBrand, status: 'CONFIGURED',
           customer: { id: jobData.customerId, name: customerName },
@@ -522,8 +532,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               configuration: dynamicConfigParams,
               quantities: stepQuantities, 
               dimensions: dimensionInputs,
-              appliedRules: engineFlags.warnings 
+              appliedRules: engineFlags.warnings,
+              breakdown: pricingBreakdown 
           },
+          engineeringNotes: engineeringNotes, 
           dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, sewing: false, packing: false },
           dateSaved: new Date().toISOString().split('T')[0], author: currentUser, createdAt: serverTimestamp()
       };
@@ -531,7 +543,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       try {
           await setDoc(doc(db, "jobs", jobId), payload);
           
-          await generateFactoryRouter(payload);
+          if (activeDraftId) {
+              await deleteDoc(doc(db, "cpq_drafts", activeDraftId));
+          }
+
+          await generateOrderDocuments(payload);
 
           if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
               alert(`✅ COMPLEX QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
@@ -540,47 +556,44 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           }
           setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); 
           setActiveAssemblyId(""); setShowCheckoutModal(false); setJobData({ customerId: '', jobName: '', sidemark: '' });
+          setActiveDraftId(null);
       } catch (err) { console.error(err); alert("Failed to save quote."); }
   };
 
-  const generateFactoryRouter = async (job) => {
-      const printWindow = window.open('', '_blank', 'width=800,height=900');
-      let dimensionHtml = '';
+  const generateOrderDocuments = async (job) => {
+      const printWindow = window.open('', '_blank');
       
-      if (job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0) {
-          dimensionHtml = `
-              <div style="margin-top: 20px; border: 2px dashed #000; padding: 15px; background: #fff3cd;">
-                  <h4 style="margin: 0 0 10px 0; color: #856404; text-transform: uppercase;">⚠️ DIMENSIONAL SHOP CUT SHEET</h4>
-                  <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-                      ${Object.entries(job.cpqData.dimensions).map(([stepId, dims]) => `
-                          <tr><td colspan="2" style="padding: 10px; font-weight: bold; background: #e9ecef; border-top: 2px solid #000;">${activeFlow?.steps?.find(s => s.id === stepId)?.title || stepId}</td></tr>
-                          
-                          ${Object.entries(dims).filter(([k,v]) => !k.startsWith('calc_') && v !== '').map(([key, val]) => `
-                              <tr>
-                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee;">INPUT: ${key.toUpperCase()}</td>
-                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee;">${val}</td>
-                              </tr>
-                          `).join('')}
-
-                          ${dims.calc_cutLength ? `
-                              <tr>
-                                  <td style="padding: 8px; border-bottom: 1px dashed #d9534f; color: #d9534f; font-weight: bold; font-size: 14px;">SHOP RAW CUT LENGTH</td>
-                                  <td style="padding: 8px; border-bottom: 1px dashed #d9534f; font-weight: bold; font-size: 16px; color: #d9534f;">${dims.calc_cutLength}"</td>
-                              </tr>
-                          ` : ''}
-                          ${dims.calc_o2o ? `
-                              <tr>
-                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee; font-weight: bold;">FINISHED O2O</td>
-                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee; font-weight: bold;">${dims.calc_o2o}"</td>
-                              </tr>
-                          ` : ''}
-                          ${dims.calc_c2c ? `
-                              <tr>
-                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee; font-weight: bold;">FINISHED C2C</td>
-                                  <td style="padding: 4px 8px; border-bottom: 1px solid #eee; font-weight: bold;">${dims.calc_c2c}"</td>
-                              </tr>
-                          ` : ''}
-                      `).join('')}
+      let mathSection = '';
+      if (job.engineeringNotes) {
+          const notes = job.engineeringNotes;
+          mathSection = `
+              <div class="math-block">
+                  <h4 style="margin:0 0 10px 0; color: #1e7e34; text-transform: uppercase;">ENGINEERING DIMENSIONS</h4>
+                  <table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 10px;">
+                      <tr>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; color: #1e7e34;">System O2O (Outside-to-Outside):</td>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.systemO2O ? notes.systemO2O.toFixed(2) + '"' : 'N/A'}</td>
+                      </tr>
+                      <tr>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; color: #007bff;">System C2C (Center-to-Center):</td>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.systemC2C ? notes.systemC2C.toFixed(2) + '"' : 'N/A'}</td>
+                      </tr>
+                      ${notes.shape === 'MITERED' ? `
+                      <tr>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee;">Left Wall C2C:</td>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole1 ? notes.pole1.toFixed(2) + '"' : 'N/A'}</td>
+                      </tr>
+                      ` : ''}
+                      <tr>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee;">${notes.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</td>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole2 ? notes.pole2.toFixed(2) + '"' : 'N/A'}</td>
+                      </tr>
+                      ${notes.shape === 'MITERED' ? `
+                      <tr>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee;">Right Wall C2C:</td>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole3 ? notes.pole3.toFixed(2) + '"' : 'N/A'}</td>
+                      </tr>
+                      ` : ''}
                   </table>
               </div>
           `;
@@ -589,44 +602,122 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       const html = `
         <html>
           <head>
-            <title>ROUTER_${job.jobId}</title>
+            <title>${job.jobId} - Documents</title>
             <style>
-              body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #000; max-width: 800px; margin: 0 auto; }
-              .header { display: flex; justify-content: space-between; border-bottom: 4px solid #000; padding-bottom: 20px; margin-bottom: 30px; }
-              .brand { font-size: 32px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; }
-              .doc-type { font-size: 24px; color: #fff; background: #000; padding: 5px 15px; text-transform: uppercase; }
-              .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 40px; background: #f8f9fa; padding: 20px; border: 2px solid #000; }
-              .label { font-size: 12px; font-weight: bold; color: #666; text-transform: uppercase; }
-              .val { font-size: 18px; font-weight: bold; }
-              .specs { margin-bottom: 40px; border: 2px solid #000; }
-              .spec-header { background: #000; color: #fff; padding: 10px 15px; font-weight: bold; text-transform: uppercase; }
-              .spec-row { display: flex; justify-content: space-between; padding: 12px 15px; border-bottom: 1px solid #ccc; font-size: 14px; }
+              body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #000; margin: 0; padding: 0; background: #525659; }
+              .page { background: #fff; width: 8.5in; min-height: 11in; padding: 0.5in; margin: 0.25in auto; box-sizing: border-box; box-shadow: 0 0 10px rgba(0,0,0,0.5); position: relative; }
+              @media print {
+                  body { background: #fff; }
+                  .page { margin: 0; border: none; box-shadow: none; width: 100%; min-height: auto; page-break-after: always; padding: 0.25in; }
+              }
+              .header { display: flex; justify-content: space-between; border-bottom: 4px solid #000; padding-bottom: 15px; margin-bottom: 20px; align-items: flex-end; }
+              .brand { font-size: 32px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; line-height: 1; }
+              .doc-type { font-size: 20px; color: #fff; background: #000; padding: 6px 15px; text-transform: uppercase; font-weight: bold; }
+              .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; background: #f8f9fa; padding: 15px; border: 2px solid #000; }
+              .label { font-size: 11px; font-weight: bold; color: #666; text-transform: uppercase; }
+              .val { font-size: 16px; font-weight: bold; }
+              
+              .split-layout { display: flex; gap: 20px; margin-bottom: 30px; align-items: flex-start; }
+              .column-left { flex: 1.5; }
+              .column-right { flex: 1; }
+
+              .section-box { border: 2px solid #000; margin-bottom: 20px; }
+              .section-header { background: #000; color: #fff; padding: 8px 12px; font-weight: bold; text-transform: uppercase; font-size: 14px; }
+              .row { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #ccc; font-size: 14px; }
+              .row:last-child { border-bottom: none; }
+              .row.alt { background: #f4f4f4; }
+              .row.total { background: #eafaf1; font-weight: bold; font-size: 18px; border-top: 2px solid #000; border-bottom: none; }
+              
+              .math-block { background: #fff3cd; border: 2px dashed #ffc107; padding: 15px; }
+              
+              .signature-block { margin-top: 40px; display: flex; justify-content: space-between; gap: 20px; }
+              .sig-line { flex: 1; border-top: 2px solid #000; padding-top: 5px; font-size: 12px; font-weight: bold; color: #666; text-align: center; }
             </style>
           </head>
           <body>
-            <div class="header">
-              <div class="brand">${activeBrand}</div>
-              <div class="doc-type">FACTORY ROUTER</div>
+            
+            <div class="page">
+                <div class="header">
+                  <div class="brand">${activeBrand}</div>
+                  <div class="doc-type">OFFICIAL QUOTATION</div>
+                </div>
+                
+                <div class="meta-grid">
+                  <div><span class="label">Project / Sidemark:</span><br/><span class="val">${job.sidemark}</span></div>
+                  <div><span class="label">Quote ID:</span><br/><span class="val">${job.jobId}</span></div>
+                  <div><span class="label">Prepared For:</span><br/><span class="val">${job.customer?.name}</span></div>
+                  <div><span class="label">Date:</span><br/><span class="val">${job.dateSaved}</span></div>
+                </div>
+
+                <div class="split-layout">
+                    <div class="column-left">
+                        <div class="section-box">
+                            <div class="section-header">CONFIGURATION DETAILS</div>
+                            ${job.cpqData?.breakdown?.map((item, i) => `
+                                <div class="row ${i % 2 === 0 ? 'alt' : ''}">
+                                    <span style="flex: 3;">${item.name}</span>
+                                    <span style="flex: 1; text-align: center;">QTY: ${item.qty}</span>
+                                    <span style="flex: 1; text-align: right; font-weight: bold;">$${item.total.toFixed(2)}</span>
+                                </div>
+                            `).join('')}
+                            <div class="row total">
+                                <span style="flex: 4; text-align: right; padding-right: 15px;">TOTAL CONFIGURED PRICE:</span>
+                                <span style="flex: 1; text-align: right; color: #1e7e34;">$${job.cpqData?.totalPrice?.toFixed(2)}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="column-right">
+                        ${mathSection}
+                    </div>
+                </div>
+
+                <div class="signature-block">
+                    <div class="sig-line">CLIENT APPROVAL SIGNATURE</div>
+                    <div class="sig-line" style="max-width: 200px;">DATE</div>
+                </div>
             </div>
-            <div class="meta-grid">
-              <div><span class="label">Sidemark / Project:</span><br/><span class="val">${job.sidemark}</span></div>
-              <div><span class="label">Job ID:</span><br/><span class="val">${job.jobId}</span></div>
-              <div><span class="label">Customer:</span><br/><span class="val">${job.customer?.name}</span></div>
-              <div><span class="label">Date Engineered:</span><br/><span class="val">${job.dateSaved}</span></div>
+
+            <div class="page">
+                <div class="header">
+                  <div class="brand">${activeBrand}</div>
+                  <div class="doc-type" style="background:#d9534f;">FACTORY ROUTER</div>
+                </div>
+                
+                <div class="meta-grid">
+                  <div><span class="label">Project / Sidemark:</span><br/><span class="val">${job.sidemark}</span></div>
+                  <div><span class="label">Work Order / Ref ID:</span><br/><span class="val">${job.jobId}</span></div>
+                  <div><span class="label">Customer:</span><br/><span class="val">${job.customer?.name}</span></div>
+                  <div><span class="label">Date Engineered:</span><br/><span class="val">${job.dateSaved}</span></div>
+                </div>
+
+                <div class="split-layout">
+                    <div class="column-left">
+                        <div class="section-box">
+                            <div class="section-header" style="background:#d9534f;">BILL OF MATERIALS (BOM)</div>
+                            <div class="row" style="background:#eee; font-weight:bold;">
+                                <span style="flex: 3;">COMPONENT / MATERIAL</span>
+                                <span style="flex: 1; text-align: right;">REQ. QTY</span>
+                            </div>
+                            ${job.cpqData?.breakdown?.map((item, i) => `
+                                <div class="row ${i % 2 === 0 ? 'alt' : ''}">
+                                    <span style="flex: 3; font-weight: bold;">${item.name}</span>
+                                    <span style="flex: 1; text-align: right; font-size: 16px; font-weight: bold;">${item.qty}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    <div class="column-right">
+                        ${mathSection}
+                    </div>
+                </div>
+                <div style="text-align:center; color:#999; font-size: 12px; margin-top: 50px;">*** END OF ROUTER ***</div>
             </div>
-            <div class="specs">
-              <div class="spec-header">BILL OF MATERIALS (BOM)</div>
-              <div class="spec-row" style="background:#eee; font-weight:bold;"><span>COMPONENT</span><span>QTY</span></div>
-              ${Object.entries(job.cpqData.configuration).map(([stepId, valueId]) => {
-                  const step = activeFlow?.steps?.find(s => s.id === stepId);
-                  const qty = job.cpqData.quantities[stepId] || 1;
-                  const allParts = [...libraryParts, ...liveAssemblies];
-                  const partObj = allParts.find(p => p.id === valueId) || dynamicAssets.find(a => a.id === valueId) || globalFinishes.find(f => f.id === valueId) || outsourceFinishes.find(f => f.id === valueId);
-                  return `<div class="spec-row"><span>${step?.title}: <strong>${partObj?.itemName || partObj?.name || valueId}</strong></span><span>${qty}</span></div>`;
-              }).join('')}
-            </div>
-            ${dimensionHtml}
-            <script> window.onload = function() { window.print(); } </script>
+            
+            <script> 
+                window.onload = function() { 
+                    setTimeout(() => window.print(), 500); 
+                } 
+            </script>
           </body>
         </html>
       `;
@@ -1139,10 +1230,13 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                     {previousDrafts.length === 0 ? <div style={{ color: '#666', fontStyle: 'italic' }}>No drafts pushed from Vision Tab yet.</div> : (
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                             {previousDrafts.map(draft => (
-                                <div key={draft.id} onClick={() => handleResumeDraft(draft.id)} style={{ background: '#fff', border: '2px solid #000', padding: '15px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '8px', transition: '0.2s', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                                <div key={draft.id} style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px', transition: '0.2s', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                         <span style={{ fontWeight: 'bold', color: '#007bff' }}>DRAFT: {draft.category}</span>
-                                        <span style={{ fontSize: '0.7rem', color: '#fff', background: '#d9534f', padding: '2px 5px' }}>RESUME</span>
+                                        <div style={{ display: 'flex', gap: '10px' }}>
+                                            <button onClick={() => handleDeleteDraft(draft.id)} style={{ background: '#fff', color: '#d9534f', border: '1px solid #d9534f', padding: '2px 6px', fontSize: '0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>🗑️ DEL</button>
+                                            <button onClick={() => handleResumeDraft(draft.id)} style={{ background: '#28a745', color: '#fff', border: 'none', padding: '2px 8px', fontSize: '0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>RESUME ➔</button>
+                                        </div>
                                     </div>
                                     <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Generated by: {draft.author}</div>
                                     <div style={{ fontSize: '0.75rem', color: '#666' }}>{new Date(draft.createdAt?.seconds * 1000).toLocaleString()}</div>
