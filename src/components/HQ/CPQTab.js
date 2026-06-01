@@ -30,7 +30,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                 if (child.isMesh && child.userData.originalMaterial) {
                     const meshName = child.name.toLowerCase();
 
-                    // --- VISIBILITY LOGIC (UPGRADED FOR BLENDER .001 DUPLICATES) ---
+                    // --- VISIBILITY LOGIC ---
                     let isVis = child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
@@ -42,7 +42,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     }
                     child.visible = isVis;
 
-                    // --- TEXTURE LOGIC (UPGRADED FOR BLENDER .001 DUPLICATES) ---
+                    // --- TEXTURE LOGIC ---
                     let matchedTexUrl = null;
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
                         for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
@@ -265,12 +265,22 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
       let targetFlow = null;
       if (draft.category === 'PILLOW') targetFlow = cpqFlows.find(f => f.name.includes("PILLOW"));
-      if (draft.category === 'HARDWARE') targetFlow = cpqFlows.find(f => f.name.includes("HARDWARE"));
+      if (draft.category === 'HARDWARE') {
+          targetFlow = cpqFlows.find(f => f.id === draft.cpqFlowId || f.id === draft.flowId || f.id === draft.linkedCpqFlowId);
+          if (!targetFlow) targetFlow = cpqFlows.find(f => f.name.includes("HARDWARE"));
+      }
 
       if (!targetFlow) return alert("Cannot resume draft: No matching CPQ flow setup for this category in Tab 10.");
 
       setActiveFlowId(targetFlow.id);
       setActiveDraftId(draft.id);
+      
+      // Auto-populate Job Data from Draft
+      setJobData(prev => ({
+          ...prev,
+          jobName: draft.jobName || prev.jobName,
+          sidemark: draft.sidemark || prev.sidemark
+      }));
       
       const translatedParams = {};
       targetFlow.steps.forEach(step => {
@@ -283,12 +293,19 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               if (step.title.toLowerCase().includes("stitch")) translatedParams[step.id] = draft.specs?.stitch;
               if (step.title.toLowerCase().includes("seam") && draft.specs?.seamCount) translatedParams[step.id] = draft.specs.seamCount;
           }
+          // Hardware intentionally bypassed to prevent messy auto-population.
+          // Hardware will use the sticky note for clean manual entry.
       });
 
       setDynamicConfigParams(translatedParams);
       setShowCloneModal(false);
       setCurrentStepIndex(0);
-      alert("Draft visual data translated and mapped to CPQ Flow!");
+      
+      if (draft.category === 'HARDWARE') {
+          alert("Hardware Draft Loaded!\n\nPlease reference the yellow Post-It note in the viewer to manually enter your quantities and fee components.");
+      } else {
+          alert("Draft visual data translated and mapped to CPQ Flow!");
+      }
   };
 
   useEffect(() => {
@@ -935,31 +952,42 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           </div>
                       )}
                       
+                      {/* --- STATIC HARDWARE POST-IT OVERLAY --- */}
                       {activeDraftId && previousDrafts.find(d => d.id === activeDraftId)?.specs?.engineeringNotes && (
                           <div style={{
-                              position: 'absolute', bottom: '20px', left: '20px', width: '220px',
-                              background: '#fffcd6', padding: '15px', boxShadow: '3px 3px 10px rgba(0,0,0,0.3)',
-                              transform: 'rotate(-2deg)', border: '1px solid #e3e4a3', zIndex: 100,
-                              color: '#333'
+                              position: 'absolute', top: '20px', left: '20px', width: '260px',
+                              background: '#ffeb3b', padding: '15px', boxShadow: '5px 5px 15px rgba(0,0,0,0.3)',
+                              transform: 'rotate(2deg)', border: '1px solid #d4b106', zIndex: 100,
+                              color: '#333', fontFamily: 'monospace'
                           }}>
-                              <div style={{ fontWeight: 'bold', borderBottom: '1px solid #ccc', paddingBottom: '5px', marginBottom: '10px', fontSize: '0.8rem', color: '#007bff' }}>
+                              <div style={{ fontWeight: 'bold', borderBottom: '2px dashed #d4b106', paddingBottom: '5px', marginBottom: '10px', fontSize: '1rem', color: '#000', textAlign: 'center' }}>
                                   📌 ENGINEERING SPECS
+                                  <div style={{fontSize: '0.65rem', fontWeight: 'normal', color: '#d9534f'}}>MANUAL ENTRY REQUIRED</div>
                               </div>
                               {(() => {
                                   const draft = previousDrafts.find(d => d.id === activeDraftId);
                                   const notes = draft.specs.engineeringNotes;
                                   return (
-                                      <div style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '5px', fontFamily: 'monospace' }}>
-                                          {draft.jobName && <div><strong>JOB:</strong> {draft.jobName}</div>}
-                                          {draft.sidemark && <div><strong>MARK:</strong> {draft.sidemark}</div>}
-                                          <div style={{ marginTop: '5px', color: '#1e7e34' }}><strong>POLE:</strong> {notes.poleFeetQty} FT</div>
-                                          {notes.qtyBrackets > 0 && <div><strong>BRACKETS:</strong> {notes.qtyBrackets}</div>}
-                                          {notes.recRings > 0 && <div><strong>RINGS:</strong> {notes.recRings}</div>}
-                                          {notes.qtyFinials > 0 && <div><strong>FINIALS:</strong> {notes.qtyFinials}</div>}
-                                          {notes.qtySplices > 0 && <div style={{ color: '#d9534f' }}><strong>SPLICES:</strong> {notes.qtySplices}</div>}
-                                          {notes.qtyMiters > 0 && <div style={{ color: '#d9534f' }}><strong>MITERS:</strong> {notes.qtyMiters}</div>}
-                                          {notes.qtyBends > 0 && <div style={{ color: '#d9534f' }}><strong>BENDS:</strong> {notes.qtyBends}</div>}
-                                          {notes.qtyMiterReturns > 0 && <div style={{ color: '#d9534f' }}><strong>MITER RTN:</strong> {notes.qtyMiterReturns}</div>}
+                                      <div style={{ fontSize: '0.85rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                          {draft.jobName && <div><strong style={{color:'#666'}}>JOB:</strong> {draft.jobName}</div>}
+                                          {draft.sidemark && <div><strong style={{color:'#666'}}>MARK:</strong> {draft.sidemark}</div>}
+                                          
+                                          <div style={{ background: '#fff9c4', padding: '8px', border: '1px solid #d4b106', marginTop: '5px' }}>
+                                              <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '4px' }}>POLE CUT: {notes.poleFeetQty} FT</div>
+                                              {notes.qtyBrackets > 0 && <div>BRACKETS: {notes.qtyBrackets}</div>}
+                                              {notes.recRings > 0 && <div>RINGS (Rec): {notes.recRings}</div>}
+                                              {notes.qtyFinials > 0 && <div>FINIALS: {notes.qtyFinials}</div>}
+                                          </div>
+
+                                          {(notes.qtySplices > 0 || notes.qtyBends > 0 || notes.qtyMiters > 0 || notes.qtyMiterReturns > 0) && (
+                                              <div style={{ background: '#ffcdd2', padding: '8px', border: '1px solid #d9534f' }}>
+                                                  <strong style={{ color: '#d9534f', display: 'block', marginBottom: '3px' }}>⚠️ FEES TO ADD:</strong>
+                                                  {notes.qtySplices > 0 && <div style={{fontWeight:'bold'}}>• SPLICE FEE: Qty {notes.qtySplices}</div>}
+                                                  {notes.qtyBends > 0 && <div style={{fontWeight:'bold'}}>• BENT RETURN FEE: Qty {notes.qtyBends}</div>}
+                                                  {notes.qtyMiters > 0 && <div style={{fontWeight:'bold'}}>• MITER CUT FEE: Qty {notes.qtyMiters}</div>}
+                                                  {notes.qtyMiterReturns > 0 && <div style={{fontWeight:'bold'}}>• MITER RETURN FEE: Qty {notes.qtyMiterReturns}</div>}
+                                              </div>
+                                          )}
                                       </div>
                                   )
                               })()}
