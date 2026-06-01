@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, doc, setDoc, serverTimestamp, query, where, getDoc } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
-import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
+import { useGLTF, OrbitControls, Bounds, Environment, ContactShadows } from '@react-three/drei';
 
 const globalTextureCache = {};
 
@@ -137,7 +137,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   
   const [pricing, setPricing] = useState({ base: 0, finalPrice: 0 });
   const [jobData, setJobData] = useState({ customerId: '', jobName: '', sidemark: '' });
+  
+  // 🚀 RESTORED: Standard UI Modals
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [showCloneModal, setShowCloneModal] = useState(false);
+  
   const [virtualFeeSteps, setVirtualFeeSteps] = useState([]);
 
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
@@ -223,6 +227,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
   useEffect(() => {
       if (!activeFlow) return;
+      
       setStepQuantities(prev => {
           const updates = { ...prev };
           let changed = false;
@@ -236,6 +241,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       });
   }, [activeFlow]);
 
+  // 🚀 FIXED: The variable is exactly activeStep, matching the JSX flawlessly.
   const activeStep = allActiveSteps[currentStepIndex];
   const availableProductTypes = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.productType).filter(Boolean))];
 
@@ -269,6 +275,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (step.allowedOptions && step.allowedOptions.length > 0) {
           return options.filter(opt => step.allowedOptions.includes(opt.id));
       }
+
       return options;
   };
 
@@ -314,36 +321,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
       const newVirtualSteps = [];
       const quantities = draft.specs?.quantities || draft.cpqData?.quantities || {};
-
-      if (quantities) {
-          const createVirtualStep = (feeKey, title, dataSourceType) => {
-              if (quantities[feeKey] > 0) {
-                  const virtualId = `VIRTUAL_FEE_${feeKey.toUpperCase()}`;
-                  newVirtualSteps.push({
-                      id: virtualId,
-                      title: title,
-                      type: 'READ_ONLY_FEE',
-                      isVirtual: true,
-                      qty: quantities[feeKey]
-                  });
-                  const feeItem = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === dataSourceType);
-                  if (feeItem) {
-                      translatedParams[virtualId] = feeItem.id;
-                  }
-              }
-          };
-
-          createVirtualStep('splice', 'Appended Splice Fee', 'SPLICE');
-          createVirtualStep('miter', 'Appended Miter Cut Fee', 'MITER_CUT');
-          createVirtualStep('bend', 'Appended Bent Return Fee', 'BENT_RETURN');
-          createVirtualStep('miterReturn', 'Appended Miter Return Fee', 'MITER_RETURN');
-          createVirtualStep('customProj', 'Appended Custom Proj Setup', 'CUSTOM_PROJ');
-      }
-
-      setVirtualFeeSteps(newVirtualSteps);
-      setDynamicConfigParams(translatedParams);
-      
       let initialQuantities = {};
+
       if (draft.specs?.engineeringNotes) {
           const notes = draft.specs.engineeringNotes;
           (targetFlow.steps || []).forEach(step => {
@@ -354,18 +333,40 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               else if (t.includes('finial')) initialQuantities[step.id] = notes.qtyFinials || 1;
               else initialQuantities[step.id] = 1;
           });
-      } else if (draft.specs?.quantities || draft.cpqData?.quantities) {
-          initialQuantities = draft.specs?.quantities || draft.cpqData?.quantities;
+
+          // Build Virtual Steps for Fees
+          const createVirtualStep = (feeKey, title, dataSourceType) => {
+              if (notes[feeKey] > 0) {
+                  const virtualId = `VIRTUAL_FEE_${feeKey.toUpperCase()}`;
+                  newVirtualSteps.push({
+                      id: virtualId, title: title, type: 'READ_ONLY_FEE', isVirtual: true, qty: notes[feeKey]
+                  });
+                  const feeItem = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === dataSourceType);
+                  if (feeItem) translatedParams[virtualId] = feeItem.id;
+              }
+          };
+
+          createVirtualStep('qtySplices', 'Appended Splice Fee', 'SPLICE');
+          createVirtualStep('qtyMiters', 'Appended Miter Cut Fee', 'MITER_CUT');
+          createVirtualStep('qtyBends', 'Appended Bent Return Fee', 'BENT_RETURN');
+          createVirtualStep('qtyMiterReturns', 'Appended Miter Return Fee', 'MITER_RETURN');
+          createVirtualStep('qtyCustomProjBrackets', 'Appended Custom Proj Setup', 'CUSTOM_PROJ');
+
+      } else if (quantities) {
+          initialQuantities = quantities;
       }
 
+      setVirtualFeeSteps(newVirtualSteps);
+      setDynamicConfigParams(translatedParams);
       setStepQuantities(initialQuantities);
       
       if (draft.cpqData?.dimensions || draft.spatialData) {
           setDimensionInputs(draft.cpqData?.dimensions || draft.spatialData);
       }
 
+      setShowCloneModal(false);
       setCurrentStepIndex(0);
-      alert("Engineering Data Loaded! Please follow the Post-It Note on the left to complete your selections.");
+      alert("Engineering Data Loaded! You can now adjust options or modify quantities below.");
   };
 
   useEffect(() => {
@@ -441,12 +442,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const currentTotal = useMemo(() => {
       if (!activeFlow) return 0;
       let total = parseFloat(activeFlow.basePrice) || 0;
-      const quantities = stepQuantities; 
-
+      
       allActiveSteps.forEach(step => {
           const selectedValueId = dynamicConfigParams[step.id];
           if (selectedValueId || step.type === 'DIMENSIONS') {
-              let qtyMultiplier = step.isVirtual ? step.qty : (quantities[step.id] !== undefined ? quantities[step.id] : 1);
+              let qtyMultiplier = step.isVirtual ? step.qty : (stepQuantities[step.id] !== undefined ? stepQuantities[step.id] : 1);
 
               if (step.priceOverride) {
                   total += parseFloat(step.priceOverride) * qtyMultiplier;
@@ -511,18 +511,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       const jobId = `QUOTE-${Date.now()}`;
       const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
       
-      const draftData = activeDraftId ? previousDrafts.find(d => d.id === activeDraftId) : null;
-      let fullQuantities = { ...stepQuantities };
-      
-      if (draftData?.specs?.engineeringNotes) {
-          const notes = draftData.specs.engineeringNotes;
-          if (notes.qtySplices > 0) fullQuantities['VIRTUAL_SPLICE'] = notes.qtySplices;
-          if (notes.qtyBends > 0) fullQuantities['VIRTUAL_BEND'] = notes.qtyBends;
-          if (notes.qtyMiters > 0) fullQuantities['VIRTUAL_MITER'] = notes.qtyMiters;
-          if (notes.qtyMiterReturns > 0) fullQuantities['VIRTUAL_MITER_RTN'] = notes.qtyMiterReturns;
-          if (notes.qtyCustomProjBrackets > 0) fullQuantities['VIRTUAL_CUSTOM_PROJ'] = notes.qtyCustomProjBrackets;
-      }
-
       const payload = {
           jobId: jobId, brandId: activeBrand, status: 'CONFIGURED',
           customer: { id: jobData.customerId, name: customerName },
@@ -533,7 +521,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           cpqData: { 
               totalPrice: pricing.finalPrice, 
               configuration: dynamicConfigParams,
-              quantities: fullQuantities, 
+              quantities: stepQuantities, 
               dimensions: dimensionInputs,
               appliedRules: engineFlags.warnings 
           },
@@ -628,7 +616,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               
               ${Object.entries(job.cpqData.configuration || {}).map(([stepId, valueId]) => {
                   const step = allActiveSteps?.find(s => s.id === stepId);
-                  if (!step) return ''; 
+                  if (!step || step.isVirtual) return ''; 
                   
                   const qty = job.cpqData.quantities[stepId] || 1;
                   const partObj = libraryParts.find(p => p.id === valueId) || dynamicAssets.find(a => a.id === valueId) || globalFinishes.find(f => f.id === valueId) || outsourceFinishes.find(f => f.id === valueId);
@@ -637,7 +625,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               
               ${Object.entries(job.cpqData.quantities || {}).map(([key, qty]) => {
                   if (key.startsWith('VIRTUAL_')) {
-                      return `<div class="spec-row"><span>AUTO-APPENDED FEE: <strong>${key.replace('VIRTUAL_', '')}</strong></span><span>${qty}</span></div>`;
+                      return `<div class="spec-row"><span>AUTO-APPENDED FEE: <strong>${key.replace('VIRTUAL_FEE_', '').replace('_', ' ')}</strong></span><span>${qty}</span></div>`;
                   }
                   return '';
               }).join('')}
@@ -742,8 +730,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
             <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>8. Configure, Price, Quote (CPQ)</h2>
             <span style={{ fontSize: '0.7rem', color: '#666' }}>PARAMETRIC PRICING & VISUALIZATION</span>
         </div>
-        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', background: '#eafaf1', padding: '10px 20px', border: '2px solid #28a745', color: '#1e7e34', boxShadow: '3px 3px 0 #28a745' }}>
-            EST. MSRP: ${pricing.finalPrice.toFixed(2)}
+        <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+            <div style={{ fontSize: '1.2rem', fontWeight: 'bold', background: '#eafaf1', padding: '10px 20px', border: '2px solid #28a745', color: '#1e7e34', boxShadow: '3px 3px 0 #28a745' }}>
+                EST. MSRP: ${pricing.finalPrice.toFixed(2)}
+            </div>
+            <button onClick={() => setShowCloneModal(true)} style={{ padding: '12px 20px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', fontSize: '1rem', boxShadow: '3px 3px 0 rgba(0,0,0,0.3)' }}>📥 RESUME DRAFT / CLONE QUOTE</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setVirtualFeeSteps([]); }} style={{ padding: '12px 20px', background: '#fff', color: '#d9534f', fontWeight: 'bold', border: '2px solid #d9534f', cursor: 'pointer', fontSize: '1rem' }}>🗑️ CLEAR</button>
         </div>
       </div>
 
@@ -786,28 +778,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                     )}
                  </div>
               </div>
-
-              {!activeFlowId && (
-                  <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                      <div style={{ padding: '10px', background: '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', textTransform: 'uppercase' }}>
-                          📥 IMPORT ENGINEERING DRAFTS
-                      </div>
-                      <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto' }}>
-                          {previousDrafts.length === 0 ? <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem' }}>No pending drafts from the Vision tab.</div> : (
-                              previousDrafts.map(draft => (
-                                  <div key={draft.id} onClick={() => handleResumeDraft(draft.id)} style={{ background: '#f8f9fa', border: '1px solid #ccc', padding: '10px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '5px', transition: '0.2s' }}>
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                          <span style={{ fontWeight: 'bold', color: '#007bff', fontSize: '0.85rem' }}>{draft.category} DRAFT</span>
-                                          <span style={{ fontSize: '0.65rem', color: '#fff', background: '#28a745', padding: '3px 6px', fontWeight: 'bold' }}>IMPORT</span>
-                                      </div>
-                                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{draft.sidemark || draft.jobName || 'Unnamed Job'}</div>
-                                      <div style={{ fontSize: '0.65rem', color: '#666' }}>{new Date(draft.createdAt?.seconds * 1000).toLocaleString()}</div>
-                                  </div>
-                              ))
-                          )}
-                      </div>
-                  </div>
-              )}
 
               {activeFlow && activeStep && (
                   <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #28a745', flex: 1 }}>
@@ -910,11 +880,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           )}
                       </div>
 
-                      {activeStep && !activeStep.isVirtual && (
+                      {!activeStep.isVirtual && (
                           <div style={{ padding: '15px', background: '#f8f9fa', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div style={{ fontSize: '0.8rem', color: '#666', lineHeight: '1.4', flex: 1, paddingRight: '15px' }}>
                                   <strong>STEP QUANTITY:</strong><br/>
-                                  <span style={{ fontSize: '0.7rem' }}>{activeStep.qtyHelperText || 'Adjust to multiply option logic (e.g. 4 rings per foot).'}</span>
+                                  <span style={{ fontSize: '0.7rem' }}>{activeStep.qtyHelperText || 'Adjust to multiply option logic.'}</span>
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                   <button onClick={() => {
@@ -1116,6 +1086,33 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                     <button onClick={handleFinalizeQuote} style={{ width: '100%', padding: '15px', background: '#28a745', color: '#fff', fontSize: '1.1rem', fontWeight: 'bold', border: '2px solid #1e7e34', cursor: 'pointer', marginTop: '10px' }}>
                         ✅ SUBMIT QUOTE TO PIPELINE
                     </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {showCloneModal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+            <div style={{ background: '#fff', border: '4px solid #000', width: '800px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
+                <div style={{ padding: '20px', background: '#000', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
+                    <h2 style={{ margin: 0, fontSize: '1.5rem', textTransform: 'uppercase' }}>📥 RESUME DRAFT / CLONE QUOTE</h2>
+                    <button onClick={() => setShowCloneModal(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '2rem', cursor: 'pointer' }}>×</button>
+                </div>
+                <div style={{ padding: '20px', flex: 1, overflowY: 'auto', background: '#f8f9fa' }}>
+                    {previousDrafts.length === 0 ? <div style={{ color: '#666', fontStyle: 'italic' }}>No drafts pushed from Vision Tab yet.</div> : (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                            {previousDrafts.map(draft => (
+                                <div key={draft.id} onClick={() => handleResumeDraft(draft.id)} style={{ background: '#fff', border: '2px solid #000', padding: '15px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '8px', transition: '0.2s', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                        <span style={{ fontWeight: 'bold', color: '#007bff' }}>DRAFT: {draft.category}</span>
+                                        <span style={{ fontSize: '0.7rem', color: '#fff', background: '#d9534f', padding: '2px 5px' }}>RESUME</span>
+                                    </div>
+                                    <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Generated by: {draft.author}</div>
+                                    <div style={{ fontSize: '0.75rem', color: '#666' }}>{new Date(draft.createdAt?.seconds * 1000).toLocaleString()}</div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
