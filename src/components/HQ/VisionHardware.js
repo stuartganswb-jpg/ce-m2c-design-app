@@ -663,10 +663,12 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   qtyBends,
                   qtyMiterReturns,
                   qtyCustomProjBrackets,
-                  rawW1: engData.w1,
-                  rawW2: engData.w2,
-                  rawW3: engData.w3,
-                  shape: engData.shape
+                  shape: engData.shape,
+                  systemO2O,
+                  systemC2C,
+                  pole1,
+                  pole2,
+                  pole3
               },
               ...dynamicConfigParams
           }, 

@@ -1009,7 +1009,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                       {/* --- STATIC HARDWARE POST-IT OVERLAY --- */}
                       {activeDraftId && previousDrafts.find(d => d.id === activeDraftId)?.specs?.engineeringNotes && (
                           <div style={{
-                              position: 'absolute', top: '20px', left: '20px', width: '260px',
+                              position: 'absolute', top: '20px', left: '20px', width: '280px',
                               background: '#ffeb3b', padding: '15px', boxShadow: '5px 5px 15px rgba(0,0,0,0.3)',
                               transform: 'rotate(2deg)', border: '1px solid #d4b106', zIndex: 100,
                               color: '#333', fontFamily: 'monospace'
@@ -1027,16 +1027,22 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                           {draft.sidemark && <div><strong style={{color:'#666'}}>MARK:</strong> {draft.sidemark}</div>}
                                           
                                           <div style={{ background: '#fff9c4', padding: '8px', border: '1px solid #d4b106', marginTop: '5px' }}>
-                                              <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '4px' }}>
-                                                  {notes.shape === 'MITERED' 
-                                                      ? `RAW DIMS: L:${notes.rawW1}" | C:${notes.rawW2}" | R:${notes.rawW3}"`
-                                                      : `RAW LENGTH: ${notes.rawW2 || 0}"`
-                                                  }
+                                              
+                                              <div style={{ color: '#000', fontSize: '0.75rem', marginBottom: '8px', borderBottom: '1px dashed #d4b106', paddingBottom: '6px' }}>
+                                                  <div style={{ color: '#1e7e34', display: 'flex', justifyContent: 'space-between' }}><span>System O2O:</span> <strong>{notes.systemO2O?.toFixed(2)}"</strong></div>
+                                                  <div style={{ color: '#007bff', display: 'flex', justifyContent: 'space-between' }}><span>System C2C:</span> <strong>{notes.systemC2C?.toFixed(2)}"</strong></div>
+                                                  
+                                                  {notes.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}><span>Left Wall C2C:</span> <strong>{notes.pole1?.toFixed(2)}"</strong></div>}
+                                                  
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: notes.shape !== 'MITERED' ? '4px' : '0' }}><span>{notes.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</span> <strong>{notes.pole2?.toFixed(2)}"</strong></div>
+                                                  
+                                                  {notes.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Right Wall C2C:</span> <strong>{notes.pole3?.toFixed(2)}"</strong></div>}
+                                              </div>
+
+                                              <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '8px', fontSize: '0.8rem', textAlign: 'center' }}>
+                                                  POLE QTY (FT) TO ENTER: {notes.poleFeetQty}
                                               </div>
                                               
-                                              {/* Fallback just in case they load a very old draft that didn't have raw dimensions */}
-                                              {notes.rawW2 === undefined && <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '4px' }}>POLE CUT: {notes.poleFeetQty} FT</div>}
-
                                               {notes.qtyBrackets > 0 && <div>BRACKETS: {notes.qtyBrackets}</div>}
                                               {notes.recRings > 0 && <div>RINGS (Rec): {notes.recRings}</div>}
                                               {notes.qtyFinials > 0 && <div>FINIALS: {notes.qtyFinials}</div>}
