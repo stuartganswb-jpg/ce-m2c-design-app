@@ -42,7 +42,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [globalLists, setGlobalLists] = useState({});
 
   const [quoteFlowId, setQuoteFlowId] = useState("");
-  const [quoteSelections, setQuoteSelections] = useState({ collection: '' });
+  const [quoteSelections, setQuoteSelections] = useState({ 
+      collection: '', 
+      poleId: '', poleFinishId: '', 
+      bracketFinishId: '', 
+      finialId: '', finialFinishId: '', 
+      ringId: '', ringFinishId: '' 
+  });
+  
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
   const [stepQuantities, setStepQuantities] = useState({}); 
   const [flowPins, setFlowPins] = useState([]);
@@ -85,7 +92,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return cpqFlows.find(f => f.id === quoteFlowId);
   }, [quoteFlowId, cpqFlows]);
 
-  // 🚀 RIGOROUS CATEGORY SNIFFER
   const getStepCategory = (step) => {
       if (!step) return '';
       const t = (step.title || '').toLowerCase();
@@ -100,20 +106,33 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return 'OTHER';
   };
 
-  // 🚀 COMPONENT TARGETING LOGIC
   const getStepForCategory = (cat) => {
       if (!activeFlow) return null;
-      return activeFlow.steps.find(s => getStepCategory(s) === cat);
+      // 🚀 FIXED: Added strict OR [] array fallbacks to prevent undefined iteration crashes
+      return (activeFlow.steps || []).find(s => {
+          const isFinish = (s.dataSource || '').toLowerCase() === 'master_finishes' || (s.title || '').toLowerCase().includes('finish');
+          if (isFinish) return false; 
+          return getStepCategory(s) === cat;
+      });
   };
 
   const getFinishStep = (compName) => {
       if (!activeFlow) return null;
-      return activeFlow.steps.find(s => {
-          const isFinish = getStepCategory(s) === 'FINISH';
-          if (!isFinish) return false;
+      const finishSteps = (activeFlow.steps || []).filter(s => {
           const t = (s.title || '').toLowerCase();
-          return t.includes(compName.toLowerCase()) || (compName === 'pole' && t.includes('tube'));
+          const ds = (s.dataSource || '').toLowerCase();
+          return ds === 'master_finishes' || t.includes('finish') || t.includes('color') || t.includes('patina');
       });
+      if (finishSteps.length === 0) return null;
+      
+      const specific = finishSteps.find(s => s.title.toLowerCase().includes(compName.toLowerCase()));
+      if (specific) return specific;
+      
+      const generic = finishSteps.find(s => {
+          const t = s.title.toLowerCase();
+          return !t.includes('pole') && !t.includes('tube') && !t.includes('bracket') && !t.includes('finial') && !t.includes('ring');
+      });
+      return generic || finishSteps[0];
   };
 
   const poleStep = getStepForCategory('POLE');
@@ -167,7 +186,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (detectedProj && !engData.bracketId) setIsCustomProj(false);
   }, [activeFlow, flowPins, libraryParts]);
 
-  // Sync Engineering Bracket to CPQ Step
   useEffect(() => {
       if (bracketStep && engData.bracketId && dynamicConfigParams[bracketStep.id] !== engData.bracketId) {
           setDynamicConfigParams(prev => ({ ...prev, [bracketStep.id]: engData.bracketId }));
@@ -199,6 +217,63 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
   const safeProj = parseFloat(engData.proj) || 0;
 
+  const getNativeOptions = (categoryString) => {
+      const step = getStepForCategory(categoryString);
+
+      return libraryParts.filter(p => {
+          if (p.manufacturingSpecs?.customData?.feeType) return false;
+          
+          const pType = (p.manufacturingSpecs?.productType || p.productType || '').toUpperCase();
+          if (!pType.includes(categoryString)) return false;
+
+          const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
+          const upperCollections = collectionsArray.map(c => c.toUpperCase());
+          const selCollection = (quoteSelections.collection || "").toUpperCase();
+          
+          if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
+              if (!upperCollections.includes('N/A')) return false; 
+          }
+
+          if (step && step.allowedOptions?.length > 0) {
+              if (!step.allowedOptions.includes(p.id)) return false;
+          }
+
+          return true;
+      });
+  };
+
+  const getFinishOptions = (compName) => {
+      const step = getFinishStep(compName);
+      const allF = [...globalFinishes, ...outsourceFinishes].map(f => ({ id: f.id, name: f.name, code: f.code }));
+      
+      if (step && step.allowedOptions?.length > 0) {
+          return allF.filter(f => step.allowedOptions.includes(f.id));
+      }
+      return allF;
+  };
+
+  const allBrackets = useMemo(() => {
+      const step = getStepForCategory('BRACKET');
+      return libraryParts.filter(p => {
+          const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
+          if (!pt.includes('BRACKET')) return false;
+
+          const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
+          const upperCollections = collectionsArray.map(c => c.toUpperCase());
+          const selCollection = (quoteSelections.collection || "").toUpperCase();
+          
+          if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
+              if (!upperCollections.includes('N/A')) return false; 
+          }
+
+          if (step && step.allowedOptions?.length > 0) {
+              if (!step.allowedOptions.includes(p.id)) return false;
+          }
+
+          return true;
+      });
+  }, [libraryParts, quoteSelections.collection, activeFlow]);
+
   const getOptionsForStep = (step) => {
       if (!step || !step.dataSource) return [];
       let options = [];
@@ -226,11 +301,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               }
 
               return true;
-          }).map(p => ({
-              id: p.id,
-              itemName: p.itemName,
-              code: p.legacyErpId
-          }));
+          }).map(p => ({ id: p.id, itemName: p.itemName, code: p.legacyErpId }));
       } else if (step.dataSource === 'master_finishes') {
           const inHouse = globalFinishes.map(f => ({ id: f.id, itemName: f.name, code: f.code }));
           const outsource = outsourceFinishes.map(f => ({ id: f.id, itemName: f.name }));
@@ -249,26 +320,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       }
       return options;
   };
-
-  const allBrackets = useMemo(() => {
-      const step = getStepForCategory('BRACKET');
-      return libraryParts.filter(p => {
-          const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
-          if (!pt.includes('BRACKET')) return false;
-
-          const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
-          const upperCollections = collectionsArray.map(c => c.toUpperCase());
-          const selCollection = (quoteSelections.collection || "").toUpperCase();
-          
-          if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
-              if (!upperCollections.includes('N/A')) return false; 
-          }
-          if (step && step.allowedOptions?.length > 0) {
-              if (!step.allowedOptions.includes(p.id)) return false;
-          }
-          return true;
-      });
-  }, [libraryParts, quoteSelections.collection, activeFlow]);
 
   const rad = (deg) => (deg * Math.PI) / 180;
   const S = 3.5; 
@@ -544,11 +595,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   };
 
   const handlePushToCPQ = async () => {
-      const hasMissingRequirements = activeFlow?.steps?.some(step => {
+      if (!quoteSelections.poleId) return alert("Please select a Pole / Tube to proceed.");
+      if (engData.proj > 0 && !engData.bracketId) return alert("Please select a Bracket in the Fabrication Settings to proceed.");
+
+      const hasMissingRequirements = (activeFlow?.steps || []).some(step => {
           if (step.type === 'DIMENSIONS') return false; 
           
           const cat = getStepCategory(step);
-          // Handled Natively
           if (['POLE','BRACKET','FINIAL','RING','FINISH'].includes(cat)) return false; 
           
           if (step.required && !dynamicConfigParams[step.id]) return true;
@@ -556,9 +609,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       });
 
       if (hasMissingRequirements) return alert("Please complete all required dynamic options in the configuration.");
-      if (poleStep && !dynamicConfigParams[poleStep.id]) return alert("Please select a Pole / Tube.");
-      if (bracketStep && !dynamicConfigParams[bracketStep.id]) return alert("Please select a Bracket.");
-
+      
       setIsPushingToCPQ(true);
       const draftId = `QUOTE-${Date.now()}`;
       
@@ -571,13 +622,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       };
 
       if (activeFlow) {
-          activeFlow.steps.forEach(step => {
+          (activeFlow.steps || []).forEach(step => {
               const cat = getStepCategory(step);
-              if (cat === 'POLE') mappedQuantities[step.id] = poleFeetQty;
-              else if (cat === 'BRACKET') mappedQuantities[step.id] = qtyBrackets;
-              else if (cat === 'FINIAL' && !disableFinials) mappedQuantities[step.id] = qtyFinials;
-              else if (cat === 'RING') mappedQuantities[step.id] = stepQuantities[step.id] || recRings;
-              else if (cat !== 'FINISH') mappedQuantities[step.id] = stepQuantities[step.id] || 1;
+              if (!['POLE','BRACKET','FINIAL','RING','FINISH'].includes(cat)) {
+                  mappedQuantities[step.id] = stepQuantities[step.id] || 1;
+              }
           });
       }
 
@@ -590,6 +639,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           cpqFlowId: activeFlow?.id || null,       
           specs: {
               collection: quoteSelections.collection,
+              poleId: quoteSelections.poleId,
+              poleFinishId: quoteSelections.poleFinishId,
+              bracketId: engData.bracketId,
+              bracketFinishId: quoteSelections.bracketFinishId,
+              finialId: quoteSelections.finialId,
+              finialFinishId: quoteSelections.finialFinishId,
+              ringId: quoteSelections.ringId,
+              ringFinishId: quoteSelections.ringFinishId,
               quantities: mappedQuantities,
               ...dynamicConfigParams
           }, 
@@ -601,13 +658,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       catch (e) { console.error(e); alert("Error pushing to CPQ."); } 
       finally { setIsPushingToCPQ(false); }
   };
-
-  const coreStepIds = [
-      poleStep?.id, poleFinishStep?.id,
-      bracketStep?.id, bracketFinishStep?.id,
-      finialStep?.id, finialFinishStep?.id,
-      ringStep?.id, ringFinishStep?.id
-  ].filter(Boolean);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh', overflow: 'hidden' }}>
@@ -732,16 +782,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                     <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>SELECT BRACKET (AUTO-SYNCS DIMS):</label>
                                     <select 
                                         value={engData.bracketId || ''} 
-                                        onChange={e => {
-                                            const val = e.target.value;
-                                            setEngData(prev => ({ ...prev, bracketId: val }));
-                                            if (bracketStep && val) {
-                                                setDynamicConfigParams(prev => ({ ...prev, [bracketStep.id]: val }));
-                                            }
-                                        }}
+                                        onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))}
                                         style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box' }}
                                     >
-                                        <option value="">{bracketStep ? '-- SELECT BRACKET --' : '-- SELECT CPQ FLOW FIRST --'}</option>
+                                        <option value="">-- SELECT BRACKET --</option>
                                         {allBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
                                     </select>
                                 </div>
@@ -901,11 +945,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                               </g>
                                           );
                                       })}
-
                                       {shopNotes.map(n => (
                                           <g key={n.id}><circle cx={n.x} cy={n.y} r="4" fill="#ffc107" /><line x1={n.x} y1={n.y} x2={n.x + 20} y2={n.y - 70} stroke="#ffc107" strokeWidth="2" /><foreignObject x={n.x + 20} y={n.y - 120} width="160" height="50" style={{ overflow: 'visible' }}><textarea value={n.text} placeholder="Type shop floor note here..." onChange={(e) => handleUpdateShopNote(n.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', height: '100%', fontSize: '12px', fontWeight: 'bold', border: '2px solid #ffc107', background: '#fff3cd', outline: 'none', resize: 'none', padding: '6px', boxShadow: '0 2px 5px rgba(0,0,0,0.2)' }} /></foreignObject></g>
                                       ))}
-
                                       {renderEndTreatment(true)}
                                       {renderEndTreatment(false)}
                                   </g>
@@ -976,7 +1018,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                   </div>
                               ) : (
                                   <>
-                                      {/* POLE */}
                                       {poleStep && (
                                           <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
@@ -996,7 +1037,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                           </div>
                                       )}
 
-                                      {/* BRACKET */}
                                       {bracketStep && qtyBrackets > 0 && (
                                           <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
@@ -1024,7 +1064,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                           </div>
                                       )}
 
-                                      {/* RINGS */}
                                       {ringStep && (
                                           <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
@@ -1052,7 +1091,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                           </div>
                                       )}
 
-                                      {/* FINIALS */}
                                       {finialStep && (
                                           <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', opacity: disableFinials ? 0.5 : 1 }}>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
@@ -1105,15 +1143,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                           </div>
                       </div>
 
-                      {/* DYNAMIC CPQ EXTRAS */}
-                      {activeFlow && activeFlow.steps.filter(s => { 
+                      {activeFlow && (activeFlow.steps || []).filter(s => { 
                           const cat = getStepCategory(s); 
                           return !['POLE','BRACKET','RING','FINIAL','FINISH'].includes(cat) && s.type !== 'DIMENSIONS'; 
                       }).length > 0 && (
                           <div style={{ background: '#fff', border: '2px dashed #007bff', padding: '15px' }}>
                               <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>EXTRA CPQ CONFIGURATIONS</h4>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                  {activeFlow.steps.map(step => {
+                                  {(activeFlow.steps || []).map(step => {
                                       const cat = getStepCategory(step);
                                       if (['POLE','BRACKET','RING','FINIAL','FINISH'].includes(cat) || step.type === 'DIMENSIONS') return null;
                                       
