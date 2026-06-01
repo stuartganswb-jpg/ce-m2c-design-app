@@ -8,6 +8,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const [activeJob, setActiveJob] = useState(null);
   
   const [libraryParts, setLibraryParts] = useState([]);
+  const [cpqFlows, setCpqFlows] = useState([]); // 🚀 Added to trace step mappings
   const [isPushing, setIsPushing] = useState(false);
   const [syncLog, setSyncLog] = useState([]);
 
@@ -27,7 +28,11 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
         setLibraryParts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    return () => { unsubJobs(); unsubParts(); };
+    const unsubFlows = onSnapshot(collection(db, "cpq_flows"), (snap) => {
+        setCpqFlows(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return () => { unsubJobs(); unsubParts(); unsubFlows(); };
   }, [activeBrand]);
 
   const addLog = (msg, type = 'info') => {
@@ -35,11 +40,57 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       setSyncLog(prev => [{ time, msg, type }, ...prev]);
   };
 
+  // 🎯 THE ZIP CODE FIX: Intelligent Line Item Extractor
+  const getJobLineItems = (job) => {
+      if (!job || !job.cpqData) return [];
+      
+      const flow = cpqFlows.find(f => f.id === job.flowId);
+      
+      // Look at all steps that have either a configuration selection OR a quantity
+      const activeStepIds = new Set([
+          ...Object.keys(job.cpqData?.configuration || {}),
+          ...Object.keys(job.cpqData?.quantities || {})
+      ]);
+
+      const lines = [];
+
+      activeStepIds.forEach(stepId => {
+          const step = flow?.steps?.find(s => s.id === stepId);
+          const userSelectionId = job.cpqData.configuration?.[stepId];
+          let qty = job.cpqData.quantities?.[stepId];
+
+          if (qty === undefined || qty === null || qty === '') qty = 1;
+
+          // 1st Priority: Did you hard-link an inventory item to this step in Tab 11?
+          // 2nd Priority: Is the user's dropdown selection an inventory item?
+          const targetPartId = step?.linkedItemId || step?.linkedPinId || userSelectionId;
+
+          if (targetPartId) {
+              const masterPart = libraryParts.find(p => p.id === targetPartId || p.itemId === targetPartId || p.legacyErpId === targetPartId);
+              
+              if (masterPart) {
+                  lines.push({
+                      stepId,
+                      masterPart,
+                      qty: parseInt(qty) || 1,
+                      nsId: masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED',
+                      partCategory: masterPart.manufacturingSpecs?.partHandling || '',
+                      projection: job.cpqData.dimensions?.[stepId]?.length || ''
+                  });
+              }
+          }
+      });
+
+      return lines;
+  };
+
   // --- 🚀 THE PUSH ENGINE (PROXY VERSION) ---
   const handlePushToNetSuite = async (job) => {
-      if (!job.cpqData || !job.cpqData.configuration) {
-          addLog(`❌ FAILED: Job ${job.jobId || job.id} has no CPQ data.`, 'error');
-          alert("Hold up! This job hasn't been configured in the CPQ Engine (Tab 8) yet. There is no physical inventory attached to it.");
+      const linesToPush = getJobLineItems(job);
+      
+      if (linesToPush.length === 0) {
+          addLog(`❌ FAILED: Job ${job.jobId || job.id} has no mapped physical inventory.`, 'error');
+          alert("Hold up! We couldn't find any physical NetSuite inventory linked to this configuration.");
           return;
       }
 
@@ -52,43 +103,33 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           const lineItems = [];
           let physicalItemsTotal = 0;
           
-          // 1. Process Physical Inventory Components
-          if (job.cpqData?.configuration) {
-              for (const [stepId, partId] of Object.entries(job.cpqData.configuration)) {
-                  const masterPart = libraryParts.find(p => p.id === partId);
-                  const qty = job.cpqData.quantities?.[stepId] || 1;
-                  
-                  if (masterPart) {
-                      const nsId = masterPart.netSuiteInternalId || masterPart.legacyErpId; 
-                      
-                      if (nsId && nsId !== 'PENDING') {
-                          const itemRate = masterPart.manufacturingSpecs?.basePrice || 0;
-                          const lineTotal = itemRate * qty;
-                          physicalItemsTotal += lineTotal;
+          // 1. Process Physical Inventory Components using our clean extractor
+          for (const line of linesToPush) {
+              if (line.nsId !== 'UNMAPPED' && line.nsId !== 'PENDING') {
+                  const itemRate = line.masterPart.manufacturingSpecs?.basePrice || 0;
+                  const lineTotal = itemRate * line.qty;
+                  physicalItemsTotal += lineTotal;
 
-                          // Extract specific custom columns
-                          const partCategory = masterPart.manufacturingSpecs?.partHandling || '';
-                          const projection = job.cpqData.dimensions?.[stepId]?.length || '';
+                  const linePayload = {
+                      item: { id: line.nsId.toString() }, 
+                      quantity: line.qty,
+                      rate: itemRate,
+                      description: `${line.masterPart.itemName} (Mapped from CPQ)`,
+                      custcol_part_category: line.partCategory
+                  };
 
-                          const linePayload = {
-                              item: { id: nsId.toString() }, 
-                              quantity: qty,
-                              rate: itemRate,
-                              description: `${masterPart.itemName} (Mapped from CPQ)`,
-                              custcol_part_category: partCategory
-                          };
-
-                          // Only append projection if it exists for this step
-                          if (projection) {
-                              linePayload.custcol_bracket_projection = projection.toString();
-                          }
-
-                          lineItems.push(linePayload);
-                      } else {
-                          addLog(`WARNING: Skipping "${masterPart.itemName}". No NetSuite ID mapped in Library.`, 'warn');
-                      }
+                  if (line.projection) {
+                      linePayload.custcol_bracket_projection = line.projection.toString();
                   }
+
+                  lineItems.push(linePayload);
+              } else {
+                  addLog(`WARNING: Skipping "${line.masterPart.itemName}". No NetSuite ID mapped.`, 'warn');
               }
+          }
+
+          if (lineItems.length === 0) {
+              throw new Error("No valid NetSuite IDs were found to push. Sync aborted.");
           }
 
           // 2. Calculate "Silent Costs" (Fees, Base Price, Upcharges)
@@ -106,7 +147,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               item: {
                   items: [
                       {
-                          // Master Assembly / Fee Roll-up Line
+                          // Master Assembly / Fee Roll-up Line (Internal ID 61502)
                           item: { id: "61502" }, 
                           quantity: 1,
                           rate: silentFeeBalance,
@@ -249,19 +290,13 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                                         <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontStyle: 'italic' }}>=== CPQ BUILD: {activeJob.sidemark?.toUpperCase()} ===</td>
                                         <td style={{ padding: '8px', borderBottom: '1px solid #eee', textAlign: 'center' }}>1</td>
                                     </tr>
-                                    {Object.entries(activeJob.cpqData?.configuration || {}).map(([stepId, partId], idx) => {
-                                        const masterPart = libraryParts.find(p => p.id === partId);
-                                        const qty = activeJob.cpqData?.quantities?.[stepId] || 1;
-                                        const nsId = masterPart?.netSuiteInternalId || masterPart?.legacyErpId || masterPart?.itemId || 'UNMAPPED';
-                                        
-                                        return (
-                                            <tr key={idx}>
-                                                <td style={{ padding: '8px', borderBottom: '1px solid #eee', color: nsId === 'UNMAPPED' || nsId === 'PENDING' ? '#d9534f' : '#333', fontWeight: 'bold' }}>{nsId}</td>
-                                                <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>{masterPart?.itemName || 'Unknown Part'}</td>
-                                                <td style={{ padding: '8px', borderBottom: '1px solid #eee', textAlign: 'center', fontWeight: 'bold' }}>{qty}</td>
-                                            </tr>
-                                        );
-                                    })}
+                                    {getJobLineItems(activeJob).map((line, idx) => (
+                                        <tr key={idx}>
+                                            <td style={{ padding: '8px', borderBottom: '1px solid #eee', color: line.nsId === 'UNMAPPED' || line.nsId === 'PENDING' ? '#d9534f' : '#333', fontWeight: 'bold' }}>{line.nsId}</td>
+                                            <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>{line.masterPart.itemName}</td>
+                                            <td style={{ padding: '8px', borderBottom: '1px solid #eee', textAlign: 'center', fontWeight: 'bold' }}>{line.qty}</td>
+                                        </tr>
+                                    ))}
                                 </tbody>
                             </table>
                         </div>
