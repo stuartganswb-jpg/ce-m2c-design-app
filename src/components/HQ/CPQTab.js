@@ -424,8 +424,22 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               qty = parseInt(rawQty) || 0; 
           }
 
-          if (selectedValue || step.type === 'DIMENSIONS' || step.type === 'STATIC_FEE') {
-              let stepPrice = 0;
+          const hasBasePrice = step.basePrice !== undefined && step.basePrice !== null && step.basePrice !== '';
+
+          if (selectedValue || step.type === 'DIMENSIONS' || step.type === 'STATIC_FEE' || hasBasePrice) {
+              
+              let stepPrice = hasBasePrice ? parseFloat(step.basePrice) : 0;
+              
+              if (step.linkedItemId && step.useClientPricing && jobData.customerId) {
+                  const basePartObj = allParts.find(p => p.id === step.linkedItemId);
+                  if (basePartObj && basePartObj.clientPricing) {
+                      const cp = basePartObj.clientPricing.find(c => c.customerId === jobData.customerId);
+                      if (cp && cp.price !== undefined && cp.price !== "") {
+                          stepPrice = parseFloat(cp.price); 
+                      }
+                  }
+              }
+
               let multiplier = 1.0;
               let itemName = step.title;
 
@@ -435,18 +449,18 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                   globalFinishes.find(f => f.id === selectedValue) ||
                                   outsourceFinishes.find(f => f.id === selectedValue);
 
-                  if (partObj) itemName = partObj.itemName || partObj.name;
+                  if (partObj) itemName = `${step.title} (${partObj.itemName || partObj.name})`;
 
-                  let nativePrice = 0;
+                  let optionNativePrice = 0;
                   if (partObj) {
-                      if (partObj.manufacturingSpecs?.basePrice) nativePrice = parseFloat(partObj.manufacturingSpecs.basePrice);
-                      else if (partObj.basePrice) nativePrice = parseFloat(partObj.basePrice);
+                      if (partObj.manufacturingSpecs?.basePrice) optionNativePrice = parseFloat(partObj.manufacturingSpecs.basePrice);
+                      else if (partObj.basePrice) optionNativePrice = parseFloat(partObj.basePrice);
                   }
 
                   if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
                       const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
                       if (cp && cp.price !== undefined && cp.price !== "") {
-                          nativePrice = parseFloat(cp.price);
+                          optionNativePrice = parseFloat(cp.price);
                       }
                   }
 
@@ -455,7 +469,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                       upcharge = parseFloat(step.priceMap[selectedValue]) || 0;
                   }
 
-                  stepPrice = nativePrice + upcharge;
+                  stepPrice += optionNativePrice + upcharge;
 
                   if (partObj && partObj.multiplier && parseFloat(partObj.multiplier) > 1.0) {
                       multiplier = parseFloat(partObj.multiplier);
@@ -467,7 +481,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               }
               
               let lineTotal = stepPrice * multiplier * qty;
-              if (lineTotal > 0 || stepPrice > 0) {
+              
+              if (lineTotal > 0 || stepPrice > 0 || step.type === 'STATIC_FEE') {
                   breakdown.push({ name: itemName, qty: qty, price: stepPrice * multiplier, total: lineTotal });
               }
 
@@ -763,6 +778,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                   <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #28a745', flex: 1 }}>
                       <div style={{ padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', justifyContent: 'space-between' }}>
                           <span>STEP {currentStepIndex + 1} OF {activeFlow.steps.length}: {currentStep.title}</span>
+                          {(currentStep.basePrice !== undefined && currentStep.basePrice !== null && currentStep.basePrice !== '') && (
+                              <span style={{ background: '#1e7e34', padding: '2px 8px', borderRadius: '4px', fontSize: '0.85rem' }}>
+                                  BASE: ${parseFloat(currentStep.basePrice).toFixed(2)}
+                              </span>
+                          )}
                       </div>
                       
                       <div style={{ padding: '20px', flex: 1, overflowY: 'auto', maxHeight: '400px' }}>
@@ -790,7 +810,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           {currentStep.type === 'STATIC_FEE' && (
                               <div style={{ padding: '20px', background: '#fff3cd', border: '2px dashed #ffc107', textAlign: 'center', marginBottom: '15px' }}>
                                   <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#d9534f' }}>
-                                      {currentStep.priceOverride ? `+$${parseFloat(currentStep.priceOverride).toFixed(2)} ea` : 'Variable Fee'}
+                                      {(currentStep.priceOverride || currentStep.basePrice) ? `+$${parseFloat(currentStep.priceOverride || currentStep.basePrice).toFixed(2)} ea` : 'Variable Fee'}
                                   </div>
                                   <div style={{ fontSize: '0.85rem', color: '#856404', marginTop: '5px', fontWeight: 'bold' }}>
                                       Adjust step quantity below to calculate total fee.
@@ -1008,9 +1028,15 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                           
                                           <div style={{ background: '#fff9c4', padding: '8px', border: '1px solid #d4b106', marginTop: '5px' }}>
                                               <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '4px' }}>
-                                                  REQ. PURCHASE LENGTH = {notes.poleFeetQty} FT
+                                                  {notes.shape === 'MITERED' 
+                                                      ? `RAW DIMS: L:${notes.rawW1}" | C:${notes.rawW2}" | R:${notes.rawW3}"`
+                                                      : `RAW LENGTH: ${notes.rawW2 || 0}"`
+                                                  }
                                               </div>
                                               
+                                              {/* Fallback just in case they load a very old draft that didn't have raw dimensions */}
+                                              {notes.rawW2 === undefined && <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '4px' }}>POLE CUT: {notes.poleFeetQty} FT</div>}
+
                                               {notes.qtyBrackets > 0 && <div>BRACKETS: {notes.qtyBrackets}</div>}
                                               {notes.recRings > 0 && <div>RINGS (Rec): {notes.recRings}</div>}
                                               {notes.qtyFinials > 0 && <div>FINIALS: {notes.qtyFinials}</div>}
