@@ -563,8 +563,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       
       try {
           const generatedSteps = linkedBomPins.map((pin, idx) => {
-              const libPart = allApprovedDesigns.find(d => d.id === pin.partId);
-              const bp = libPart?.manufacturingSpecs?.basePrice || libPart?.basePrice || 0;
+              const libPart = allApprovedDesigns.find(d => d.id === pin.partId || d.legacyErpId === pin.partId || d.itemId === pin.partId);
+              let bp = 0;
+              if (libPart) {
+                  const specs = libPart.manufacturingSpecs || {};
+                  const bPrice = parseFloat(specs.basePrice) || 0;
+                  const cPrice = parseFloat(specs.cost) || 0;
+                  bp = bPrice > 0 ? bPrice : cPrice;
+              }
 
               return {
                   id: `STEP-AUTO-${Date.now()}-${idx}`,
@@ -1056,9 +1062,21 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             <div>
                                                  <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '4px' }}>LINK TO LIBRARY ITEM (AUTO-PULLS PRICE):</label>
                                                  <select value={newStep.linkedItemId || newStep.linkedPinId || ''} onChange={e => {
-                                                     const part = allApprovedDesigns.find(p => p.id === e.target.value);
-                                                     const bp = part?.manufacturingSpecs?.basePrice || part?.basePrice || 0;
-                                                     setNewStep({...newStep, linkedItemId: e.target.value, basePrice: bp});
+                                                     const selectedId = e.target.value;
+                                                     const part = allApprovedDesigns.find(p => p.id === selectedId || p.itemId === selectedId || p.legacyErpId === selectedId);
+                                                     let extractedPrice = '';
+                                                     
+                                                     if (part) {
+                                                         const specs = part.manufacturingSpecs || {};
+                                                         const bp = specs.basePrice !== undefined && specs.basePrice !== "" ? parseFloat(specs.basePrice) : 0;
+                                                         const cost = specs.cost !== undefined && specs.cost !== "" ? parseFloat(specs.cost) : 0;
+                                                         
+                                                         if (bp > 0) extractedPrice = bp;
+                                                         else if (cost > 0) extractedPrice = cost;
+                                                         else extractedPrice = 0;
+                                                     }
+                                                     
+                                                     setNewStep(prev => ({...prev, linkedItemId: selectedId, linkedPinId: selectedId, basePrice: extractedPrice}));
                                                  }} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontWeight: 'bold' }}>
                                                      <option value="">-- No Item Linked --</option>
                                                      {allApprovedDesigns.filter(p => p.partClass === 'Inventory' || p.partClass === 'Assembly').map(p => <option key={p.id} value={p.id}>{p.itemName} {p.legacyErpId && p.legacyErpId !== 'PENDING' ? `[${p.legacyErpId}]` : ''}</option>)}
@@ -1066,7 +1084,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             </div>
                                             <div>
                                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#333', display: 'block', marginBottom: '4px' }}>STEP BASE PRICE ($):</label>
-                                                <input type="number" step="0.01" value={newStep.basePrice || ''} onChange={e => setNewStep({...newStep, basePrice: e.target.value})} placeholder="e.g. 15.00" style={{ width: '100%', padding: '8px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                                                <input 
+                                                    type="number" 
+                                                    step="0.01" 
+                                                    value={newStep.basePrice !== undefined && newStep.basePrice !== null && newStep.basePrice !== '' ? newStep.basePrice : ''} 
+                                                    onChange={e => setNewStep({...newStep, basePrice: e.target.value})} 
+                                                    placeholder="e.g. 15.00" 
+                                                    style={{ width: '100%', padding: '8px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold' }} 
+                                                />
                                             </div>
                                         </div>
                                     </div>
@@ -1234,7 +1259,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>
                                                 Type: <strong style={{ color: (step.type.includes('DIMENSIONS') || step.type === 'STATIC_FEE') ? '#e83e8c' : '#333'}}>{step.type}</strong> | Data: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{step.dataSource || 'N/A'}</span> | Required: {step.required ? 'Yes' : 'No'}
                                             </div>
-                                            {step.basePrice > 0 && <div style={{ fontSize: '0.65rem', color: '#28a745', marginTop: '3px', fontWeight: 'bold' }}>🏷️ BASE PRICE: ${parseFloat(step.basePrice).toFixed(2)}</div>}
+                                            {step.basePrice !== undefined && step.basePrice !== '' && step.basePrice !== null && (
+                                                <div style={{ fontSize: '0.65rem', color: '#28a745', marginTop: '3px', fontWeight: 'bold' }}>
+                                                    🏷️ BASE PRICE: ${parseFloat(step.basePrice).toFixed(2)}
+                                                </div>
+                                            )}
                                             {step.allowedOptions && step.allowedOptions.length > 0 && (
                                                 <div style={{ fontSize: '0.65rem', color: '#CC6600', marginTop: '3px', fontWeight: 'bold' }}>🔍 RESTRICTED TO: {step.allowedOptions.length} specific options.</div>
                                             )}
