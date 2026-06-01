@@ -8,7 +8,6 @@ import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Html, Bounds } from '@react-three/drei';
 
-// 🚀 The Airbag. This prevents corrupted 3D models from white-screening the entire app.
 class ErrorBoundary extends React.Component {
     constructor(props) { super(props); this.state = { hasError: false }; }
     static getDerivedStateFromError(error) { return { hasError: true }; }
@@ -39,16 +38,6 @@ const is3DFile = (nameOrUrl) => {
     if (!nameOrUrl) return false;
     const lower = nameOrUrl.toLowerCase();
     return lower.includes('.glb') || lower.includes('.gltf');
-};
-
-const CameraController = ({ zoomTrigger }) => {
-    const { camera } = useThree();
-    useEffect(() => {
-        if (zoomTrigger === 'IN') camera.position.multiplyScalar(0.8);
-        if (zoomTrigger === 'OUT') camera.position.multiplyScalar(1.2);
-        camera.updateProjectionMatrix();
-    }, [zoomTrigger, camera]);
-    return null;
 };
 
 const ReviewModel = ({ url, isAddingCallout, onMeshClick }) => {
@@ -100,7 +89,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const [activeRevisionId, setActiveRevisionId] = useState(null);
   
   const [activeTool, setActiveTool] = useState(TOOL_PAN); 
-  const [zoomTrigger, setZoomTrigger] = useState(null);
 
   const [reactSvgPanZoomRef, setReactSvgPanZoomRef] = useState(null);
   
@@ -111,8 +99,12 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const viewerContainerRef = useRef(null);
   const [viewerSize, setViewerSize] = useState({ width: 800, height: 600 });
   
-  // 🚀 Mouse tracking state for precision crosshairs
   const [mouseCoords, setMouseCoords] = useState({ x: -100, y: -100 });
+
+  // 🚀 The Event Shield: Prevents the canvas from stealing your mouse or keyboard strokes
+  const stopPropagation = (e) => {
+      e.stopPropagation();
+  };
 
   useEffect(() => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
@@ -445,7 +437,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       setActiveAssembly(prev => ({ ...prev, spatialCallouts: updatedCallouts }));
       setActiveCalloutId(newCallout.id);
       
-      // 🚀 CLEAN EXIT: Turn off targeting immediately so the user can start typing
       setIsAddingCallout(false);
       if(!is3D) setActiveTool(TOOL_PAN);   
 
@@ -485,7 +476,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       setIsCanvasLocked(false);
   };
 
-  // 🚀 MOUSE TRACKING FOR THE CROSSHAIRS
   const handleMouseMove = (e) => {
       if (!isAddingCallout || !viewerContainerRef.current) return;
       const rect = viewerContainerRef.current.getBoundingClientRect();
@@ -752,7 +742,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                             {currentRevisionObj?.url && (
                                 <div style={{ display: 'flex', gap: '5px', marginRight: '15px', paddingRight: '15px', borderRight: '1px solid rgba(255,255,255,0.3)' }}>
                                     
-                                    {/* 🚀 ADDED: THE PIN BUTTON IS NOW EXPOSED IN THE DEFAULT VIEW */}
                                     <button onClick={activatePinMode} style={{ padding: '5px 10px', background: isAddingCallout ? '#ffc107' : '#fff', color: '#000', border: 'none', fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer', boxShadow: isAddingCallout ? 'inset 0 2px 4px rgba(0,0,0,0.5)' : 'none' }}>
                                         {isAddingCallout ? '🎯 TARGETING...' : '📍 PIN'}
                                     </button>
@@ -793,7 +782,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                  
                  <div ref={viewerContainerRef} onMouseMove={handleMouseMove} style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
                     
-                    {/* 🚀 PRECISION TARGETING CROSSHAIRS FOR PIN PLACEMENT */}
                     {isAddingCallout && (
                         <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 9999 }}>
                             <div style={{ position: 'absolute', top: mouseCoords.y, left: 0, width: '100%', height: '1px', background: 'rgba(217, 83, 79, 0.9)' }} />
@@ -843,6 +831,8 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                 <Html key={callout.id} position={[callout.x, callout.y, callout.z]} zIndexRange={[100, 0]}>
                                                     <div style={{ position: 'relative' }}>
                                                         <div 
+                                                            onPointerDown={stopPropagation}
+                                                            onMouseDown={stopPropagation}
                                                             onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} 
                                                             style={{ width: '15px', height: '15px', background: isActive ? '#007bff' : '#d9534f', borderRadius: '50%', border: '2px solid #fff', cursor: 'pointer', transform: 'translate(-50%, -50%)', boxShadow: '0 0 5px rgba(0,0,0,0.5)', position: 'absolute', zIndex: 2 }} 
                                                         />
@@ -851,15 +841,30 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                             <line x1="0" y1="110" x2="130" y2="0" stroke={isActive ? '#007bff' : '#d9534f'} strokeWidth="2" strokeDasharray="4 4" />
                                                         </svg>
 
-                                                        <div style={{ position: 'absolute', top: '-110px', left: '130px', width: '220px', background: '#fff', border: `2px solid ${isActive ? '#007bff' : '#d9534f'}`, padding: '5px', boxShadow: '2px 2px 5px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', zIndex: 3, transform: 'translateY(-50%)' }}>
+                                                        <div 
+                                                            onPointerDown={stopPropagation}
+                                                            onMouseDown={stopPropagation}
+                                                            onWheel={stopPropagation}
+                                                            style={{ position: 'absolute', top: '-110px', left: '130px', width: '220px', background: '#fff', border: `2px solid ${isActive ? '#007bff' : '#d9534f'}`, padding: '5px', boxShadow: '2px 2px 5px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', zIndex: 3, transform: 'translateY(-50%)' }}
+                                                        >
                                                             <div style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#666', borderBottom: '1px solid #eee', marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
                                                                 <span>{callout.user}</span>
-                                                                {isActive && <button onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0 }}>✖</button>}
+                                                                {isActive && <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0 }}>✖</button>}
                                                             </div>
                                                             {isActive ? (
                                                                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                                                    <textarea autoFocus placeholder="Type spatial note or RFI..." value={callout.text} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onBlur={saveCalloutTextToFirebase} style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} />
-                                                                    <button onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); }} style={{ background: '#28a745', color: '#fff', border: 'none', padding: '4px', fontSize: '0.65rem', fontWeight: 'bold', cursor: 'pointer', marginTop: '4px' }}>
+                                                                    <textarea 
+                                                                        autoFocus 
+                                                                        placeholder="Type spatial note or RFI..." 
+                                                                        value={callout.text || ''} 
+                                                                        onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} 
+                                                                        onBlur={saveCalloutTextToFirebase} 
+                                                                        onKeyDown={stopPropagation}
+                                                                        onKeyUp={stopPropagation}
+                                                                        onKeyPress={stopPropagation}
+                                                                        style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} 
+                                                                    />
+                                                                    <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); }} style={{ background: '#28a745', color: '#fff', border: 'none', padding: '4px', fontSize: '0.65rem', fontWeight: 'bold', cursor: 'pointer', marginTop: '4px' }}>
                                                                         ✅ FINALIZE NOTE
                                                                     </button>
                                                                 </div>
@@ -900,22 +905,45 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                         return (
                                             <g key={callout.id} data-callout-g style={{ cursor: 'pointer' }}>
                                                 <line x1={callout.x} y1={callout.y} x2={lineTargetX} y2={lineTargetY} stroke={isActive ? '#007bff' : '#d9534f'} strokeWidth="2" strokeDasharray="4 4" />
-                                                <circle cx={callout.x} cy={callout.y} r="5" fill={isActive ? '#007bff' : '#d9534f'} stroke="#fff" strokeWidth="2" onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} />
+                                                <circle 
+                                                    cx={callout.x} cy={callout.y} r="5" 
+                                                    fill={isActive ? '#007bff' : '#d9534f'} stroke="#fff" strokeWidth="2" 
+                                                    onPointerDown={stopPropagation}
+                                                    onMouseDown={stopPropagation}
+                                                    onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} 
+                                                />
                                                 <foreignObject x={foreignObjectX} y={foreignObjectY} width={boxWidth} height="200" style={{ overflow: 'visible' }}>
-                                                    <div onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} style={{ background: '#fff', border: `2px solid ${isActive ? '#007bff' : '#d9534f'}`, padding: '5px', boxShadow: '2px 2px 5px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column' }}>
+                                                    <div 
+                                                        onPointerDown={stopPropagation}
+                                                        onMouseDown={stopPropagation}
+                                                        onWheel={stopPropagation}
+                                                        style={{ background: '#fff', border: `2px solid ${isActive ? '#007bff' : '#d9534f'}`, padding: '5px', boxShadow: '2px 2px 5px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column' }}
+                                                    >
                                                         <div style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#666', borderBottom: '1px solid #eee', marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
                                                             <span>{callout.user}</span>
-                                                            {isActive && <button onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0 }}>✖</button>}
+                                                            {isActive && <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0 }}>✖</button>}
                                                         </div>
                                                         {isActive ? (
                                                             <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                                                <textarea autoFocus placeholder="Type spatial note or RFI..." value={callout.text} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onBlur={saveCalloutTextToFirebase} style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} />
-                                                                <button onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); }} style={{ background: '#28a745', color: '#fff', border: 'none', padding: '4px', fontSize: '0.65rem', fontWeight: 'bold', cursor: 'pointer', marginTop: '4px' }}>
+                                                                <textarea 
+                                                                    autoFocus 
+                                                                    placeholder="Type spatial note or RFI..." 
+                                                                    value={callout.text || ''} 
+                                                                    onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} 
+                                                                    onBlur={saveCalloutTextToFirebase} 
+                                                                    onKeyDown={stopPropagation}
+                                                                    onKeyUp={stopPropagation}
+                                                                    onKeyPress={stopPropagation}
+                                                                    style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace', cursor: 'text' }} 
+                                                                />
+                                                                <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); }} style={{ background: '#28a745', color: '#fff', border: 'none', padding: '4px', fontSize: '0.65rem', fontWeight: 'bold', cursor: 'pointer', marginTop: '4px' }}>
                                                                     ✅ FINALIZE NOTE
                                                                 </button>
                                                             </div>
                                                         ) : (
-                                                            <div style={{ fontSize: '0.75rem', color: '#000', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px' }}>{callout.text || <span style={{color:'#ccc', fontStyle:'italic'}}>Empty Note</span>}</div>
+                                                            <div onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} style={{ fontSize: '0.75rem', color: '#000', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px', cursor: 'pointer' }}>
+                                                                {callout.text || <span style={{color:'#ccc', fontStyle:'italic'}}>Empty Note</span>}
+                                                            </div>
                                                         )}
                                                     </div>
                                                 </foreignObject>
