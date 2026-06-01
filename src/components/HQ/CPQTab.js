@@ -221,7 +221,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       return [...(activeFlow.steps || []), ...virtualFeeSteps];
   }, [activeFlow, virtualFeeSteps]);
 
-  // SAFE QUANTITY INIT
   useEffect(() => {
       if (!activeFlow) return;
       
@@ -238,9 +237,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       });
   }, [activeFlow]);
 
-  // 🚀 FIXED: Renamed back to activeStep so JSX logic works without crashing
   const activeStep = allActiveSteps[currentStepIndex];
-  
   const availableProductTypes = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.productType).filter(Boolean))];
 
   const getOptionsForStep = (step) => {
@@ -348,7 +345,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       setVirtualFeeSteps(newVirtualSteps);
       setDynamicConfigParams(translatedParams);
       
-      // EXPLICIT QUANTITY INJECTION (From Post-It Note Data)
       let initialQuantities = {};
       if (draft.specs?.engineeringNotes) {
           const notes = draft.specs.engineeringNotes;
@@ -555,7 +551,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           
           setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); 
           setActiveAssemblyId(""); setShowCheckoutModal(false); setJobData({ customerId: '', jobName: '', sidemark: '' });
-          setActiveDraftId(null);
+          setActiveDraftId(null); setVirtualFeeSteps([]);
       } catch (err) { console.error(err); alert("Failed to save quote."); }
   };
 
@@ -793,7 +789,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                  </div>
               </div>
 
-              {/* 🚀 RESTORED: The Import Drafts Panel is now permanently visible here when no flow is selected */}
               {!activeFlowId && (
                   <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
                       <div style={{ padding: '10px', background: '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', textTransform: 'uppercase' }}>
@@ -816,7 +811,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                   </div>
               )}
 
-              {/* 🚀 FIXED: Safe evaluation of activeStep to prevent crash */}
               {activeFlow && activeStep && (
                   <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #28a745', flex: 1 }}>
                       <div style={{ padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', justifyContent: 'space-between' }}>
@@ -1124,33 +1118,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                     <button onClick={handleFinalizeQuote} style={{ width: '100%', padding: '15px', background: '#28a745', color: '#fff', fontSize: '1.1rem', fontWeight: 'bold', border: '2px solid #1e7e34', cursor: 'pointer', marginTop: '10px' }}>
                         ✅ SUBMIT QUOTE TO PIPELINE
                     </button>
-                </div>
-            </div>
-        </div>
-      )}
-
-      {showCloneModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-            <div style={{ background: '#fff', border: '4px solid #000', width: '800px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
-                <div style={{ padding: '20px', background: '#000', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                    <h2 style={{ margin: 0, fontSize: '1.5rem', textTransform: 'uppercase' }}>📥 RESUME DRAFT / CLONE QUOTE</h2>
-                    <button onClick={() => setShowCloneModal(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '2rem', cursor: 'pointer' }}>×</button>
-                </div>
-                <div style={{ padding: '20px', flex: 1, overflowY: 'auto', background: '#f8f9fa' }}>
-                    {previousDrafts.length === 0 ? <div style={{ color: '#666', fontStyle: 'italic' }}>No drafts pushed from Vision Tab yet.</div> : (
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                            {previousDrafts.map(draft => (
-                                <div key={draft.id} onClick={() => handleResumeDraft(draft.id)} style={{ background: '#fff', border: '2px solid #000', padding: '15px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '8px', transition: '0.2s', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                        <span style={{ fontWeight: 'bold', color: '#007bff' }}>DRAFT: {draft.category}</span>
-                                        <span style={{ fontSize: '0.7rem', color: '#fff', background: '#d9534f', padding: '2px 5px' }}>RESUME</span>
-                                    </div>
-                                    <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Generated by: {draft.author}</div>
-                                    <div style={{ fontSize: '0.75rem', color: '#666' }}>{new Date(draft.createdAt?.seconds * 1000).toLocaleString()}</div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
                 </div>
             </div>
         </div>
