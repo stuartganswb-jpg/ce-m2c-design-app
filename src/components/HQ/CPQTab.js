@@ -413,7 +413,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               qty = parseInt(rawQty) || 0; 
           }
 
-          if (selectedValue || step.type === 'DIMENSIONS') {
+          if (selectedValue || step.type === 'DIMENSIONS' || step.type === 'STATIC_FEE') {
               let stepPrice = 0;
               let multiplier = 1.0;
 
@@ -755,13 +755,24 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                               </div>
                           )}
 
-                          {(currentStep.type === 'DROPDOWN' || currentStep.type === 'DIMENSIONS') && currentStep.type !== 'VISUAL_DIMENSIONS' && currentStep.dataSource && (
+                          {currentStep.type === 'DROPDOWN' && currentStep.dataSource && (
                               <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #000', fontSize: '1rem', marginBottom: '15px' }}>
                                   <option value="">-- Select Option --</option>
                                   {getOptionsForStep(currentStep).map(opt => (
                                       <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</option>
                                   ))}
                               </select>
+                          )}
+
+                          {currentStep.type === 'STATIC_FEE' && (
+                              <div style={{ padding: '20px', background: '#fff3cd', border: '2px dashed #ffc107', textAlign: 'center', marginBottom: '15px' }}>
+                                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#d9534f' }}>
+                                      {currentStep.priceOverride ? `+$${parseFloat(currentStep.priceOverride).toFixed(2)} ea` : 'Variable Fee'}
+                                  </div>
+                                  <div style={{ fontSize: '0.85rem', color: '#856404', marginTop: '5px', fontWeight: 'bold' }}>
+                                      Adjust step quantity below to calculate total fee.
+                                  </div>
+                              </div>
                           )}
 
                           {(currentStep.calculatorTemplate || currentStep.type === 'DIMENSIONS' || currentStep.type === 'VISUAL_DIMENSIONS') && (
@@ -838,12 +849,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                   let current = stepQuantities[currentStep.id];
                                   if (current === undefined || current === '') current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
                                   else current = parseInt(current);
-                                  setStepQuantities({...stepQuantities, [currentStep.id]: Math.max(1, current - 1)});
+                                  setStepQuantities({...stepQuantities, [currentStep.id]: Math.max(0, current - 1)});
                               }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>-</button>
                               
                               <input 
                                   type="number" 
-                                  min="1" 
+                                  min="0" 
                                   value={stepQuantities[currentStep.id] !== undefined ? stepQuantities[currentStep.id] : (activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1)} 
                                   onChange={e => {
                                       const val = e.target.value;
@@ -871,9 +882,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} disabled={currentStepIndex === 0} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStepIndex === 0 ? '#333' : '#fff', color: currentStepIndex === 0 ? '#fff' : '#000', fontWeight: 'bold', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer' }}>BACK</button>
                           
                           {currentStepIndex < activeFlow.steps.length - 1 ? (
-                              <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS'} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
+                              <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE'} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
                           ) : (
-                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS'} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
+                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE'} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
                           )}
                       </div>
                   </div>
@@ -973,7 +984,16 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                           {draft.sidemark && <div><strong style={{color:'#666'}}>MARK:</strong> {draft.sidemark}</div>}
                                           
                                           <div style={{ background: '#fff9c4', padding: '8px', border: '1px solid #d4b106', marginTop: '5px' }}>
-                                              <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '4px' }}>POLE CUT: {notes.poleFeetQty} FT</div>
+                                              <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '4px' }}>
+                                                  {notes.shape === 'MITERED' 
+                                                      ? `RAW DIMS: L:${notes.rawW1}" | C:${notes.rawW2}" | R:${notes.rawW3}"`
+                                                      : `RAW LENGTH: ${notes.rawW2 || 0}"`
+                                                  }
+                                              </div>
+                                              
+                                              {/* Fallback just in case they load a very old draft that didn't have raw dimensions */}
+                                              {notes.rawW2 === undefined && <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '4px' }}>POLE CUT: {notes.poleFeetQty} FT</div>}
+
                                               {notes.qtyBrackets > 0 && <div>BRACKETS: {notes.qtyBrackets}</div>}
                                               {notes.recRings > 0 && <div>RINGS (Rec): {notes.recRings}</div>}
                                               {notes.qtyFinials > 0 && <div>FINIALS: {notes.qtyFinials}</div>}
