@@ -733,7 +733,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   };
 
-  // 🚀 FIXED: Added Product Types, Inventory Types, and Assembly Types directly from Master Library Data
   const getDataSourceItems = (source) => {
       if (!source) return [];
       if (source === 'master_finishes') {
@@ -979,15 +978,15 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                     <input value={newStep.title} onChange={e => setNewStep({...newStep, title: e.target.value})} placeholder="Step Title (e.g. Select Bracket Style)" style={{ padding: '8px', border: '1px solid #ccc' }} />
                                     <div style={{ display: 'flex', gap: '10px' }}>
-                                        <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }}>
+                                        <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value, dataSource: e.target.value === 'STATIC_FEE' ? '' : newStep.dataSource})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }}>
                                             <option value="DROPDOWN">Dropdown List</option>
                                             <option value="VISUAL_GRID">Visual Grid (Images/Textures)</option>
                                             <option value="VISUAL_DIMENSIONS">Visual Grid + Dimensions (2-in-1)</option>
                                             <option value="DIMENSIONS">Dimensional Input Only (Math)</option>
+                                            <option value="STATIC_FEE">Static Fee / Quantity Only</option>
                                         </select>
                                         
-                                        {/* 🚀 FIXED: Added Product Types and Routing Types to data source options! */}
-                                        <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} disabled={newStep.type === 'DIMENSIONS'} style={{ flex: 1, padding: '8px', border: '2px solid #007bff', fontWeight: 'bold', opacity: newStep.type === 'DIMENSIONS' ? 0.5 : 1 }}>
+                                        <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} disabled={newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE'} style={{ flex: 1, padding: '8px', border: '2px solid #007bff', fontWeight: 'bold', opacity: (newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') ? 0.5 : 1 }}>
                                             <option value="">-- SELECT DATA SOURCE --</option>
                                             <optgroup label="Core Libraries">
                                                 <option value="master_finishes">Master Finishes (In-House & Outsource)</option>
@@ -1041,7 +1040,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         />
                                     </div>
 
-                                    {newStep.dataSource && availableSourceItems.length > 0 && newStep.type !== 'DIMENSIONS' && (
+                                    {newStep.dataSource && availableSourceItems.length > 0 && newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && (
                                         <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                                                 <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>🔍 RESTRICT AVAILABLE OPTIONS (Leave empty to allow all):</span>
@@ -1144,7 +1143,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         </div>
                                     </div>
                                     
-                                    {optionsToMap.length > 0 && optionsToMap.length < 100 && newStep.type !== 'DIMENSIONS' && (
+                                    {optionsToMap.length > 0 && optionsToMap.length < 100 && newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && (
                                         <div style={{ background: '#fff', padding: '10px', border: '1px solid #007bff' }}>
                                             <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff', marginBottom: '10px' }}>OPTION PROPERTIES: COST UPCHARGES & GEOMETRY SWAPPING</div>
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: '10px', maxHeight: '250px', overflowY: 'auto' }}>
@@ -1172,7 +1171,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <input type="checkbox" checked={newStep.required} onChange={e => setNewStep({...newStep, required: e.target.checked})} /> Required Step
                                     </label>
                                     <div style={{ display: 'flex', gap: '10px' }}>
-                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={newStep.type !== 'DIMENSIONS' && !newStep.dataSource} style={{ flex: 1, padding: '10px', background: newStep.id ? '#ffc107' : '#000', color: newStep.id ? '#000' : '#fff', fontWeight: 'bold', border: newStep.id ? '2px solid #856404' : 'none', cursor: (newStep.type === 'DIMENSIONS' || newStep.dataSource) ? 'pointer' : 'not-allowed', opacity: (newStep.type === 'DIMENSIONS' || newStep.dataSource) ? 1 : 0.5 }}>
+                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={(newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE') && !newStep.dataSource} style={{ flex: 1, padding: '10px', background: newStep.id ? '#ffc107' : '#000', color: newStep.id ? '#000' : '#fff', fontWeight: 'bold', border: newStep.id ? '2px solid #856404' : 'none', cursor: ((newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') || newStep.dataSource) ? 'pointer' : 'not-allowed', opacity: ((newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') || newStep.dataSource) ? 1 : 0.5 }}>
                                             {newStep.id ? "💾 SAVE EDITS TO STEP" : "➕ MANUAL ADD STEP"}
                                         </button>
                                         {newStep.id && (
@@ -1190,7 +1189,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <div>
                                             <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>Step {idx + 1}: {step.title}</div>
                                             <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>
-                                                Type: <strong style={{ color: step.type.includes('DIMENSIONS') ? '#e83e8c' : '#333'}}>{step.type}</strong> | Data: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{step.dataSource || 'N/A'}</span> | Required: {step.required ? 'Yes' : 'No'}
+                                                Type: <strong style={{ color: (step.type.includes('DIMENSIONS') || step.type === 'STATIC_FEE') ? '#e83e8c' : '#333'}}>{step.type}</strong> | Data: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{step.dataSource || 'N/A'}</span> | Required: {step.required ? 'Yes' : 'No'}
                                             </div>
                                             {step.allowedOptions && step.allowedOptions.length > 0 && (
                                                 <div style={{ fontSize: '0.65rem', color: '#CC6600', marginTop: '3px', fontWeight: 'bold' }}>🔍 RESTRICTED TO: {step.allowedOptions.length} specific options.</div>
