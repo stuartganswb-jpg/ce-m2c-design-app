@@ -568,8 +568,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               if (libPart) {
                   const specs = libPart.manufacturingSpecs || {};
                   const bPrice = parseFloat(specs.basePrice) || 0;
-                  const cPrice = parseFloat(specs.cost) || 0;
-                  bp = bPrice > 0 ? bPrice : cPrice;
+                  bp = bPrice > 0 ? bPrice : 0; 
               }
 
               return {
@@ -1069,10 +1068,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                      if (part) {
                                                          const specs = part.manufacturingSpecs || {};
                                                          const bp = specs.basePrice !== undefined && specs.basePrice !== "" ? parseFloat(specs.basePrice) : 0;
-                                                         const cost = specs.cost !== undefined && specs.cost !== "" ? parseFloat(specs.cost) : 0;
-                                                         
                                                          if (bp > 0) extractedPrice = bp;
-                                                         else if (cost > 0) extractedPrice = cost;
                                                          else extractedPrice = 0;
                                                      }
                                                      
@@ -1084,14 +1080,31 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             </div>
                                             <div>
                                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#333', display: 'block', marginBottom: '4px' }}>STEP BASE PRICE ($):</label>
-                                                <input 
-                                                    type="number" 
-                                                    step="0.01" 
-                                                    value={newStep.basePrice !== undefined && newStep.basePrice !== null && newStep.basePrice !== '' ? newStep.basePrice : ''} 
-                                                    onChange={e => setNewStep({...newStep, basePrice: e.target.value})} 
-                                                    placeholder="e.g. 15.00" 
-                                                    style={{ width: '100%', padding: '8px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold' }} 
-                                                />
+                                                <div style={{ display: 'flex', gap: '5px' }}>
+                                                    <input 
+                                                        type="number" 
+                                                        step="0.01" 
+                                                        value={newStep.basePrice !== undefined && newStep.basePrice !== null && newStep.basePrice !== '' ? newStep.basePrice : ''} 
+                                                        onChange={e => setNewStep({...newStep, basePrice: e.target.value})} 
+                                                        placeholder="e.g. 15.00" 
+                                                        style={{ flex: 1, padding: '8px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold' }} 
+                                                    />
+                                                    <button 
+                                                        onClick={() => {
+                                                            const selectedId = newStep.linkedItemId || newStep.linkedPinId;
+                                                            if (!selectedId) return alert("Please link a library item first.");
+                                                            const part = allApprovedDesigns.find(p => p.id === selectedId || p.itemId === selectedId || p.legacyErpId === selectedId);
+                                                            if (part) {
+                                                                const bp = parseFloat(part.manufacturingSpecs?.basePrice) || parseFloat(part.basePrice) || 0;
+                                                                setNewStep(prev => ({...prev, basePrice: bp}));
+                                                            } else {
+                                                                alert("Item not found in library.");
+                                                            }
+                                                        }}
+                                                        style={{ padding: '8px 12px', background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>
+                                                        🔄 FETCH
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
