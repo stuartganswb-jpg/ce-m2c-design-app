@@ -41,21 +41,12 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [globalLists, setGlobalLists] = useState({});
 
-  // QUOTING ENGINE STATE
   const [quoteFlowId, setQuoteFlowId] = useState("");
-  const [quoteSelections, setQuoteSelections] = useState({ 
-      collection: '', 
-      poleId: '', poleFinishId: '', 
-      bracketFinishId: '', 
-      finialId: '', finialFinishId: '', 
-      ringId: '', ringFinishId: '' 
-  });
-  
+  const [quoteSelections, setQuoteSelections] = useState({ collection: '' });
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
-  const [stepQuantities, setStepQuantities] = useState({ rings: 0 }); 
+  const [stepQuantities, setStepQuantities] = useState({}); 
   const [flowPins, setFlowPins] = useState([]);
 
-  // ENGINEERING MATH STATE
   const [engData, setEngData] = useState({
     jobName: '', sidemark: '', shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
@@ -94,7 +85,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return cpqFlows.find(f => f.id === quoteFlowId);
   }, [quoteFlowId, cpqFlows]);
 
-  // 🚀 DYNAMIC STEP CATEGORY SNIFFER
+  // 🚀 RIGOROUS CATEGORY SNIFFER
   const getStepCategory = (step) => {
       if (!step) return '';
       const t = (step.title || '').toLowerCase();
@@ -109,35 +100,31 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return 'OTHER';
   };
 
-  // 🚀 FETCH SPECIFIC HARDWARE COMPONENT STEPS FROM ACTIVE FLOW
+  // 🚀 COMPONENT TARGETING LOGIC
   const getStepForCategory = (cat) => {
       if (!activeFlow) return null;
+      return activeFlow.steps.find(s => getStepCategory(s) === cat);
+  };
+
+  const getFinishStep = (compName) => {
+      if (!activeFlow) return null;
       return activeFlow.steps.find(s => {
-          const isFinish = (s.dataSource || '').toLowerCase() === 'master_finishes' || (s.title || '').toLowerCase().includes('finish');
-          if (isFinish) return false; 
-          return getStepCategory(s) === cat;
+          const isFinish = getStepCategory(s) === 'FINISH';
+          if (!isFinish) return false;
+          const t = (s.title || '').toLowerCase();
+          return t.includes(compName.toLowerCase()) || (compName === 'pole' && t.includes('tube'));
       });
   };
 
-  // 🚀 FETCH FINISH STEPS FOR SPECIFIC COMPONENTS
-  const getFinishStep = (compName) => {
-      if (!activeFlow) return null;
-      const finishSteps = activeFlow.steps.filter(s => {
-          const t = (s.title || '').toLowerCase();
-          const ds = (s.dataSource || '').toLowerCase();
-          return ds === 'master_finishes' || t.includes('finish') || t.includes('color') || t.includes('patina');
-      });
-      if (finishSteps.length === 0) return null;
-      
-      const specific = finishSteps.find(s => s.title.toLowerCase().includes(compName.toLowerCase()));
-      if (specific) return specific;
-      
-      const generic = finishSteps.find(s => {
-          const t = s.title.toLowerCase();
-          return !t.includes('pole') && !t.includes('tube') && !t.includes('bracket') && !t.includes('finial') && !t.includes('ring');
-      });
-      return generic || finishSteps[0];
-  };
+  const poleStep = getStepForCategory('POLE');
+  const bracketStep = getStepForCategory('BRACKET');
+  const finialStep = getStepForCategory('FINIAL');
+  const ringStep = getStepForCategory('RING');
+
+  const poleFinishStep = getFinishStep('pole');
+  const bracketFinishStep = getFinishStep('bracket');
+  const finialFinishStep = getFinishStep('finial');
+  const ringFinishStep = getFinishStep('ring');
 
   useEffect(() => {
       if (!activeFlow?.linkedAssemblyId) { setFlowPins([]); return; }
@@ -180,13 +167,19 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (detectedProj && !engData.bracketId) setIsCustomProj(false);
   }, [activeFlow, flowPins, libraryParts]);
 
+  // Sync Engineering Bracket to CPQ Step
+  useEffect(() => {
+      if (bracketStep && engData.bracketId && dynamicConfigParams[bracketStep.id] !== engData.bracketId) {
+          setDynamicConfigParams(prev => ({ ...prev, [bracketStep.id]: engData.bracketId }));
+      }
+  }, [engData.bracketId, bracketStep, dynamicConfigParams]);
+
   useEffect(() => {
       if (engData.bracketId) {
           const part = libraryParts.find(p => p.id === engData.bracketId);
           if (part) {
               const cData = part.manufacturingSpecs?.customData || {};
               const pData = part.manufacturingSpecs?.parametric || {};
-              
               const proj = parseFloat(cData.projection) || parseFloat(engData.proj) || 0;
               const bw = parseFloat(cData.bracketW || pData.width || pData.bracketW) || 3.0;
               const bt = parseFloat(cData.bracketThickness || pData.thickness || pData.bracketThickness) || 0.25;
@@ -199,72 +192,12 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   if (bt && prev.bracketThickness !== bt) { updates.bracketThickness = bt; changed = true; }
                   return changed ? updates : prev;
               });
-              
               if (proj) setIsCustomProj(false);
           }
       }
   }, [engData.bracketId, libraryParts]);
 
   const safeProj = parseFloat(engData.proj) || 0;
-
-  // 🚀 NATIVE OPTIONS - NOW RESPECTS CPQ FLOW RESTRICTIONS
-  const getNativeOptions = (categoryString) => {
-      const step = getStepForCategory(categoryString);
-
-      return libraryParts.filter(p => {
-          if (p.manufacturingSpecs?.customData?.feeType) return false;
-          
-          const pType = (p.manufacturingSpecs?.productType || p.productType || '').toUpperCase();
-          if (!pType.includes(categoryString)) return false;
-
-          const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
-          const upperCollections = collectionsArray.map(c => c.toUpperCase());
-          const selCollection = (quoteSelections.collection || "").toUpperCase();
-          
-          if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
-              if (!upperCollections.includes('N/A')) return false; 
-          }
-
-          // Force step restrictions from CPQ Flow if present
-          if (step && step.allowedOptions?.length > 0) {
-              if (!step.allowedOptions.includes(p.id)) return false;
-          }
-
-          return true;
-      });
-  };
-
-  const getFinishOptions = (compName) => {
-      const step = getFinishStep(compName);
-      const allF = [...globalFinishes, ...outsourceFinishes].map(f => ({ id: f.id, name: f.name, code: f.code }));
-      
-      if (step && step.allowedOptions?.length > 0) {
-          return allF.filter(f => step.allowedOptions.includes(f.id));
-      }
-      return allF;
-  };
-
-  const allBrackets = useMemo(() => {
-      const step = getStepForCategory('BRACKET');
-      return libraryParts.filter(p => {
-          const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
-          if (!pt.includes('BRACKET')) return false;
-
-          const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
-          const upperCollections = collectionsArray.map(c => c.toUpperCase());
-          const selCollection = (quoteSelections.collection || "").toUpperCase();
-          
-          if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
-              if (!upperCollections.includes('N/A')) return false; 
-          }
-
-          if (step && step.allowedOptions?.length > 0) {
-              if (!step.allowedOptions.includes(p.id)) return false;
-          }
-
-          return true;
-      });
-  }, [libraryParts, quoteSelections.collection, activeFlow]);
 
   const getOptionsForStep = (step) => {
       if (!step || !step.dataSource) return [];
@@ -317,7 +250,25 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return options;
   };
 
-  const uniqueProjections = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.customData?.projection).filter(Boolean))].sort((a,b) => parseFloat(a) - parseFloat(b));
+  const allBrackets = useMemo(() => {
+      const step = getStepForCategory('BRACKET');
+      return libraryParts.filter(p => {
+          const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
+          if (!pt.includes('BRACKET')) return false;
+
+          const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
+          const upperCollections = collectionsArray.map(c => c.toUpperCase());
+          const selCollection = (quoteSelections.collection || "").toUpperCase();
+          
+          if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
+              if (!upperCollections.includes('N/A')) return false; 
+          }
+          if (step && step.allowedOptions?.length > 0) {
+              if (!step.allowedOptions.includes(p.id)) return false;
+          }
+          return true;
+      });
+  }, [libraryParts, quoteSelections.collection, activeFlow]);
 
   const rad = (deg) => (deg * Math.PI) / 180;
   const S = 3.5; 
@@ -341,126 +292,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (engData.inputMode === 'WALL') { pole1 = Math.max(0, wall1 - mDeduct1 - imDeductL); pole2 = Math.max(0, wall2 - mDeduct1 - mDeduct2); pole3 = Math.max(0, wall3 - mDeduct2 - imDeductR); } 
       else { pole1 = engData.w1 - bendDeductL - imDeductL; wall1 = pole1 + mDeduct1 + imDeductL; pole2 = engData.w2; wall2 = pole2 + mDeduct1 + mDeduct2; pole3 = engData.w3 - bendDeductR - imDeductR; wall3 = pole3 + mDeduct2 + imDeductR; }
       sawAngle1 = engData.a1 === 180 ? 0 : 90 - (engData.a1 / 2); sawAngle2 = engData.a2 === 180 ? 0 : 90 - (engData.a2 / 2);
-  } else if (engData.shape === 'BOW') {
-      const c = engData.w2; const h = engData.bowDepth;
-      if (h > 0) {
-        const rInput = (h/2) + ((c*c)/(8*h)); const theta = 2 * Math.asin(c / (2 * rInput));
-        if (engData.inputMode === 'WALL') { bowR = rInput; bowHW_R = bowR - safeProj; pole2 = Math.max(0, (bowHW_R * theta) - imDeductL - imDeductR); wall2 = c; } 
-        else { bowHW_R = rInput; bowR = bowHW_R + safeProj; pole2 = (bowHW_R * theta) - imDeductL - imDeductR; wall2 = 2 * bowR * Math.sin(theta / 2); }
-      }
-  }
-
-  let endFootprint = 0; let endRawAdd = 0;    
-  if (engData.endStyle === 'FINIAL') { endFootprint = engData.finialW; endRawAdd = 0; } 
-  else if (engData.endStyle === 'RETURN_MITER') { endFootprint = Math.max(0, (engData.bracketW - engData.poleDiameter) / 2); endRawAdd = 0; } 
-  else if (engData.endStyle === 'RETURN_BEND') { endFootprint = Math.max(0, (engData.bracketW - engData.poleDiameter) / 2); endRawAdd = engData.gripAllowance; }
-
-  const addL_TOL = isLeftInside ? 0 : endFootprint; const addR_TOL = isRightInside ? 0 : endFootprint;
-  const addL_RAW = isLeftInside ? 0 : endRawAdd; const addR_RAW = isRightInside ? 0 : endRawAdd;
-  const orderL = pole1 + bendDeductL + imDeductL; const orderR = pole3 + bendDeductR + imDeductR;
-  const orderC = engData.shape === 'STRAIGHT' ? (pole2 + bendDeductL + bendDeductR + imDeductL + imDeductR) : (engData.shape === 'BOW' ? pole2 + imDeductL + imDeductR : pole2);
-  const tolLeft = engData.shape === 'MITERED' ? orderL + addL_TOL : 0; const tolRight = engData.shape === 'MITERED' ? orderR + addR_TOL : 0;
-  const tolCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? orderC + addL_TOL + addR_TOL : orderC;
-  const rawLeft = engData.shape === 'MITERED' ? pole1 + addL_RAW : 0; const rawRight = engData.shape === 'MITERED' ? pole3 + addR_RAW : 0;
-  const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 + addL_RAW + addR_RAW : pole2;
-  
-  const systemC2C = orderL + orderC + orderR;
-  const systemO2O = tolLeft + tolCenter + tolRight;
-  const totalPoleRawInches = rawLeft + rawCenter + rawRight;
-  
-  const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
-  const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;
-  const qtySplices = attachments.filter(a => a.type === 'splice').length;
-  const qtyMiters = engData.shape === 'MITERED' ? 2 : 0;
-  const qtyBends = engData.endStyle === 'RETURN_BEND' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
-  const qtyMiterReturns = engData.endStyle === 'RETURN_MITER' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
-  const qtyCustomProjBrackets = isCustomProj ? qtyBrackets : 0;
-  const qtyFinials = engData.endStyle === 'FINIAL' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
-  const disableFinials = engData.endStyle === 'RETURN_BEND' || engData.endStyle === 'RETURN_MITER';
-  
-  const recRings = Math.ceil(systemO2O / 12) * 4;
-
-  useEffect(() => {
-      setStepQuantities(prev => ({ ...prev, rings: prev.rings || recRings }));
-  }, [recRings]);
-
-  // 🚀 SYNC QUANTITIES AND AUTO-SELECTORS
-  useEffect(() => {
-      if (!activeFlow) return;
-
-      let changedQuotes = false;
-      let updatesQ = { ...quoteSelections };
-
-      const poleOpts = getNativeOptions('POLE');
-      if (poleOpts.length === 1 && updatesQ.poleId !== poleOpts[0].id) { updatesQ.poleId = poleOpts[0].id; changedQuotes = true; }
-
-      const ringOpts = getNativeOptions('RING');
-      if (ringOpts.length === 1 && updatesQ.ringId !== ringOpts[0].id) { updatesQ.ringId = ringOpts[0].id; changedQuotes = true; }
-
-      const finialOpts = getNativeOptions('FINIAL');
-      if (finialOpts.length === 1 && updatesQ.finialId !== finialOpts[0].id && !disableFinials) { updatesQ.finialId = finialOpts[0].id; changedQuotes = true; }
-
-      const poleFinOpts = getFinishOptions('pole');
-      if (poleFinOpts.length === 1 && updatesQ.poleFinishId !== poleFinOpts[0].id) { updatesQ.poleFinishId = poleFinOpts[0].id; changedQuotes = true; }
-
-      const brFinOpts = getFinishOptions('bracket');
-      if (brFinOpts.length === 1 && updatesQ.bracketFinishId !== brFinOpts[0].id) { updatesQ.bracketFinishId = brFinOpts[0].id; changedQuotes = true; }
-
-      const ringFinOpts = getFinishOptions('ring');
-      if (ringFinOpts.length === 1 && updatesQ.ringFinishId !== ringFinOpts[0].id) { updatesQ.ringFinishId = ringFinOpts[0].id; changedQuotes = true; }
-
-      const finialFinOpts = getFinishOptions('finial');
-      if (finialFinOpts.length === 1 && updatesQ.finialFinishId !== finialFinOpts[0].id && !disableFinials) { updatesQ.finialFinishId = finialFinOpts[0].id; changedQuotes = true; }
-
-      if (changedQuotes) setQuoteSelections(updatesQ);
-      
-      if (allBrackets.length === 1 && engData.bracketId !== allBrackets[0].id) {
-          setEngData(prev => ({...prev, bracketId: allBrackets[0].id}));
-      }
-
-      setStepQuantities(prev => {
-          const updates = { ...prev };
-          activeFlow.steps.forEach(step => {
-              const cat = getStepCategory(step);
-              if (cat === 'SPLICE') updates[step.id] = qtySplices;
-              else if (!updates[step.id] && !['POLE','BRACKET','FINIAL','RING','FINISH'].includes(cat)) updates[step.id] = 1; 
-          });
-          return updates;
-      });
-
-      setDynamicConfigParams(prev => {
-          let updates = { ...prev };
-          let changed = false;
-          activeFlow.steps.forEach(step => {
-              const opts = getOptionsForStep(step);
-              if (opts.length === 1 && prev[step.id] !== opts[0].id) {
-                  updates[step.id] = opts[0].id;
-                  changed = true;
-              }
-          });
-          return changed ? updates : prev;
-      });
-
-  }, [activeFlow, qtySplices, disableFinials, libraryParts, globalFinishes, outsourceFinishes, quoteSelections.collection, allBrackets]);
-
-  const feeSkuSplice = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'SPLICE');
-  const feeSkuMiter = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'MITER_CUT');
-  const feeSkuBend = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'BENT_RETURN');
-  const feeSkuMiterReturn = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'MITER_RETURN');
-  const feeSkuCustomProj = libraryParts.find(p => p.manufacturingSpecs?.customData?.feeType === 'CUSTOM_PROJ');
-
-  const P2 = { x: 500 - (wall2 * S)/2, y: 250 }; const P3 = { x: 500 + (wall2 * S)/2, y: 250 };
-  let P1 = P2, P4 = P3, HS = {x: 0, y: 0}, HE = {x: 0, y: 0}, HC1 = {x: 0, y: 0}, HC2 = {x: 0, y: 0}, nL = {x: 0, y: -1}, nR = {x: 0, y: -1}; 
-
-  if (engData.shape === 'STRAIGHT') {
-      HS = { x: 500 - (pole2 * S)/2, y: P2.y + safeProj * S }; HE = { x: 500 + (pole2 * S)/2, y: P3.y + safeProj * S }; nL = { x: 0, y: -1 }; nR = { x: 0, y: -1 };
-  } else if (engData.shape === 'MITERED') {
-      const t1 = rad(180 - engData.a1); const t2 = rad(180 - engData.a2);
-      P1 = { x: P2.x - (wall1 * S) * Math.cos(t1), y: P2.y + (wall1 * S) * Math.sin(t1) }; P4 = { x: P3.x + (wall3 * S) * Math.cos(t2), y: P3.y + (wall3 * S) * Math.sin(t2) };
-      HC1 = { x: P2.x + (mDeduct1 * S), y: P2.y + (safeProj * S) }; HC2 = { x: P3.x - (mDeduct2 * S), y: P3.y + (safeProj * S) };
-      HS = { x: HC1.x - (pole1 * S) * Math.cos(t1), y: HC1.y + (pole1 * S) * Math.sin(t1) }; HE = { x: HC2.x + (pole3 * S) * Math.cos(t2), y: HC2.y + (pole3 * S) * Math.sin(t2) };
-      const ndxL = P1.x - HS.x; const ndyL = P1.y - HS.y; const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1; nL = { x: ndxL/nlenL, y: ndyL/nlenL };
-      const ndxR = P4.x - HE.x; const ndyR = P4.y - HE.y; const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1; nR = { x: ndxR/nlenR, y: ndyR/nlenR };
   } else if (engData.shape === 'BOW') {
       if (engData.bowDepth > 0) {
           const rW_px = bowR * S; const rH_px = bowHW_R * S; bowCX = 500; bowCY = P2.y + rW_px - engData.bowDepth * S;
@@ -713,13 +544,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   };
 
   const handlePushToCPQ = async () => {
-      if (!quoteSelections.poleId) return alert("Please select a Pole / Tube to proceed.");
-      if (engData.proj > 0 && !engData.bracketId) return alert("Please select a Bracket in the Fabrication Settings to proceed.");
-
       const hasMissingRequirements = activeFlow?.steps?.some(step => {
           if (step.type === 'DIMENSIONS') return false; 
           
           const cat = getStepCategory(step);
+          // Handled Natively
           if (['POLE','BRACKET','FINIAL','RING','FINISH'].includes(cat)) return false; 
           
           if (step.required && !dynamicConfigParams[step.id]) return true;
@@ -727,15 +556,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       });
 
       if (hasMissingRequirements) return alert("Please complete all required dynamic options in the configuration.");
-      
+      if (poleStep && !dynamicConfigParams[poleStep.id]) return alert("Please select a Pole / Tube.");
+      if (bracketStep && !dynamicConfigParams[bracketStep.id]) return alert("Please select a Bracket.");
+
       setIsPushingToCPQ(true);
       const draftId = `QUOTE-${Date.now()}`;
       
       const mappedQuantities = {
-          pole: poleFeetQty,
-          bracket: qtyBrackets,
-          ring: stepQuantities.rings || recRings,
-          finial: qtyFinials,
           splice: qtySplices,
           miter: qtyMiters,
           bend: qtyBends,
@@ -746,9 +573,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (activeFlow) {
           activeFlow.steps.forEach(step => {
               const cat = getStepCategory(step);
-              if (!['POLE','BRACKET','FINIAL','RING','FINISH'].includes(cat)) {
-                  mappedQuantities[step.id] = stepQuantities[step.id] || 1;
-              }
+              if (cat === 'POLE') mappedQuantities[step.id] = poleFeetQty;
+              else if (cat === 'BRACKET') mappedQuantities[step.id] = qtyBrackets;
+              else if (cat === 'FINIAL' && !disableFinials) mappedQuantities[step.id] = qtyFinials;
+              else if (cat === 'RING') mappedQuantities[step.id] = stepQuantities[step.id] || recRings;
+              else if (cat !== 'FINISH') mappedQuantities[step.id] = stepQuantities[step.id] || 1;
           });
       }
 
@@ -761,14 +590,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           cpqFlowId: activeFlow?.id || null,       
           specs: {
               collection: quoteSelections.collection,
-              poleId: quoteSelections.poleId,
-              poleFinishId: quoteSelections.poleFinishId,
-              bracketId: engData.bracketId,
-              bracketFinishId: quoteSelections.bracketFinishId,
-              finialId: quoteSelections.finialId,
-              finialFinishId: quoteSelections.finialFinishId,
-              ringId: quoteSelections.ringId,
-              ringFinishId: quoteSelections.ringFinishId,
               quantities: mappedQuantities,
               ...dynamicConfigParams
           }, 
@@ -780,6 +601,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       catch (e) { console.error(e); alert("Error pushing to CPQ."); } 
       finally { setIsPushingToCPQ(false); }
   };
+
+  const coreStepIds = [
+      poleStep?.id, poleFinishStep?.id,
+      bracketStep?.id, bracketFinishStep?.id,
+      finialStep?.id, finialFinishStep?.id,
+      ringStep?.id, ringFinishStep?.id
+  ].filter(Boolean);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh', overflow: 'hidden' }}>
@@ -904,10 +732,16 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                     <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>SELECT BRACKET (AUTO-SYNCS DIMS):</label>
                                     <select 
                                         value={engData.bracketId || ''} 
-                                        onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            setEngData(prev => ({ ...prev, bracketId: val }));
+                                            if (bracketStep && val) {
+                                                setDynamicConfigParams(prev => ({ ...prev, [bracketStep.id]: val }));
+                                            }
+                                        }}
                                         style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box' }}
                                     >
-                                        <option value="">-- SELECT BRACKET --</option>
+                                        <option value="">{bracketStep ? '-- SELECT BRACKET --' : '-- SELECT CPQ FLOW FIRST --'}</option>
                                         {allBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
                                     </select>
                                 </div>
@@ -1118,15 +952,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa' }}>
                       
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>SYSTEM & COLLECTION</h4>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>COLLECTION ASSIGNMENT</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                              <div>
-                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>CPQ FLOW / CONFIGURATOR:</label>
-                                  <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '10px', border: '2px solid #007bff', fontWeight: 'bold' }}>
-                                      <option value="">-- NO FLOW SELECTED --</option>
-                                      {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                                  </select>
-                              </div>
                               <div>
                                   <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>COLLECTION (FILTERS HARDWARE):</label>
                                   <select value={quoteSelections.collection} onChange={e => { setQuoteSelections({...quoteSelections, collection: e.target.value}); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold', background: '#e6f2ff' }}>
@@ -1138,51 +965,151 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                       </div>
 
                       <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>CORE HARDWARE & COMPONENTS</h4>
+                          <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>REQUIRED COMPONENTS & FABRICATION</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                               
-                              {/* POLE */}
-                              <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>MAIN TUBE / POLE:</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>{poleFeetQty} FT REQ</span></div>
-                                  <select value={quoteSelections.poleId} onChange={e => setQuoteSelections({...quoteSelections, poleId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}><option value="">-- SELECT TUBE/POLE --</option>{getNativeOptions('POLE').map(p => <option key={p.id} value={p.id}>{p.itemName} {p.legacyErpId ? `[${p.legacyErpId}]` : ''}</option>)}</select>
-                                  <select value={quoteSelections.poleFinishId} onChange={e => setQuoteSelections({...quoteSelections, poleFinishId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem' }}><option value="">-- SELECT FINISH --</option>{getFinishOptions('pole').map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}</select>
-                              </div>
+                              {!activeFlow ? (
+                                  <div style={{ color: '#d9534f', fontSize: '0.8rem', fontWeight: 'bold', fontStyle: 'italic', padding: '10px', border: '1px dashed #d9534f' }}>
+                                      ⚠️ WARNING: No CPQ Flow selected.
+                                      <br/><br/>
+                                      To configure options, please select a CPQ Flow in the left panel.
+                                  </div>
+                              ) : (
+                                  <>
+                                      {/* POLE */}
+                                      {poleStep && (
+                                          <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
+                                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{poleStep.title.toUpperCase()}:</label>
+                                                  <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>{poleFeetQty} FT REQ</span>
+                                              </div>
+                                              <select value={dynamicConfigParams[poleStep.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [poleStep.id]: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}>
+                                                  <option value="">-- SELECT TUBE/POLE --</option>
+                                                  {getOptionsForStep(poleStep).map(p => <option key={p.id} value={p.id}>{p.itemName} {p.code ? `[${p.code}]` : ''}</option>)}
+                                              </select>
+                                              {poleFinishStep && (
+                                                  <select value={dynamicConfigParams[poleFinishStep.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [poleFinishStep.id]: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem' }}>
+                                                      <option value="">-- SELECT FINISH --</option>
+                                                      {getFinishOptions('pole').map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}
+                                                  </select>
+                                              )}
+                                          </div>
+                                      )}
 
-                              {/* BRACKET */}
-                              {qtyBrackets > 0 && (
-                                  <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>BRACKETS ({isCustomProj ? "CUSTOM" : `${engData.proj}"`} PROJ):</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>QTY: {qtyBrackets}</span></div>
-                                      <select disabled value={engData.bracketId} style={{ width: '100%', padding: '10px', border: '1px dashed #ccc', marginBottom: '5px', background: '#f4f4f4' }}><option value="">-- SELECTED IN FAB SETTINGS --</option>{allBrackets.map(p => <option key={p.id} value={p.id}>{p.itemName}</option>)}</select>
-                                      <select value={quoteSelections.bracketFinishId} onChange={e => setQuoteSelections({...quoteSelections, bracketFinishId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem' }}><option value="">-- SELECT FINISH --</option>{getFinishOptions('bracket').map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}</select>
+                                      {/* BRACKET */}
+                                      {bracketStep && qtyBrackets > 0 && (
+                                          <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
+                                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{bracketStep.title.toUpperCase()} ({isCustomProj ? "CUSTOM" : `${engData.proj}"`} PROJ):</label>
+                                                  <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>QTY: {qtyBrackets}</span>
+                                              </div>
+                                              <select 
+                                                  value={dynamicConfigParams[bracketStep.id] || ''} 
+                                                  onChange={e => {
+                                                      const val = e.target.value;
+                                                      setDynamicConfigParams({...dynamicConfigParams, [bracketStep.id]: val});
+                                                      setEngData(prev => ({...prev, bracketId: val}));
+                                                  }}
+                                                  style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}
+                                              >
+                                                  <option value="">-- SELECT BRACKET --</option>
+                                                  {getOptionsForStep(bracketStep).map(p => <option key={p.id} value={p.id}>{p.itemName} {p.code ? `[${p.code}]` : ''}</option>)}
+                                              </select>
+                                              {bracketFinishStep && (
+                                                  <select value={dynamicConfigParams[bracketFinishStep.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [bracketFinishStep.id]: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem' }}>
+                                                      <option value="">-- SELECT FINISH --</option>
+                                                      {getFinishOptions('bracket').map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}
+                                                  </select>
+                                              )}
+                                          </div>
+                                      )}
+
+                                      {/* RINGS */}
+                                      {ringStep && (
+                                          <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
+                                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{ringStep.title.toUpperCase()}:</label>
+                                                  <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>REC: {recRings} RINGS</span>
+                                              </div>
+                                              <select value={dynamicConfigParams[ringStep.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [ringStep.id]: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}>
+                                                  <option value="">-- NO RINGS / TRAVERSE --</option>
+                                                  {getOptionsForStep(ringStep).map(p => <option key={p.id} value={p.id}>{p.itemName} {p.code ? `[${p.code}]` : ''}</option>)}
+                                              </select>
+                                              {dynamicConfigParams[ringStep.id] && (
+                                                  <>
+                                                      {ringFinishStep && (
+                                                          <select value={dynamicConfigParams[ringFinishStep.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [ringFinishStep.id]: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem', marginBottom: '5px' }}>
+                                                              <option value="">-- SELECT FINISH --</option>
+                                                              {getFinishOptions('ring').map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}
+                                                          </select>
+                                                      )}
+                                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff', padding: '5px', border: '1px solid #ccc' }}>
+                                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>TOTAL RINGS TO ORDER:</span>
+                                                          <input type="number" min="1" value={stepQuantities[ringStep.id] !== undefined ? stepQuantities[ringStep.id] : recRings} onChange={e => setStepQuantities({...stepQuantities, [ringStep.id]: parseInt(e.target.value) || 0})} style={{ width: '60px', padding: '5px', textAlign: 'center', border: '2px solid #000', fontWeight: 'bold' }} />
+                                                      </div>
+                                                  </>
+                                              )}
+                                          </div>
+                                      )}
+
+                                      {/* FINIALS */}
+                                      {finialStep && (
+                                          <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', opacity: disableFinials ? 0.5 : 1 }}>
+                                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{finialStep.title.toUpperCase()}:</label>
+                                                  <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: disableFinials ? '#999' : '#1e7e34' }}>{disableFinials ? "N/A (BENT RETURN)" : `QTY: ${qtyFinials}`}</span>
+                                              </div>
+                                              <select disabled={disableFinials} value={dynamicConfigParams[finialStep.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [finialStep.id]: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}>
+                                                  <option value="">-- SELECT FINIAL --</option>
+                                                  {getOptionsForStep(finialStep).map(p => <option key={p.id} value={p.id}>{p.itemName} {p.code ? `[${p.code}]` : ''}</option>)}
+                                              </select>
+                                              {!disableFinials && dynamicConfigParams[finialStep.id] && finialFinishStep && (
+                                                  <select value={dynamicConfigParams[finialFinishStep.id] || ''} onChange={e => setDynamicConfigParams({...dynamicConfigParams, [finialFinishStep.id]: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem' }}>
+                                                      <option value="">-- SELECT FINISH --</option>
+                                                      {getFinishOptions('finial').map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}
+                                                  </select>
+                                              )}
+                                          </div>
+                                      )}
+                                  </>
+                              )}
+
+                              {(qtyBends > 0 || qtyMiterReturns > 0 || qtyMiters > 0) && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px dotted #ccc', alignItems: 'center' }}>
+                                      <div>
+                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block' }}>FABRICATION SERVICE:</span>
+                                          {qtyBends > 0 && <span style={{ fontSize: '0.65rem', color: '#856404' }}>RETURN BEND {feeSkuBend ? `[${feeSkuBend.legacyErpId}]` : '[UNMAPPED]'}</span>}
+                                          {qtyMiterReturns > 0 && <span style={{ fontSize: '0.65rem', color: '#856404' }}>MITER RETURN {feeSkuMiterReturn ? `[${feeSkuMiterReturn.legacyErpId}]` : '[UNMAPPED]'}</span>}
+                                          {qtyMiters > 0 && <span style={{ fontSize: '0.65rem', color: '#856404' }}>MITER CUT {feeSkuMiter ? `[${feeSkuMiter.legacyErpId}]` : '[UNMAPPED]'}</span>}
+                                      </div>
+                                      <strong style={{ color: '#1e7e34' }}>{(qtyBends || qtyMiterReturns || qtyMiters)}x</strong>
                                   </div>
                               )}
 
-                              {/* RINGS */}
-                              <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>OPTIONAL RINGS:</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34' }}>REC: {recRings} RINGS</span></div>
-                                  <select value={quoteSelections.ringId} onChange={e => setQuoteSelections({...quoteSelections, ringId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}><option value="">-- NO RINGS / TRAVERSE --</option>{getNativeOptions('RING').map(p => <option key={p.id} value={p.id}>{p.itemName} {p.legacyErpId ? `[${p.legacyErpId}]` : ''}</option>)}</select>
-                                  {quoteSelections.ringId && (
-                                      <>
-                                          <select value={quoteSelections.ringFinishId} onChange={e => setQuoteSelections({...quoteSelections, ringFinishId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem', marginBottom: '5px' }}><option value="">-- SELECT FINISH --</option>{getFinishOptions('ring').map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}</select>
-                                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff', padding: '5px', border: '1px solid #ccc' }}>
-                                              <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>TOTAL RINGS TO ORDER:</span>
-                                              <input type="number" min="1" value={stepQuantities.rings} onChange={e => setStepQuantities({...stepQuantities, rings: parseInt(e.target.value) || 0})} style={{ width: '60px', padding: '5px', textAlign: 'center', border: '2px solid #000', fontWeight: 'bold' }} />
-                                          </div>
-                                      </>
-                                  )}
-                              </div>
+                              {qtySplices > 0 && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderBottom: '1px dotted #ccc', alignItems: 'center' }}>
+                                      <div>
+                                          <span style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block' }}>SPLICE SERVICE:</span>
+                                          <span style={{ fontSize: '0.65rem', color: '#856404' }}>{feeSkuSplice ? `[${feeSkuSplice.legacyErpId}]` : '[UNMAPPED]'}</span>
+                                      </div>
+                                      <strong style={{ color: '#1e7e34' }}>{qtySplices}x</strong>
+                                  </div>
+                              )}
 
-                              {/* FINIALS */}
-                              <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', opacity: disableFinials ? 0.5 : 1 }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>FINIALS:</label><span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: disableFinials ? '#999' : '#1e7e34' }}>{disableFinials ? "N/A (BENT RETURN)" : `QTY: ${qtyFinials}`}</span></div>
-                                  <select disabled={disableFinials} value={quoteSelections.finialId} onChange={e => setQuoteSelections({...quoteSelections, finialId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #000', marginBottom: '5px' }}><option value="">-- SELECT FINIAL --</option>{getNativeOptions('FINIAL').map(p => <option key={p.id} value={p.id}>{p.itemName} {p.legacyErpId ? `[${p.legacyErpId}]` : ''}</option>)}</select>
-                                  {!disableFinials && quoteSelections.finialId && <select value={quoteSelections.finialFinishId} onChange={e => setQuoteSelections({...quoteSelections, finialFinishId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontSize: '0.8rem' }}><option value="">-- SELECT FINISH --</option>{getFinishOptions('finial').map(f => <option key={f.id} value={f.id}>{f.name} {f.code ? `[${f.code}]` : ''}</option>)}</select>}
-                              </div>
+                              {qtyCustomProjBrackets > 0 && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px', marginTop: '5px', background: '#fff0f0' }}>
+                                      <span style={{ fontSize: '0.65rem', color: '#d9534f', fontWeight: 'bold' }}>CUSTOM PROJ. SETUP {feeSkuCustomProj ? `[${feeSkuCustomProj.legacyErpId}]` : '[UNMAPPED]'}</span>
+                                      <strong style={{ color: '#d9534f', fontSize: '0.7rem' }}>{qtyCustomProjBrackets}x</strong>
+                                  </div>
+                              )}
                           </div>
                       </div>
 
                       {/* DYNAMIC CPQ EXTRAS */}
-                      {activeFlow && activeFlow.steps.filter(s => { const cat = getStepCategory(s); return !['POLE','BRACKET','RING','FINIAL','FINISH'].includes(cat) && s.type !== 'DIMENSIONS'; }).length > 0 && (
+                      {activeFlow && activeFlow.steps.filter(s => { 
+                          const cat = getStepCategory(s); 
+                          return !['POLE','BRACKET','RING','FINIAL','FINISH'].includes(cat) && s.type !== 'DIMENSIONS'; 
+                      }).length > 0 && (
                           <div style={{ background: '#fff', border: '2px dashed #007bff', padding: '15px' }}>
                               <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>EXTRA CPQ CONFIGURATIONS</h4>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1205,20 +1132,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                           </div>
                       )}
 
-                      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#d9534f', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>FABRICATION FEES</h4>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.75rem' }}>
-                              {(qtyBends > 0 || qtyMiterReturns > 0 || qtyMiters > 0) && <div style={{ display: 'flex', justifyContent: 'space-between', color: '#856404', fontWeight: 'bold' }}><span>END FABRICATION:</span><strong>{(qtyBends || qtyMiterReturns || qtyMiters)}x</strong></div>}
-                              {qtySplices > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', color: '#856404', fontWeight: 'bold' }}><span>SPLICES:</span><strong>{qtySplices}x</strong></div>}
-                              {qtyCustomProjBrackets > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', color: '#d9534f', fontWeight: 'bold' }}><span>CUSTOM PROJ. BRACKETS:</span><strong>{qtyCustomProjBrackets}x</strong></div>}
-                              {!qtyBends && !qtyMiterReturns && !qtyMiters && !qtySplices && !qtyCustomProjBrackets && <div style={{ color: '#999', fontStyle: 'italic' }}>No additional fabrication fees detected.</div>}
-                          </div>
-                      </div>
-
                   </div>
                   
                   <div style={{ padding: '20px', background: '#000', borderTop: '2px solid #000' }}>
-                      <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !quoteSelections.poleId || !engData.bracketId} style={{ width: '100%', padding: '15px', background: (isPushingToCPQ || !quoteSelections.poleId || !engData.bracketId) ? '#666' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isPushingToCPQ || !quoteSelections.poleId || !engData.bracketId) ? 'not-allowed' : 'pointer', fontSize: '1.1rem', transition: '0.2s' }}>
+                      <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeFlow} style={{ width: '100%', padding: '15px', background: (isPushingToCPQ || !activeFlow) ? '#666' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isPushingToCPQ || !activeFlow) ? 'not-allowed' : 'pointer', fontSize: '1.1rem', transition: '0.2s' }}>
                           {isPushingToCPQ ? 'SAVING DRAFT...' : '🛒 SEND TO CPQ CART'}
                       </button>
                   </div>
