@@ -9,11 +9,12 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const [isProcessing, setIsProcessing] = useState(false);
     
     const [hqParts, setHqParts] = useState([]);
-    const [globalLists, setGlobalLists] = useState({ collections: [], prodTypes: [], customers: [] }); 
+    const [globalLists, setGlobalLists] = useState({ prodTypes: [], customers: [] }); 
 
     const [globalFinishes, setGlobalFinishes] = useState([]);
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);
     const [inhouseFinishes, setInhouseFinishes] = useState([]);
+    const [collectionsData, setCollectionsData] = useState([]); // 🚀 Hooked up to new Collection DB
 
     const [patternId, setPatternId] = useState("");
     const [finishId, setFinishId] = useState(""); 
@@ -36,15 +37,23 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             unsub = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
                 if (docSnap.exists()) {
                     setGlobalLists({
-                        collections: docSnap.data().collections || [],
                         prodTypes: docSnap.data().prodTypes || [],
                         customers: docSnap.data().customers || []
                     });
-                    setCollectionName(docSnap.data().collections?.[0] || '');
                     setProductType(docSnap.data().prodTypes?.[0] || '');
                 }
             });
         } catch (err) { console.error("Global Lists Error:", err); }
+        return () => { if (typeof unsub === 'function') unsub(); };
+    }, []);
+
+    useEffect(() => {
+        let unsub = null;
+        try {
+            unsub = onSnapshot(collection(db, "hq_collections"), snap => {
+                setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})));
+            });
+        } catch (err) { console.error("Collections DB Error:", err); }
         return () => { if (typeof unsub === 'function') unsub(); };
     }, []);
 
@@ -365,12 +374,14 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             <div style={{ flex: 1 }}>
                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>COLLECTION</label>
                                 <select value={collectionName} onChange={e => setCollectionName(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid #ccc', fontWeight: 'bold', marginTop: '5px', boxSizing: 'border-box' }}>
-                                    {globalLists.collections.map(c => <option key={c} value={c}>{c}</option>)}
+                                    <option value="">Select...</option>
+                                    {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                 </select>
                             </div>
                             <div style={{ flex: 1 }}>
                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>PRODUCT TYPE</label>
                                 <select value={productType} onChange={e => setProductType(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid #ccc', fontWeight: 'bold', marginTop: '5px', boxSizing: 'border-box' }}>
+                                    <option value="">Select...</option>
                                     {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                             </div>
@@ -386,13 +397,14 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             />
                         </div>
 
+                        {/* PART TAGGING */}
                         <select 
                             onChange={(e) => {
                                 if (e.target.value && !associatedParts.includes(e.target.value)) {
                                     setAssociatedParts(prev => [...prev, e.target.value]);
                                 }
                             }} 
-                            style={{ width: '100%', padding: '10px', border: '2px solid #007bff', fontWeight: 'bold', boxSizing: 'border-box' }}
+                            style={{ padding: '10px', border: '2px solid #007bff', fontWeight: 'bold', width: '100%', boxSizing: 'border-box' }}
                         >
                             <option value="">+ Link to Master Library Part...</option>
                             {safeHqParts.slice(0, 200).map(p => <option key={p.id} value={p.id}>{String(p.itemName || p.id)}</option>)}
@@ -408,13 +420,14 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             </div>
                         )}
 
+                        {/* FINISHES ASSIGNMENT */}
                         <select 
                             onChange={(e) => {
                                 if (e.target.value && !associatedFinishes.includes(e.target.value)) {
                                     setAssociatedFinishes(prev => [...prev, e.target.value]);
                                 }
                             }} 
-                            style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', fontWeight: 'bold', boxSizing: 'border-box' }}
+                            style={{ padding: '10px', border: '2px solid #6f42c1', fontWeight: 'bold', width: '100%', boxSizing: 'border-box' }}
                         >
                             <option value="">+ Link to Master Finish...</option>
                             <optgroup label="In-House & Global Finishes">

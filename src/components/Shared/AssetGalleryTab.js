@@ -11,7 +11,9 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);
     const [inhouseFinishes, setInhouseFinishes] = useState([]);
 
-    const [globalLists, setGlobalLists] = useState({ collections: [], prodTypes: [], customers: [] });
+    const [globalLists, setGlobalLists] = useState({ prodTypes: [], customers: [] });
+    const [collectionsData, setCollectionsData] = useState([]); // 🚀 Hooked up to new Collection DB
+
     const [searchQuery, setSearchQuery] = useState('');
     
     const [activeAsset, setActiveAsset] = useState(null); 
@@ -31,18 +33,26 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             unsub = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
                 if (docSnap.exists()) {
                     setGlobalLists({
-                        collections: docSnap.data().collections || [],
                         prodTypes: docSnap.data().prodTypes || [],
                         customers: docSnap.data().customers || []
                     });
                     setMetaForm(prev => ({ 
                         ...prev, 
-                        collection: prev.collection || (docSnap.data().collections?.[0] || ''),
                         productType: prev.productType || (docSnap.data().prodTypes?.[0] || '')
                     }));
                 }
             });
         } catch (err) { console.error("Global Lists Error:", err); }
+        return () => { if (typeof unsub === 'function') unsub(); };
+    }, []);
+
+    useEffect(() => {
+        let unsub = null;
+        try {
+            unsub = onSnapshot(collection(db, "hq_collections"), snap => {
+                setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})));
+            });
+        } catch (err) { console.error("Collections DB Error:", err); }
         return () => { if (typeof unsub === 'function') unsub(); };
     }, []);
 
@@ -289,7 +299,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             }, { merge: true });
 
             setUploadProgress(100);
-            setMetaForm({ name: '', collection: globalLists.collections[0]||'', productType: globalLists.prodTypes[0]||'', patternId: '', finishId: '', customerId: '', clientSku: '', notes: '', associatedParts: [], associatedFinishes: [] });
+            setMetaForm({ name: '', collection: collectionsData[0]?.name||'', productType: globalLists.prodTypes[0]||'', patternId: '', finishId: '', customerId: '', clientSku: '', notes: '', associatedParts: [], associatedFinishes: [] });
             setUploadFile(null);
             if (fileInputRef.current) fileInputRef.current.value = '';
             setTimeout(() => { setIsUploading(false); setUploadProgress(0); }, 500);
@@ -332,7 +342,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
         setIsZoomed(false); 
         setMetaForm({
             name: asset?.name || '',
-            collection: asset?.collection || asset?.category || globalLists.collections[0] || '',
+            collection: asset?.collection || asset?.category || collectionsData[0]?.name || '',
             productType: asset?.productType || globalLists.prodTypes[0] || '',
             patternId: asset?.patternId || '',
             finishId: asset?.finishId || '',
@@ -408,12 +418,14 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                         <div style={{ flex: 1 }}>
                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>COLLECTION</label>
                             <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
-                                {globalLists.collections.map(c => <option key={c} value={c}>{c}</option>)}
+                                <option value="">Select...</option>
+                                {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                             </select>
                         </div>
                         <div style={{ flex: 1 }}>
                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>PROD TYPE</label>
                             <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
+                                <option value="">Select...</option>
                                 {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
@@ -630,12 +642,14 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                     <div style={{ flex: 1 }}>
                                         <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>COLLECTION</label>
                                         <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
-                                            {globalLists.collections.map(c => <option key={c} value={c}>{c}</option>)}
+                                            <option value="">Select...</option>
+                                            {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                         </select>
                                     </div>
                                     <div style={{ flex: 1 }}>
                                         <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>PROD TYPE</label>
                                         <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
+                                            <option value="">Select...</option>
                                             {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
                                         </select>
                                     </div>
