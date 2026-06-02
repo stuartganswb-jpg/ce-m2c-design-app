@@ -71,7 +71,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   // Identify if the current logged-in user is the Master Admin 
   const currentActiveUser = users.find(u => u.name === currentUser);
-  const isSuperAdmin = currentActiveUser?.pin === "1032" || currentActiveUser?.superAdmin === true;
+const isSuperAdmin = currentUser === "Master Admin" || currentActiveUser?.pin === "1032" || currentActiveUser?.superAdmin === true;
 
   useEffect(() => {
       const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
