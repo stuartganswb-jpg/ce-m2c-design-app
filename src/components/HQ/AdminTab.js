@@ -281,32 +281,37 @@ const isSuperAdmin = currentUser === "Master Admin" || currentActiveUser?.pin ==
   };
 
 const handleSyncAddresses = async () => {
+      if (!nsSubsidiaryId) return alert("Please enter a Target Subsidiary ID.");
+      
       setIsSyncing(true);
-      addLog(`Initiating Address Book Sync for Active Customers...`, 'info');
+      addLog(`Initiating Address Book Sync for Subsidiary [${nsSubsidiaryId}]...`, 'info');
 
       try {
+          // 🚀 FIX 1: Use the strict CustomerAddressbookEntityAddress table
+          // 🚀 FIX 2: Filter by nsSubsidiaryId to match your active customers
           const q = `
               SELECT 
                   Customer.id AS customer_id,
-                  CustomerAddressbook.id AS addressbook_id,
+                  CustomerAddressbook.internalid AS addressbook_id,
                   CustomerAddressbook.label,
                   CustomerAddressbook.defaultshipping,
-                  EntityAddress.addressee,
-                  EntityAddress.attention,
-                  EntityAddress.addr1,
-                  EntityAddress.addr2,
-                  EntityAddress.city,
-                  EntityAddress.state,
-                  EntityAddress.zip,
-                  EntityAddress.country
+                  CustomerAddressbookEntityAddress.addressee,
+                  CustomerAddressbookEntityAddress.attention,
+                  CustomerAddressbookEntityAddress.addr1,
+                  CustomerAddressbookEntityAddress.addr2,
+                  CustomerAddressbookEntityAddress.city,
+                  CustomerAddressbookEntityAddress.state,
+                  CustomerAddressbookEntityAddress.zip,
+                  CustomerAddressbookEntityAddress.country
               FROM 
                   Customer
-              JOIN 
+              INNER JOIN 
                   CustomerAddressbook ON CustomerAddressbook.entity = Customer.id
-              JOIN 
-                  EntityAddress ON EntityAddress.nkey = CustomerAddressbook.addressbookaddress
+              INNER JOIN 
+                  CustomerAddressbookEntityAddress ON CustomerAddressbookEntityAddress.nkey = CustomerAddressbook.addressbookaddress
               WHERE 
                   Customer.isinactive = 'F'
+                  AND Customer.subsidiary = ${nsSubsidiaryId}
           `;
 
           const result = await executeSuiteQL(q);
