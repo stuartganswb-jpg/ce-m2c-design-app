@@ -32,9 +32,9 @@ const BRANDS = [
   { id: 'leyla', name: 'Leyla Gans LLC', focus: 'Fine Jewelry', color: '#C5A880' } 
 ];
 
-// 🚀 ADDED 10.7 (HQ Shared Messaging)
+// 🚀 UPDATED: Moved Node Grouping up and relabeled it 1.5
 const TABS = [
-  '1. Inception & Validation', '2. Visual Assembly', '2.5 Node Grouping', '3. BOM Engine', '4. Master Library',
+  '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library',
   '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
   '9. Client Vision', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '12. ERP Push / Pull', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor'
@@ -183,9 +183,10 @@ function HQ() {
               <h2 style={{ color: activeBrand.color }}>LOADING MODULE...</h2>
             </div>
           }>
+            {/* 🚀 UPDATED: Render array mapping mapped to new layout order */}
             {activeTab === TABS[0] && <InceptionTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[1] && <VisualAssemblyTab currentUser={user.name} activeBrand={activeBrand.id} onProceed={() => setActiveTab(TABS[3])} />}
-            {activeTab === TABS[2] && <NodeClusterTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[1] && <NodeClusterTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[2] && <VisualAssemblyTab currentUser={user.name} activeBrand={activeBrand.id} onProceed={() => setActiveTab(TABS[3])} />}
             {activeTab === TABS[3] && <BOMTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[4] && <LibraryTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[6] && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
@@ -195,7 +196,6 @@ function HQ() {
             {activeTab === TABS[10] && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[11] && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
             
-            {/* 🚀 NEW: HQ MESSAGING TAB */}
             {activeTab === TABS[12] && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={null} />}
             
             {activeTab === TABS[13] && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} />}

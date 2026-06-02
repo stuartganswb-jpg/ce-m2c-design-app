@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc, orderBy, limit } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
@@ -59,10 +59,19 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncLog, setSyncLog] = useState([]);
 
+  // --- SUPER ADMIN STATE ---
+  const [systemLogs, setSystemLogs] = useState([]);
+  const [logFilter, setLogFilter] = useState({ app: 'ALL', user: '' });
+  const [newMasterPin, setNewMasterPin] = useState("");
+
   const DOCUMENT_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE', 'FACTORY_ROUTER'];
   const BRANDS_LIST = ['m2c', 'uniquity', 'ce', 'leyla']; 
 
   const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app"; 
+
+  // Identify if the current logged-in user is the Master Admin 
+  const currentActiveUser = users.find(u => u.name === currentUser);
+  const isSuperAdmin = currentActiveUser?.pin === "1032" || currentActiveUser?.superAdmin === true;
 
   useEffect(() => {
       const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -112,6 +121,33 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           setFormEditor({ header: '', footer: '', terms: '' });
       }
   }, [activeFormType, formTemplates]);
+
+  // Fetch Global Logs across all apps when Super Admin tab is opened
+  useEffect(() => {
+      if (activeSection === "SUPER_ADMIN" && isSuperAdmin) {
+          const fetchGlobalLogs = async () => {
+              try {
+                  const shopSnap = await getDocs(query(collection(db, "shop_logs"), orderBy("t", "desc"), limit(150)));
+                  const finSnap = await getDocs(query(collection(db, "fin_logs"), orderBy("t", "desc"), limit(150)));
+                  const hqSnap = await getDocs(query(collection(db, "hq_logs"), orderBy("t", "desc"), limit(150)));
+
+                  let combined = [
+                      ...shopSnap.docs.map(d => ({ id: d.id, app: 'SHOP FLOOR', ...d.data() })),
+                      ...finSnap.docs.map(d => ({ id: d.id, app: 'FINISHING', ...d.data() })),
+                      ...hqSnap.docs.map(d => ({ id: d.id, app: 'HQ', ...d.data() }))
+                  ];
+                  
+                  combined.sort((a, b) => {
+                      const timeA = a.t?.toMillis ? a.t.toMillis() : 0;
+                      const timeB = b.t?.toMillis ? b.t.toMillis() : 0;
+                      return timeB - timeA;
+                  });
+                  setSystemLogs(combined);
+              } catch(e) { console.error("Error fetching global logs:", e); }
+          };
+          fetchGlobalLogs();
+      }
+  }, [activeSection, isSuperAdmin]);
 
   const masterAssemblies = allApprovedDesigns.filter(d => {
       const isBrandMatch = d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand));
@@ -176,6 +212,29 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const data = await response.json();
       if (!response.ok) throw new Error(`NetSuite Error: ${JSON.stringify(data)}`);
       return data;
+  };
+
+  const handleUpdateMasterPin = async () => {
+      if (!newMasterPin || newMasterPin.length !== 4) return alert("Master PIN must be exactly 4 digits.");
+      if (!currentActiveUser) return alert("Error locating your user profile.");
+      if (!window.confirm(`Update your Master PIN from ${currentActiveUser.pin} to ${newMasterPin}?`)) return;
+
+      try {
+          await setDoc(doc(db, "hq_users", newMasterPin), { 
+              ...currentActiveUser, 
+              pin: newMasterPin,
+              superAdmin: true 
+          });
+          if (currentActiveUser.id !== newMasterPin) {
+              await deleteDoc(doc(db, "hq_users", currentActiveUser.id));
+          }
+          
+          alert("✅ Master PIN successfully updated. You may need to log back in for changes to reflect globally.");
+          setNewMasterPin("");
+      } catch(e) {
+          console.error(e);
+          alert("Failed to update Master PIN.");
+      }
   };
 
   const handleSyncCustomers = async () => {
@@ -795,6 +854,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           <button onClick={() => setActiveSection("FORMS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "FORMS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "FORMS" ? '4px solid #28a745' : '4px solid transparent' }}>📝 FORM TEMPLATES</button>
           <button onClick={() => setActiveSection("USERS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "USERS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "USERS" ? '4px solid #007bff' : '4px solid transparent' }}>👥 USER MATRIX</button>
           <button onClick={() => setActiveSection("DANGER")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "DANGER" ? '#ffebee' : '#fff', color: '#d9534f', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "DANGER" ? '4px solid #d9534f' : '4px solid transparent' }}>⚠️ DANGER ZONE</button>
+          
+          {/* HIDDEN SUPER ADMIN TAB */}
+          {isSuperAdmin && (
+              <button onClick={() => setActiveSection("SUPER_ADMIN")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "SUPER_ADMIN" ? '#f4f4f4' : '#fff', color: '#000', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "SUPER_ADMIN" ? '4px solid #000' : '4px solid transparent' }}>
+                  🕵️‍♂️ 15.5 SUPER ADMIN
+              </button>
+          )}
         </div>
 
         <div style={{ flex: 1, background: '#fff', border: '2px solid #000', minHeight: '600px', boxShadow: '10px 10px 0 #000' }}>
@@ -1601,6 +1667,89 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   <div><h4 style={{ margin: '0 0 5px 0' }}>WIPE MASTER INVENTORY LIBRARY</h4><div style={{fontSize:'0.8rem', color:'#666'}}>Deletes all raw materials, components, and hardware.</div></div>
                   <button onClick={handleNukeLibrary} style={{ padding: '15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>NUKE INVENTORY</button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* SUPER ADMIN VIEW (TAB 15.5) */}
+          {activeSection === "SUPER_ADMIN" && isSuperAdmin && (
+            <div style={{ padding: '30px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px' }}>
+                <h3 style={{ margin: 0, textTransform: 'uppercase' }}>🕵️‍♂️ Master Analytics & Surveillance</h3>
+              </div>
+
+              {/* PIN CHANGER */}
+              <div style={{ background: '#000', color: '#fff', border: '2px solid #333', padding: '20px', marginBottom: '30px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                      <h4 style={{ margin: '0 0 5px 0', color: '#f39c12' }}>MASTER PIN CONTROLS</h4>
+                      <p style={{ margin: 0, fontSize: '0.8rem', color: '#ccc' }}>Update your global access PIN. Your Super Admin status will automatically migrate to the new PIN.</p>
+                  </div>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                      <input 
+                          type="password" 
+                          value={newMasterPin} 
+                          onChange={e => setNewMasterPin(e.target.value)} 
+                          placeholder="NEW 4-DIGIT PIN" 
+                          maxLength="4"
+                          style={{ padding: '10px', fontSize: '1.2rem', textAlign: 'center', width: '150px', fontWeight: 'bold', border: '2px solid #f39c12', background: '#333', color: '#fff' }} 
+                      />
+                      <button onClick={handleUpdateMasterPin} style={{ background: '#f39c12', color: '#000', padding: '10px 20px', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>UPDATE PIN</button>
+                  </div>
+              </div>
+
+              {/* GLOBAL LOG SURVEILLANCE */}
+              <div style={{ background: '#fff', border: '2px solid #000', padding: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                      <h4 style={{ margin: 0 }}>GLOBAL SYSTEM LOGS</h4>
+                      <div style={{ display: 'flex', gap: '10px' }}>
+                          <input 
+                              type="text" 
+                              placeholder="Filter by User..." 
+                              value={logFilter.user} 
+                              onChange={e => setLogFilter({...logFilter, user: e.target.value.toLowerCase()})} 
+                              style={{ padding: '8px', border: '1px solid #ccc' }} 
+                          />
+                          <select 
+                              value={logFilter.app} 
+                              onChange={e => setLogFilter({...logFilter, app: e.target.value})} 
+                              style={{ padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}
+                          >
+                              <option value="ALL">ALL APPS</option>
+                              <option value="HQ">HQ</option>
+                              <option value="SHOP FLOOR">SHOP FLOOR</option>
+                              <option value="FINISHING">FINISHING</option>
+                          </select>
+                      </div>
+                  </div>
+
+                  <div style={{ maxHeight: '500px', overflowY: 'auto', border: '1px solid #eee' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
+                          <thead style={{ background: '#f4f4f4', position: 'sticky', top: 0 }}>
+                              <tr>
+                                  <th style={{ padding: '10px', borderBottom: '2px solid #000' }}>TIMESTAMP</th>
+                                  <th style={{ padding: '10px', borderBottom: '2px solid #000' }}>APP</th>
+                                  <th style={{ padding: '10px', borderBottom: '2px solid #000' }}>CATEGORY / TAB</th>
+                                  <th style={{ padding: '10px', borderBottom: '2px solid #000' }}>USER</th>
+                                  <th style={{ padding: '10px', borderBottom: '2px solid #000' }}>ACTION</th>
+                              </tr>
+                          </thead>
+                          <tbody>
+                              {systemLogs
+                                  .filter(log => logFilter.app === 'ALL' || log.app === logFilter.app)
+                                  .filter(log => !logFilter.user || log.u?.toLowerCase().includes(logFilter.user))
+                                  .map((log, idx) => (
+                                      <tr key={idx} style={{ borderBottom: '1px solid #eee', background: idx % 2 === 0 ? '#fff' : '#fcfcfc' }}>
+                                          <td style={{ padding: '10px', color: '#666' }}>{log.t?.toDate ? log.t.toDate().toLocaleString() : '-'}</td>
+                                          <td style={{ padding: '10px', fontWeight: 'bold', color: log.app === 'HQ' ? '#6f42c1' : log.app === 'SHOP FLOOR' ? '#007bff' : '#CC6600' }}>{log.app}</td>
+                                          <td style={{ padding: '10px' }}><span style={{ background: '#eee', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem' }}>{log.cat || log.tab || 'system'}</span></td>
+                                          <td style={{ padding: '10px', fontWeight: 'bold' }}>{log.u || log.user || 'Unknown'}</td>
+                                          <td style={{ padding: '10px' }}>{log.msg || log.action}</td>
+                                      </tr>
+                              ))}
+                              {systemLogs.length === 0 && <tr><td colSpan="5" style={{ padding: '20px', textAlign: 'center', color: '#999' }}>No logs found.</td></tr>}
+                          </tbody>
+                      </table>
+                  </div>
               </div>
             </div>
           )}
