@@ -287,8 +287,8 @@ const handleSyncAddresses = async () => {
       addLog(`Initiating Address Book Sync for Subsidiary [${nsSubsidiaryId}]...`, 'info');
 
       try {
-          // 🚀 FIX 1: Use the strict CustomerAddressbookEntityAddress table
-          // 🚀 FIX 2: Filter by nsSubsidiaryId to match your active customers
+          // 🚀 THE X-RAY QUERY: 
+          // Uses LEFT JOIN so NetSuite cannot silently drop the customers.
           const q = `
               SELECT 
                   Customer.id AS customer_id,
@@ -305,28 +305,34 @@ const handleSyncAddresses = async () => {
                   CustomerAddressbookEntityAddress.country
               FROM 
                   Customer
-              INNER JOIN 
+              LEFT JOIN 
                   CustomerAddressbook ON CustomerAddressbook.entity = Customer.id
-              INNER JOIN 
+              LEFT JOIN 
                   CustomerAddressbookEntityAddress ON CustomerAddressbookEntityAddress.nkey = CustomerAddressbook.addressbookaddress
               WHERE 
-                  Customer.isinactive = 'F'
-                  AND Customer.subsidiary = ${nsSubsidiaryId}
+                  Customer.subsidiary = ${nsSubsidiaryId} 
+                  AND Customer.isinactive = 'F'
           `;
 
           const result = await executeSuiteQL(q);
           const records = result.items || [];
           
-          addLog(`Downloaded ${records.length} address records. Grouping by Customer...`, 'success');
+          addLog(`Downloaded ${records.length} total customer/address rows. Filtering empty records...`, 'success');
 
-          // Group addresses by customer ID to create clean Firebase arrays
+          // Group addresses by customer ID
           const addressMap = {};
+          let validAddressCount = 0;
+
           for (const row of records) {
+              // 🚀 If the LEFT JOIN failed to find an address, skip it
+              if (!row.addressbook_id) continue; 
+
+              validAddressCount++;
               const custId = `CUST-${row.customer_id}`;
               if (!addressMap[custId]) addressMap[custId] = [];
               
               addressMap[custId].push({
-                  addressBookId: row.addressbook_id, // 🚀 CRITICAL FOR API PUSH
+                  addressBookId: row.addressbook_id, // CRITICAL FOR API PUSH
                   label: row.label || 'Default Address',
                   isDefault: row.defaultshipping === 'T',
                   addressee: row.addressee || row.attention || '',
@@ -339,18 +345,22 @@ const handleSyncAddresses = async () => {
               });
           }
 
-          let successCount = 0;
-          // Write the arrays into the existing CRM documents
-          for (const [custId, addresses] of Object.entries(addressMap)) {
-              // Sort so the 'Default Shipping' address is always index 0
-              addresses.sort((a, b) => (b.isDefault === true) - (a.isDefault === true));
+          if (validAddressCount === 0) {
+              addLog(`⚠️ NetSuite returned your customers, but hid all Address Books. Your NetSuite API Integration Role is likely missing the 'Customer Address' permission.`, 'warn');
+          } else {
+              let successCount = 0;
+              // Write the arrays into the existing CRM documents
+              for (const [custId, addresses] of Object.entries(addressMap)) {
+                  // Sort so the 'Default Shipping' address is always index 0
+                  addresses.sort((a, b) => (b.isDefault === true) - (a.isDefault === true));
+                  
+                  const docRef = doc(db, "crm_records", custId);
+                  await setDoc(docRef, { shippingAddresses: addresses }, { merge: true });
+                  successCount++;
+              }
               
-              const docRef = doc(db, "crm_records", custId);
-              await setDoc(docRef, { shippingAddresses: addresses }, { merge: true });
-              successCount++;
+              addLog(`✅ Successfully merged ${validAddressCount} address books into ${successCount} CRM profiles.`, 'success');
           }
-          
-          addLog(`✅ Successfully merged address books into ${successCount} CRM profiles.`, 'success');
 
       } catch (err) {
           console.error(err);
