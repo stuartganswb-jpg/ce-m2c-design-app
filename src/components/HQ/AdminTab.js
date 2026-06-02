@@ -280,6 +280,80 @@ const isSuperAdmin = currentUser === "Master Admin" || currentActiveUser?.pin ==
       setIsSyncing(false);
   };
 
+const handleSyncAddresses = async () => {
+      setIsSyncing(true);
+      addLog(`Initiating Address Book Sync for Active Customers...`, 'info');
+
+      try {
+          const q = `
+              SELECT 
+                  Customer.id AS customer_id,
+                  CustomerAddressbook.id AS addressbook_id,
+                  CustomerAddressbook.label,
+                  CustomerAddressbook.defaultshipping,
+                  EntityAddress.addressee,
+                  EntityAddress.attention,
+                  EntityAddress.addr1,
+                  EntityAddress.addr2,
+                  EntityAddress.city,
+                  EntityAddress.state,
+                  EntityAddress.zip,
+                  EntityAddress.country
+              FROM 
+                  Customer
+              JOIN 
+                  CustomerAddressbook ON CustomerAddressbook.entity = Customer.id
+              JOIN 
+                  EntityAddress ON EntityAddress.nkey = CustomerAddressbook.addressbookaddress
+              WHERE 
+                  Customer.isinactive = 'F'
+          `;
+
+          const result = await executeSuiteQL(q);
+          const records = result.items || [];
+          
+          addLog(`Downloaded ${records.length} address records. Grouping by Customer...`, 'success');
+
+          // Group addresses by customer ID to create clean Firebase arrays
+          const addressMap = {};
+          for (const row of records) {
+              const custId = `CUST-${row.customer_id}`;
+              if (!addressMap[custId]) addressMap[custId] = [];
+              
+              addressMap[custId].push({
+                  addressBookId: row.addressbook_id, // 🚀 CRITICAL FOR API PUSH
+                  label: row.label || 'Default Address',
+                  isDefault: row.defaultshipping === 'T',
+                  addressee: row.addressee || row.attention || '',
+                  addr1: row.addr1 || '',
+                  addr2: row.addr2 || '',
+                  city: row.city || '',
+                  state: row.state || '',
+                  zip: row.zip || '',
+                  country: row.country || 'US'
+              });
+          }
+
+          let successCount = 0;
+          // Write the arrays into the existing CRM documents
+          for (const [custId, addresses] of Object.entries(addressMap)) {
+              // Sort so the 'Default Shipping' address is always index 0
+              addresses.sort((a, b) => (b.isDefault === true) - (a.isDefault === true));
+              
+              const docRef = doc(db, "crm_records", custId);
+              await setDoc(docRef, { shippingAddresses: addresses }, { merge: true });
+              successCount++;
+          }
+          
+          addLog(`✅ Successfully merged address books into ${successCount} CRM profiles.`, 'success');
+
+      } catch (err) {
+          console.error(err);
+          addLog(`❌ FAILED: ${err.message}`, 'error');
+      }
+      setIsSyncing(false);
+  };
+
   const handleSyncVendors = async () => {
       setIsSyncing(true);
       addLog(`Initiating Vendor Sync for External Co-Op CRM...`, 'info');
@@ -893,6 +967,11 @@ const isSuperAdmin = currentUser === "Master Admin" || currentActiveUser?.pin ==
                               <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls all active customers mapped to Subsidiary {nsSubsidiaryId}.</div>
                           </button>
 
+<button onClick={handleSyncAddresses} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#e83e8c', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                              ⬇️ 1.2 SYNC CUSTOMER ADDRESS BOOKS
+                              <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls all address books and maps IDs for API Drop-Shipping.</div>
+                          </button>
+                          
                           <button onClick={handleSyncVendors} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#17a2b8', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                               ⬇️ 1.5 SYNC ACTIVE VENDORS (CO-OP CRM)
                               <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls all active external vendors/co-ops from NetSuite.</div>
