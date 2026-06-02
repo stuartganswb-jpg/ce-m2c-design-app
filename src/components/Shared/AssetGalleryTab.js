@@ -15,7 +15,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [searchQuery, setSearchQuery] = useState('');
     
     const [activeAsset, setActiveAsset] = useState(null); 
-    const [isZoomed, setIsZoomed] = useState(false); // 🚀 NEW: Zoom State
+    const [isZoomed, setIsZoomed] = useState(false); 
     const [isUploading, setIsUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
 
@@ -329,7 +329,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     };
 
     const openModal = (asset) => {
-        setIsZoomed(false); // 🚀 Reset zoom
+        setIsZoomed(false); 
         setMetaForm({
             name: asset?.name || '',
             collection: asset?.collection || asset?.category || globalLists.collections[0] || '',
@@ -376,8 +376,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 <div style={{ width: '350px', background: '#fff', border: '2px solid #000', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
                     <div style={{ fontWeight: 'bold', fontSize: '1.2rem', color: '#000', borderBottom: '2px solid #000', paddingBottom: '10px' }}>UPLOAD NEW ASSET</div>
                     
-                    <input type="file" accept="image/png, image/jpeg" ref={fileInputRef} onChange={e => setUploadFile(e.target.files[0])} style={{ padding: '10px', border: '1px dashed #ccc', background: '#f8f9fa', cursor: 'pointer' }} />
-                    <input type="text" placeholder="Friendly Name (Optional)" value={metaForm.name} onChange={e => setMetaForm({...metaForm, name: e.target.value})} style={{ padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                    <input type="file" accept="image/png, image/jpeg" ref={fileInputRef} onChange={e => setUploadFile(e.target.files[0])} style={{ padding: '10px', border: '1px dashed #ccc', background: '#f8f9fa', cursor: 'pointer', width: '100%', boxSizing: 'border-box' }} />
+                    <input type="text" placeholder="Friendly Name (Optional)" value={metaForm.name} onChange={e => setMetaForm({...metaForm, name: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }} />
                     
                     <div style={{ display: 'flex', gap: '10px' }}>
                         <div style={{ flex: 1 }}>
@@ -393,7 +393,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                     <div style={{ display: 'flex', gap: '10px' }}>
                         <div style={{ flex: 1 }}>
                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CUSTOMER</label>
-                            <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold' }}>
+                            <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box' }}>
                                 <option value="">Select...</option>
                                 {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
@@ -407,19 +407,19 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                     <div style={{ display: 'flex', gap: '10px' }}>
                         <div style={{ flex: 1 }}>
                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>COLLECTION</label>
-                            <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                            <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
                                 {globalLists.collections.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
                         <div style={{ flex: 1 }}>
                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>PROD TYPE</label>
-                            <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                            <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
                                 {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
                     </div>
 
-                    <textarea placeholder="Searchable Notes (e.g. 'Lifestyle angle')" value={metaForm.notes} onChange={e => setMetaForm({...metaForm, notes: e.target.value})} style={{ padding: '10px', border: '1px solid #ccc', minHeight: '60px', fontFamily: 'monospace', resize: 'vertical' }} />
+                    <textarea placeholder="Searchable Notes (e.g. 'Lifestyle angle')" value={metaForm.notes} onChange={e => setMetaForm({...metaForm, notes: e.target.value})} style={{ padding: '10px', border: '1px solid #ccc', minHeight: '60px', fontFamily: 'monospace', boxSizing: 'border-box', resize: 'vertical' }} />
 
                     {/* PARTS ASSIGNMENT */}
                     <select 
@@ -428,7 +428,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                 setMetaForm(prev => ({ ...prev, associatedParts: [...prev.associatedParts, e.target.value] }));
                             }
                         }} 
-                        style={{ padding: '10px', border: '2px solid #007bff', fontWeight: 'bold' }}
+                        style={{ width: '100%', padding: '10px', border: '2px solid #007bff', fontWeight: 'bold', boxSizing: 'border-box' }}
                     >
                         <option value="">+ Link to Master Library Part...</option>
                         {safeHqParts.slice(0, 200).map(p => <option key={p.id} value={p.id}>{String(p.itemName || p.id)}</option>)}
@@ -452,7 +452,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                 setMetaForm(prev => ({ ...prev, associatedFinishes: [...prev.associatedFinishes, e.target.value] }));
                             }
                         }} 
-                        style={{ padding: '10px', border: '2px solid #6f42c1', fontWeight: 'bold' }}
+                        style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', fontWeight: 'bold', boxSizing: 'border-box' }}
                     >
                         <option value="">+ Link to Master Finish...</option>
                         <optgroup label="In-House & Global Finishes">
@@ -577,7 +577,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                         <select 
                                             value={downloadSku} 
                                             onChange={e => setDownloadSku(e.target.value)}
-                                            style={{ padding: '10px', border: 'none', outline: 'none', fontWeight: 'bold', background: '#e9ecef', maxWidth: '250px', cursor: 'pointer' }}
+                                            style={{ padding: '10px', border: 'none', outline: 'none', fontWeight: 'bold', background: '#e9ecef', maxWidth: '250px', cursor: 'pointer', boxSizing: 'border-box' }}
                                         >
                                             {availableClientSKUs.length === 0 && <option value="">-- No Linked Client SKUs --</option>}
                                             {availableClientSKUs.map(s => <option key={s.clientSku} value={s.clientSku}>{s.customerId}: {s.clientSku}</option>)}
@@ -615,7 +615,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                 <div style={{ display: 'flex', gap: '10px' }}>
                                     <div style={{ flex: 1 }}>
                                         <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#28a745' }}>CUSTOMER</label>
-                                        <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold' }}>
+                                        <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box' }}>
                                             <option value="">Select...</option>
                                             {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
                                         </select>
@@ -629,13 +629,13 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                 <div style={{ display: 'flex', gap: '10px' }}>
                                     <div style={{ flex: 1 }}>
                                         <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>COLLECTION</label>
-                                        <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                        <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
                                             {globalLists.collections.map(c => <option key={c} value={c}>{c}</option>)}
                                         </select>
                                     </div>
                                     <div style={{ flex: 1 }}>
                                         <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>PROD TYPE</label>
-                                        <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                        <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
                                             {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
                                         </select>
                                     </div>

@@ -18,7 +18,6 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const [patternId, setPatternId] = useState("");
     const [finishId, setFinishId] = useState(""); 
     
-    // 🚀 NEW: Added Customer Mapping to Pipeline
     const [customerId, setCustomerId] = useState("");
     const [clientSku, setClientSku] = useState("");
     
@@ -114,14 +113,12 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         }
     }, [currentIndex, queue]);
 
-    // 🚀 NEW: Clean High-Res, Burned Thumbnail (Bottom Right)
     const generateWatermarkedImages = (file, textStr) => {
         return new Promise((resolve) => {
             if (!file) return resolve({ hiResBlob: null, thumbBlob: null });
             const img = new Image();
             img.onload = () => {
                 try {
-                    // Create Thumbnail Canvas
                     const thCanvas = document.createElement('canvas');
                     const thCtx = thCanvas.getContext('2d');
                     thCanvas.width = 250;
@@ -131,7 +128,6 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                     const sy = (img.height - minDim) / 2;
                     thCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 250, 250);
 
-                    // Burn Internal Watermark into LOWER RIGHT of Thumbnail
                     const thFontSize = 14;
                     thCtx.font = `bold ${thFontSize}px monospace`;
                     const thPad = thFontSize * 0.4;
@@ -147,7 +143,6 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                     thCtx.fillText(textStr, thBoxX + thPad, thBoxY + thPad * 1.5);
 
                     thCanvas.toBlob((thBlob) => {
-                        // Return the completely clean, original file as the high-res blob
                         resolve({ hiResBlob: file, thumbBlob: thBlob });
                     }, 'image/png', 0.9);
 
@@ -345,11 +340,10 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             </div>
                         </div>
 
-                        {/* 🚀 NEW: Customer & Client SKU Mapping */}
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CUSTOMER</label>
-                                <select value={customerId} onChange={e => setCustomerId(e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #28a745', fontWeight: 'bold', marginTop: '5px' }}>
+                                <select value={customerId} onChange={e => setCustomerId(e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #28a745', fontWeight: 'bold', marginTop: '5px', boxSizing: 'border-box' }}>
                                     <option value="">Select...</option>
                                     {globalLists.customers.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
@@ -370,13 +364,13 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                         <div style={{ display: 'flex', gap: '15px' }}>
                             <div style={{ flex: 1 }}>
                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>COLLECTION</label>
-                                <select value={collectionName} onChange={e => setCollectionName(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid #ccc', fontWeight: 'bold', marginTop: '5px' }}>
+                                <select value={collectionName} onChange={e => setCollectionName(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid #ccc', fontWeight: 'bold', marginTop: '5px', boxSizing: 'border-box' }}>
                                     {globalLists.collections.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                             </div>
                             <div style={{ flex: 1 }}>
                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>PRODUCT TYPE</label>
-                                <select value={productType} onChange={e => setProductType(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid #ccc', fontWeight: 'bold', marginTop: '5px' }}>
+                                <select value={productType} onChange={e => setProductType(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid #ccc', fontWeight: 'bold', marginTop: '5px', boxSizing: 'border-box' }}>
                                     {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                             </div>
@@ -392,14 +386,13 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             />
                         </div>
 
-                        {/* PART TAGGING */}
                         <select 
                             onChange={(e) => {
                                 if (e.target.value && !associatedParts.includes(e.target.value)) {
                                     setAssociatedParts(prev => [...prev, e.target.value]);
                                 }
                             }} 
-                            style={{ padding: '10px', border: '2px solid #007bff', fontWeight: 'bold' }}
+                            style={{ width: '100%', padding: '10px', border: '2px solid #007bff', fontWeight: 'bold', boxSizing: 'border-box' }}
                         >
                             <option value="">+ Link to Master Library Part...</option>
                             {safeHqParts.slice(0, 200).map(p => <option key={p.id} value={p.id}>{String(p.itemName || p.id)}</option>)}
@@ -410,6 +403,34 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                     <span key={partId} style={{ background: '#007bff', color: '#fff', padding: '4px 8px', fontSize: '0.7rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                                         {String(safeHqParts.find(p => p.id === partId)?.itemName || partId)}
                                         <span onClick={() => setAssociatedParts(prev => prev.filter(id => id !== partId))} style={{ cursor: 'pointer', fontWeight: 'bold' }}>×</span>
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+
+                        <select 
+                            onChange={(e) => {
+                                if (e.target.value && !associatedFinishes.includes(e.target.value)) {
+                                    setAssociatedFinishes(prev => [...prev, e.target.value]);
+                                }
+                            }} 
+                            style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', fontWeight: 'bold', boxSizing: 'border-box' }}
+                        >
+                            <option value="">+ Link to Master Finish...</option>
+                            <optgroup label="In-House & Global Finishes">
+                                {[...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])].map(f => <option key={f.id} value={f.id}>{String(f.name || f.id)}</option>)}
+                            </optgroup>
+                            <optgroup label="Outsourced Finishes">
+                                {(Array.isArray(outsourceFinishes)?outsourceFinishes:[]).map(f => <option key={f.id} value={f.id}>{String(f.name || f.id)}</option>)}
+                            </optgroup>
+                        </select>
+
+                        {associatedFinishes.length > 0 && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                                {associatedFinishes.map(finId => (
+                                    <span key={finId} style={{ background: '#6f42c1', color: '#fff', padding: '4px 8px', fontSize: '0.7rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                        {String(allFinishes.find(f => f.id === finId)?.name || finId)}
+                                        <span onClick={() => setAssociatedFinishes(prev => prev.filter(id => id !== finId))} style={{ cursor: 'pointer', fontWeight: 'bold' }}>×</span>
                                     </span>
                                 ))}
                             </div>
