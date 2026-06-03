@@ -143,22 +143,41 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           const cpqGrandTotal = parseFloat(job.cpqData.totalPrice || 0);
           const silentFeeBalance = Math.max(0, cpqGrandTotal - physicalItemsTotal);
 
-          // 3. Construct the NetSuite Header & Payload
+          // 3. Extract Customer & Brand
           let nsCustomerId = job.customer?.id || "";
           if (nsCustomerId.startsWith('CUST-')) nsCustomerId = nsCustomerId.replace('CUST-', '');
-
           const brandMapping = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2", location: "17" };
 
-          // 🚀 DYNAMIC DESCRIPTION
+          // 4. Set Description
           const flowName = cpqFlows.find(f => f.id === job.flowId)?.name || 'Custom Assembly';
           const headerDesc = `${flowName} labor portion of quote# ${job.jobId || job.id} for Job: ${job.jobName || 'N/A'} Sidemark: ${job.sidemark || 'N/A'}`;
 
+          // 🚀 5. CONSTRUCT SHIPPING OVERRIDES
+          const shippingPayload = {};
+          if (job.shippingMethod === 'SAVED' && job.shippingAddressId) {
+              shippingPayload.shipaddresslist = { id: job.shippingAddressId };
+          } else if (job.shippingMethod === 'CUSTOM' && job.customShippingAddress) {
+              // Standard SuiteTalk REST override for custom drop-shipping
+              shippingPayload.shippingaddress = {
+                  attention: job.customShippingAddress.attention || '',
+                  addressee: job.customShippingAddress.addressee || '',
+                  addr1: job.customShippingAddress.addr1 || '',
+                  addr2: job.customShippingAddress.addr2 || '',
+                  city: job.customShippingAddress.city || '',
+                  state: job.customShippingAddress.state || '',
+                  zip: job.customShippingAddress.zip || '',
+                  country: { id: job.customShippingAddress.country || 'US' }
+              };
+          }
+
+          // 6. Construct the Final NetSuite Payload
           const payload = {
               entity: { id: nsCustomerId }, 
               subsidiary: { id: brandMapping.subsidiary }, 
               location: { id: brandMapping.location },     
               memo: `[HQ APP CONFIG] ${job.jobName || ''} - ${job.sidemark || ''}`.trim(),
               custbody50: job.jobId || job.id, 
+              ...shippingPayload,  // <-- INJECT SHIPPING DATA
               item: {
                   items: [
                       {
@@ -166,7 +185,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                           quantity: 1,
                           rate: parseFloat(silentFeeBalance.toFixed(2)), 
                           price: { id: "-1" }, 
-                          description: headerDesc // 🚀 INJECTED HERE
+                          description: headerDesc
                       },
                       ...lineItems
                   ]
@@ -174,8 +193,9 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           };
 
           addLog(`Payload constructed. Silent Fees/Assembly assigned $${silentFeeBalance.toFixed(2)}`, 'success');
+          if (shippingPayload.shippingaddress) addLog(`Custom Shipping Override Attached.`, 'info');
 
-          // 4. Fire to Google Cloud Proxy
+          // 7. Fire to Google Cloud Proxy
           const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
           addLog(`Transmitting to NetSuite via Google Cloud...`, 'info');
 
@@ -289,6 +309,25 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
+                        {/* 🚀 NEW: Shipping Payload Review */}
+                        <div style={{ background: '#f8f9fa', border: '2px solid #17a2b8', padding: '15px' }}>
+                            <h4 style={{ margin: '0 0 10px 0', color: '#17a2b8' }}>SHIPPING DESTINATION OVERRIDE</h4>
+                            <div style={{ fontSize: '0.85rem', color: '#333' }}>
+                                <strong>Method:</strong> {activeJob.shippingMethod || 'Standard Defaults'}<br/>
+                                {activeJob.shippingMethod === 'SAVED' && activeJob.shippingAddressId && (
+                                    <div style={{ marginTop: '5px' }}><strong>NetSuite Address Book ID:</strong> {activeJob.shippingAddressId}</div>
+                                )}
+                                {activeJob.shippingMethod === 'CUSTOM' && activeJob.customShippingAddress && (
+                                    <div style={{ marginTop: '5px', padding: '10px', background: '#fff', border: '1px solid #ccc' }}>
+                                        <div style={{ fontWeight: 'bold' }}>{activeJob.customShippingAddress.attention || activeJob.customShippingAddress.addressee}</div>
+                                        <div>{activeJob.customShippingAddress.addr1}</div>
+                                        {activeJob.customShippingAddress.addr2 && <div>{activeJob.customShippingAddress.addr2}</div>}
+                                        <div>{activeJob.customShippingAddress.city}, {activeJob.customShippingAddress.state} {activeJob.customShippingAddress.zip}</div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
                         <div style={{ border: '2px solid #ccc', padding: '15px', background: '#f8f9fa' }}>
                             <h4 style={{ margin: '0 0 10px 0', color: '#333' }}>MAPPED LINE ITEMS (BOM)</h4>
                             
@@ -303,7 +342,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                                 <tbody>
                                     <tr>
                                         <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontWeight: 'bold', color: '#007bff' }}>61502</td>
-                                        {/* 🚀 DYNAMIC PREVIEW TEXT INJECTED HERE */}
                                         <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontStyle: 'italic' }}>
                                             {cpqFlows.find(f => f.id === activeJob.flowId)?.name || 'Custom Assembly'} labor portion of quote# {activeJob.jobId || activeJob.id} for Job: {activeJob.jobName || 'N/A'} Sidemark: {activeJob.sidemark || 'N/A'}
                                         </td>

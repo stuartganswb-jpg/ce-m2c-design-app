@@ -6,7 +6,9 @@ const printStyles = `
   @media print {
     body * { visibility: hidden; }
     #printable-document, #printable-document * { visibility: visible; }
-    #printable-document { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 20px; box-sizing: border-box; }
+    #printable-document { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; background: transparent; }
+    .pdf-page { page-break-after: always; box-shadow: none !important; margin: 0 !important; }
+    .pdf-page:last-child { page-break-after: auto; }
     .no-print { display: none !important; }
   }
 `;
@@ -50,12 +52,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [liveAssemblies, setLiveAssemblies] = useState([]);
   
   const [activeDocJob, setActiveDocJob] = useState(null);
-  const [activeDocType, setActiveDocType] = useState('QUOTE'); 
+  const [activeDocType, setActiveDocType] = useState('FULL_PACKET'); 
   const [formTemplates, setFormTemplates] = useState({});
   const [brandLogos, setBrandLogos] = useState({});
   const [draftDrawings, setDraftDrawings] = useState([]); 
 
-  // 🚀 NEW: State for collapsible sections in CRM profile
   const [expandedSections, setExpandedSections] = useState({ active: true, archive: false });
 
   useEffect(() => {
@@ -217,25 +218,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       return { active, pending, complete };
   };
 
-  const handleLinkToAssembly = async (jobId, asmId) => {
-      try {
-          const asm = liveAssemblies.find(a => a.id === asmId);
-          await updateDoc(doc(db, "jobs", jobId), { 
-              linkedAssemblyId: asmId,
-              linkedAssemblyName: asm ? asm.itemName : 'Unknown Assembly'
-          });
-          setActiveModalJob({...activeModalJob, linkedAssemblyId: asmId, linkedAssemblyName: asm ? asm.itemName : 'Unknown Assembly'});
-          alert("Successfully linked hardware assembly! Route to Tab 8 (CPQ) to finalize pricing.");
-      } catch (err) {
-          console.error(err);
-          alert("Failed to link assembly.");
-      }
-  };
-
+  // 🚀 REBUILT: Multi-Page Render Logic
   const renderDocument = () => {
       if (!activeDocJob) return null;
 
-      const template = formTemplates[activeDocType] || { header: '', footer: '', terms: '' };
+      const template = formTemplates['QUOTE'] || { header: '', footer: '', terms: '' };
       const logoUrl = brandLogos[activeBrand];
 
       let mathSection = '';
@@ -276,6 +263,10 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
       const linkedDrawing = draftDrawings.find(d => d.jobId === (activeDocJob.jobId || activeDocJob.id));
 
+      const isFullPacket = activeDocType === 'FULL_PACKET';
+      const renderQuote = isFullPacket || activeDocType === 'QUOTE';
+      const renderRouter = isFullPacket || activeDocType === 'FACTORY_ROUTER';
+
       return (
           <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.9)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 9999, overflowY: 'auto', padding: '40px 0' }}>
               <div style={{ position: 'relative' }}>
@@ -284,133 +275,172 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                       <button onClick={() => setActiveDocJob(null)} style={{ padding: '15px', background: '#d9534f', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', boxShadow: '4px 4px 0 #000' }}>❌ CLOSE</button>
                   </div>
 
-                  <div id="printable-document" style={{ background: '#fff', width: '8.5in', minHeight: '11in', padding: '0.5in', boxSizing: 'border-box', fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: '#000', boxShadow: '0 0 20px rgba(0,0,0,0.5)', position: 'relative' }}>
+                  <div id="printable-document" style={{ width: '8.5in', display: 'flex', flexDirection: 'column', gap: '30px' }}>
                       
-                      {activeDocType === 'FACTORY_ROUTER' ? (
-                          <div style={{ borderBottom: '4px solid #000', paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                              <div>
-                                  <div style={{ fontSize: '32px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px', lineHeight: 1 }}>{activeBrand}</div>
-                                  <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>Manufacturing Division</div>
+                      {/* PAGE 1: QUOTE */}
+                      {renderQuote && (
+                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.5in', boxSizing: 'border-box', fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: '#000', boxShadow: '0 0 20px rgba(0,0,0,0.5)', position: 'relative' }}>
+                              <div style={{ borderBottom: '4px solid #000', paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                                  {logoUrl ? (
+                                      <img src={logoUrl} alt={activeBrand} style={{ height: '60px', objectFit: 'contain' }} />
+                                  ) : (
+                                      <div style={{ fontSize: '32px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px', lineHeight: 1 }}>{activeBrand}</div>
+                                  )}
+                                  <div style={{ fontSize: '20px', color: '#fff', background: '#000', padding: '6px 15px', textTransform: 'uppercase', fontWeight: 'bold' }}>OFFICIAL QUOTE</div>
                               </div>
-                              <div style={{ fontSize: '24px', color: '#fff', background: '#d9534f', padding: '8px 20px', fontWeight: 'bold', textTransform: 'uppercase' }}>
-                                  FACTORY ROUTER
+
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '30px', background: '#f8f9fa', padding: '20px', border: '2px solid #000' }}>
+                                  <div>
+                                      <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Prepared For:</div>
+                                      <div style={{ fontSize: '16px', fontWeight: 'bold', marginTop: '3px' }}>{activeDocJob.customer?.name || activeDocJob.clientName || 'N/A'}</div>
+                                      {activeCrmRecord?.billingAddress && <div style={{ fontSize: '12px', marginTop: '5px', whiteSpace: 'pre-wrap' }}>{activeCrmRecord.billingAddress}</div>}
+                                  </div>
+                                  <div>
+                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                          <div>
+                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Document ID:</div>
+                                              <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.jobId || activeDocJob.id}</div>
+                                          </div>
+                                          <div>
+                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Date:</div>
+                                              <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.dateSaved || new Date().toLocaleDateString()}</div>
+                                          </div>
+                                          <div style={{ gridColumn: 'span 2' }}>
+                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Project / Sidemark:</div>
+                                              <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#007bff' }}>{activeDocJob.sidemark || activeDocJob.note || 'N/A'}</div>
+                                          </div>
+                                      </div>
+                                  </div>
                               </div>
-                          </div>
-                      ) : (
-                          <div style={{ borderBottom: '4px solid #000', paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                              {logoUrl ? (
-                                  <img src={logoUrl} alt={activeBrand} style={{ height: '60px', objectFit: 'contain' }} />
-                              ) : (
-                                  <div style={{ fontSize: '32px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px', lineHeight: 1 }}>{activeBrand}</div>
-                              )}
-                              <div style={{ fontSize: '20px', color: '#fff', background: '#000', padding: '6px 15px', textTransform: 'uppercase', fontWeight: 'bold' }}>
-                                  {activeDocType.replace('_', ' ')}
+
+                              {template.header && <div style={{ marginBottom: '20px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>{template.header}</div>}
+
+                              <div style={{ border: '2px solid #000', marginBottom: '30px' }}>
+                                  <div style={{ background: '#000', color: '#fff', padding: '10px 15px', fontWeight: 'bold', textTransform: 'uppercase', fontSize: '14px' }}>CONFIGURATION DETAILS</div>
+                                  {activeDocJob.cpqData?.breakdown ? (
+                                      activeDocJob.cpqData.breakdown.map((item, i) => (
+                                          <div key={i} style={{ display: 'flex', padding: '12px 15px', borderBottom: '1px solid #eee', background: i % 2 === 0 ? '#fff' : '#f8f9fa', fontSize: '14px' }}>
+                                              <span style={{ flex: 3 }}>{item.name}</span>
+                                              <span style={{ flex: 1, textAlign: 'center' }}>QTY: {item.qty}</span>
+                                              <span style={{ flex: 1, textAlign: 'right', fontWeight: 'bold' }}>${item.total.toFixed(2)}</span>
+                                          </div>
+                                      ))
+                                  ) : (
+                                      <div style={{ padding: '20px', fontStyle: 'italic', color: '#666', textAlign: 'center' }}>No line items configured.</div>
+                                  )}
+                                  {activeDocJob.cpqData?.totalPrice && (
+                                      <div style={{ display: 'flex', padding: '15px', background: '#eafaf1', borderTop: '2px solid #000', fontSize: '18px', fontWeight: 'bold' }}>
+                                          <span style={{ flex: 4, textAlign: 'right', paddingRight: '20px' }}>TOTAL AMOUNT:</span>
+                                          <span style={{ flex: 1, textAlign: 'right', color: '#1e7e34' }}>${activeDocJob.cpqData.totalPrice.toFixed(2)}</span>
+                                      </div>
+                                  )}
+                              </div>
+
+                              {template.footer && <div style={{ marginBottom: '20px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.5', borderTop: '1px solid #ccc', paddingTop: '15px' }}>{template.footer}</div>}
+                              {template.terms && <div style={{ marginTop: '40px', fontSize: '9px', color: '#666', whiteSpace: 'pre-wrap', lineHeight: '1.4', borderTop: '1px solid #eee', paddingTop: '15px' }}>{template.terms}</div>}
+
+                              <div style={{ marginTop: '50px', display: 'flex', justifyContent: 'space-between', gap: '30px' }}>
+                                  <div style={{ flex: 1, borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>CLIENT APPROVAL SIGNATURE</div>
+                                  <div style={{ width: '200px', borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>DATE</div>
                               </div>
                           </div>
                       )}
 
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '30px', background: '#f8f9fa', padding: '20px', border: '2px solid #000' }}>
-                          <div>
-                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Prepared For:</div>
-                              <div style={{ fontSize: '16px', fontWeight: 'bold', marginTop: '3px' }}>{activeDocJob.customer?.name || activeDocJob.clientName || 'N/A'}</div>
-                              {activeCrmRecord?.billingAddress && <div style={{ fontSize: '12px', marginTop: '5px', whiteSpace: 'pre-wrap' }}>{activeCrmRecord.billingAddress}</div>}
+                      {/* PAGE 2: FACTORY ROUTER (Internal BOM/Math) */}
+                      {renderRouter && (
+                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.5in', boxSizing: 'border-box', fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: '#000', boxShadow: '0 0 20px rgba(0,0,0,0.5)', position: 'relative' }}>
+                              <div style={{ borderBottom: '4px solid #000', paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                                  <div>
+                                      <div style={{ fontSize: '32px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px', lineHeight: 1 }}>{activeBrand}</div>
+                                      <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>Manufacturing Division</div>
+                                  </div>
+                                  <div style={{ fontSize: '24px', color: '#fff', background: '#d9534f', padding: '8px 20px', fontWeight: 'bold', textTransform: 'uppercase' }}>FACTORY ROUTER</div>
+                              </div>
+
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '30px', background: '#f8f9fa', padding: '20px', border: '2px solid #000' }}>
+                                  <div>
+                                      <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Prepared For:</div>
+                                      <div style={{ fontSize: '16px', fontWeight: 'bold', marginTop: '3px' }}>{activeDocJob.customer?.name || activeDocJob.clientName || 'N/A'}</div>
+                                  </div>
+                                  <div>
+                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                          <div>
+                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Document ID:</div>
+                                              <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.jobId || activeDocJob.id}</div>
+                                          </div>
+                                          <div>
+                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Date:</div>
+                                              <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.dateSaved || new Date().toLocaleDateString()}</div>
+                                          </div>
+                                          <div style={{ gridColumn: 'span 2' }}>
+                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Project / Sidemark:</div>
+                                              <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#007bff' }}>{activeDocJob.sidemark || activeDocJob.note || 'N/A'}</div>
+                                          </div>
+                                      </div>
+                                  </div>
+                              </div>
+
+                              {activeDocJob.engineeringNotes && <div dangerouslySetInnerHTML={{ __html: mathSection }} />}
+
+                              <div style={{ border: '2px solid #000', marginBottom: '30px' }}>
+                                  <div style={{ background: '#000', color: '#fff', padding: '10px 15px', fontWeight: 'bold', textTransform: 'uppercase', fontSize: '14px' }}>BILL OF MATERIALS (BOM)</div>
+                                  <div style={{ display: 'flex', padding: '10px 15px', background: '#eee', fontWeight: 'bold', fontSize: '12px', borderBottom: '1px solid #ccc' }}>
+                                      <span style={{ flex: 3 }}>COMPONENT / MATERIAL</span>
+                                      <span style={{ flex: 1, textAlign: 'center' }}>REQ. QTY</span>
+                                  </div>
+
+                                  {activeDocJob.cpqData?.breakdown ? (
+                                      activeDocJob.cpqData.breakdown.map((item, i) => (
+                                          <div key={i} style={{ display: 'flex', padding: '12px 15px', borderBottom: '1px solid #eee', background: i % 2 === 0 ? '#fff' : '#f8f9fa', fontSize: '14px' }}>
+                                              <span style={{ flex: 3, fontWeight: 'bold' }}>{item.name}</span>
+                                              <span style={{ flex: 1, textAlign: 'center', fontWeight: 'bold', fontSize: '16px' }}>{item.qty}</span>
+                                          </div>
+                                      ))
+                                  ) : (
+                                      <div style={{ padding: '20px', fontStyle: 'italic', color: '#666', textAlign: 'center' }}>No line items configured.</div>
+                                  )}
+                              </div>
+
+                              {!activeDocJob.engineeringNotes && (
+                                  <div style={{ padding: '20px', textAlign: 'center', color: '#d9534f', fontWeight: 'bold', border: '2px dashed #d9534f', marginBottom: '20px', background: '#fff0f0' }}>
+                                      ⚠️ NO ENGINEERING DIMENSIONS ATTACHED TO THIS CONFIGURATION
+                                  </div>
+                              )}
+
+                              <div style={{ marginTop: '50px', display: 'flex', justifyContent: 'space-between', gap: '30px' }}>
+                                  <div style={{ flex: 1, borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>FABRICATION SIGN-OFF</div>
+                                  <div style={{ width: '200px', borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>DATE</div>
+                              </div>
                           </div>
-                          <div>
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                      )}
+
+                      {/* PAGE 3: DRAWING (If applicable & full packet) */}
+                      {isFullPacket && linkedDrawing && (
+                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.5in', boxSizing: 'border-box', fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: '#000', boxShadow: '0 0 20px rgba(0,0,0,0.5)', position: 'relative' }}>
+                              <div style={{ borderBottom: '4px solid #000', paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                                  <div>
+                                      <div style={{ fontSize: '32px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px', lineHeight: 1 }}>{activeBrand}</div>
+                                      <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>Engineering Drawing</div>
+                                  </div>
+                                  <div style={{ fontSize: '24px', color: '#fff', background: '#007bff', padding: '8px 20px', fontWeight: 'bold', textTransform: 'uppercase' }}>SHOP DRAWING</div>
+                              </div>
+
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '30px', background: '#f8f9fa', padding: '20px', border: '2px solid #000' }}>
                                   <div>
                                       <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Document ID:</div>
                                       <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.jobId || activeDocJob.id}</div>
                                   </div>
                                   <div>
-                                      <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Date:</div>
-                                      <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.dateSaved || new Date().toLocaleDateString()}</div>
-                                  </div>
-                                  <div style={{ gridColumn: 'span 2' }}>
                                       <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Project / Sidemark:</div>
                                       <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#007bff' }}>{activeDocJob.sidemark || activeDocJob.note || 'N/A'}</div>
                                   </div>
                               </div>
-                          </div>
-                      </div>
 
-                      {template.header && activeDocType !== 'FACTORY_ROUTER' && (
-                          <div style={{ marginBottom: '20px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>
-                              {template.header}
-                          </div>
-                      )}
-
-                      {activeDocType === 'FACTORY_ROUTER' && activeDocJob.engineeringNotes && (
-                          <div dangerouslySetInnerHTML={{ __html: mathSection }} />
-                      )}
-
-                      {activeDocType === 'FACTORY_ROUTER' && linkedDrawing && (
-                          <div style={{ marginBottom: '20px', border: '4px solid #000', padding: '10px' }}>
-                              <div dangerouslySetInnerHTML={{ __html: linkedDrawing.svgData }} style={{ width: '100%' }} />
-                          </div>
-                      )}
-
-                      <div style={{ border: '2px solid #000', marginBottom: '30px' }}>
-                          <div style={{ background: '#000', color: '#fff', padding: '10px 15px', fontWeight: 'bold', textTransform: 'uppercase', fontSize: '14px' }}>
-                              {activeDocType === 'FACTORY_ROUTER' ? 'BILL OF MATERIALS (BOM)' : 'CONFIGURATION DETAILS'}
-                          </div>
-                          
-                          {activeDocType === 'FACTORY_ROUTER' && (
-                              <div style={{ display: 'flex', padding: '10px 15px', background: '#eee', fontWeight: 'bold', fontSize: '12px', borderBottom: '1px solid #ccc' }}>
-                                  <span style={{ flex: 3 }}>COMPONENT / MATERIAL</span>
-                                  <span style={{ flex: 1, textAlign: 'center' }}>QTY</span>
+                              <div style={{ border: '4px solid #000', padding: '10px' }}>
+                                  <div dangerouslySetInnerHTML={{ __html: linkedDrawing.svgData }} style={{ width: '100%' }} />
                               </div>
-                          )}
-
-                          {activeDocJob.cpqData?.breakdown ? (
-                              activeDocJob.cpqData.breakdown.map((item, i) => (
-                                  <div key={i} style={{ display: 'flex', padding: '12px 15px', borderBottom: '1px solid #eee', background: i % 2 === 0 ? '#fff' : '#f8f9fa', fontSize: '14px' }}>
-                                      <span style={{ flex: 3, fontWeight: activeDocType === 'FACTORY_ROUTER' ? 'bold' : 'normal' }}>{item.name}</span>
-                                      <span style={{ flex: 1, textAlign: 'center', fontWeight: activeDocType === 'FACTORY_ROUTER' ? 'bold' : 'normal', fontSize: activeDocType === 'FACTORY_ROUTER' ? '16px' : '14px' }}>
-                                          {activeDocType === 'FACTORY_ROUTER' ? item.qty : `QTY: ${item.qty}`}
-                                      </span>
-                                      {activeDocType !== 'FACTORY_ROUTER' && (
-                                          <span style={{ flex: 1, textAlign: 'right', fontWeight: 'bold' }}>${item.total.toFixed(2)}</span>
-                                      )}
-                                  </div>
-                              ))
-                          ) : (
-                              <div style={{ padding: '20px', fontStyle: 'italic', color: '#666', textAlign: 'center' }}>No line items configured.</div>
-                          )}
-
-                          {activeDocType !== 'FACTORY_ROUTER' && activeDocJob.cpqData?.totalPrice && (
-                              <div style={{ display: 'flex', padding: '15px', background: '#eafaf1', borderTop: '2px solid #000', fontSize: '18px', fontWeight: 'bold' }}>
-                                  <span style={{ flex: 4, textAlign: 'right', paddingRight: '20px' }}>TOTAL AMOUNT:</span>
-                                  <span style={{ flex: 1, textAlign: 'right', color: '#1e7e34' }}>${activeDocJob.cpqData.totalPrice.toFixed(2)}</span>
-                              </div>
-                          )}
-                      </div>
-
-                      {activeDocType === 'FACTORY_ROUTER' && !activeDocJob.engineeringNotes && (
-                          <div style={{ padding: '20px', textAlign: 'center', color: '#d9534f', fontWeight: 'bold', border: '2px dashed #d9534f', marginBottom: '20px', background: '#fff0f0' }}>
-                              ⚠️ NO ENGINEERING DIMENSIONS ATTACHED TO THIS CONFIGURATION
                           </div>
                       )}
-
-                      {template.footer && activeDocType !== 'FACTORY_ROUTER' && (
-                          <div style={{ marginBottom: '20px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.5', borderTop: '1px solid #ccc', paddingTop: '15px' }}>
-                              {template.footer}
-                          </div>
-                      )}
-
-                      {template.terms && activeDocType !== 'FACTORY_ROUTER' && (
-                          <div style={{ marginTop: '40px', fontSize: '9px', color: '#666', whiteSpace: 'pre-wrap', lineHeight: '1.4', borderTop: '1px solid #eee', paddingTop: '15px' }}>
-                              {template.terms}
-                          </div>
-                      )}
-
-                      <div style={{ marginTop: '50px', display: 'flex', justifyContent: 'space-between', gap: '30px' }}>
-                          <div style={{ flex: 1, borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>
-                              {activeDocType === 'FACTORY_ROUTER' ? 'FABRICATION SIGN-OFF' : 'CLIENT APPROVAL SIGNATURE'}
-                          </div>
-                          <div style={{ width: '200px', borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>
-                              DATE
-                          </div>
-                      </div>
 
                       <style>{printStyles}</style>
                   </div>
@@ -642,16 +672,13 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                       <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || job.note || 'No description'}</div>
                                                       {job.cpqData?.totalPrice && <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '5px', color: '#28a745' }}>Value: ${job.cpqData.totalPrice.toFixed(2)}</div>}
                                                       
-                                                      {/* 🚀 ACTION BUTTONS */}
+                                                      {/* 🚀 NEW CRM PIPELINE ACTION BUTTONS */}
                                                       <div style={{ display: 'flex', gap: '5px', marginTop: '10px', flexWrap: 'wrap' }}>
                                                           {job.status === 'CONFIGURED' && (
                                                               <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#28a745', color: '#fff', border: 'none', cursor: 'pointer' }}>✅ APPROVE</button>
                                                           )}
                                                           <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${job.jobId || job.id} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #17a2b8', color: '#17a2b8', cursor: 'pointer' }}>📧 EMAIL</button>
-                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', cursor: 'pointer' }}>🖨️ PRINT PDF</button>
-                                                          {job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0 && (
-                                                              <button onClick={() => { setActiveDocJob(job); setActiveDocType('FACTORY_ROUTER'); }} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #e83e8c', color: '#e83e8c', cursor: 'pointer' }}>🏭 ROUTER</button>
-                                                          )}
+                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', cursor: 'pointer' }}>📄 FULL PACKET</button>
                                                       </div>
                                                   </div>
                                               ))}
@@ -681,7 +708,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                       <div style={{ fontSize: '0.65rem', color: '#999', marginTop: '5px' }}>Saved: {new Date(job.createdAt?.seconds * 1000).toLocaleDateString()}</div>
                                                       
                                                       <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
-                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#f8f9fa', border: '1px solid #ccc', color: '#333', cursor: 'pointer' }}>📄 VIEW RECORD</button>
+                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#f8f9fa', border: '1px solid #ccc', color: '#333', cursor: 'pointer' }}>📄 FULL PACKET</button>
                                                       </div>
                                                   </div>
                                               ))}
@@ -756,7 +783,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                   {job.status === 'CONFIGURED' && (
                                                       <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ padding: '6px 12px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '0.75rem', marginRight: '5px' }}>APPROVE</button>
                                                   )}
-                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ padding: '6px 12px', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>📄 DOCS</button>
+                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ padding: '6px 12px', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>📄 DOCS</button>
                                               </td>
                                           </tr>
                                       ))
