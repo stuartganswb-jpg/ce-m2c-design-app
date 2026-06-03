@@ -55,6 +55,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [brandLogos, setBrandLogos] = useState({});
   const [draftDrawings, setDraftDrawings] = useState([]); 
 
+  // 🚀 NEW: State for collapsible sections in CRM profile
+  const [expandedSections, setExpandedSections] = useState({ active: true, archive: false });
+
   useEffect(() => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { 
           if (docSnap.exists()) setGlobalLists(docSnap.data()); 
@@ -177,14 +180,14 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const getCrmActivePipeline = (crmId) => {
       return allBrandJobs.filter(j => 
           (j.customer?.id === crmId || j.vendorId === crmId) && 
-          !['COMPLETED', 'SHIPPED', 'CANCELLED'].includes(j.status)
+          !['COMPLETED', 'SHIPPED', 'CANCELLED', 'TRANSMITTED_TO_ERP'].includes(j.status)
       ).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   };
 
   const getCrmArchivedPipeline = (crmId) => {
       return allBrandJobs.filter(j => 
           (j.customer?.id === crmId || j.vendorId === crmId) && 
-          ['COMPLETED', 'SHIPPED', 'CANCELLED'].includes(j.status)
+          ['COMPLETED', 'SHIPPED', 'CANCELLED', 'TRANSMITTED_TO_ERP'].includes(j.status)
       ).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   };
 
@@ -565,7 +568,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                   <textarea value={activeCrmRecord.billingAddress || ''} onChange={e => handleUpdateActiveCrmField('billingAddress', e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', resize: 'vertical', minHeight: '60px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
                                               </div>
                                               
-                                              {/* 📍 NEW SHIPPING ADDRESSES RENDER BLOCK */}
                                               <div style={{ marginTop: '15px', borderTop: '2px dashed #ccc', paddingTop: '15px' }}>
                                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                                                       <h4 style={{ margin: '0', color: '#007bff', fontSize: '0.9rem' }}>📍 SAVED SHIPPING ADDRESSES</h4>
@@ -616,45 +618,75 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                       </div>
                                   </div>
 
-                                  {/* Right Panel: Active & Archived Pipeline */}
+                                  {/* Right Panel: Active & Archived Pipeline with Collapsibles */}
                                   <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)', flex: 1 }}>
                                       
-                                      <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#007bff' }}>ACTIVE PIPELINE (PENDING)</h4>
-                                      <div style={{ maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px', paddingRight: '5px' }}>
-                                          {getCrmActivePipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No active configurations pending.</div>}
-                                          {getCrmActivePipeline(activeCrmRecord.id).map(job => (
-                                              <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: `4px solid ${job.status === 'CONFIGURED' ? '#28a745' : '#17a2b8'}`, padding: '10px', background: '#f4f4f4' }}>
-                                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
-                                                      <span>{job.jobId || job.id}</span>
-                                                      <span style={{ color: job.status === 'CONFIGURED' ? '#28a745' : '#17a2b8' }}>{job.status}</span>
-                                                  </div>
-                                                  <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || job.note || 'No description'}</div>
-                                                  {job.cpqData?.totalPrice && <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '5px', color: '#28a745' }}>Value: ${job.cpqData.totalPrice.toFixed(2)}</div>}
-                                                  <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
-                                                      <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', cursor: 'pointer' }}>📄 QUOTE PDF</button>
-                                                      {job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0 && (
-                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FACTORY_ROUTER'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #e83e8c', color: '#e83e8c', cursor: 'pointer' }}>🏭 ROUTER PDF</button>
-                                                      )}
-                                                  </div>
-                                              </div>
-                                          ))}
+                                      {/* --- ACTIVE PIPELINE COLLAPSIBLE --- */}
+                                      <div 
+                                          onClick={() => setExpandedSections(prev => ({ ...prev, active: !prev.active }))}
+                                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '5px', marginBottom: '10px', cursor: 'pointer' }}
+                                      >
+                                          <h4 style={{ margin: 0, color: '#007bff' }}>ACTIVE PIPELINE (PENDING)</h4>
+                                          <span style={{ fontWeight: 'bold' }}>{expandedSections.active ? '▼' : '▶'}</span>
                                       </div>
+                                      
+                                      {expandedSections.active && (
+                                          <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px', paddingRight: '5px' }}>
+                                              {getCrmActivePipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No active configurations pending.</div>}
+                                              {getCrmActivePipeline(activeCrmRecord.id).map(job => (
+                                                  <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: `4px solid ${job.status === 'CONFIGURED' ? '#17a2b8' : '#28a745'}`, padding: '10px', background: '#f4f4f4' }}>
+                                                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                                          <span>{job.jobId || job.id}</span>
+                                                          <span style={{ color: job.status === 'CONFIGURED' ? '#17a2b8' : '#28a745' }}>{job.status}</span>
+                                                      </div>
+                                                      <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || job.note || 'No description'}</div>
+                                                      {job.cpqData?.totalPrice && <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '5px', color: '#28a745' }}>Value: ${job.cpqData.totalPrice.toFixed(2)}</div>}
+                                                      
+                                                      {/* 🚀 ACTION BUTTONS */}
+                                                      <div style={{ display: 'flex', gap: '5px', marginTop: '10px', flexWrap: 'wrap' }}>
+                                                          {job.status === 'CONFIGURED' && (
+                                                              <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#28a745', color: '#fff', border: 'none', cursor: 'pointer' }}>✅ APPROVE</button>
+                                                          )}
+                                                          <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${job.jobId || job.id} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #17a2b8', color: '#17a2b8', cursor: 'pointer' }}>📧 EMAIL</button>
+                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', cursor: 'pointer' }}>🖨️ PRINT PDF</button>
+                                                          {job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0 && (
+                                                              <button onClick={() => { setActiveDocJob(job); setActiveDocType('FACTORY_ROUTER'); }} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #e83e8c', color: '#e83e8c', cursor: 'pointer' }}>🏭 ROUTER</button>
+                                                          )}
+                                                      </div>
+                                                  </div>
+                                              ))}
+                                          </div>
+                                      )}
 
-                                      <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#6c757d' }}>ARCHIVED / APPROVED JOBS</h4>
-                                      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '5px' }}>
-                                          {getCrmArchivedPipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No historical jobs found.</div>}
-                                          {getCrmArchivedPipeline(activeCrmRecord.id).map(job => (
-                                              <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: `4px solid #6c757d`, padding: '10px', background: '#fff' }}>
-                                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
-                                                      <span>{job.jobId || job.id}</span>
-                                                      <span style={{ color: '#6c757d' }}>{job.status}</span>
-                                                  </div>
-                                                  <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || job.note || 'No description'}</div>
-                                                  {job.cpqData?.totalPrice && <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '5px', color: '#000' }}>Value: ${job.cpqData.totalPrice.toFixed(2)}</div>}
-                                                  <div style={{ fontSize: '0.65rem', color: '#999', marginTop: '5px' }}>{new Date(job.createdAt?.seconds * 1000).toLocaleDateString()}</div>
-                                              </div>
-                                          ))}
+                                      {/* --- ARCHIVE PIPELINE COLLAPSIBLE --- */}
+                                      <div 
+                                          onClick={() => setExpandedSections(prev => ({ ...prev, archive: !prev.archive }))}
+                                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '5px', marginBottom: '10px', cursor: 'pointer', marginTop: expandedSections.active ? '10px' : '0' }}
+                                      >
+                                          <h4 style={{ margin: 0, color: '#6c757d' }}>ERP TRANSMITTED & ARCHIVED</h4>
+                                          <span style={{ fontWeight: 'bold' }}>{expandedSections.archive ? '▼' : '▶'}</span>
                                       </div>
+                                      
+                                      {expandedSections.archive && (
+                                          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '5px', maxHeight: '350px' }}>
+                                              {getCrmArchivedPipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No historical or transmitted jobs found.</div>}
+                                              {getCrmArchivedPipeline(activeCrmRecord.id).map(job => (
+                                                  <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: `4px solid #6c757d`, padding: '10px', background: '#fff' }}>
+                                                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                                          <span>{job.jobId || job.id}</span>
+                                                          <span style={{ color: '#6c757d' }}>{job.status}</span>
+                                                      </div>
+                                                      <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || job.note || 'No description'}</div>
+                                                      {job.cpqData?.totalPrice && <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '5px', color: '#000' }}>Value: ${job.cpqData.totalPrice.toFixed(2)}</div>}
+                                                      <div style={{ fontSize: '0.65rem', color: '#999', marginTop: '5px' }}>Saved: {new Date(job.createdAt?.seconds * 1000).toLocaleDateString()}</div>
+                                                      
+                                                      <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
+                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#f8f9fa', border: '1px solid #ccc', color: '#333', cursor: 'pointer' }}>📄 VIEW RECORD</button>
+                                                      </div>
+                                                  </div>
+                                              ))}
+                                          </div>
+                                      )}
                                   </div>
                               </div>
                           )}
