@@ -42,10 +42,27 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
     };
 
     const handleSaveProfile = async () => {
-        if(!base || !rBase || !rCat) return alert("Fill required fields");
-        await setDoc(doc(db, "fin_paint_profiles", base), { base, cat, rBase, rCat });
-        if (writeLog) writeLog(`Updated Paint Profile: ${base}`, 'recipes');
-        setBase(""); setCat(""); setRBase(""); setRCat("");
+        // 1. Removed rCat from the strict validation since Catalyst is optional
+        if(!base || !rBase) return alert("Base color and base ratio are required fields");
+        
+        // 2. Sanitize the ID to prevent Firebase path crashes if a supply name contains a slash
+        const safeBaseID = base.replace(/\//g, '-');
+
+        try {
+            await setDoc(doc(db, "fin_paint_profiles", safeBaseID), { 
+                base, // Keep the original name for the UI display
+                cat, 
+                rBase, 
+                rCat: rCat || "0" // Default to 0 if left blank
+            });
+            if (writeLog) writeLog(`Updated Paint Profile: ${base}`, 'recipes');
+            
+            // Clear the form
+            setBase(""); setCat(""); setRBase(""); setRCat("");
+        } catch (error) {
+            console.error("Firebase error saving profile:", error);
+            alert("Error saving profile. Check the console for details.");
+        }
     };
 
     const handleEditProfile = (p) => {
