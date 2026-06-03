@@ -94,7 +94,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
         const generateWO = (index, sizeType) => {
             const isLarge = sizeType === 'large';
             const recipeCode = pCodes[index % pCodes.length];
-            const letter = String.fromCharCode(65 + index); // Converts 0 to 'A', 1 to 'B', to avoid step number confusion
+            const letter = String.fromCharCode(65 + index); // Avoids Step Number confusion
 
             const partsList = isLarge ? [
                 { name: '1.5" Flat Sided Ring', qty: 80 },
@@ -117,7 +117,6 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                 currentPhase: 'Painting', 
                 currentStepIndex: 0,
                 stepStatus: 'Pending',
-                // SPLIT SPIN INTO SETUP AND PAINT
                 tasks: {
                     spinSetup: { status: 'Pending', assignedTo: '' },
                     spinPaint: { status: 'Pending', assignedTo: '' },
