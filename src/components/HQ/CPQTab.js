@@ -6,7 +6,8 @@ import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
 
 const globalTextureCache = {};
-// 🚀 NEW: Searchable Customer Dropdown Component
+
+// 🚀 Searchable Customer Dropdown Component
 const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, style }) => {
     const [search, setSearch] = useState('');
     const [isOpen, setIsOpen] = useState(false);
@@ -61,6 +62,7 @@ const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, sty
         </div>
     );
 };
+
 const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
     // This tells the app to download Google's official decoder to unzip the file
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
@@ -598,7 +600,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (nextIndex < activeFlow.steps.length) setCurrentStepIndex(nextIndex);
   };
 
-  // 👇 Notice the 'async' right here
+  // 🚀 FIXED: Cleaned up duplicate code blocks in Finalize Quote Function
   const handleFinalizeQuote = async () => {
       if (!jobData.customerId || !jobData.sidemark) return alert("❌ Please select a Customer and enter a Sidemark.");
       const jobId = `QUOTE-${Date.now()}`;
@@ -615,7 +617,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           linkedAssemblyId: activeAssemblyId || null,
           isProjectManaged: activeAssembly?.manufacturingSpecs?.isProjectManaged || false, 
           
-          // 🚀 NEW: Attach the shipping destination to the job document
+          // 🚀 Attach the shipping destination to the job document
           shippingMethod: jobData.shippingMethod || 'SAVED',
           shippingAddressId: jobData.shippingAddressId || null,
           customShippingAddress: jobData.shippingMethod === 'CUSTOM' ? jobData.customShippingAddress : null,
@@ -658,10 +660,16 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           } else {
               alert(`✅ STANDARD QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10 (External Coop) for standard approval.`);
           }
-          setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); 
-          setActiveAssemblyId(""); setShowCheckoutModal(false); 
           
-          // 🚀 UPGRADED: Properly reset the jobData state including shipping fields
+          setActiveFlowId(""); 
+          setDynamicConfigParams({}); 
+          setStepQuantities({}); 
+          setDimensionInputs({}); 
+          setCurrentStepIndex(0); 
+          setActiveAssemblyId(""); 
+          setShowCheckoutModal(false); 
+          
+          // 🚀 Properly reset the jobData state including shipping fields
           setJobData({ 
               customerId: '', 
               jobName: '', 
@@ -670,37 +678,13 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               shippingAddressId: '', 
               customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } 
           });
-          setActiveDraftId(null); setActiveDraftSvg(null);
-      } catch (err) { console.error(err); alert("Failed to save quote."); }
-  };
-          await setDoc(doc(db, "jobs", jobId), payload);
-          
-          if (activeDraftSvg) {
-              await setDoc(doc(db, "crm_files", `DRAWING-${Date.now()}`), {
-                  customerId: jobData.customerId,
-                  jobId: jobId,
-                  sidemark: jobData.sidemark,
-                  dateSaved: new Date().toISOString(),
-                  type: 'VISION_DRAWING',
-                  svgData: activeDraftSvg
-              });
-          }
-          
-          if (activeDraftId) {
-              await deleteDoc(doc(db, "cpq_drafts", activeDraftId));
-          }
+          setActiveDraftId(null); 
+          setActiveDraftSvg(null);
 
-          await generateOrderDocuments(payload, activeDraftSvg);
-
-          if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
-              alert(`✅ COMPLEX QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
-          } else {
-              alert(`✅ STANDARD QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10 (External Coop) for standard approval.`);
-          }
-          setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); 
-          setActiveAssemblyId(""); setShowCheckoutModal(false); setJobData({ customerId: '', jobName: '', sidemark: '' });
-          setActiveDraftId(null); setActiveDraftSvg(null);
-      } catch (err) { console.error(err); alert("Failed to save quote."); }
+      } catch (err) { 
+          console.error(err); 
+          alert("Failed to save quote."); 
+      }
   };
 
   const generateOrderDocuments = async (job, draftSvg) => {
@@ -1131,7 +1115,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                               <div style={{background:'#eee', padding:'5px', textAlign:'center'}}><strong>C2C:</strong> {dimensionInputs[currentStep.id].calc_c2c}"</div>
                                               <div style={{background:'#ffeeba', padding:'5px', textAlign:'center', color:'#856404', border:'1px solid #856404'}}><strong>CUT LENGTH:</strong> {dimensionInputs[currentStep.id].calc_cutLength}"</div>
                                           </div>
-                                          Required raw pole is +17" over O2O length. Sold per foot (rounded up). 
+                                          Required purchase length is +17" over O2O length. Sold per foot (rounded up). 
                                           Calculated Purchase Quantity: <strong>{stepQuantities[currentStep.id] || 1} Feet</strong>.
                                       </div>
                                   )}
@@ -1354,7 +1338,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                     <button onClick={() => setShowCheckoutModal(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
                 </div>
                 
-                {/* Added maxHeight and overflowY so the modal doesn't fall off the screen */}
                 <div style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', gap: '15px', maxHeight: '80vh', overflowY: 'auto' }}>
                     
                     <div style={{ padding: '15px', background: '#eafaf1', border: '1px solid #28a745', textAlign: 'center' }}>
@@ -1370,7 +1353,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                         </select>
                     </div>
 
-                    {/* 🚀 NEW: SHIPPING DESTINATION UI */}
                     {jobData.customerId && (
                         <div style={{ marginTop: '5px', background: '#f8f9fa', padding: '15px', border: '1px solid #ccc', borderLeft: '4px solid #007bff' }}>
                             <h4 style={{ margin: '0 0 10px 0', color: '#007bff', fontSize: '0.9rem' }}>🚚 SHIPPING DESTINATION</h4>
@@ -1440,7 +1422,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                             )}
                         </div>
                     )}
-                    {/* 🚀 END SHIPPING BLOCK */}
 
                     <div>
                         <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>JOB NAME (Optional):</label>
