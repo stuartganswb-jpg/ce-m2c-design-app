@@ -7,14 +7,15 @@ const btnStyle = { padding: '10px 15px', border: 'none', borderRadius: 0, cursor
 const inputStyle = { padding: '8px', border: '2px solid #ccc', borderRadius: 0, width: '100%', boxSizing: 'border-box' };
 
 // --- NATIVE SCADA SIMULATOR ---
-const SpindleSprayerSim = ({ ovenHasPoles, ovenHasSpin, spinActiveCount }) => {
+const SpindleSprayerSim = ({ ovenHasPoles, ovenHasSpin, spinActiveCount, redWO, blueWO }) => {
     let ovenPos = 'center'; 
     if (ovenHasPoles) ovenPos = 'left'; 
     else if (ovenHasSpin) ovenPos = 'center'; 
     else ovenPos = 'center'; 
 
-    const redPos = spinActiveCount > 0 ? 'right' : 'left';
-    const bluePos = spinActiveCount > 0 ? 'left' : 'right';
+    // Visual tracking based on active sled assignments
+    const redPos = (redWO && redWO.stepStatus === 'Oven') ? 'left' : 'right';
+    const bluePos = (blueWO && blueWO.stepStatus === 'Oven') ? 'left' : 'right';
 
     return (
         <div style={{ background: '#222', padding: '20px', border: '4px solid #000', marginBottom: '20px', fontFamily: 'Avenir, sans-serif' }}>
@@ -32,7 +33,6 @@ const SpindleSprayerSim = ({ ovenHasPoles, ovenHasSpin, spinActiveCount }) => {
                 <div style={{ position: 'absolute', right: '5%', bottom: '15px', color: '#aaa', fontSize: '0.6rem', fontWeight: 'bold' }}>SETUP/PAINT STATION</div>
 
                 <div style={{ position: 'absolute', top: '30px', left: redPos === 'left' ? '30%' : '80%', width: '60px', height: '80px', background: '#d9534f', border: '2px solid #fff', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem' }}>RED</div>
-
                 <div style={{ position: 'absolute', top: '30px', left: bluePos === 'left' ? '30%' : '80%', width: '60px', height: '80px', background: '#007bff', border: '2px solid #fff', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem' }}>BLUE</div>
 
                 <div style={{ position: 'absolute', top: '10px', left: ovenPos === 'left' ? '1%' : '23%', width: '22%', height: '120px', background: 'rgba(204, 102, 0, 0.2)', border: '4px solid #CC6600', boxShadow: 'inset 0 0 20px #CC6600', transition: 'left 2s ease-in-out', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: '10px' }}>
@@ -61,6 +61,30 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   
   const totalSpinMins = cfg.spinSetupMins + cfg.spinPaintMins;
 
+  // --- SLED ASSIGNMENT ENGINE ---
+  // Identify orders actively needing spinning or in the oven from a spin
+  const spinningWOs = activeWOs.filter(w => w.tasks?.spin && w.tasks.spin.status !== 'N/A' && (w.tasks.spin.status !== 'Complete' || w.stepStatus === 'Oven'));
+  const redWO = spinningWOs.length > 0 ? spinningWOs[0] : null;
+  const blueWO = spinningWOs.length > 1 ? spinningWOs[1] : null;
+
+  const getSledAssignment = (woId) => {
+      if (redWO && redWO.id === woId) return 'RED';
+      if (blueWO && blueWO.id === woId) return 'BLUE';
+      return null;
+  };
+
+  const getTrackClearance = (mySled) => {
+      // If I am RED, I need to know if BLUE is blocking the track (e.g., finishing an oven cycle)
+      const oppositeWO = mySled === 'RED' ? blueWO : redWO;
+      if (!oppositeWO) return { clear: true, reason: '' };
+      
+      if (oppositeWO.stepStatus === 'Oven') {
+          const rem = Math.max(0, Math.floor(((cfg.ovenMins * 60000) - (now - oppositeWO.ovenStartTime)) / 60000));
+          if (rem > 0) return { clear: false, reason: `WAITING ON ${mySled === 'RED' ? 'BLUE' : 'RED'} OVEN (${rem}m)` };
+      }
+      return { clear: true, reason: '' };
+  };
+
   const colorGroups = {};
   activeWOs.forEach(wo => {
       const r = recipes[wo.recipe];
@@ -73,7 +97,6 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   const ovenContents = activeWOs.filter(w => w.stepStatus === "Oven");
   const ovenHasPoles = ovenContents.some(w => w.type === 'Poles');
   const ovenHasSpin = ovenContents.some(w => w.type !== 'Poles');
-  
   const spinActiveCount = activeJobs.filter(j => j.type !== 'Poles' && j.tasks?.spin?.status === 'Running').length;
 
   const getRemainingMins = (timestampMs, totalMinsAllowed) => {
@@ -102,10 +125,6 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           if (b.role === 'paint_manager' && a.role !== 'paint_manager') return -1;
           return 0;
       });
-      if (taskType === 'spin') {
-          let idleHandPainter = available.find(u => u.role === 'hand_painter'); 
-          return idleHandPainter ? idleHandPainter.name : available[0].name;
-      }
       return available[0].name;
   };
 
@@ -114,7 +133,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       
       {/* LEFT: PIPELINE & QUEUE */}
       <div>
-        <SpindleSprayerSim ovenHasPoles={ovenHasPoles} ovenHasSpin={ovenHasSpin} spinActiveCount={spinActiveCount} />
+        <SpindleSprayerSim ovenHasPoles={ovenHasPoles} ovenHasSpin={ovenHasSpin} spinActiveCount={spinActiveCount} redWO={redWO} blueWO={blueWO} />
 
         {redlineWOs.length > 0 && (
             <div style={{ background: '#d9534f', color: '#fff', padding: '15px', border: '4px solid #333', marginBottom: '20px', fontWeight: 'bold', fontSize: '1.1rem', textTransform: 'uppercase' }}>
@@ -157,7 +176,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                         <div style={{ background: '#f8f9fa', border: '1px solid #ccc', padding: '10px' }}>
                             <div style={{ fontWeight: '900', fontSize: '0.8rem', textAlign: 'center', borderBottom: '2px solid #333', paddingBottom: '10px', marginBottom: '10px', color: '#333' }}>SPINNING</div>
                             {colorGroups[color]?.map(item => item.wo.tasks?.spin?.status !== 'Complete' && item.wo.tasks?.spin?.status !== 'N/A' && (
-                                <TaskCard key={item.wo.id+"spin"} wo={item.wo} type="spin" step={item.step} user={user} setQcModal={setQcModal} estTime={totalSpinMins} activePots={activePots} ovenHasPoles={ovenHasPoles} now={now} aiRec={getAiRecommendation('spin')} users={users} activeWOs={activeWOs} cfg={cfg} />
+                                <TaskCard key={item.wo.id+"spin"} wo={item.wo} type="spin" step={item.step} user={user} setQcModal={setQcModal} estTime={totalSpinMins} activePots={activePots} ovenHasPoles={ovenHasPoles} now={now} aiRec={getAiRecommendation('spin')} users={users} activeWOs={activeWOs} cfg={cfg} sled={getSledAssignment(item.wo.id)} trackStatus={getTrackClearance(getSledAssignment(item.wo.id))} />
                             ))}
                         </div>
 
@@ -183,6 +202,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 return (
                                     <div key={wo.id} style={{ ...cardStyle, borderLeft: isReady ? '5px solid #28a745' : '5px solid #d9534f', textAlign: 'center' }}>
                                         <b style={{color: '#333'}}>{wo.id}</b>
+                                        {getSledAssignment(wo.id) && <div style={{ fontSize: '0.7rem', color: getSledAssignment(wo.id) === 'RED' ? '#d9534f' : '#007bff', fontWeight: 'bold' }}>{getSledAssignment(wo.id)} STATION</div>}
                                         <div style={{ fontSize: '0.7rem', color: '#666' }}>{wo.type}</div>
                                         {isReady ? (
                                             <button onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { stepStatus: "Pending", currentStepIndex: wo.currentStepIndex + 1, lastCoatTime: Date.now() })} style={{ width: '100%', padding: '8px', background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', marginTop: '10px', cursor: 'pointer' }}>UNLOAD OVEN</button>
@@ -197,18 +217,6 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                 </div>
             );
         })}
-
-        <h2 style={{ margin: '40px 0 10px 0', color: '#333', borderBottom: '2px solid #333', paddingBottom: '10px' }}>IN QUEUE (UPCOMING SHIFT WORKLOAD)</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '15px' }}>
-            {queuedWOs.length === 0 && <div style={{ color: '#666', fontStyle: 'italic' }}>No pending orders staged for production.</div>}
-            {queuedWOs.map(wo => (
-                <div key={wo.id} style={{ ...cardStyle, borderLeft: '5px solid #ccc', background: '#f8f9fa' }}>
-                    <div style={{ fontWeight: 'bold', color: '#333' }}>{wo.id}</div>
-                    <div style={{ fontSize: '0.8rem', color: '#666' }}>Recipe: {wo.recipe} | {wo.type}</div>
-                    <div style={{ fontSize: '0.7rem', color: '#007bff', marginTop: '5px', fontWeight: 'bold' }}>Phase: {wo.currentPhase.toUpperCase()}</div>
-                </div>
-            ))}
-        </div>
       </div>
 
       {/* RIGHT: LIVE ASSIGNMENTS & AI LOGIC */}
@@ -252,57 +260,49 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                   })
               )}
           </div>
-
-          <div style={{ background: '#fff', padding: '20px', border: '2px solid #333' }}>
-              <h3 style={{ marginTop: 0, color: '#333', borderBottom: '1px solid #ccc', paddingBottom: '10px' }}>PIPELINE OVERVIEW</h3>
-              {activeWOs.length === 0 ? <p style={{color: '#666', fontSize: '0.8rem'}}>No active jobs in pipeline.</p> : (
-                  activeWOs.map(wo => {
-                      let recoatWarning = null;
-                      if (wo.lastCoatTime) {
-                          const recoatMinsLeft = Math.max(0, Math.floor(((cfg.recoatMins * 60000) - (now - wo.lastCoatTime)) / 60000));
-                          if (recoatMinsLeft < 30) recoatWarning = `⚠️ RECOAT DANGER: ${recoatMinsLeft}m LEFT!`;
-                      }
-                      return (
-                          <div key={wo.id} style={{ border: '1px solid #eee', padding: '10px', marginBottom: '10px', borderLeft: recoatWarning ? '4px solid #d9534f' : '4px solid #333' }}>
-                              <div style={{ fontWeight: 'bold', color: '#333', display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
-                                  <span>{wo.soId ? `SO: ${wo.soId} | ` : ''}WO: {wo.id}</span>
-                                  <span style={{ color: '#CC6600' }}>{wo.recipe}</span>
-                              </div>
-                              {recoatWarning && <div style={{ color: '#d9534f', fontSize: '0.75rem', fontWeight: 'bold', marginTop: '3px' }}>{recoatWarning}</div>}
-                          </div>
-                      );
-                  })
-              )}
-          </div>
       </div>
 
-      {/* --- NEW: PINNED ORDER NOTES OVERLAY --- */}
-      <div style={{ position: 'fixed', bottom: '20px', right: '20px', width: '320px', maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 1000 }}>
-          {activeWOs.map(wo => (
-              <div key={`note-${wo.id}`} style={{ background: '#f4f4f4', border: '2px solid #333', padding: '15px', boxShadow: '-6px 6px 0px rgba(0,0,0,0.1)' }}>
-                  <div style={{ fontWeight: 'bold', borderBottom: '2px solid #333', paddingBottom: '8px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.85rem' }}>{wo.soId || 'NO-SO'} / {wo.id.split('-').pop()}</span>
-                      <span style={{ color: '#fff', background: '#CC6600', padding: '2px 6px', fontSize: '0.7rem' }}>{wo.recipe}</span>
+      {/* --- PINNED ORDER NOTES OVERLAY WITH HQ ROUTING METADATA --- */}
+      <div style={{ position: 'fixed', bottom: '20px', right: '20px', width: '340px', maxHeight: '500px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 1000 }}>
+          {activeWOs.map(wo => {
+              // Group parts by standard handling types (from Library rules)
+              const smallParts = (wo.partsList || []).filter(p => p.name.toUpperCase().includes('RING') || p.name.toUpperCase().includes('FINIAL') || p.name.toUpperCase().includes('BRACKET'));
+              const customParts = (wo.partsList || []).filter(p => p.name.toUpperCase().includes('POLE') || p.name.toUpperCase().includes('TRACK') || p.name.toUpperCase().includes('SPLICE'));
+
+              return (
+                  <div key={`note-${wo.id}`} style={{ background: '#f4f4f4', border: '2px solid #333', padding: '15px', boxShadow: '-6px 6px 0px rgba(0,0,0,0.1)' }}>
+                      <div style={{ fontWeight: 'bold', borderBottom: '2px solid #333', paddingBottom: '8px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.9rem', color: '#007bff' }}>{wo.soId || 'NO-SO'} / {wo.id.split('-').pop()}</span>
+                          <span style={{ color: '#fff', background: '#CC6600', padding: '3px 8px', fontSize: '0.75rem', fontWeight: 'bold' }}>{wo.recipe}</span>
+                      </div>
+                      
+                      <div style={{ fontSize: '0.7rem', color: '#333', marginBottom: '5px', fontWeight: 'bold', textTransform: 'uppercase', background: '#e3f2fd', padding: '4px', border: '1px solid #007bff' }}>
+                          MACHINE LOADOUT: {smallParts.reduce((acc, p) => acc + p.qty, 0)} PARTS
+                      </div>
+                      <ul style={{ margin: '0 0 10px 0', paddingLeft: '15px', fontSize: '0.75rem', color: '#555' }}>
+                          {smallParts.length > 0 ? smallParts.map((p, i) => (
+                              <li key={`sm-${i}`} style={{ marginBottom: '4px' }}><b>{p.qty}x</b> {p.name}</li>
+                          )) : <li style={{ fontStyle: 'italic', color: '#888' }}>No small parts.</li>}
+                      </ul>
+
+                      <div style={{ fontSize: '0.7rem', color: '#333', marginBottom: '5px', fontWeight: 'bold', textTransform: 'uppercase', background: '#eafaf1', padding: '4px', border: '1px solid #28a745' }}>
+                          CUSTOM / POLE LOADOUT: {customParts.reduce((acc, p) => acc + p.qty, 0)} PARTS
+                      </div>
+                      <ul style={{ margin: 0, paddingLeft: '15px', fontSize: '0.75rem', color: '#555' }}>
+                          {customParts.length > 0 ? customParts.map((p, i) => (
+                              <li key={`cu-${i}`} style={{ marginBottom: '4px' }}><b>{p.qty}x</b> {p.name}</li>
+                          )) : <li style={{ fontStyle: 'italic', color: '#888' }}>No poles or tracks.</li>}
+                      </ul>
                   </div>
-                  
-                  <div style={{ fontSize: '0.7rem', color: '#666', marginBottom: '5px', fontWeight: 'bold', textTransform: 'uppercase' }}>Itemized Floor Routing:</div>
-                  <ul style={{ margin: 0, paddingLeft: '15px', fontSize: '0.75rem', color: '#333' }}>
-                      {wo.partsList && wo.partsList.length > 0 ? wo.partsList.map((p, i) => (
-                          <li key={i} style={{ marginBottom: '4px' }}><b>{p.qty}x</b> {p.name}</li>
-                      )) : (
-                          <li style={{ fontStyle: 'italic', color: '#888' }}>Standard Part Mix Loaded</li>
-                      )}
-                  </ul>
-              </div>
-          ))}
+              )
+          })}
       </div>
-      {/* --------------------------------------- */}
 
     </div>
   );
 };
 
-const TaskCard = ({ wo, type, step, user, setQcModal, estTime, activePots, ovenHasPoles, ovenHasSpin, now, aiRec, users, activeWOs, cfg }) => {
+const TaskCard = ({ wo, type, step, user, setQcModal, estTime, activePots, ovenHasPoles, ovenHasSpin, now, aiRec, users, activeWOs, cfg, sled, trackStatus }) => {
     const task = wo.tasks?.[type] || {}; 
     const isRunning = task.status === 'Running';
     
@@ -334,7 +334,10 @@ const TaskCard = ({ wo, type, step, user, setQcModal, estTime, activePots, ovenH
 
     const isSelectedOpBusy = selectedOpManualLoad >= 1;
     const needsOven = ['spin', 'pole'].includes(type);
+    
+    // Check local blocking or interlocked track blocking
     let ovenBlocked = (needsOven && type === 'spin' && ovenHasPoles) || (needsOven && type === 'pole' && ovenHasSpin);
+    let interlockBlocked = (type === 'spin' && trackStatus && !trackStatus.clear);
 
     let recoatWarning = null;
     if (wo.lastCoatTime) {
@@ -354,6 +357,14 @@ const TaskCard = ({ wo, type, step, user, setQcModal, estTime, activePots, ovenH
 
     return (
         <div style={{ ...cardStyle, borderLeft: isRunning ? '5px solid #007bff' : '5px solid #333', position: 'relative' }}>
+            
+            {/* SLED BADGE FOR SPINDLE MACHINE */}
+            {type === 'spin' && sled && (
+                <div style={{ background: sled === 'RED' ? '#d9534f' : '#007bff', color: '#fff', padding: '6px', textAlign: 'center', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '10px', textTransform: 'uppercase', border: '1px solid #000' }}>
+                    {sled} STATION
+                </div>
+            )}
+
             <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#333' }}>{wo.id}</div>
             <div style={{ fontSize: '0.7rem', color: '#666', margin: '5px 0' }}>Step {step.step}: {step.color}</div>
             
@@ -376,11 +387,13 @@ const TaskCard = ({ wo, type, step, user, setQcModal, estTime, activePots, ovenH
             <div style={{ fontSize: '0.7rem', color: '#333', marginBottom: '10px', fontWeight: 'bold' }}>⏱️ Est: {Math.ceil(estTime)} mins</div>
             
             {!isRunning ? (
-                <button disabled={disabledStart} onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Running', [`tasks.${type}.assignedTo`]: currentOp, [`tasks.${type}.startTime`]: Date.now() })} style={{ width: '100%', padding: '8px', background: disabledStart ? '#ccc' : '#333', color: disabledStart ? '#666' : '#fff', border: 'none', fontWeight: 'bold', cursor: disabledStart ? 'not-allowed' : 'pointer', fontSize: '0.75rem' }}>{btnText}</button>
+                <button disabled={disabledStart} onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Running', [`tasks.${type}.assignedTo`]: currentOp, [`tasks.${type}.startTime`]: Date.now() })} style={{ width: '100%', padding: '8px', background: disabledStart ? '#ccc' : '#333', color: disabledStart ? '#666' : '#fff', border: 'none', fontWeight: 'bold', cursor: disabledStart ? 'not-allowed' : 'fontSize: 0.75rem' }}>{btnText}</button>
             ) : (
                 <>
                     {ovenBlocked ? (
                         <button disabled style={{ width: '100%', padding: '8px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', fontSize: '0.75rem' }}>OVEN BLOCKED</button>
+                    ) : interlockBlocked ? (
+                        <button disabled style={{ width: '100%', padding: '8px', background: '#ffc107', color: '#000', border: 'none', fontWeight: 'bold', fontSize: '0.75rem' }}>{trackStatus.reason}</button>
                     ) : (
                         <button onClick={() => setQcModal({ id: wo.id, parts: wo.totalParts, type: wo.type, phase: 'Painting', taskType: type, needsOven })} style={{ width: '100%', padding: '8px', background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>{needsOven ? 'COMPLETE & SEND TO OVEN' : 'COMPLETE TASK'}</button>
                     )}
