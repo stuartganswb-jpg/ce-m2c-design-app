@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3" },
@@ -17,6 +17,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const [inventoryTasks, setInventoryTasks] = useState([]);
     const [loading, setLoading] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [syncLog, setSyncLog] = useState([]);
+
+    const addLog = (msg, type = 'info') => {
+        const time = new Date().toLocaleTimeString();
+        setSyncLog(prev => [{ time, msg, type }, ...prev]);
+    };
 
     const loadRTGOrders = async () => {
         setLoading(true);
@@ -37,7 +43,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
         } catch (error) {
             console.error("Error loading RTG:", error);
-            alert("Failed to load data. See console.");
+            addLog("Failed to load local RTG board data.", "error");
         }
         setLoading(false);
     };
@@ -46,13 +52,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         loadRTGOrders();
     }, [activeBrand]);
 
-    // 🚀 UPDATED: Pull Approved Sales Orders from NetSuite (Filtered for App-Only Orders)
+    // 🚀 PULL WITH LOGGING
     const pullNSSalesOrders = async () => {
         setIsSyncing(true);
+        setSyncLog([]); // Clear log on new pull
+        
         try {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
+            addLog(`Initiating Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
-            // 🚀 The X-RAY Query: Only pulls Pending Fulfillment orders that have an App Job ID (custbody50)
+            // Note: Filters for SalesOrd:B (Pending Fulfillment) and requires the App Job ID (custbody50)
             const q = `
                 SELECT 
                     Transaction.id AS ns_id,
@@ -69,6 +78,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 AND Transaction.custbody50 IS NOT NULL
             `;
             
+            addLog("Executing SuiteQL: Looking for 'Pending Fulfillment' orders born from CPQ App...", "info");
+
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -83,6 +94,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             if (!response.ok) throw new Error(JSON.stringify(result));
             
             const records = result.items || [];
+            addLog(`NetSuite returned ${records.length} matching orders.`, records.length > 0 ? "success" : "warn");
+
             let newOrders = 0;
             
             for (const row of records) {
@@ -90,7 +103,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 const soRef = doc(db, "hq_sales_orders", hqSalesOrderId);
                 const soSnap = await getDoc(soRef);
                 
-                // Only create the SO if it doesn't already exist in Firebase to prevent overwriting routed tickets
                 if (!soSnap.exists()) {
                     await setDoc(soRef, {
                         id: hqSalesOrderId,
@@ -108,14 +120,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                         memo: row.memo || ''
                     });
                     newOrders++;
+                    addLog(`Imported new Sales Order: ${hqSalesOrderId}`, "success");
+                } else {
+                    addLog(`Skipped ${hqSalesOrderId} (Already exists on board).`, "info");
                 }
             }
             
-            alert(`✅ Successfully synced ${newOrders} new App-Generated Sales Orders from NetSuite!`);
+            addLog(`✅ Sync complete. Added ${newOrders} new orders to dispatch board.`, "success");
             loadRTGOrders();
         } catch(e) {
             console.error(e);
-            alert("Failed to sync from NetSuite. Ensure your API proxy is active.");
+            addLog(`❌ FAILED: ${e.message}`, "error");
+            alert("Failed to sync from NetSuite. See terminal for details.");
         }
         setIsSyncing(false);
     };
@@ -125,7 +141,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
 
         try {
-            // Keep WO and SO separate
             const finWorkOrderId = orderType === 'sales' ? `WO-${hqOrder.soId || Date.now()}` : `WO-${hqOrder.woId || Date.now()}`;
             
             const finPayload = {
@@ -138,7 +153,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 type: hqOrder.type || "Mixed", 
                 totalParts: Number(hqOrder.totalParts) || 1,
                 
-                // Dimensions injected for the paint calculator
                 dimensions: {
                     length: Number(hqOrder.length) || 10,
                     width: Number(hqOrder.width) || 5,
@@ -158,37 +172,27 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
             await updateDoc(doc(db, collectionName, hqOrder.id), { status: "Dispatched_Finishing" });
 
+            addLog(`Dispatched ${finWorkOrderId} to Finishing Floor!`, "success");
             alert(`Successfully pushed ${finWorkOrderId} to Finishing Floor Setup Queue!`);
             loadRTGOrders(); 
 
         } catch (error) {
             console.error("Dispatch Error:", error);
+            addLog(`Dispatch Failed: ${error.message}`, "error");
             alert("Failed to push to Finishing Floor. Check permissions/console.");
         }
     };
 
-    // --- DEV CHEAT CODE: INJECT TEST ORDER ---
-    const injectTestOrder = async () => {
+    // 🚀 NEW: Delete Order Function (To clear out test orders)
+    const deleteOrder = async (collectionName, id) => {
+        if (!window.confirm(`Permanently remove ${id} from the dispatch board?`)) return;
         try {
-            const testId = `TEST-SO-${Math.floor(Math.random() * 1000)}`;
-            await setDoc(doc(db, "hq_sales_orders", testId), {
-                soId: testId,
-                customer: "Stark Industries",
-                status: "Approved",      
-                brand: activeBrand,      
-                recipe: "MATTE-BLACK",
-                type: "Poles",
-                totalParts: 25,
-                length: 48, 
-                width: 2, 
-                height: 2,
-                reqDate: "2026-06-01"
-            });
-            alert(`Injected ${testId}! The board will now refresh.`);
+            await deleteDoc(doc(db, collectionName, id));
+            addLog(`Deleted document: ${id}`, "warn");
             loadRTGOrders();
-        } catch (error) {
-            console.error("Injection failed:", error);
-            alert("Injection failed. Check console.");
+        } catch (e) {
+            console.error(e);
+            addLog(`Failed to delete ${id}: ${e.message}`, "error");
         }
     };
 
@@ -206,90 +210,127 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     <button onClick={pullNSSalesOrders} disabled={isSyncing} style={{ ...btnStyle, background: isSyncing ? '#ccc' : '#007bff' }}>
                         {isSyncing ? 'SYNCING...' : '⬇️ PULL ERP SALES ORDERS'}
                     </button>
-                    <button onClick={injectTestOrder} style={{ ...btnStyle, background: '#8e44ad' }}>⚙️ INJECT TEST ORDER</button>
                     <button onClick={loadRTGOrders} style={{ ...btnStyle, background: '#333', margin: 0 }}>{loading ? 'SCANNING...' : '🔄 REFRESH DISPATCH LIST'}</button>
                 </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
-                {/* 1. SALES ORDERS */}
-                <div style={{ borderTop: '4px solid #004080', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                    <h3 style={{ margin: '0 0 15px 0', color: '#004080', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📦 SALES ORDERS (CUSTOM)</h3>
-                    {salesOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved sales orders pending dispatch.</p>}
+            <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+                
+                {/* LEFT: 4x GRID BOARD */}
+                <div style={{ flex: 1.5, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                     
-                    {salesOrders.map(so => (
-                        <div key={so.id} style={cardStyle}>
-                            <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '5px', color: '#333' }}>
-                                SO: {so.soId || so.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Cust: {so.customer || 'N/A'}</span>
-                            </div>
-                            {so.memo && (
-                                <div style={{ fontSize: '0.75rem', color: '#007bff', marginBottom: '10px', fontStyle: 'italic' }}>
-                                    "{so.memo}"
+                    {/* 1. SALES ORDERS */}
+                    <div style={{ borderTop: '4px solid #004080', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                        <h3 style={{ margin: '0 0 15px 0', color: '#004080', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📦 SALES ORDERS (CUSTOM)</h3>
+                        {salesOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved sales orders pending dispatch.</p>}
+                        
+                        {salesOrders.map(so => (
+                            <div key={so.id} style={cardStyle}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                    <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '5px', color: '#333' }}>
+                                        SO: {so.soId || so.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Cust: {so.customer || 'N/A'}</span>
+                                    </div>
+                                    <button onClick={() => deleteOrder('hq_sales_orders', so.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>🗑️</button>
                                 </div>
-                            )}
-                            <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-                                <button style={{ ...btnStyle, background: '#CC6600' }} onClick={() => pushToFinishing(so, 'sales')}>Push to Finishing</button>
-                                <button style={{ ...btnStyle, background: '#555' }} onClick={() => alert('Shop Floor push coming soon')}>Push to Shop</button>
-                                <button style={{ ...btnStyle, background: '#555' }} onClick={() => alert('Picking push coming soon')}>Push to Picking</button>
-                                <button style={{ ...btnStyle, background: '#555' }} onClick={() => alert('Plating push coming soon')}>Push to Plating</button>
-                                <button style={{ ...btnStyle, background: '#555' }} onClick={() => alert('Packing push coming soon')}>Push to Packing</button>
+                                {so.memo && (
+                                    <div style={{ fontSize: '0.75rem', color: '#007bff', marginBottom: '10px', fontStyle: 'italic' }}>
+                                        "{so.memo}"
+                                    </div>
+                                )}
+                                <div style={{ display: 'flex', flexWrap: 'wrap' }}>
+                                    <button style={{ ...btnStyle, background: '#CC6600' }} onClick={() => pushToFinishing(so, 'sales')}>Push to Finishing</button>
+                                    <button style={{ ...btnStyle, background: '#555' }} onClick={() => alert('Shop Floor push coming soon')}>Push to Shop</button>
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        ))}
+                    </div>
+
+                    {/* 2. WORK ORDERS */}
+                    <div style={{ borderTop: '4px solid #d4af37', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                        <h3 style={{ margin: '0 0 15px 0', color: '#d4af37', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>🛠️ WORK ORDERS (STOCK BUILDS)</h3>
+                        {workOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved work orders pending dispatch.</p>}
+                        
+                        {workOrders.map(wo => (
+                            <div key={wo.id} style={cardStyle}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                    <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '10px', color: '#333' }}>
+                                        WO: {wo.woId || wo.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Build to Stock</span>
+                                    </div>
+                                    <button onClick={() => deleteOrder('hq_work_orders', wo.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>🗑️</button>
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap' }}>
+                                    <button style={{ ...btnStyle, background: '#CC6600' }} onClick={() => pushToFinishing(wo, 'stock')}>Push to Finishing</button>
+                                    <button style={{ ...btnStyle, background: '#555' }} onClick={() => alert('Shop Floor push coming soon')}>Push to Shop</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* 3. PURCHASE ORDERS */}
+                    <div style={{ borderTop: '4px solid #28a745', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                        <h3 style={{ margin: '0 0 15px 0', color: '#28a745', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📥 PURCHASE ORDERS (INBOUND)</h3>
+                        {purchaseOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved purchase orders incoming.</p>}
+                        
+                        {purchaseOrders.map(po => (
+                            <div key={po.id} style={cardStyle}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                    <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '10px', color: '#333' }}>
+                                        PO: {po.poId || po.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Vendor: {po.vendor || 'N/A'}</span>
+                                    </div>
+                                    <button onClick={() => deleteOrder('hq_purchase_orders', po.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>🗑️</button>
+                                </div>
+                                <button style={{ ...btnStyle, background: '#28a745' }} onClick={() => alert('Sent to Receiving Dock App')}>Alert Receiving Dock</button>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* 4. INVENTORY CONTROL */}
+                    <div style={{ borderTop: '4px solid #d9534f', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                        <h3 style={{ margin: '0 0 15px 0', color: '#d9534f', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📋 INVENTORY CONTROL</h3>
+                        {inventoryTasks.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No active inventory tasks.</p>}
+                        
+                        {inventoryTasks.map(inv => (
+                            <div key={inv.id} style={cardStyle}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                    <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '10px', color: '#333' }}>
+                                        Task: {inv.taskId || inv.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Type: {inv.type || 'Count'}</span>
+                                    </div>
+                                    <button onClick={() => deleteOrder('hq_inventory_tasks', inv.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>🗑️</button>
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap' }}>
+                                    <button style={{ ...btnStyle, background: '#d9534f' }} onClick={() => alert('Cycle Count Dispatched')}>Dispatch Count</button>
+                                    <button style={{ ...btnStyle, background: '#d4af37', color: '#000' }} onClick={() => alert('Bin Transfer Initiated')}>Init Bin Transfer</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
                 </div>
 
-                {/* 2. WORK ORDERS */}
-                <div style={{ borderTop: '4px solid #d4af37', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                    <h3 style={{ margin: '0 0 15px 0', color: '#d4af37', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>🛠️ WORK ORDERS (STOCK BUILDS)</h3>
-                    {workOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved work orders pending dispatch.</p>}
-                    
-                    {workOrders.map(wo => (
-                        <div key={wo.id} style={cardStyle}>
-                            <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '10px', color: '#333' }}>
-                                WO: {wo.woId || wo.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Build to Stock</span>
-                            </div>
-                            <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-                                <button style={{ ...btnStyle, background: '#CC6600' }} onClick={() => pushToFinishing(wo, 'stock')}>Push to Finishing</button>
-                                <button style={{ ...btnStyle, background: '#555' }} onClick={() => alert('Shop Floor push coming soon')}>Push to Shop</button>
-                                <button style={{ ...btnStyle, background: '#555' }} onClick={() => alert('Plating push coming soon')}>Push to Plating</button>
-                            </div>
-                        </div>
-                    ))}
+                {/* RIGHT: TERMINAL */}
+                <div style={{ flex: 0.8, background: '#1e1e1e', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000', height: '800px', position: 'sticky', top: '20px' }}>
+                    <div style={{ padding: '10px 15px', background: '#333', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>>_ SUITEQL PULL TERMINAL</span>
+                        <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '0.7rem' }}>CLEAR</button>
+                    </div>
+                    <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                        {syncLog.length === 0 && <span style={{ color: '#666' }}>Awaiting command...</span>}
+                        {syncLog.map((log, idx) => {
+                            let color = '#fff';
+                            if (log.type === 'error') color = '#ff4d4d';
+                            if (log.type === 'success') color = '#28a745';
+                            if (log.type === 'warn') color = '#ffc107';
+                            
+                            return (
+                                <div key={idx} style={{ color, borderBottom: '1px dotted #333', paddingBottom: '4px' }}>
+                                    <span style={{ color: '#888', marginRight: '8px' }}>[{log.time}]</span>
+                                    {log.msg}
+                                </div>
+                            );
+                        })}
+                    </div>
                 </div>
 
-                {/* 3. PURCHASE ORDERS */}
-                <div style={{ borderTop: '4px solid #28a745', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                    <h3 style={{ margin: '0 0 15px 0', color: '#28a745', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📥 PURCHASE ORDERS (INBOUND)</h3>
-                    {purchaseOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved purchase orders incoming.</p>}
-                    
-                    {purchaseOrders.map(po => (
-                        <div key={po.id} style={cardStyle}>
-                            <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '10px', color: '#333' }}>
-                                PO: {po.poId || po.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Vendor: {po.vendor || 'N/A'}</span>
-                            </div>
-                            <button style={{ ...btnStyle, background: '#28a745' }} onClick={() => alert('Sent to Receiving Dock App')}>Alert Receiving Dock</button>
-                        </div>
-                    ))}
-                </div>
-
-                {/* 4. INVENTORY CONTROL */}
-                <div style={{ borderTop: '4px solid #d9534f', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                    <h3 style={{ margin: '0 0 15px 0', color: '#d9534f', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📋 INVENTORY CONTROL</h3>
-                    {inventoryTasks.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No active inventory tasks.</p>}
-                    
-                    {inventoryTasks.map(inv => (
-                        <div key={inv.id} style={cardStyle}>
-                            <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '10px', color: '#333' }}>
-                                Task: {inv.taskId || inv.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Type: {inv.type || 'Count'}</span>
-                            </div>
-                            <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-                                <button style={{ ...btnStyle, background: '#d9534f' }} onClick={() => alert('Cycle Count Dispatched')}>Dispatch Count</button>
-                                <button style={{ ...btnStyle, background: '#d4af37', color: '#000' }} onClick={() => alert('Bin Transfer Initiated')}>Init Bin Transfer</button>
-                                <button style={{ ...btnStyle, background: '#8e44ad' }} onClick={() => alert('Clearance Flagged')}>Flag Clearance</button>
-                            </div>
-                        </div>
-                    ))}
-                </div>
             </div>
         </div>
     );
