@@ -3,24 +3,33 @@ import { db } from '../../firebase';
 import { doc, setDoc, deleteDoc, collection, getDocs, writeBatch } from "firebase/firestore";
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection as oldCol, getDocs as oldGetDocs } from 'firebase/firestore';
-import { cardStyle, btnStyle, inputStyle, labelStyle } from './finishingStyles';
+
+// Strict flat sides, no rounded corners
+const btnStyle = { padding: '10px 15px', border: 'none', borderRadius: 0, cursor: 'pointer', fontWeight: 'bold', textTransform: 'uppercase' };
+const inputStyle = { padding: '8px', border: '2px solid #ccc', borderRadius: 0, width: '100%', boxSizing: 'border-box', fontFamily: 'Avenir, sans-serif' };
+const labelStyle = { fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '4px' };
 
 const ROLES = ['setup', 'setup_manager', 'painter', 'hand_painter', 'paint_manager', 'packaging', 'floor_manager', 'office', 'admin'];
 const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'MESSAGING', 'MANAGEMENT', 'DAILY SUMMARY'];
 
 const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms }) => {
-    // 1. Timers State - UPDATED FOR DUAL-STATION SPINDLE
+    
+    // 1. Timers State
     const [config, setConfig] = useState({
         mixMins: sysConfig?.mixMins || 5,
         spinSetupMins: sysConfig?.spinSetupMins || 10,
         spinPaintMins: sysConfig?.spinPaintMins || 3,
-        ovenMins: sysConfig?.ovenMins || 10, // Synced to setup time
+        ovenMins: sysConfig?.ovenMins || 10, 
         handSmallMins: sysConfig?.handSmallMins || 1.35,
         handPoleMins: sysConfig?.handPoleMins || 10,
         poleMins: sysConfig?.poleMins || 5,
         potLifeMins: sysConfig?.potLifeMins || 189,
         recoatMins: sysConfig?.recoatMins || 90
     });
+
+    // 2. Demo Injector State
+    const [demoSmall, setDemoSmall] = useState(3);
+    const [demoLarge, setDemoLarge] = useState(2);
 
     const [uName, setUName] = useState("");
     const [uPin, setUPin] = useState("");
@@ -99,9 +108,70 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
         } catch(e) { console.error(e); alert("Sync failed. Check console for details."); }
     };
 
+    // --- DEMO DATA INJECTOR LOGIC ---
+    const handleInjectDemoData = async () => {
+        if (!window.confirm(`Inject ${demoSmall} Small and ${demoLarge} Large test orders to the floor?`)) return;
+
+        const batch = writeBatch(db);
+
+        // 1. Inject baseline test recipes
+        const testRecipes = [
+            { code: 'AGED-GOLD', steps: [{step:1, color:'Aged Gold Matte Base', app:'Sprayed'}, {step:2, color:'Light Antique Wash', app:'Hand Applied'}] },
+            { code: 'MATTE-BLK', steps: [{step:1, color:'Matte Black Finish', app:'Sprayed'}] },
+            { code: 'CHAMPAGNE', steps: [{step:1, color:'Champagne Metallic', app:'Sprayed'}, {step:2, color:'Clear Matte Topcoat', app:'Sprayed'}] }
+        ];
+
+        testRecipes.forEach(r => {
+            batch.set(doc(collection(db, "fin_recipes"), r.code), r);
+        });
+
+        // 2. Generate Work Orders Function
+        const generateWO = (index, sizeType) => {
+            const isLarge = sizeType === 'large';
+            const recipeData = testRecipes[index % testRecipes.length];
+            const requiresHand = recipeData.steps.some(s => s.app === 'Hand Applied');
+
+            return {
+                id: `DEMO-WO-${Date.now().toString().slice(-4)}-${index}`,
+                soId: `SO-9${100 + index}`,
+                recipe: recipeData.code,
+                type: 'Mixed', // Includes both poles and small parts
+                totalParts: isLarge ? 100 : 65, // <70 for small, 100 for large
+                totalPoles: isLarge ? 5 : 2,
+                currentPhase: 'Painting', // Send straight to floor
+                currentStepIndex: 0,
+                stepStatus: 'Pending',
+                tasks: {
+                    spin: { status: 'Pending', assignedTo: '' },
+                    pole: { status: 'Pending', assignedTo: '' },
+                    hand: requiresHand ? { status: 'Pending', assignedTo: '' } : { status: 'N/A', assignedTo: '' }
+                }
+            };
+        };
+
+        // Loop and attach to batch
+        let currentIndex = 0;
+        for(let i=0; i<demoSmall; i++) {
+            const wo = generateWO(currentIndex, 'small');
+            batch.set(doc(collection(db, "fin_workorders"), wo.id), wo);
+            currentIndex++;
+        }
+        for(let i=0; i<demoLarge; i++) {
+            const wo = generateWO(currentIndex, 'large');
+            batch.set(doc(collection(db, "fin_workorders"), wo.id), wo);
+            currentIndex++;
+        }
+
+        await batch.commit();
+        writeLog(`Injected ${demoSmall + demoLarge} Demo Orders onto Active Floor`, "admin");
+        alert("Demo Data Injected Successfully! Check the Active Floor tab.");
+    };
+
     return (
         <div style={{ padding: '30px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', fontFamily: 'Avenir, sans-serif' }}>
+            {/* LEFT COLUMN */}
             <div>
+                {/* TIMERS */}
                 <h2 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #333', paddingBottom: '10px', color: '#333' }}>AI PRODUCTION TIMERS (MINUTES)</h2>
                 <div style={{ background: '#fff', border: '2px solid #333', padding: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                     <div><label style={labelStyle}>Mix Station</label><input type="number" step="0.1" value={config.mixMins} onChange={e=>setConfig({...config, mixMins: Number(e.target.value)})} style={inputStyle} /></div>
@@ -118,6 +188,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                     <button onClick={handleSaveConfig} style={{ ...btnStyle, gridColumn: '1 / -1', background: '#333', color: '#fff' }}>SAVE TIMERS</button>
                 </div>
 
+                {/* DATABASE WIPE */}
                 <h2 style={{ borderBottom: '2px solid #333', paddingBottom: '10px', marginTop: '30px', color: '#333' }}>DATABASE MANAGEMENT</h2>
                 <div style={{ background: '#fff0f0', border: '2px solid #d9534f', padding: '15px' }}>
                     <p style={{ fontSize: '0.8rem', color: '#666', marginTop: 0 }}>These actions permanently delete live production data.</p>
@@ -128,6 +199,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                     <button onClick={syncLegacyPaintProfiles} style={{ width: '100%', padding: '10px', background: '#CC6600', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>🔄 SYNC LEGACY PROFILES</button>
                 </div>
 
+                {/* OPERATOR DIRECTORY */}
                 <h2 style={{ borderBottom: '2px solid #333', paddingBottom: '10px', marginTop: '30px', color: '#333' }}>OPERATOR DIRECTORY</h2>
                 <div style={{ background: '#fff', border: '2px solid #333', padding: '20px' }}>
                     <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '10px', marginBottom: '10px' }}>
@@ -155,9 +227,30 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                 </div>
             </div>
 
+            {/* RIGHT COLUMN */}
             <div>
+                {/* DEMO DATA INJECTOR */}
+                <h2 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #007bff', paddingBottom: '10px', color: '#007bff' }}>SIMULATION & DEMO DATA</h2>
+                <div style={{ background: '#e3f2fd', border: '2px solid #007bff', padding: '20px', marginBottom: '30px' }}>
+                    <p style={{ fontSize: '0.85rem', color: '#333', marginTop: 0, marginBottom: '15px' }}>
+                        Configure and push synthetic work orders directly to the Active Floor to test dispatch logic, routing, and spindle track animations. 
+                    </p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
+                        <div>
+                            <label style={{...labelStyle, color: '#007bff'}}>Small Orders (&lt;70 Parts, 2 Poles)</label>
+                            <input type="number" min="0" value={demoSmall} onChange={e=>setDemoSmall(Number(e.target.value))} style={{...inputStyle, borderColor: '#007bff'}} />
+                        </div>
+                        <div>
+                            <label style={{...labelStyle, color: '#007bff'}}>Large Orders (100 Parts, 5 Poles)</label>
+                            <input type="number" min="0" value={demoLarge} onChange={e=>setDemoLarge(Number(e.target.value))} style={{...inputStyle, borderColor: '#007bff'}} />
+                        </div>
+                    </div>
+                    <button onClick={handleInjectDemoData} style={{ ...btnStyle, width: '100%', background: '#007bff', color: '#fff' }}>🚀 INJECT BATCH TO FLOOR</button>
+                </div>
+
+                {/* LOGS */}
                 <h2 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #333', paddingBottom: '10px', color: '#333' }}>SYSTEM LOGS</h2>
-                <div style={{ background: '#333', color: '#00ff00', padding: '15px', height: '400px', overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.8rem', border: '2px solid #000' }}>
+                <div style={{ background: '#333', color: '#00ff00', padding: '15px', height: '300px', overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.8rem', border: '2px solid #000' }}>
                     {logs.map(l => (
                         <div key={l.id} style={{ marginBottom: '5px', borderBottom: '1px solid #444', paddingBottom: '5px' }}>
                             <span style={{ color: '#888' }}>[{new Date(l.t?.toDate()).toLocaleTimeString()}]</span> <span style={{ color: '#fff' }}>{l.u}:</span> {l.msg}
@@ -165,6 +258,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                     ))}
                 </div>
 
+                {/* PERMISSIONS MATRIX */}
                 <h2 style={{ borderBottom: '2px solid #333', paddingBottom: '10px', marginTop: '30px', color: '#333' }}>PERMISSIONS SETUP</h2>
                 <div style={{ background: '#fff', border: '2px solid #333', overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'center' }}>
