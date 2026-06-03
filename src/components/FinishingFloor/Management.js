@@ -27,7 +27,6 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
         recoatMins: sysConfig?.recoatMins || 90
     });
 
-    // 2. Demo Injector State
     const [demoSmall, setDemoSmall] = useState(3);
     const [demoLarge, setDemoLarge] = useState(2);
 
@@ -88,20 +87,38 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
         writeLog("WIPED ALL WORK ORDERS", "admin");
     };
 
+    const syncLegacyPaintProfiles = async () => {
+        if(!window.confirm("WARNING: Pull Paint Profiles from Legacy Firebase?")) return;
+        try {
+            const oldApp = initializeApp({ apiKey: "AIzaSyAmXhVF4qX8WKW-8erHZfgSBQqkuqJ-hu0", authDomain: "shop-floor-b84ae.firebaseapp.com", projectId: "shop-floor-b84ae" }, "LegacyPaintApp");
+            const oldDb = getFirestore(oldApp);
+            let snap = await oldGetDocs(oldCol(oldDb, "fin_paint_profiles"));
+            if (snap.empty) snap = await oldGetDocs(oldCol(oldDb, "paint_profiles"));
+
+            let count = 0; 
+            const batch = writeBatch(db);
+            snap.docs.forEach(d => { 
+                batch.set(doc(collection(db, "fin_paint_profiles"), d.id), d.data()); 
+                count++; 
+            });
+            await batch.commit(); 
+            alert(`✅ Successfully synced ${count} paint profiles from Legacy Database!`);
+            writeLog(`Synced ${count} legacy paint profiles`, "admin");
+        } catch(e) { console.error(e); alert("Sync failed. Check console for details."); }
+    };
+
     // --- DEMO DATA INJECTOR LOGIC ---
     const handleInjectDemoData = async () => {
         if (!window.confirm(`Inject ${demoSmall} Small and ${demoLarge} Large test orders to the floor using standard P-Codes?`)) return;
 
         const batch = writeBatch(db);
-
-        // Map to existing, developed production finishes
         const pCodes = ['P01', 'P15', 'P30']; 
 
         const generateWO = (index, sizeType) => {
             const isLarge = sizeType === 'large';
             const recipeCode = pCodes[index % pCodes.length];
+            const letter = String.fromCharCode(65 + index); // Converts 0 to 'A', 1 to 'B', etc. to avoid Step Number confusion
 
-            // Generate physical line items for the pinned notes
             const partsList = isLarge ? [
                 { name: '1.5" Flat Sided Ring', qty: 80 },
                 { name: 'Modern Cylinder Finial', qty: 20 },
@@ -113,7 +130,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
             ];
 
             return {
-                id: `DEMO-WO-${Date.now().toString().slice(-4)}-${index}`,
+                id: `DEMO-WO-${Date.now().toString().slice(-4)}-${letter}`,
                 soId: `SO-9${100 + index}`,
                 recipe: recipeCode,
                 type: 'Mixed', 
@@ -126,7 +143,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                 tasks: {
                     spin: { status: 'Pending', assignedTo: '' },
                     pole: { status: 'Pending', assignedTo: '' },
-                    hand: { status: 'Pending', assignedTo: '' } // Defensively cue hand task
+                    hand: { status: 'Pending', assignedTo: '' } 
                 }
             };
         };
