@@ -88,68 +88,49 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
         writeLog("WIPED ALL WORK ORDERS", "admin");
     };
 
-    const syncLegacyPaintProfiles = async () => {
-        if(!window.confirm("WARNING: Pull Paint Profiles from Legacy Firebase?")) return;
-        try {
-            const oldApp = initializeApp({ apiKey: "AIzaSyAmXhVF4qX8WKW-8erHZfgSBQqkuqJ-hu0", authDomain: "shop-floor-b84ae.firebaseapp.com", projectId: "shop-floor-b84ae" }, "LegacyPaintApp");
-            const oldDb = getFirestore(oldApp);
-            let snap = await oldGetDocs(oldCol(oldDb, "fin_paint_profiles"));
-            if (snap.empty) snap = await oldGetDocs(oldCol(oldDb, "paint_profiles"));
-
-            let count = 0; 
-            const batch = writeBatch(db);
-            snap.docs.forEach(d => { 
-                batch.set(doc(collection(db, "fin_paint_profiles"), d.id), d.data()); 
-                count++; 
-            });
-            await batch.commit(); 
-            alert(`✅ Successfully synced ${count} paint profiles from Legacy Database!`);
-            writeLog(`Synced ${count} legacy paint profiles`, "admin");
-        } catch(e) { console.error(e); alert("Sync failed. Check console for details."); }
-    };
-
     // --- DEMO DATA INJECTOR LOGIC ---
     const handleInjectDemoData = async () => {
-        if (!window.confirm(`Inject ${demoSmall} Small and ${demoLarge} Large test orders to the floor?`)) return;
+        if (!window.confirm(`Inject ${demoSmall} Small and ${demoLarge} Large test orders to the floor using standard P-Codes?`)) return;
 
         const batch = writeBatch(db);
 
-        // 1. Inject baseline test recipes
-        const testRecipes = [
-            { code: 'AGED-GOLD', steps: [{step:1, color:'Aged Gold Matte Base', app:'Sprayed'}, {step:2, color:'Light Antique Wash', app:'Hand Applied'}] },
-            { code: 'MATTE-BLK', steps: [{step:1, color:'Matte Black Finish', app:'Sprayed'}] },
-            { code: 'CHAMPAGNE', steps: [{step:1, color:'Champagne Metallic', app:'Sprayed'}, {step:2, color:'Clear Matte Topcoat', app:'Sprayed'}] }
-        ];
+        // Map to existing, developed production finishes
+        const pCodes = ['P01', 'P15', 'P30']; 
 
-        testRecipes.forEach(r => {
-            batch.set(doc(collection(db, "fin_recipes"), r.code), r);
-        });
-
-        // 2. Generate Work Orders Function
         const generateWO = (index, sizeType) => {
             const isLarge = sizeType === 'large';
-            const recipeData = testRecipes[index % testRecipes.length];
-            const requiresHand = recipeData.steps.some(s => s.app === 'Hand Applied');
+            const recipeCode = pCodes[index % pCodes.length];
+
+            // Generate physical line items for the pinned notes
+            const partsList = isLarge ? [
+                { name: '1.5" Flat Sided Ring', qty: 80 },
+                { name: 'Modern Cylinder Finial', qty: 20 },
+                { name: '8ft Smooth Steel Pole', qty: 5 }
+            ] : [
+                { name: '1.5" Flat Sided Ring', qty: 50 },
+                { name: 'Modern Cylinder Finial', qty: 15 },
+                { name: '8ft Smooth Steel Pole', qty: 2 }
+            ];
 
             return {
                 id: `DEMO-WO-${Date.now().toString().slice(-4)}-${index}`,
                 soId: `SO-9${100 + index}`,
-                recipe: recipeData.code,
-                type: 'Mixed', // Includes both poles and small parts
-                totalParts: isLarge ? 100 : 65, // <70 for small, 100 for large
+                recipe: recipeCode,
+                type: 'Mixed', 
+                totalParts: isLarge ? 100 : 65, 
                 totalPoles: isLarge ? 5 : 2,
-                currentPhase: 'Painting', // Send straight to floor
+                partsList: partsList,
+                currentPhase: 'Painting', 
                 currentStepIndex: 0,
                 stepStatus: 'Pending',
                 tasks: {
                     spin: { status: 'Pending', assignedTo: '' },
                     pole: { status: 'Pending', assignedTo: '' },
-                    hand: requiresHand ? { status: 'Pending', assignedTo: '' } : { status: 'N/A', assignedTo: '' }
+                    hand: { status: 'Pending', assignedTo: '' } // Defensively cue hand task
                 }
             };
         };
 
-        // Loop and attach to batch
         let currentIndex = 0;
         for(let i=0; i<demoSmall; i++) {
             const wo = generateWO(currentIndex, 'small');
@@ -196,7 +177,6 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                         <button onClick={handleWipePots} style={{ flex: 1, padding: '10px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>WIPE POTS</button>
                         <button onClick={handleWipeWorkOrders} style={{ flex: 1, padding: '10px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>WIPE WORK ORDERS</button>
                     </div>
-                    <button onClick={syncLegacyPaintProfiles} style={{ width: '100%', padding: '10px', background: '#CC6600', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>🔄 SYNC LEGACY PROFILES</button>
                 </div>
 
                 {/* OPERATOR DIRECTORY */}
@@ -233,7 +213,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                 <h2 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #007bff', paddingBottom: '10px', color: '#007bff' }}>SIMULATION & DEMO DATA</h2>
                 <div style={{ background: '#e3f2fd', border: '2px solid #007bff', padding: '20px', marginBottom: '30px' }}>
                     <p style={{ fontSize: '0.85rem', color: '#333', marginTop: 0, marginBottom: '15px' }}>
-                        Configure and push synthetic work orders directly to the Active Floor to test dispatch logic, routing, and spindle track animations. 
+                        Configure and push synthetic work orders directly to the Active Floor. Uses established P-Codes (e.g. P01, P30) to test dispatch logic, routing, and spindle track animations. 
                     </p>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
                         <div>
@@ -256,36 +236,6 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                             <span style={{ color: '#888' }}>[{new Date(l.t?.toDate()).toLocaleTimeString()}]</span> <span style={{ color: '#fff' }}>{l.u}:</span> {l.msg}
                         </div>
                     ))}
-                </div>
-
-                {/* PERMISSIONS MATRIX */}
-                <h2 style={{ borderBottom: '2px solid #333', paddingBottom: '10px', marginTop: '30px', color: '#333' }}>PERMISSIONS SETUP</h2>
-                <div style={{ background: '#fff', border: '2px solid #333', overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'center' }}>
-                        <thead style={{ background: '#333', color: '#fff' }}>
-                            <tr>
-                                <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #000' }}>TAB</th>
-                                {ROLES.map(r => (
-                                    <th key={r} style={{ padding: '10px 5px', height: '80px', verticalAlign: 'bottom', borderBottom: '2px solid #000', borderLeft: '1px solid #444' }}>
-                                        {r.replace(/_/g, ' ').toUpperCase()}
-                                    </th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {TABS.map(tab => (
-                                <tr key={tab} style={{ borderBottom: '1px solid #eee' }}>
-                                    <td style={{ padding: '10px', textAlign: 'left', fontWeight: 'bold', borderRight: '2px solid #333' }}>{tab}</td>
-                                    {ROLES.map(role => (
-                                        <td key={role} style={{ padding: '10px', borderLeft: '1px solid #eee' }}>
-                                            <input type="checkbox" checked={permissions[role]?.includes(tab) || false} onChange={() => togglePermission(tab, role)} style={{ cursor: 'pointer', transform: 'scale(1.3)' }} />
-                                        </td>
-                                    ))}
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                    <button onClick={handleSavePermissions} style={{ ...btnStyle, width: '100%', background: '#CC6600', color: '#fff', borderRadius: 0, border: 'none', marginTop: '15px' }}>SAVE MATRIX</button>
                 </div>
             </div>
         </div>

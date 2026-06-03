@@ -2,21 +2,17 @@ import React, { useState } from 'react';
 import { finishingDb as db } from '../../firebase'; 
 import { doc, updateDoc } from "firebase/firestore";
 
-// Strict flat sides, no rounded corners per Classical Elements aesthetic
 const cardStyle = { background: '#fff', padding: '15px', border: '1px solid #ccc', borderRadius: 0, boxShadow: '4px 4px 0 rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' };
 const btnStyle = { padding: '10px 15px', border: 'none', borderRadius: 0, cursor: 'pointer', fontWeight: 'bold', textTransform: 'uppercase' };
 const inputStyle = { padding: '8px', border: '2px solid #ccc', borderRadius: 0, width: '100%', boxSizing: 'border-box' };
 
 // --- NATIVE SCADA SIMULATOR ---
 const SpindleSprayerSim = ({ ovenHasPoles, ovenHasSpin, spinActiveCount }) => {
-    // Determine state based on Firebase inputs
-    let ovenPos = 'center'; // Default off-track slightly
-    if (ovenHasPoles) ovenPos = 'left'; // Covering poles
-    else if (ovenHasSpin) ovenPos = 'center'; // Covering left side of track
-    else ovenPos = 'center'; // Idle
+    let ovenPos = 'center'; 
+    if (ovenHasPoles) ovenPos = 'left'; 
+    else if (ovenHasSpin) ovenPos = 'center'; 
+    else ovenPos = 'center'; 
 
-    // Sled positions (faking rotation based on active spin tasks)
-    // If spinActiveCount is 1, Red is painting, Blue is idle or in oven
     const redPos = spinActiveCount > 0 ? 'right' : 'left';
     const bluePos = spinActiveCount > 0 ? 'left' : 'right';
 
@@ -25,8 +21,6 @@ const SpindleSprayerSim = ({ ovenHasPoles, ovenHasSpin, spinActiveCount }) => {
             <h3 style={{ margin: '0 0 15px 0', color: '#fff', fontSize: '1rem', borderBottom: '1px solid #444', paddingBottom: '10px' }}>LIVE SPINDLE & OVEN TRACKER</h3>
             
             <div style={{ position: 'relative', height: '140px', background: '#333', border: '2px solid #555', display: 'flex', alignItems: 'center' }}>
-                
-                {/* POLE RACK (FAR LEFT) */}
                 <div style={{ position: 'absolute', left: '2%', width: '15%', height: '100px', border: '2px solid #777', display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly', padding: '5px' }}>
                     <div style={{ height: '4px', background: '#777', width: '100%' }}></div>
                     <div style={{ height: '4px', background: '#777', width: '100%' }}></div>
@@ -34,53 +28,20 @@ const SpindleSprayerSim = ({ ovenHasPoles, ovenHasSpin, spinActiveCount }) => {
                     <span style={{ color: '#aaa', fontSize: '0.6rem', textAlign: 'center', marginTop: '5px', fontWeight: 'bold' }}>POLE RACK</span>
                 </div>
 
-                {/* THE TRACK (CENTER TO RIGHT) */}
                 <div style={{ position: 'absolute', left: '25%', right: '5%', height: '40px', border: '2px dashed #666', background: '#2a2a2a' }}></div>
                 <div style={{ position: 'absolute', right: '5%', bottom: '15px', color: '#aaa', fontSize: '0.6rem', fontWeight: 'bold' }}>SETUP/PAINT STATION</div>
 
-                {/* SLED RED */}
-                <div style={{ 
-                    position: 'absolute', 
-                    top: '30px', 
-                    left: redPos === 'left' ? '30%' : '80%', 
-                    width: '60px', height: '80px', 
-                    background: '#d9534f', 
-                    border: '2px solid #fff',
-                    transition: 'left 1.5s ease-in-out',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem'
-                }}>RED</div>
+                <div style={{ position: 'absolute', top: '30px', left: redPos === 'left' ? '30%' : '80%', width: '60px', height: '80px', background: '#d9534f', border: '2px solid #fff', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem' }}>RED</div>
 
-                {/* SLED BLUE */}
-                <div style={{ 
-                    position: 'absolute', 
-                    top: '30px', 
-                    left: bluePos === 'left' ? '30%' : '80%', 
-                    width: '60px', height: '80px', 
-                    background: '#007bff', 
-                    border: '2px solid #fff',
-                    transition: 'left 1.5s ease-in-out',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem'
-                }}>BLUE</div>
+                <div style={{ position: 'absolute', top: '30px', left: bluePos === 'left' ? '30%' : '80%', width: '60px', height: '80px', background: '#007bff', border: '2px solid #fff', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem' }}>BLUE</div>
 
-                {/* MOBILE OVEN */}
-                <div style={{ 
-                    position: 'absolute', 
-                    top: '10px', 
-                    left: ovenPos === 'left' ? '1%' : '23%', 
-                    width: '22%', height: '120px', 
-                    background: 'rgba(204, 102, 0, 0.2)', // Warm glow
-                    border: '4px solid #CC6600',
-                    boxShadow: 'inset 0 0 20px #CC6600',
-                    transition: 'left 2s ease-in-out',
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: '10px'
-                }}>
+                <div style={{ position: 'absolute', top: '10px', left: ovenPos === 'left' ? '1%' : '23%', width: '22%', height: '120px', background: 'rgba(204, 102, 0, 0.2)', border: '4px solid #CC6600', boxShadow: 'inset 0 0 20px #CC6600', transition: 'left 2s ease-in-out', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: '10px' }}>
                     <span style={{ color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', background: '#CC6600', padding: '2px 8px' }}>CURING OVEN</span>
                 </div>
             </div>
         </div>
     );
 };
-
 
 const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, now, user, setQcModal, users }) => {
   const activeWOs = workOrders.filter(w => w.currentPhase === "Painting");
@@ -93,12 +54,11 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   const cfg = {
     potLifeMins: sysConfig?.potLifeMins || 189, recoatMins: sysConfig?.recoatMins || 90,
     mixMins: sysConfig?.mixMins || 5, 
-    spinSetupMins: sysConfig?.spinSetupMins || 10, spinPaintMins: sysConfig?.spinPaintMins || 3, // SPLIT TIMERS
+    spinSetupMins: sysConfig?.spinSetupMins || 10, spinPaintMins: sysConfig?.spinPaintMins || 3, 
     ovenMins: sysConfig?.ovenMins || 10, handSmallMins: sysConfig?.handSmallMins || 1.35,
     handPoleMins: sysConfig?.handPoleMins || 10, poleMins: sysConfig?.poleMins || 5
   };
   
-  // Total spindle time for operator capacity calculation
   const totalSpinMins = cfg.spinSetupMins + cfg.spinPaintMins;
 
   const colorGroups = {};
@@ -154,8 +114,6 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       
       {/* LEFT: PIPELINE & QUEUE */}
       <div>
-        
-        {/* NATIVE SCADA SIMULATION */}
         <SpindleSprayerSim ovenHasPoles={ovenHasPoles} ovenHasSpin={ovenHasSpin} spinActiveCount={spinActiveCount} />
 
         {redlineWOs.length > 0 && (
@@ -255,7 +213,6 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
 
       {/* RIGHT: LIVE ASSIGNMENTS & AI LOGIC */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          
           <div style={{ background: '#f8f9fa', padding: '20px', borderLeft: '4px solid #CC6600', border: '2px solid #333' }}>
               <h3 style={{ marginTop: 0, color: '#333', borderBottom: '1px solid #ccc', paddingBottom: '10px' }}>LIVE OPERATOR STATUS</h3>
               {floorOps.length === 0 ? <p style={{color: '#666'}}>No floor operators in directory.</p> : (
@@ -300,10 +257,6 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               <h3 style={{ marginTop: 0, color: '#333', borderBottom: '1px solid #ccc', paddingBottom: '10px' }}>PIPELINE OVERVIEW</h3>
               {activeWOs.length === 0 ? <p style={{color: '#666', fontSize: '0.8rem'}}>No active jobs in pipeline.</p> : (
                   activeWOs.map(wo => {
-                      const recipe = recipes[wo.recipe];
-                      const steps = recipe?.steps || [];
-                      const currentStep = wo.currentStepIndex || 0;
-                      
                       let recoatWarning = null;
                       if (wo.lastCoatTime) {
                           const recoatMinsLeft = Math.max(0, Math.floor(((cfg.recoatMins * 60000) - (now - wo.lastCoatTime)) / 60000));
@@ -321,14 +274,30 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                   })
               )}
           </div>
-
-          <div style={{ background: '#333', padding: '20px', color: '#00ff00', fontFamily: 'monospace', fontSize: '0.8rem', border: '4px solid #000' }}>
-              <h3 style={{ marginTop: 0, color: '#fff', borderBottom: '1px solid #555', paddingBottom: '10px' }}>AI DISPATCH BRAIN</h3>
-              <div style={{ marginBottom: '10px' }}>{'>'} Tracking Setup vs Paint cycles...</div>
-              <div style={{ marginBottom: '10px', color: '#ffcc00' }}>{'>'} RULE: Oven prioritizes pole rack intercept.</div>
-          </div>
-
       </div>
+
+      {/* --- NEW: PINNED ORDER NOTES OVERLAY --- */}
+      <div style={{ position: 'fixed', bottom: '20px', right: '20px', width: '320px', maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 1000 }}>
+          {activeWOs.map(wo => (
+              <div key={`note-${wo.id}`} style={{ background: '#f4f4f4', border: '2px solid #333', padding: '15px', boxShadow: '-6px 6px 0px rgba(0,0,0,0.1)' }}>
+                  <div style={{ fontWeight: 'bold', borderBottom: '2px solid #333', paddingBottom: '8px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.85rem' }}>{wo.soId || 'NO-SO'} / {wo.id.split('-').pop()}</span>
+                      <span style={{ color: '#fff', background: '#CC6600', padding: '2px 6px', fontSize: '0.7rem' }}>{wo.recipe}</span>
+                  </div>
+                  
+                  <div style={{ fontSize: '0.7rem', color: '#666', marginBottom: '5px', fontWeight: 'bold', textTransform: 'uppercase' }}>Itemized Floor Routing:</div>
+                  <ul style={{ margin: 0, paddingLeft: '15px', fontSize: '0.75rem', color: '#333' }}>
+                      {wo.partsList && wo.partsList.length > 0 ? wo.partsList.map((p, i) => (
+                          <li key={i} style={{ marginBottom: '4px' }}><b>{p.qty}x</b> {p.name}</li>
+                      )) : (
+                          <li style={{ fontStyle: 'italic', color: '#888' }}>Standard Part Mix Loaded</li>
+                      )}
+                  </ul>
+              </div>
+          ))}
+      </div>
+      {/* --------------------------------------- */}
+
     </div>
   );
 };
