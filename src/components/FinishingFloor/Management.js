@@ -116,12 +116,16 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                 partsList: partsList,
                 currentPhase: 'Painting', 
                 currentStepIndex: 0,
+                // Refined Task Structure to match physical machine states
                 tasks: {
                     spinSetup: { status: 'Pending', assignedTo: '' },
-                    spinPaint: { status: 'Pending', assignedTo: '' },
-                    pole: { status: 'Pending', assignedTo: '' },
+                    spinSpray: { status: 'Pending', assignedTo: '' },
+                    spinBake: { status: 'Pending', assignedTo: '' },
+                    poleSpray: { status: 'Pending', assignedTo: '' },
+                    poleBake: { status: 'Pending', assignedTo: '' },
                     hand: { status: 'Pending', assignedTo: '' } 
-                }
+                },
+                machineAssigned: null // 'RED' or 'BLUE'
             };
         };
 
