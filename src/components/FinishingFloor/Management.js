@@ -4,7 +4,6 @@ import { doc, setDoc, deleteDoc, collection, getDocs, writeBatch } from "firebas
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection as oldCol, getDocs as oldGetDocs } from 'firebase/firestore';
 
-// Strict flat sides, no rounded corners
 const btnStyle = { padding: '10px 15px', border: 'none', borderRadius: 0, cursor: 'pointer', fontWeight: 'bold', textTransform: 'uppercase' };
 const inputStyle = { padding: '8px', border: '2px solid #ccc', borderRadius: 0, width: '100%', boxSizing: 'border-box', fontFamily: 'Avenir, sans-serif' };
 const labelStyle = { fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '4px' };
@@ -14,7 +13,6 @@ const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'MESS
 
 const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms }) => {
     
-    // 1. Timers State
     const [config, setConfig] = useState({
         mixMins: sysConfig?.mixMins || 5,
         spinSetupMins: sysConfig?.spinSetupMins || 10,
@@ -87,27 +85,6 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
         writeLog("WIPED ALL WORK ORDERS", "admin");
     };
 
-    const syncLegacyPaintProfiles = async () => {
-        if(!window.confirm("WARNING: Pull Paint Profiles from Legacy Firebase?")) return;
-        try {
-            const oldApp = initializeApp({ apiKey: "AIzaSyAmXhVF4qX8WKW-8erHZfgSBQqkuqJ-hu0", authDomain: "shop-floor-b84ae.firebaseapp.com", projectId: "shop-floor-b84ae" }, "LegacyPaintApp");
-            const oldDb = getFirestore(oldApp);
-            let snap = await oldGetDocs(oldCol(oldDb, "fin_paint_profiles"));
-            if (snap.empty) snap = await oldGetDocs(oldCol(oldDb, "paint_profiles"));
-
-            let count = 0; 
-            const batch = writeBatch(db);
-            snap.docs.forEach(d => { 
-                batch.set(doc(collection(db, "fin_paint_profiles"), d.id), d.data()); 
-                count++; 
-            });
-            await batch.commit(); 
-            alert(`✅ Successfully synced ${count} paint profiles from Legacy Database!`);
-            writeLog(`Synced ${count} legacy paint profiles`, "admin");
-        } catch(e) { console.error(e); alert("Sync failed. Check console for details."); }
-    };
-
-    // --- DEMO DATA INJECTOR LOGIC ---
     const handleInjectDemoData = async () => {
         if (!window.confirm(`Inject ${demoSmall} Small and ${demoLarge} Large test orders to the floor using standard P-Codes?`)) return;
 
@@ -117,7 +94,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
         const generateWO = (index, sizeType) => {
             const isLarge = sizeType === 'large';
             const recipeCode = pCodes[index % pCodes.length];
-            const letter = String.fromCharCode(65 + index); // Converts 0 to 'A', 1 to 'B', etc. to avoid Step Number confusion
+            const letter = String.fromCharCode(65 + index); // Converts 0 to 'A', 1 to 'B', to avoid step number confusion
 
             const partsList = isLarge ? [
                 { name: '1.5" Flat Sided Ring', qty: 80 },
@@ -140,8 +117,10 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                 currentPhase: 'Painting', 
                 currentStepIndex: 0,
                 stepStatus: 'Pending',
+                // SPLIT SPIN INTO SETUP AND PAINT
                 tasks: {
-                    spin: { status: 'Pending', assignedTo: '' },
+                    spinSetup: { status: 'Pending', assignedTo: '' },
+                    spinPaint: { status: 'Pending', assignedTo: '' },
                     pole: { status: 'Pending', assignedTo: '' },
                     hand: { status: 'Pending', assignedTo: '' } 
                 }
@@ -167,9 +146,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
 
     return (
         <div style={{ padding: '30px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', fontFamily: 'Avenir, sans-serif' }}>
-            {/* LEFT COLUMN */}
             <div>
-                {/* TIMERS */}
                 <h2 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #333', paddingBottom: '10px', color: '#333' }}>AI PRODUCTION TIMERS (MINUTES)</h2>
                 <div style={{ background: '#fff', border: '2px solid #333', padding: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                     <div><label style={labelStyle}>Mix Station</label><input type="number" step="0.1" value={config.mixMins} onChange={e=>setConfig({...config, mixMins: Number(e.target.value)})} style={inputStyle} /></div>
@@ -186,7 +163,6 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                     <button onClick={handleSaveConfig} style={{ ...btnStyle, gridColumn: '1 / -1', background: '#333', color: '#fff' }}>SAVE TIMERS</button>
                 </div>
 
-                {/* DATABASE WIPE */}
                 <h2 style={{ borderBottom: '2px solid #333', paddingBottom: '10px', marginTop: '30px', color: '#333' }}>DATABASE MANAGEMENT</h2>
                 <div style={{ background: '#fff0f0', border: '2px solid #d9534f', padding: '15px' }}>
                     <p style={{ fontSize: '0.8rem', color: '#666', marginTop: 0 }}>These actions permanently delete live production data.</p>
@@ -196,7 +172,6 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                     </div>
                 </div>
 
-                {/* OPERATOR DIRECTORY */}
                 <h2 style={{ borderBottom: '2px solid #333', paddingBottom: '10px', marginTop: '30px', color: '#333' }}>OPERATOR DIRECTORY</h2>
                 <div style={{ background: '#fff', border: '2px solid #333', padding: '20px' }}>
                     <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '10px', marginBottom: '10px' }}>
@@ -224,9 +199,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                 </div>
             </div>
 
-            {/* RIGHT COLUMN */}
             <div>
-                {/* DEMO DATA INJECTOR */}
                 <h2 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #007bff', paddingBottom: '10px', color: '#007bff' }}>SIMULATION & DEMO DATA</h2>
                 <div style={{ background: '#e3f2fd', border: '2px solid #007bff', padding: '20px', marginBottom: '30px' }}>
                     <p style={{ fontSize: '0.85rem', color: '#333', marginTop: 0, marginBottom: '15px' }}>
@@ -245,7 +218,6 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                     <button onClick={handleInjectDemoData} style={{ ...btnStyle, width: '100%', background: '#007bff', color: '#fff' }}>🚀 INJECT BATCH TO FLOOR</button>
                 </div>
 
-                {/* LOGS */}
                 <h2 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #333', paddingBottom: '10px', color: '#333' }}>SYSTEM LOGS</h2>
                 <div style={{ background: '#333', color: '#00ff00', padding: '15px', height: '300px', overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.8rem', border: '2px solid #000' }}>
                     {logs.map(l => (

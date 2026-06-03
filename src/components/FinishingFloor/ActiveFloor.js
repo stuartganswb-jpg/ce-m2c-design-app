@@ -7,14 +7,24 @@ const btnStyle = { padding: '10px 15px', border: 'none', borderRadius: 0, cursor
 const inputStyle = { padding: '8px', border: '2px solid #ccc', borderRadius: 0, width: '100%', boxSizing: 'border-box' };
 
 // --- NATIVE SCADA SIMULATOR ---
-const SpindleSprayerSim = ({ ovenHasPoles, ovenHasSpin, spinActiveCount, redWO, blueWO }) => {
+const SpindleSprayerSim = ({ ovenHasPoles, ovenHasSpin, redWO, blueWO }) => {
     let ovenPos = 'center'; 
     if (ovenHasPoles) ovenPos = 'left'; 
     else if (ovenHasSpin) ovenPos = 'center'; 
     else ovenPos = 'center'; 
 
-    const redPos = (redWO && redWO.stepStatus === 'Oven') ? 'left' : 'right';
-    const bluePos = (blueWO && blueWO.stepStatus === 'Oven') ? 'left' : 'right';
+    // Because they share a track, they are mechanically opposite. 
+    // If Red is in Oven (left), Blue MUST be on right.
+    let redPos = 'right';
+    let bluePos = 'left';
+    
+    if (redWO && redWO.stepStatus === 'Oven') {
+        redPos = 'left';
+        bluePos = 'right';
+    } else if (blueWO && blueWO.stepStatus === 'Oven') {
+        bluePos = 'left';
+        redPos = 'right';
+    }
 
     return (
         <div style={{ background: '#222', padding: '20px', border: '4px solid #000', marginBottom: '20px', fontFamily: 'Avenir, sans-serif' }}>
@@ -31,10 +41,10 @@ const SpindleSprayerSim = ({ ovenHasPoles, ovenHasSpin, spinActiveCount, redWO, 
                 <div style={{ position: 'absolute', left: '25%', right: '5%', height: '40px', border: '2px dashed #666', background: '#2a2a2a' }}></div>
                 <div style={{ position: 'absolute', right: '5%', bottom: '15px', color: '#aaa', fontSize: '0.6rem', fontWeight: 'bold' }}>SETUP/PAINT STATION</div>
 
-                <div style={{ position: 'absolute', top: '30px', left: redPos === 'left' ? '30%' : '80%', width: '60px', height: '80px', background: '#d9534f', border: '2px solid #fff', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem' }}>RED</div>
-                <div style={{ position: 'absolute', top: '30px', left: bluePos === 'left' ? '30%' : '80%', width: '60px', height: '80px', background: '#007bff', border: '2px solid #fff', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem' }}>BLUE</div>
+                <div style={{ position: 'absolute', top: '30px', left: redPos === 'left' ? '30%' : '80%', width: '60px', height: '80px', background: '#d9534f', border: '2px solid #fff', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem', zIndex: 10 }}>RED</div>
+                <div style={{ position: 'absolute', top: '30px', left: bluePos === 'left' ? '30%' : '80%', width: '60px', height: '80px', background: '#007bff', border: '2px solid #fff', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem', zIndex: 10 }}>BLUE</div>
 
-                <div style={{ position: 'absolute', top: '10px', left: ovenPos === 'left' ? '1%' : '23%', width: '22%', height: '120px', background: 'rgba(204, 102, 0, 0.2)', border: '4px solid #CC6600', boxShadow: 'inset 0 0 20px #CC6600', transition: 'left 2s ease-in-out', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: '10px' }}>
+                <div style={{ position: 'absolute', top: '10px', left: ovenPos === 'left' ? '1%' : '23%', width: '22%', height: '120px', background: 'rgba(204, 102, 0, 0.2)', border: '4px solid #CC6600', boxShadow: 'inset 0 0 20px #CC6600', transition: 'left 2s ease-in-out', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: '10px', zIndex: 20 }}>
                     <span style={{ color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', background: '#CC6600', padding: '2px 8px' }}>CURING OVEN</span>
                 </div>
             </div>
@@ -44,7 +54,6 @@ const SpindleSprayerSim = ({ ovenHasPoles, ovenHasSpin, spinActiveCount, redWO, 
 
 const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, now, user, setQcModal, users }) => {
   const activeWOs = workOrders.filter(w => w.currentPhase === "Painting");
-  const queuedWOs = workOrders.filter(w => w.currentPhase === "Setup" || (w.currentPhase === "Painting" && w.stepStatus !== "Oven" && !Object.values(w.tasks || {}).some(t => t.status === "Running")));
   const activeJobs = workOrders.filter(j => j.tasks && Object.values(j.tasks).some(t => t.status === 'Running'));
   const redlineWOs = workOrders.filter(w => w.redlineAlert);
 
@@ -57,11 +66,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
     ovenMins: sysConfig?.ovenMins || 10, handSmallMins: sysConfig?.handSmallMins || 1.35,
     handPoleMins: sysConfig?.handPoleMins || 10, poleMins: sysConfig?.poleMins || 5
   };
-  
-  const totalSpinMins = cfg.spinSetupMins + cfg.spinPaintMins;
 
   // --- SLED ASSIGNMENT ENGINE ---
-  const spinningWOs = activeWOs.filter(w => w.tasks?.spin && w.tasks.spin.status !== 'N/A' && (w.tasks.spin.status !== 'Complete' || w.stepStatus === 'Oven'));
+  // A spinning order is active if it hasn't completed BOTH setup and paint, OR it is currently in the oven.
+  const spinningWOs = activeWOs.filter(w => w.tasks?.spinSetup && (w.tasks.spinPaint?.status !== 'Complete' || w.stepStatus === 'Oven'));
   const redWO = spinningWOs.length > 0 ? spinningWOs[0] : null;
   const blueWO = spinningWOs.length > 1 ? spinningWOs[1] : null;
 
@@ -75,12 +83,18 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const oppositeWO = mySled === 'RED' ? blueWO : redWO;
       if (!oppositeWO) return { clear: true, reason: '' };
       
-      if (oppositeWO.stepStatus === 'Oven') {
-          const rem = Math.max(0, Math.floor(((cfg.ovenMins * 60000) - (now - oppositeWO.ovenStartTime)) / 60000));
-          if (rem > 0) return { clear: false, reason: `WAITING ON ${mySled === 'RED' ? 'BLUE' : 'RED'} OVEN (${rem}m)` };
-      }
+      // If the opposite sled is in the oven, it is parked on the LEFT. The track (RIGHT) is clear for me to setup/paint.
+      if (oppositeWO.stepStatus === 'Oven') return { clear: true, reason: '' };
+      
+      // If the opposite sled is NOT in the oven, we have to respect right-of-way. Red gets right-of-way first.
+      if (mySled === 'BLUE') return { clear: false, reason: 'WAITING FOR RED TO ENTER OVEN' };
+      
       return { clear: true, reason: '' };
   };
+
+  const ovenContents = activeWOs.filter(w => w.stepStatus === "Oven");
+  const ovenHasPoles = ovenContents.some(w => w.type === 'Poles');
+  const ovenHasSpin = ovenContents.some(w => w.type !== 'Poles');
 
   const colorGroups = {};
   activeWOs.forEach(wo => {
@@ -90,11 +104,6 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       if (!colorGroups[step.color]) colorGroups[step.color] = [];
       colorGroups[step.color].push({ wo, step });
   });
-
-  const ovenContents = activeWOs.filter(w => w.stepStatus === "Oven");
-  const ovenHasPoles = ovenContents.some(w => w.type === 'Poles');
-  const ovenHasSpin = ovenContents.some(w => w.type !== 'Poles');
-  const spinActiveCount = activeJobs.filter(j => j.type !== 'Poles' && j.tasks?.spin?.status === 'Running').length;
 
   const getRemainingMins = (timestampMs, totalMinsAllowed) => {
       if (!timestampMs) return null;
@@ -109,7 +118,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   const getAiRecommendation = (taskType) => {
       if (!users || users.length === 0) return "Pending";
       let eligible = users.filter(u => {
-          if (taskType === 'spin') return ['painter', 'hand_painter', 'paint_manager'].includes(u.role);
+          if (taskType.includes('spin')) return ['painter', 'hand_painter', 'paint_manager'].includes(u.role);
           if (taskType === 'pole') return ['painter', 'paint_manager'].includes(u.role);
           if (taskType === 'hand') return ['hand_painter', 'paint_manager'].includes(u.role);
           return false;
@@ -128,9 +137,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   return (
     <div style={{ padding: '30px', display: 'grid', gridTemplateColumns: '3fr 1.2fr', gap: '30px', height: '100%', fontFamily: 'Avenir, sans-serif' }}>
       
-      {/* LEFT: PIPELINE & QUEUE */}
+      {/* LEFT: PIPELINE */}
       <div>
-        <SpindleSprayerSim ovenHasPoles={ovenHasPoles} ovenHasSpin={ovenHasSpin} spinActiveCount={spinActiveCount} redWO={redWO} blueWO={blueWO} />
+        <SpindleSprayerSim ovenHasPoles={ovenHasPoles} ovenHasSpin={ovenHasSpin} redWO={redWO} blueWO={blueWO} />
 
         {redlineWOs.length > 0 && (
             <div style={{ background: '#d9534f', color: '#fff', padding: '15px', border: '4px solid #333', marginBottom: '20px', fontWeight: 'bold', fontSize: '1.1rem', textTransform: 'uppercase' }}>
@@ -171,13 +180,23 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '15px' }}>
                         
-                        {/* --- STRICT ROUTING LOGIC: SPRAYED VS HAND APPLIED --- */}
-
+                        {/* --- SEQUENTIAL SPINNING FLOW (SETUP -> PAINT) --- */}
                         <div style={{ background: '#f8f9fa', border: '1px solid #ccc', padding: '10px' }}>
-                            <div style={{ fontWeight: '900', fontSize: '0.8rem', textAlign: 'center', borderBottom: '2px solid #333', paddingBottom: '10px', marginBottom: '10px', color: '#333' }}>SPINNING</div>
-                            {colorGroups[color]?.map(item => item.step.app === 'Sprayed' && item.wo.tasks?.spin?.status !== 'Complete' && item.wo.tasks?.spin?.status !== 'N/A' && (
-                                <TaskCard key={item.wo.id+"spin"} wo={item.wo} type="spin" step={item.step} user={user} setQcModal={setQcModal} estTime={totalSpinMins} activePots={activePots} ovenHasPoles={ovenHasPoles} now={now} aiRec={getAiRecommendation('spin')} users={users} activeWOs={activeWOs} cfg={cfg} sled={getSledAssignment(item.wo.id)} trackStatus={getTrackClearance(getSledAssignment(item.wo.id))} />
-                            ))}
+                            <div style={{ fontWeight: '900', fontSize: '0.8rem', textAlign: 'center', borderBottom: '2px solid #333', paddingBottom: '10px', marginBottom: '10px', color: '#333' }}>SPINNING (SETUP & PAINT)</div>
+                            {colorGroups[color]?.map(item => {
+                                if (item.step.app !== 'Sprayed') return null; // Only render Sprayed items here
+                                
+                                const isSetupComplete = item.wo.tasks?.spinSetup?.status === 'Complete';
+                                const isPaintComplete = item.wo.tasks?.spinPaint?.status === 'Complete';
+
+                                if (!isSetupComplete && item.wo.tasks?.spinSetup?.status !== 'N/A') {
+                                    return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="SPIN: SETUP" wo={item.wo} type="spinSetup" step={item.step} user={user} setQcModal={setQcModal} estTime={cfg.spinSetupMins} activePots={activePots} ovenHasPoles={ovenHasPoles} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={getSledAssignment(item.wo.id)} trackStatus={getTrackClearance(getSledAssignment(item.wo.id))} />
+                                } 
+                                else if (!isPaintComplete && item.wo.tasks?.spinPaint?.status !== 'N/A') {
+                                    return <TaskCard key={item.wo.id+"spinPaint"} titleOverride="SPIN: PAINT" wo={item.wo} type="spinPaint" step={item.step} user={user} setQcModal={setQcModal} estTime={cfg.spinPaintMins} activePots={activePots} ovenHasPoles={ovenHasPoles} now={now} aiRec={getAiRecommendation('spinPaint')} users={users} activeWOs={activeWOs} cfg={cfg} sled={getSledAssignment(item.wo.id)} trackStatus={getTrackClearance(getSledAssignment(item.wo.id))} />
+                                }
+                                return null;
+                            })}
                         </div>
 
                         <div style={{ background: '#f8f9fa', border: '1px solid #ccc', padding: '10px' }}>
@@ -209,7 +228,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                                 stepStatus: "Pending", 
                                                 currentStepIndex: wo.currentStepIndex + 1, 
                                                 lastCoatTime: Date.now(),
-                                                "tasks.spin.status": "Pending",
+                                                "tasks.spinSetup.status": "Pending", // Reset task statuses for next recipe step
+                                                "tasks.spinPaint.status": "Pending",
                                                 "tasks.pole.status": "Pending",
                                                 "tasks.hand.status": "Pending"
                                             })} style={{ width: '100%', padding: '8px', background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', marginTop: '10px', cursor: 'pointer' }}>UNLOAD OVEN (CUE NEXT STEP)</button>
@@ -226,7 +246,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
         })}
       </div>
 
-      {/* RIGHT: LIVE ASSIGNMENTS & AI LOGIC */}
+      {/* RIGHT: LIVE ASSIGNMENTS */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           <div style={{ background: '#f8f9fa', padding: '20px', borderLeft: '4px solid #CC6600', border: '2px solid #333' }}>
               <h3 style={{ marginTop: 0, color: '#333', borderBottom: '1px solid #ccc', paddingBottom: '10px' }}>LIVE OPERATOR STATUS</h3>
@@ -244,7 +264,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           let taskData = runningTaskEntry[1];
 
                           let taskEstTime = 0;
-                          if (tType === 'spin') taskEstTime = totalSpinMins;
+                          if (tType === 'spinSetup') taskEstTime = cfg.spinSetupMins;
+                          if (tType === 'spinPaint') taskEstTime = cfg.spinPaintMins;
                           if (tType === 'pole') taskEstTime = (activeOpJob.totalParts || 0) * cfg.poleMins;
                           if (tType === 'hand') taskEstTime = activeOpJob.type === 'Poles' ? ((activeOpJob.totalParts || 0) * cfg.handPoleMins) : ((activeOpJob.totalParts || 0) * cfg.handSmallMins);
 
@@ -295,7 +316,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                       </ul>
 
                       <div style={{ fontSize: '0.7rem', color: '#333', marginBottom: '5px', fontWeight: 'bold', textTransform: 'uppercase', background: '#eafaf1', padding: '4px', border: '1px solid #28a745' }}>
-                          CUSTOM / POLE LOADOUT: {customParts.reduce((acc, p) => acc + p.qty, 0)} PARTS
+                          POLES / CUSTOM LOADOUT: {customParts.reduce((acc, p) => acc + p.qty, 0)} PARTS
                       </div>
                       <ul style={{ margin: 0, paddingLeft: '15px', fontSize: '0.75rem', color: '#555' }}>
                           {customParts.length > 0 ? customParts.map((p, i) => (
@@ -311,7 +332,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   );
 };
 
-const TaskCard = ({ wo, type, step, user, setQcModal, estTime, activePots, ovenHasPoles, ovenHasSpin, now, aiRec, users, activeWOs, cfg, sled, trackStatus }) => {
+const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, activePots, ovenHasPoles, ovenHasSpin, now, aiRec, users, activeWOs, cfg, sled, trackStatus }) => {
     const task = wo.tasks?.[type] || {}; 
     const isRunning = task.status === 'Running';
     
@@ -320,21 +341,21 @@ const TaskCard = ({ wo, type, step, user, setQcModal, estTime, activePots, ovenH
 
     const eligibleUsers = users?.filter(u => {
         const isAdminOrMgr = ['admin', 'floor_manager', 'paint_manager'].includes(u.role);
-        if (type === 'spin') return isAdminOrMgr || ['painter', 'hand_painter'].includes(u.role);
+        if (type.includes('spin')) return isAdminOrMgr || ['painter', 'hand_painter'].includes(u.role);
         if (type === 'pole') return isAdminOrMgr || u.role === 'painter';
         if (type === 'hand') return isAdminOrMgr || u.role === 'hand_painter';
         return false;
     }) || [];
 
     const loggedInUserHasAccess = ['admin', 'floor_manager', 'paint_manager'].includes(user?.role) || 
-                                  (user?.role === 'painter' && ['spin', 'pole'].includes(type)) || 
-                                  (user?.role === 'hand_painter' && ['spin', 'hand'].includes(type));
+                                  (user?.role === 'painter' && ['spinSetup', 'spinPaint', 'pole'].includes(type)) || 
+                                  (user?.role === 'hand_painter' && ['spinSetup', 'spinPaint', 'hand'].includes(type));
 
     let selectedOpManualLoad = 0;
     activeWOs.forEach(w => {
         if(w.tasks) {
             Object.entries(w.tasks).forEach(([tType, t]) => {
-                if(t.status === 'Running' && t.assignedTo === currentOp && ['spin', 'pole', 'hand'].includes(tType)) {
+                if(t.status === 'Running' && t.assignedTo === currentOp && ['spinSetup', 'spinPaint', 'pole', 'hand'].includes(tType)) {
                     selectedOpManualLoad++;
                 }
             });
@@ -342,10 +363,12 @@ const TaskCard = ({ wo, type, step, user, setQcModal, estTime, activePots, ovenH
     });
 
     const isSelectedOpBusy = selectedOpManualLoad >= 1;
-    const needsOven = ['spin', 'pole'].includes(type);
     
-    let ovenBlocked = (needsOven && type === 'spin' && ovenHasPoles) || (needsOven && type === 'pole' && ovenHasSpin);
-    let interlockBlocked = (type === 'spin' && trackStatus && !trackStatus.clear);
+    // Only spinPaint triggers the oven physically. spinSetup just requires the track.
+    const needsOven = ['spinPaint', 'pole'].includes(type);
+    
+    let ovenBlocked = (needsOven && type === 'spinPaint' && ovenHasPoles) || (needsOven && type === 'pole' && ovenHasSpin);
+    let interlockBlocked = (type.includes('spin') && trackStatus && !trackStatus.clear);
 
     let recoatWarning = null;
     if (wo.lastCoatTime) {
@@ -355,24 +378,27 @@ const TaskCard = ({ wo, type, step, user, setQcModal, estTime, activePots, ovenH
     }
 
     const isPaintReady = !!activePots[step.color];
-    const disabledStart = !loggedInUserHasAccess || !isPaintReady || !currentOp || isSelectedOpBusy;
+    const disabledStart = !loggedInUserHasAccess || !isPaintReady || !currentOp || isSelectedOpBusy || interlockBlocked;
     
     let btnText = 'START TASK';
     if (!loggedInUserHasAccess) btnText = 'ROLE RESTRICTED';
     else if (!isPaintReady) btnText = 'AWAITING PAINT MIX';
     else if (!currentOp) btnText = 'NO OP AVAILABLE';
     else if (isSelectedOpBusy) btnText = `${currentOp.toUpperCase()} IS BUSY`;
+    else if (interlockBlocked) btnText = trackStatus.reason;
 
     return (
         <div style={{ ...cardStyle, borderLeft: isRunning ? '5px solid #007bff' : '5px solid #333', position: 'relative' }}>
             
-            {type === 'spin' && sled && (
+            {titleOverride && <div style={{ fontSize: '0.7rem', color: '#fff', background: '#333', padding: '4px', textAlign: 'center', fontWeight: 'bold', marginBottom: '10px' }}>{titleOverride}</div>}
+
+            {type.includes('spin') && sled && (
                 <div style={{ background: sled === 'RED' ? '#d9534f' : '#007bff', color: '#fff', padding: '6px', textAlign: 'center', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '10px', textTransform: 'uppercase', border: '1px solid #000' }}>
                     {sled} STATION
                 </div>
             )}
 
-            <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#333' }}>{wo.id}</div>
+            <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#333' }}>WO: {wo.id}</div>
             <div style={{ fontSize: '0.7rem', color: '#666', margin: '5px 0' }}>Step {step.step}: {step.color}</div>
             
             {isRunning ? (
@@ -399,10 +425,11 @@ const TaskCard = ({ wo, type, step, user, setQcModal, estTime, activePots, ovenH
                 <>
                     {ovenBlocked ? (
                         <button disabled style={{ width: '100%', padding: '8px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', fontSize: '0.75rem' }}>OVEN BLOCKED</button>
-                    ) : interlockBlocked ? (
-                        <button disabled style={{ width: '100%', padding: '8px', background: '#ffc107', color: '#000', border: 'none', fontWeight: 'bold', fontSize: '0.75rem' }}>{trackStatus.reason}</button>
                     ) : (
-                        <button onClick={() => setQcModal({ id: wo.id, parts: wo.totalParts, type: wo.type, phase: 'Painting', taskType: type, needsOven })} style={{ width: '100%', padding: '8px', background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>{needsOven ? 'COMPLETE & SEND TO OVEN' : 'COMPLETE TASK'}</button>
+                        <button onClick={() => {
+                            if (needsOven) setQcModal({ id: wo.id, parts: wo.totalParts, type: wo.type, phase: 'Painting', taskType: type, needsOven });
+                            else updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' }); // Just complete setup, no oven routing
+                        }} style={{ width: '100%', padding: '8px', background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>{needsOven ? 'COMPLETE & SEND TO OVEN' : 'COMPLETE SETUP'}</button>
                     )}
                 </>
             )}
