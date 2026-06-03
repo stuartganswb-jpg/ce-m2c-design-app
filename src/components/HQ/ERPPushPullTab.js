@@ -157,7 +157,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           if (job.shippingMethod === 'SAVED' && job.shippingAddressId) {
               shippingPayload.shipaddresslist = { id: job.shippingAddressId };
           } else if (job.shippingMethod === 'CUSTOM' && job.customShippingAddress) {
-              // Standard SuiteTalk REST override for custom drop-shipping
               shippingPayload.shippingaddress = {
                   attention: job.customShippingAddress.attention || '',
                   addressee: job.customShippingAddress.addressee || '',
@@ -170,14 +169,17 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               };
           }
 
+          // 🚀 Clean the Memo Field (Removed the HQ APP CONFIG string)
+          const memoText = [job.jobName, job.sidemark].filter(Boolean).join(' - ').trim();
+
           // 6. Construct the Final NetSuite Payload
           const payload = {
               entity: { id: nsCustomerId }, 
               subsidiary: { id: brandMapping.subsidiary }, 
               location: { id: brandMapping.location },     
-              memo: `[HQ APP CONFIG] ${job.jobName || ''} - ${job.sidemark || ''}`.trim(),
+              memo: memoText,
               custbody50: job.jobId || job.id, 
-              ...shippingPayload,  // <-- INJECT SHIPPING DATA
+              ...shippingPayload,
               item: {
                   items: [
                       {
@@ -309,7 +311,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
-                        {/* 🚀 NEW: Shipping Payload Review */}
                         <div style={{ background: '#f8f9fa', border: '2px solid #17a2b8', padding: '15px' }}>
                             <h4 style={{ margin: '0 0 10px 0', color: '#17a2b8' }}>SHIPPING DESTINATION OVERRIDE</h4>
                             <div style={{ fontSize: '0.85rem', color: '#333' }}>

@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, query, where, getDocs, doc, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc } from 'firebase/firestore';
+
+const BRAND_NETSUITE_MAP = {
+    'm2c': { subsidiary: "3" },
+    'uniquity': { subsidiary: "6" },
+    'ce': { subsidiary: "2" },
+    'leyla': { subsidiary: "5" }
+};
+const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
 const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const [salesOrders, setSalesOrders] = useState([]);
@@ -8,6 +16,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const [purchaseOrders, setPurchaseOrders] = useState([]);
     const [inventoryTasks, setInventoryTasks] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [isSyncing, setIsSyncing] = useState(false);
 
     const loadRTGOrders = async () => {
         setLoading(true);
@@ -36,6 +45,80 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     useEffect(() => {
         loadRTGOrders();
     }, [activeBrand]);
+
+    // 🚀 UPDATED: Pull Approved Sales Orders from NetSuite (Filtered for App-Only Orders)
+    const pullNSSalesOrders = async () => {
+        setIsSyncing(true);
+        try {
+            const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
+            
+            // 🚀 The X-RAY Query: Only pulls Pending Fulfillment orders that have an App Job ID (custbody50)
+            const q = `
+                SELECT 
+                    Transaction.id AS ns_id,
+                    Transaction.tranid AS so_num,
+                    Transaction.custbody50 AS hq_job_id,
+                    Customer.companyname AS customer_name,
+                    Transaction.trandate,
+                    Transaction.memo
+                FROM Transaction
+                LEFT JOIN Customer ON Transaction.entity = Customer.id
+                WHERE Transaction.type = 'SalesOrd' 
+                AND Transaction.status = 'SalesOrd:B'
+                AND Transaction.subsidiary = ${subsidiaryId}
+                AND Transaction.custbody50 IS NOT NULL
+            `;
+            
+            const response = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                    method: 'POST',
+                    payload: { q }
+                })
+            });
+            
+            const result = await response.json();
+            if (!response.ok) throw new Error(JSON.stringify(result));
+            
+            const records = result.items || [];
+            let newOrders = 0;
+            
+            for (const row of records) {
+                const hqSalesOrderId = `SO-${row.so_num}`;
+                const soRef = doc(db, "hq_sales_orders", hqSalesOrderId);
+                const soSnap = await getDoc(soRef);
+                
+                // Only create the SO if it doesn't already exist in Firebase to prevent overwriting routed tickets
+                if (!soSnap.exists()) {
+                    await setDoc(soRef, {
+                        id: hqSalesOrderId,
+                        soId: row.so_num,
+                        nsInternalId: row.ns_id,
+                        customer: row.customer_name || 'NetSuite Customer',
+                        status: "Approved",
+                        brand: activeBrand,
+                        recipe: "PENDING-RECIPE", 
+                        type: "Custom",
+                        totalParts: 1, 
+                        length: 0, width: 0, height: 0,
+                        reqDate: row.trandate || new Date().toISOString().split('T')[0],
+                        hqJobId: row.hq_job_id || null,
+                        memo: row.memo || ''
+                    });
+                    newOrders++;
+                }
+            }
+            
+            alert(`✅ Successfully synced ${newOrders} new App-Generated Sales Orders from NetSuite!`);
+            loadRTGOrders();
+        } catch(e) {
+            console.error(e);
+            alert("Failed to sync from NetSuite. Ensure your API proxy is active.");
+        }
+        setIsSyncing(false);
+    };
 
     // --- THE BRIDGE: HQ to Finishing Floor ---
     const pushToFinishing = async (hqOrder, orderType) => {
@@ -120,7 +203,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     <div style={{ fontSize: '0.8rem', color: '#666' }}>Action Center for Netsuite Approved Orders</div>
                 </div>
                 <div>
-                    <button onClick={injectTestOrder} style={{ ...btnStyle, background: '#8e44ad' }}>🧪 INJECT TEST ORDER</button>
+                    <button onClick={pullNSSalesOrders} disabled={isSyncing} style={{ ...btnStyle, background: isSyncing ? '#ccc' : '#007bff' }}>
+                        {isSyncing ? 'SYNCING...' : '⬇️ PULL ERP SALES ORDERS'}
+                    </button>
+                    <button onClick={injectTestOrder} style={{ ...btnStyle, background: '#8e44ad' }}>⚙️ INJECT TEST ORDER</button>
                     <button onClick={loadRTGOrders} style={{ ...btnStyle, background: '#333', margin: 0 }}>{loading ? 'SCANNING...' : '🔄 REFRESH DISPATCH LIST'}</button>
                 </div>
             </div>
@@ -128,14 +214,19 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
                 {/* 1. SALES ORDERS */}
                 <div style={{ borderTop: '4px solid #004080', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                    <h3 style={{ margin: '0 0 15px 0', color: '#004080', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>🛒 SALES ORDERS (CUSTOM)</h3>
+                    <h3 style={{ margin: '0 0 15px 0', color: '#004080', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📦 SALES ORDERS (CUSTOM)</h3>
                     {salesOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved sales orders pending dispatch.</p>}
                     
                     {salesOrders.map(so => (
                         <div key={so.id} style={cardStyle}>
-                            <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '10px', color: '#333' }}>
+                            <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '5px', color: '#333' }}>
                                 SO: {so.soId || so.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Cust: {so.customer || 'N/A'}</span>
                             </div>
+                            {so.memo && (
+                                <div style={{ fontSize: '0.75rem', color: '#007bff', marginBottom: '10px', fontStyle: 'italic' }}>
+                                    "{so.memo}"
+                                </div>
+                            )}
                             <div style={{ display: 'flex', flexWrap: 'wrap' }}>
                                 <button style={{ ...btnStyle, background: '#CC6600' }} onClick={() => pushToFinishing(so, 'sales')}>Push to Finishing</button>
                                 <button style={{ ...btnStyle, background: '#555' }} onClick={() => alert('Shop Floor push coming soon')}>Push to Shop</button>
@@ -149,7 +240,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
                 {/* 2. WORK ORDERS */}
                 <div style={{ borderTop: '4px solid #d4af37', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                    <h3 style={{ margin: '0 0 15px 0', color: '#d4af37', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>🏭 WORK ORDERS (STOCK BUILDS)</h3>
+                    <h3 style={{ margin: '0 0 15px 0', color: '#d4af37', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>🛠️ WORK ORDERS (STOCK BUILDS)</h3>
                     {workOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved work orders pending dispatch.</p>}
                     
                     {workOrders.map(wo => (
@@ -168,7 +259,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
                 {/* 3. PURCHASE ORDERS */}
                 <div style={{ borderTop: '4px solid #28a745', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                    <h3 style={{ margin: '0 0 15px 0', color: '#28a745', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📦 PURCHASE ORDERS (INBOUND)</h3>
+                    <h3 style={{ margin: '0 0 15px 0', color: '#28a745', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📥 PURCHASE ORDERS (INBOUND)</h3>
                     {purchaseOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved purchase orders incoming.</p>}
                     
                     {purchaseOrders.map(po => (

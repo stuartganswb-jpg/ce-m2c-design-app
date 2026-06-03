@@ -4,6 +4,14 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, 
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
+// 🚀 DYNAMIC BRAND MAPPING DICTIONARY
+const BRAND_NETSUITE_MAP = {
+    'm2c': { subsidiary: "3", location: "19" },
+    'uniquity': { subsidiary: "6", location: "22" },
+    'ce': { subsidiary: "2", location: "17" },
+    'leyla': { subsidiary: "5", location: "18" }
+};
+
 const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeSection, setActiveSection] = useState("NETSUITE_SYNC"); 
   
@@ -71,7 +79,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   // Identify if the current logged-in user is the Master Admin 
   const currentActiveUser = users.find(u => u.name === currentUser);
-const isSuperAdmin = currentUser === "Master Admin" || currentActiveUser?.pin === "1032" || currentActiveUser?.superAdmin === true;
+  const isSuperAdmin = currentUser === "Master Admin" || currentActiveUser?.pin === "1032" || currentActiveUser?.superAdmin === true;
 
   useEffect(() => {
       const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -253,6 +261,10 @@ const isSuperAdmin = currentUser === "Master Admin" || currentActiveUser?.pin ==
           for (const c of records) {
               const safeId = `CUST-${c.id}`;
               const docRef = doc(db, "crm_records", safeId);
+              
+              // 🚀 NEW: Auto-Map Subsidiary ID to Brand Key
+              const targetBrand = Object.keys(BRAND_NETSUITE_MAP).find(key => BRAND_NETSUITE_MAP[key].subsidiary === nsSubsidiaryId?.toString()) || activeBrand;
+
               await setDoc(docRef, {
                   id: safeId,
                   type: 'CUSTOMER',
@@ -267,11 +279,13 @@ const isSuperAdmin = currentUser === "Master Admin" || currentActiveUser?.pin ==
                   contact: '',
                   salesRep: '',
                   notes: 'Imported from NetSuite',
+                  brandId: targetBrand,          // Lock to specific CRM view
+                  sharedBrands: [targetBrand],   // Lock to specific CRM view
                   ytd: 0, mtd: 0, openOrders: 0
               }, { merge: true });
               successCount++;
           }
-          addLog(`✅ Successfully synced ${successCount} CRM records.`, 'success');
+          addLog(`✅ Successfully synced ${successCount} CRM records. mapped to brand: ${Object.keys(BRAND_NETSUITE_MAP).find(key => BRAND_NETSUITE_MAP[key].subsidiary === nsSubsidiaryId?.toString()) || activeBrand}`, 'success');
 
       } catch (err) {
           console.error(err);
@@ -287,8 +301,6 @@ const handleSyncAddresses = async () => {
       addLog(`Initiating Address Book Sync for Subsidiary [${nsSubsidiaryId}]...`, 'info');
 
       try {
-          // 🚀 THE X-RAY QUERY: 
-          // Uses LEFT JOIN so NetSuite cannot silently drop the customers.
           const q = `
               SELECT 
                   Customer.id AS customer_id,
@@ -319,12 +331,10 @@ const handleSyncAddresses = async () => {
           
           addLog(`Downloaded ${records.length} total customer/address rows. Filtering empty records...`, 'success');
 
-          // Group addresses by customer ID
           const addressMap = {};
           let validAddressCount = 0;
 
           for (const row of records) {
-              // 🚀 If the LEFT JOIN failed to find an address, skip it
               if (!row.addressbook_id) continue; 
 
               validAddressCount++;
@@ -332,7 +342,7 @@ const handleSyncAddresses = async () => {
               if (!addressMap[custId]) addressMap[custId] = [];
               
               addressMap[custId].push({
-                  addressBookId: row.addressbook_id, // CRITICAL FOR API PUSH
+                  addressBookId: row.addressbook_id,
                   label: row.label || 'Default Address',
                   isDefault: row.defaultshipping === 'T',
                   addressee: row.addressee || row.attention || '',
@@ -349,11 +359,8 @@ const handleSyncAddresses = async () => {
               addLog(`⚠️ NetSuite returned your customers, but hid all Address Books. Your NetSuite API Integration Role is likely missing the 'Customer Address' permission.`, 'warn');
           } else {
               let successCount = 0;
-              // Write the arrays into the existing CRM documents
               for (const [custId, addresses] of Object.entries(addressMap)) {
-                  // Sort so the 'Default Shipping' address is always index 0
                   addresses.sort((a, b) => (b.isDefault === true) - (a.isDefault === true));
-                  
                   const docRef = doc(db, "crm_records", custId);
                   await setDoc(docRef, { shippingAddresses: addresses }, { merge: true });
                   successCount++;
@@ -982,7 +989,7 @@ const handleSyncAddresses = async () => {
                               <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls all active customers mapped to Subsidiary {nsSubsidiaryId}.</div>
                           </button>
 
-<button onClick={handleSyncAddresses} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#e83e8c', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                          <button onClick={handleSyncAddresses} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#e83e8c', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
                               ⬇️ 1.2 SYNC CUSTOMER ADDRESS BOOKS
                               <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls all address books and maps IDs for API Drop-Shipping.</div>
                           </button>
@@ -1754,7 +1761,8 @@ const handleSyncAddresses = async () => {
                 
                 <div style={{ border: '2px solid #d9534f', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div><h4 style={{ margin: '0 0 5px 0' }}>WIPE ALL MASTER ASSEMBLIES</h4><div style={{fontSize:'0.8rem', color:'#666'}}>Deletes all BOMs and Top-Level Configurations.</div></div>
-                  <button onClick={handleNukeAssemblies} style={{ padding: '15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>NUKE ASSEMBLIES</button>
+                  <button
+                  onClick={handleNukeAssemblies} style={{ padding: '15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>NUKE ASSEMBLIES</button>
                 </div>
                 
                 <div style={{ border: '2px solid #d9534f', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
