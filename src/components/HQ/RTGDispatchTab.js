@@ -52,16 +52,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         loadRTGOrders();
     }, [activeBrand]);
 
-    // 🚀 PULL WITH LOGGING
+    // 🚀 HYPER-STRICT PULL: Only grabs SalesOrd:B with a valid App Quote ID
     const pullNSSalesOrders = async () => {
         setIsSyncing(true);
-        setSyncLog([]); // Clear log on new pull
+        setSyncLog([]); 
         
         try {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
-            addLog(`Initiating Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
+            addLog(`Initiating Strict Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
-            // Note: Filters for SalesOrd:B (Pending Fulfillment) and requires the App Job ID (custbody50)
+            // Strictly locking to Pending Fulfillment and ensuring custbody50 starts with our App's syntax
             const q = `
                 SELECT 
                     Transaction.id AS ns_id,
@@ -75,10 +75,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 WHERE Transaction.type = 'SalesOrd' 
                 AND Transaction.status = 'SalesOrd:B'
                 AND Transaction.subsidiary = ${subsidiaryId}
-                AND Transaction.custbody50 IS NOT NULL
+                AND Transaction.custbody50 LIKE 'QUOTE-%'
             `;
             
-            addLog("Executing SuiteQL: Looking for 'Pending Fulfillment' orders born from CPQ App...", "info");
+            addLog("Executing SuiteQL: Strict filter for 'Pending Fulfillment' AND 'QUOTE-*' signature...", "info");
 
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
@@ -94,7 +94,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             if (!response.ok) throw new Error(JSON.stringify(result));
             
             const records = result.items || [];
-            addLog(`NetSuite returned ${records.length} matching orders.`, records.length > 0 ? "success" : "warn");
+            addLog(`NetSuite returned ${records.length} strictly matching orders.`, records.length > 0 ? "success" : "warn");
 
             let newOrders = 0;
             
@@ -116,11 +116,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                         totalParts: 1, 
                         length: 0, width: 0, height: 0,
                         reqDate: row.trandate || new Date().toISOString().split('T')[0],
-                        hqJobId: row.hq_job_id || null,
+                        hqJobId: row.hq_job_id,
                         memo: row.memo || ''
                     });
                     newOrders++;
-                    addLog(`Imported new Sales Order: ${hqSalesOrderId}`, "success");
+                    addLog(`Imported App-Generated SO: ${hqSalesOrderId} (Linked to ${row.hq_job_id})`, "success");
                 } else {
                     addLog(`Skipped ${hqSalesOrderId} (Already exists on board).`, "info");
                 }
@@ -183,7 +183,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         }
     };
 
-    // 🚀 NEW: Delete Order Function (To clear out test orders)
     const deleteOrder = async (collectionName, id) => {
         if (!window.confirm(`Permanently remove ${id} from the dispatch board?`)) return;
         try {
