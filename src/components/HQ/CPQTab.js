@@ -194,7 +194,17 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   
   const [pricing, setPricing] = useState({ base: 0, finalPrice: 0 });
   const [pricingBreakdown, setPricingBreakdown] = useState([]);
-  const [jobData, setJobData] = useState({ customerId: '', jobName: '', sidemark: '' });
+  
+  // 🚀 UPDATED: Added Shipping Fields to JobData State
+  const [jobData, setJobData] = useState({ 
+      customerId: '', 
+      jobName: '', 
+      sidemark: '',
+      shippingMethod: 'SAVED', 
+      shippingAddressId: '', 
+      customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' }
+  });
+  
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
 
@@ -603,6 +613,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           flowId: activeFlow?.id || null, 
           linkedAssemblyId: activeAssemblyId || null,
           isProjectManaged: activeAssembly?.manufacturingSpecs?.isProjectManaged || false, 
+          
+          // 🚀 NEW: Attach the shipping destination to the job document
+          shippingMethod: jobData.shippingMethod || 'SAVED',
+          shippingAddressId: jobData.shippingAddressId || null,
+          customShippingAddress: jobData.shippingMethod === 'CUSTOM' ? jobData.customShippingAddress : null,
+
           cpqData: { 
               totalPrice: pricing.finalPrice, 
               configuration: dynamicConfigParams,
@@ -615,6 +631,47 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, sewing: false, packing: false },
           dateSaved: new Date().toISOString().split('T')[0], author: currentUser, createdAt: serverTimestamp()
       };
+      
+      try {
+          await setDoc(doc(db, "jobs", jobId), payload);
+          
+          if (activeDraftSvg) {
+              await setDoc(doc(db, "crm_files", `DRAWING-${Date.now()}`), {
+                  customerId: jobData.customerId,
+                  jobId: jobId,
+                  sidemark: jobData.sidemark,
+                  dateSaved: new Date().toISOString(),
+                  type: 'VISION_DRAWING',
+                  svgData: activeDraftSvg
+              });
+          }
+          
+          if (activeDraftId) {
+              await deleteDoc(doc(db, "cpq_drafts", activeDraftId));
+          }
+
+          await generateOrderDocuments(payload, activeDraftSvg);
+
+          if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
+              alert(`✅ COMPLEX QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
+          } else {
+              alert(`✅ STANDARD QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10 (External Coop) for standard approval.`);
+          }
+          setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); 
+          setActiveAssemblyId(""); setShowCheckoutModal(false); 
+          
+          // 🚀 UPGRADED: Properly reset the jobData state including shipping fields
+          setJobData({ 
+              customerId: '', 
+              jobName: '', 
+              sidemark: '', 
+              shippingMethod: 'SAVED', 
+              shippingAddressId: '', 
+              customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } 
+          });
+          setActiveDraftId(null); setActiveDraftSvg(null);
+      } catch (err) { console.error(err); alert("Failed to save quote."); }
+  };
       
       try {
           await setDoc(doc(db, "jobs", jobId), payload);
@@ -1297,7 +1354,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                     <h2 style={{ margin: 0, fontSize: '1.2rem', textTransform: 'uppercase' }}>💾 FINALIZE & ASSIGN QUOTE</h2>
                     <button onClick={() => setShowCheckoutModal(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
                 </div>
-                <div style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                
+                {/* Added maxHeight and overflowY so the modal doesn't fall off the screen */}
+                <div style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', gap: '15px', maxHeight: '80vh', overflowY: 'auto' }}>
                     
                     <div style={{ padding: '15px', background: '#eafaf1', border: '1px solid #28a745', textAlign: 'center' }}>
                         <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#28a745' }}>FINAL CONFIGURED PRICE</div>
@@ -1311,6 +1370,78 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                             {combinedCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
                         </select>
                     </div>
+
+                    {/* 🚀 NEW: SHIPPING DESTINATION UI */}
+                    {jobData.customerId && (
+                        <div style={{ marginTop: '5px', background: '#f8f9fa', padding: '15px', border: '1px solid #ccc', borderLeft: '4px solid #007bff' }}>
+                            <h4 style={{ margin: '0 0 10px 0', color: '#007bff', fontSize: '0.9rem' }}>🚚 SHIPPING DESTINATION</h4>
+                            
+                            <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+                                <button 
+                                    onClick={() => {
+                                        const cust = combinedCustomers.find(c => c.id === jobData.customerId);
+                                        const defaultId = cust?.shippingAddresses?.[0]?.addressBookId || '';
+                                        setJobData({...jobData, shippingMethod: 'SAVED', shippingAddressId: defaultId});
+                                    }} 
+                                    style={{ flex: 1, padding: '10px', background: jobData.shippingMethod === 'SAVED' ? '#007bff' : '#fff', color: jobData.shippingMethod === 'SAVED' ? '#fff' : '#000', border: '1px solid #007bff', fontWeight: 'bold', cursor: 'pointer' }}
+                                >
+                                    SAVED ADDRESSES
+                                </button>
+                                <button 
+                                    onClick={() => setJobData({...jobData, shippingMethod: 'CUSTOM', shippingAddressId: ''})} 
+                                    style={{ flex: 1, padding: '10px', background: jobData.shippingMethod === 'CUSTOM' ? '#007bff' : '#fff', color: jobData.shippingMethod === 'CUSTOM' ? '#fff' : '#000', border: '1px solid #007bff', fontWeight: 'bold', cursor: 'pointer' }}
+                                >
+                                    CUSTOM DROP-SHIP
+                                </button>
+                            </div>
+
+                            {jobData.shippingMethod === 'SAVED' ? (
+                                <div>
+                                    {(!combinedCustomers.find(c => c.id === jobData.customerId)?.shippingAddresses?.length) ? (
+                                        <div style={{ color: '#d9534f', fontSize: '0.85rem', fontStyle: 'italic', padding: '10px', background: '#fff0f0', border: '1px dashed #d9534f' }}>
+                                            No synced NetSuite addresses found for this customer. Please use Custom Drop-Ship.
+                                        </div>
+                                    ) : (
+                                        <select 
+                                            value={jobData.shippingAddressId} 
+                                            onChange={e => setJobData({...jobData, shippingAddressId: e.target.value})}
+                                            style={{ width: '100%', padding: '10px', border: '1px solid #007bff', fontWeight: 'bold', fontSize: '0.85rem' }}
+                                        >
+                                            <option value="">-- Select Saved Address --</option>
+                                            {combinedCustomers.find(c => c.id === jobData.customerId)?.shippingAddresses.map(addr => (
+                                                <option key={addr.addressBookId} value={addr.addressBookId}>
+                                                    {addr.label} - {addr.addr1}, {addr.city} {addr.state}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    )}
+                                </div>
+                            ) : (
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                                    <div style={{ gridColumn: 'span 2' }}>
+                                        <input placeholder="Attention / Contact Name" value={jobData.customShippingAddress.attention} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, attention: e.target.value}})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                    </div>
+                                    <div style={{ gridColumn: 'span 2' }}>
+                                        <input placeholder="Addressee / Company Name" value={jobData.customShippingAddress.addressee} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addressee: e.target.value}})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                    </div>
+                                    <div style={{ gridColumn: 'span 2' }}>
+                                        <input placeholder="Street Address 1" value={jobData.customShippingAddress.addr1} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr1: e.target.value}})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                    </div>
+                                    <div style={{ gridColumn: 'span 2' }}>
+                                        <input placeholder="Street Address 2 (Suite, Unit, etc.)" value={jobData.customShippingAddress.addr2} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr2: e.target.value}})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                    </div>
+                                    <div>
+                                        <input placeholder="City" value={jobData.customShippingAddress.city} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, city: e.target.value}})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                        <input placeholder="State (e.g. NC)" value={jobData.customShippingAddress.state} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, state: e.target.value}})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                        <input placeholder="Zip" value={jobData.customShippingAddress.zip} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, zip: e.target.value}})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {/* 🚀 END SHIPPING BLOCK */}
 
                     <div>
                         <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>JOB NAME (Optional):</label>
