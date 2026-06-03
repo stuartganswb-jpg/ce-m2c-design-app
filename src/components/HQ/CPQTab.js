@@ -673,35 +673,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           setActiveDraftId(null); setActiveDraftSvg(null);
       } catch (err) { console.error(err); alert("Failed to save quote."); }
   };
-          
-          if (activeDraftId) {
-              await deleteDoc(doc(db, "cpq_drafts", activeDraftId));
-          }
-
-          await generateOrderDocuments(payload, activeDraftSvg);
-
-          if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
-              alert(`✅ COMPLEX QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
-          } else {
-              alert(`✅ STANDARD QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10 (External Coop) for standard approval.`);
-          }
-          setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); 
-          setActiveAssemblyId(""); setShowCheckoutModal(false); 
-          
-          // 🚀 UPGRADED: Properly reset the jobData state including shipping fields
-          setJobData({ 
-              customerId: '', 
-              jobName: '', 
-              sidemark: '', 
-              shippingMethod: 'SAVED', 
-              shippingAddressId: '', 
-              customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } 
-          });
-          setActiveDraftId(null); setActiveDraftSvg(null);
-      } catch (err) { console.error(err); alert("Failed to save quote."); }
-  };
-      
-      try {
           await setDoc(doc(db, "jobs", jobId), payload);
           
           if (activeDraftSvg) {
