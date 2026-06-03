@@ -28,7 +28,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   
   const [showNewCrmModal, setShowNewCrmModal] = useState(false);
   
-  // 🚀 UPGRADED: Expanded CRM Form State with Multiple Shipping Addresses
   const [newCrmForm, setNewCrmForm] = useState({ 
       name: '', email: '', contact: '', phone: '', 
       terms: '', salesRep: '', discountCode: '', creditLimit: '', 
@@ -45,847 +44,731 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [endDate, setEndDate] = useState('');
 
   const [activeModalJob, setActiveModalJob] = useState(null);
-  const [activeAssembly, setActiveAssembly] = useState(null);
-  const [activeRevisionId, setActiveRevisionId] = useState(null);
-  const [isAddingCallout, setIsAddingCallout] = useState(false);
-  const [activeCalloutId, setActiveCalloutId] = useState(null);
-  const svgRef = useRef(null);
-
-  const [formTemplates, setFormTemplates] = useState({});
-  const [brandLogos, setBrandLogos] = useState({});
-  const [libraryParts, setLibraryParts] = useState([]);
+  const [activeAssemblyId, setActiveAssemblyId] = useState('');
+  const [activeAssemblyName, setActiveAssemblyName] = useState('');
+  
+  const [liveAssemblies, setLiveAssemblies] = useState([]);
+  
   const [activeDocJob, setActiveDocJob] = useState(null);
   const [activeDocType, setActiveDocType] = useState('QUOTE'); 
-  const DOC_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE'];
+  const [formTemplates, setFormTemplates] = useState({});
+  const [brandLogos, setBrandLogos] = useState({});
+  const [draftDrawings, setDraftDrawings] = useState([]); 
 
   useEffect(() => {
-    const styleSheet = document.createElement("style");
-    styleSheet.innerText = printStyles;
-    document.head.appendChild(styleSheet);
-    return () => styleSheet.remove();
+      const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { 
+          if (docSnap.exists()) setGlobalLists(docSnap.data()); 
+      });
+
+      const unsubDiscounts = onSnapshot(doc(db, "system", "crm_discounts"), (docSnap) => { 
+          if (docSnap.exists() && docSnap.data().list) setCrmDiscounts(docSnap.data().list); 
+      });
+
+      const unsubAssemblies = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
+          const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          setLiveAssemblies(docs.filter(d => ['Assembly', 'Master Assembly'].includes(d.partClass)));
+      });
+
+      const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
+          const data = {};
+          snap.docs.forEach(d => { data[d.id] = { id: d.id, ...d.data() }; });
+          setCrmData(data);
+      });
+
+      const unsubForms = onSnapshot(doc(db, "hq_config", "form_templates"), (docSnap) => { 
+          if (docSnap.exists()) setFormTemplates(docSnap.data());
+      });
+
+      const unsubLogos = onSnapshot(doc(db, "hq_config", "brand_logos"), (docSnap) => { 
+          if (docSnap.exists()) setBrandLogos(docSnap.data());
+      });
+
+      const unsubDrawings = onSnapshot(collection(db, "crm_files"), (snap) => {
+          const drawings = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(f => f.type === 'VISION_DRAWING');
+          setDraftDrawings(drawings);
+      });
+
+      return () => { unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubCrm(); unsubForms(); unsubLogos(); unsubDrawings(); };
   }, []);
 
   useEffect(() => {
-      if (!activeBrand) return;
-      const unsub = onSnapshot(collection(db, "jobs"), (snapshot) => {
-          const allJobs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-          const brandJobs = allJobs.filter(j => j.brandId === activeBrand);
-          
-          setAllBrandJobs(brandJobs); 
+    if (!activeBrand) return;
 
-          const inceptions = brandJobs.filter(j => j.status === 'INCEPTION');
-          const configured = brandJobs.filter(j => j.status === 'CONFIGURED');
-          
-          setDebugStats({ total: allJobs.length, brandMatch: brandJobs.length, inception: inceptions.length, configured: configured.length });
-          setInceptionJobs(inceptions);
-          setConfiguredJobs(configured);
-      });
-      return () => unsub();
+    const unsubJobs = onSnapshot(collection(db, "jobs"), (snapshot) => {
+        const allJobs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        const brandJobs = allJobs.filter(j => j.brandId === activeBrand);
+        
+        setAllBrandJobs(brandJobs); 
+        
+        const inception = brandJobs.filter(j => ['INCEPTION', 'DRAFT'].includes(j.status));
+        const configured = brandJobs.filter(j => !['INCEPTION', 'DRAFT'].includes(j.status));
+
+        setInceptionJobs(inception);
+        setConfiguredJobs(configured);
+
+        setDebugStats({
+            total: allJobs.length,
+            brandMatch: brandJobs.length,
+            inception: inception.length,
+            configured: configured.length
+        });
+
+    }, (error) => {
+        console.error("Error fetching jobs:", error);
+    });
+
+    return () => unsubJobs();
   }, [activeBrand]);
 
-  useEffect(() => {
-      if (!activeModalJob?.linkedAssemblyId) { setActiveAssembly(null); return; }
-      const unsub = onSnapshot(doc(db, "Approved_Designs", activeModalJob.linkedAssemblyId), (docSnap) => {
-          if (docSnap.exists()) {
-              const asmData = { id: docSnap.id, ...docSnap.data() };
-              setActiveAssembly(asmData);
-              const revs = asmData.revisions || (asmData.finalImageUrl ? [{ id: 'INITIAL', name: 'Initial Design', url: asmData.finalImageUrl }] : []);
-              if (revs.length > 0 && !activeRevisionId) setActiveRevisionId(revs[revs.length - 1].id);
-          }
-      });
-      return () => unsub();
-  }, [activeModalJob, activeRevisionId]);
-
-  useEffect(() => {
-      if (!activeBrand) return;
-      const unsubForms = onSnapshot(doc(db, "hq_config", "form_templates"), (snap) => {
-          if (snap.exists()) setFormTemplates(snap.data());
-      });
-      const unsubLogos = onSnapshot(doc(db, "hq_config", "brand_logos"), (snap) => {
-          if (snap.exists()) setBrandLogos(snap.data());
-      });
-      const unsubParts = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
-          setLibraryParts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      });
-      return () => { unsubForms(); unsubLogos(); unsubParts(); };
-  }, [activeBrand]);
-
-  useEffect(() => {
-      const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
-          const dbRecords = {};
-          snap.docs.forEach(d => dbRecords[d.id] = { id: d.id, ...d.data() });
-          setCrmData({ ...INITIAL_CRM_DATA, ...dbRecords });
-          
-          if (activeCrmRecord) {
-              const updatedActive = snap.docs.find(d => d.id === activeCrmRecord.id);
-              if (updatedActive) setActiveCrmRecord({ id: updatedActive.id, ...updatedActive.data() });
-          }
-      });
-
-      const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (snap) => {
-          if (snap.exists()) {
-              const data = snap.data();
-              setGlobalLists({ 
-                  customers: data.customers || [], 
-                  vendors: data.vendors || [],
-                  paymentTerms: data.paymentTerms || [],
-                  salesReps: data.salesReps || []
-              });
-          }
-      });
-
-      const unsubDiscounts = onSnapshot(doc(db, "system", "crm_discounts"), (snap) => {
-          if (snap.exists() && snap.data().list) setCrmDiscounts(snap.data().list);
-      });
-
-      return () => { unsubCrm(); unsubLists(); unsubDiscounts(); };
-  }, [activeCrmRecord?.id]);
-
-  const handleAddShippingAddress = () => {
-      if (!newAddressInput.label || !newAddressInput.street) return alert("Label and Address required.");
-      const newAddr = { id: `ADDR_${Date.now()}`, label: newAddressInput.label, street: newAddressInput.street };
-      setNewCrmForm(prev => ({ ...prev, shippingAddresses: [...prev.shippingAddresses, newAddr] }));
-      setNewAddressInput({ label: '', street: '' });
-  };
-
-  const handleRemoveShippingAddress = (addrId) => {
-      setNewCrmForm(prev => ({ ...prev, shippingAddresses: prev.shippingAddresses.filter(a => a.id !== addrId) }));
-  };
-
-  const handleSaveNewCrm = async () => {
-      if (!newCrmForm.name.trim()) return alert("Entity Name is required.");
-      
-      const isCust = activeSubTab === 'CUSTOMERS';
-      const prefix = isCust ? 'CUST' : 'VEND';
-      const newId = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-      const newRecord = {
-          id: newId,
-          type: isCust ? 'CUSTOMER' : 'VENDOR',
-          name: newCrmForm.name.trim(),
-          email: newCrmForm.email.trim(),
-          contact: newCrmForm.contact.trim(),
-          phone: newCrmForm.phone.trim(),
-          terms: newCrmForm.terms || '',
-          salesRep: newCrmForm.salesRep || '',
-          billingAddress: newCrmForm.billingAddress.trim(),
-          shippingAddresses: newCrmForm.shippingAddresses || [],
-          creditLimit: parseFloat(newCrmForm.creditLimit) || 0,
-          discountCode: newCrmForm.discountCode || '',
-          ytd: 0, mtd: 0, openOrders: 0, notes: ''
-      };
-
+  const updateJobStatus = async (jobId, newStatus) => {
       try {
-          await setDoc(doc(db, "crm_records", newId), newRecord);
-          const listKey = isCust ? 'customers' : 'vendors';
-          
-          const formattedName = `${newRecord.name} - ${newId}`;
-          const updatedList = [...new Set([...(globalLists[listKey] || []), formattedName])];
-          await setDoc(doc(db, "system", "master_lists"), { [listKey]: updatedList }, { merge: true });
-
-          setShowNewCrmModal(false);
-          setNewCrmForm({ name: '', email: '', contact: '', phone: '', terms: '', salesRep: '', billingAddress: '', shippingAddresses: [], creditLimit: '', discountCode: '' });
-          setCrmSearchQuery('');
-          setActiveCrmRecord(newRecord);
-          
+          await updateDoc(doc(db, "jobs", jobId), { status: newStatus });
       } catch (err) {
-          console.error(err);
-          alert("Failed to create the new CRM record.");
+          console.error("Error updating status:", err);
+          alert("Failed to update status.");
       }
   };
 
   const handleUpdateActiveCrmField = async (field, value) => {
       if (!activeCrmRecord) return;
-      setActiveCrmRecord(prev => ({ ...prev, [field]: value }));
+      const updated = { ...activeCrmRecord, [field]: value };
+      setActiveCrmRecord(updated);
+      try { await updateDoc(doc(db, "crm_records", activeCrmRecord.id), { [field]: value }); } 
+      catch (e) { console.error(e); }
+  };
+
+  const getFilteredCrmRecords = (isCust) => {
+      const records = Object.values(crmData).filter(r => r.type === (isCust ? 'CUSTOMER' : 'VENDOR'));
+      if (!crmSearchQuery) return records;
+      const q = crmSearchQuery.toLowerCase();
+      return records.filter(r => (r.name || '').toLowerCase().includes(q) || (r.id || '').toLowerCase().includes(q) || (r.email || '').toLowerCase().includes(q));
+  };
+
+  const handleCreateNewCrm = async () => {
+      if (!newCrmForm.name) return alert("Name is required.");
+      const isCust = activeSubTab === 'CUSTOMERS';
+      const newId = `${isCust ? 'CUST' : 'VEND'}-${Math.floor(1000 + Math.random() * 9000)}`;
+      
+      const payload = {
+          ...newCrmForm,
+          id: newId,
+          type: isCust ? 'CUSTOMER' : 'VENDOR',
+          createdAt: new Date().toISOString(),
+          ytd: 0, mtd: 0, openOrders: 0
+      };
+
       try {
-          await updateDoc(doc(db, "crm_records", activeCrmRecord.id), { [field]: value });
+          await setDoc(doc(db, "crm_records", newId), payload);
+          
+          const listKey = isCust ? 'customers' : 'vendors';
+          const updatedList = [...(globalLists[listKey] || []), newCrmForm.name];
+          await setDoc(doc(db, "system", "master_lists"), { [listKey]: updatedList }, { merge: true });
+
+          setNewCrmForm({ name: '', email: '', contact: '', phone: '', terms: '', salesRep: '', discountCode: '', creditLimit: '', billingAddress: '', shippingAddresses: [] });
+          setShowNewCrmModal(false);
+          setActiveCrmRecord(payload);
+
       } catch (err) {
-          console.error("Failed to update CRM field:", err);
+          console.error(err);
+          alert("Failed to create record.");
       }
   };
 
-  const handleActiveCrmAddAddress = async (label, street) => {
-      if (!label || !street) return;
-      const newAddr = { id: `ADDR_${Date.now()}`, label, street };
-      const updatedAddresses = [...(activeCrmRecord.shippingAddresses || []), newAddr];
-      await handleUpdateActiveCrmField('shippingAddresses', updatedAddresses);
-  };
-
-  const handleActiveCrmRemoveAddress = async (addrId) => {
-      if (!window.confirm("Remove this shipping address?")) return;
-      const updatedAddresses = (activeCrmRecord.shippingAddresses || []).filter(a => a.id !== addrId);
-      await handleUpdateActiveCrmField('shippingAddresses', updatedAddresses);
-  };
-
-  const handleEditJob = (job) => alert(`Loading ${job.jobId || job.id} into Global Context...\n\nRouting operator back to CPQ / Vision Tabs to configure physical inventory.`);
-  
-  const handleApproveJob = async (jobId) => {
-      if(window.confirm(`Approve ${jobId}?\n\nThis will lock the configuration and move it to the Tab 12 (ERP) dispatch pipeline.`)) {
-          try { await updateDoc(doc(db, "jobs", jobId), { status: 'APPROVED' }); } 
-          catch (err) { console.error("Failed to approve job:", err); }
-      }
-  };
-
-  const handleClearFilters = () => { setSearchQuery(''); setStartDate(''); setEndDate(''); };
-
-  const handleEmailQuote = (job) => {
-      const clientData = crmData[job.customer?.id] || { email: 'client@example.com', contact: 'Valued Client' };
-      const subject = encodeURIComponent(`Your Custom Hardware Quote: ${job.sidemark} (${job.jobId})`);
-      const body = encodeURIComponent(`Hi ${clientData.contact},\n\nPlease find attached your finalized quotation for the ${job.sidemark} project.\n\nTotal: $${job.cpqData?.totalPrice?.toFixed(2) || '0.00'}\n\nPlease review the attached PDF and reply to this email to approve the design for production.\n\nBest Regards,\nThe ${activeBrand.toUpperCase()} Team`);
-
-      setActiveDocJob(job);
-      setActiveDocType('QUOTE');
-
-      setTimeout(() => { window.location.href = `mailto:${clientData.email}?subject=${subject}&body=${body}`; }, 1000);
-  };
-
-  const handleSvgClick = async (e) => {
-      if (!isAddingCallout || !activeRevisionId || !activeAssembly) { setActiveCalloutId(null); return; }
-      const svg = svgRef.current;
-      if (!svg) return;
-      const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
-      const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
-      const newCallout = { id: Date.now().toString(), revisionId: activeRevisionId, x: svgP.x, y: svgP.y, user: `${currentUser} (External Note)`, text: '', time: new Date().toLocaleTimeString() };
-      const updatedCallouts = [...(activeAssembly.spatialCallouts || []), newCallout];
-      setActiveAssembly(prev => ({ ...prev, spatialCallouts: updatedCallouts })); setActiveCalloutId(newCallout.id); setIsAddingCallout(false);
-      try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: updatedCallouts }); } catch (err) { console.error(err); }
-  };
-  
-  const handleLocalTextChange = (id, newText) => { setActiveAssembly(prev => ({ ...prev, spatialCallouts: (activeAssembly.spatialCallouts || []).map(c => c.id === id ? { ...c, text: newText } : c) })); };
-  const saveCalloutTextToFirebase = async () => { try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: activeAssembly.spatialCallouts }); } catch (err) { console.error(err); } };
-  const removeCallout = async (id) => { if(!window.confirm("Delete this external note?")) return; const updatedCallouts = (activeAssembly.spatialCallouts || []).filter(c => c.id !== id); try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: updatedCallouts }); } catch (err) { console.error(err); } };
-
-  const filterByActiveTab = (job) => { if (activeSubTab === 'CUSTOMERS') return !!job.clientName || !!job.customer; if (activeSubTab === 'VENDORS') return !!job.vendorName; return true; };
-  const filteredInception = inceptionJobs.filter(job => filterByActiveTab(job)).filter(job => { const q = searchQuery.toLowerCase(); const entity = job.clientName || job.vendorName || ''; return (!q || job.id.toLowerCase().includes(q) || entity.toLowerCase().includes(q) || (job.note && job.note.toLowerCase().includes(q))) && (!startDate || job.date >= startDate) && (!endDate || job.date <= endDate); });
-  const filteredConfigured = configuredJobs.filter(job => filterByActiveTab(job)).filter(job => { const q = searchQuery.toLowerCase(); const entity = job.customer?.name || ''; return (!q || (job.jobId || job.id).toLowerCase().includes(q) || entity.toLowerCase().includes(q) || (job.sidemark && job.sidemark.toLowerCase().includes(q))) && (!startDate || job.dateSaved >= startDate) && (!endDate || job.dateSaved <= endDate); });
-
-  const activeRevisions = activeAssembly?.revisions || (activeAssembly?.finalImageUrl ? [{ id: 'INITIAL', name: 'Initial Design', url: activeAssembly.finalImageUrl }] : []);
-  const currentRevisionObj = activeRevisions.find(r => r.id === activeRevisionId) || activeRevisions[0];
-  const filteredCallouts = (activeAssembly?.spatialCallouts || []).filter(c => (c.revisionId === activeRevisionId || (!c.revisionId && activeRevisionId === 'INITIAL')) && c.user && c.user.includes('(External Note)'));
-
-  const targetCrmType = activeSubTab === 'CUSTOMERS' ? 'CUSTOMER' : 'VENDOR';
-  const activeCrmList = Object.values(crmData).filter(r => r.type === targetCrmType);
-  const crmSearchResults = crmSearchQuery ? activeCrmList.filter(r => r.name.toLowerCase().includes(crmSearchQuery.toLowerCase()) || r.id.toLowerCase().includes(crmSearchQuery.toLowerCase())) : [];
-  const exactMatchExists = crmSearchResults.some(r => r.name.toLowerCase() === crmSearchQuery.toLowerCase());
-
-  const getCrmActivePipeline = (id) => {
-      const entityName = crmData[id]?.name || "";
-      return [...inceptionJobs, ...configuredJobs].filter(j => 
-          j.customer?.id === id || 
-          (j.clientName && j.clientName.includes(entityName)) || 
-          (j.vendorName && j.vendorName.includes(entityName))
-      ).sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-  };
-
-  const getCrmArchivedPipeline = (id) => {
-      const entityName = crmData[id]?.name || "";
+  const getCrmActivePipeline = (crmId) => {
       return allBrandJobs.filter(j => 
-          j.status !== 'INCEPTION' && j.status !== 'CONFIGURED' && 
-          (j.customer?.id === id || (j.clientName && j.clientName.includes(entityName)) || (j.vendorName && j.vendorName.includes(entityName)))
-      ).sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+          (j.customer?.id === crmId || j.vendorId === crmId) && 
+          !['COMPLETED', 'SHIPPED', 'CANCELLED'].includes(j.status)
+      ).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   };
 
-  const getPartName = (partId) => {
-      const part = libraryParts.find(p => p.id === partId);
-      return part ? part.itemName : partId;
+  const getCrmArchivedPipeline = (crmId) => {
+      return allBrandJobs.filter(j => 
+          (j.customer?.id === crmId || j.vendorId === crmId) && 
+          ['COMPLETED', 'SHIPPED', 'CANCELLED'].includes(j.status)
+      ).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   };
-  const activeTemplate = formTemplates[activeDocType === 'FACTORY_ROUTER' ? 'WORK_ORDER' : activeDocType] || { header: '', footer: '', terms: '' };
-  const currentLogo = brandLogos[activeBrand] || null;
+
+  const filterByActiveTab = (job) => {
+      if (activeSubTab === 'CUSTOMERS') return !!job.clientName || !!job.customer;
+      if (activeSubTab === 'VENDORS') return !!job.vendorName;
+      return true;
+  };
+
+  const filteredConfigured = configuredJobs
+      .filter(job => filterByActiveTab(job))
+      .filter(job => {
+          const q = searchQuery.toLowerCase();
+          const entity = job.customer?.name || '';
+          return (!q || (job.jobId || job.id).toLowerCase().includes(q) || entity.toLowerCase().includes(q) || (job.sidemark && job.sidemark.toLowerCase().includes(q))) &&
+                 (!startDate || job.dateSaved >= startDate) &&
+                 (!endDate || job.dateSaved <= endDate);
+      });
+
+  const getActiveTabCounts = () => {
+      let active = 0; let pending = 0; let complete = 0;
+      configuredJobs.filter(j => filterByActiveTab(j)).forEach(j => {
+          if (['APPROVED', 'IN_PRODUCTION'].includes(j.status)) active++;
+          else if (['CONFIGURED', 'SENT_TO_CLIENT', 'REVISION_REQUESTED'].includes(j.status)) pending++;
+          else complete++;
+      });
+      return { active, pending, complete };
+  };
+
+  const handleLinkToAssembly = async (jobId, asmId) => {
+      try {
+          const asm = liveAssemblies.find(a => a.id === asmId);
+          await updateDoc(doc(db, "jobs", jobId), { 
+              linkedAssemblyId: asmId,
+              linkedAssemblyName: asm ? asm.itemName : 'Unknown Assembly'
+          });
+          setActiveModalJob({...activeModalJob, linkedAssemblyId: asmId, linkedAssemblyName: asm ? asm.itemName : 'Unknown Assembly'});
+          alert("Successfully linked hardware assembly! Route to Tab 8 (CPQ) to finalize pricing.");
+      } catch (err) {
+          console.error(err);
+          alert("Failed to link assembly.");
+      }
+  };
+
+  const renderDocument = () => {
+      if (!activeDocJob) return null;
+
+      const template = formTemplates[activeDocType] || { header: '', footer: '', terms: '' };
+      const logoUrl = brandLogos[activeBrand];
+
+      let mathSection = '';
+      if (activeDocJob.engineeringNotes) {
+          const notes = activeDocJob.engineeringNotes;
+          mathSection = `
+              <div style="background: #fff3cd; border: 2px dashed #ffc107; padding: 15px; margin-bottom: 20px;">
+                  <h4 style="margin:0 0 10px 0; color: #1e7e34; text-transform: uppercase;">ENGINEERING DIMENSIONS</h4>
+                  <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                      <tr>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; color: #1e7e34;">System O2O (Outside-to-Outside):</td>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.systemO2O ? notes.systemO2O.toFixed(2) + '"' : 'N/A'}</td>
+                      </tr>
+                      <tr>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; color: #007bff;">System C2C (Center-to-Center):</td>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.systemC2C ? notes.systemC2C.toFixed(2) + '"' : 'N/A'}</td>
+                      </tr>
+                      ${notes.shape === 'MITERED' ? `
+                      <tr>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee;">Left Wall C2C:</td>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole1 ? notes.pole1.toFixed(2) + '"' : 'N/A'}</td>
+                      </tr>
+                      ` : ''}
+                      <tr>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee;">${notes.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</td>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole2 ? notes.pole2.toFixed(2) + '"' : 'N/A'}</td>
+                      </tr>
+                      ${notes.shape === 'MITERED' ? `
+                      <tr>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee;">Right Wall C2C:</td>
+                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole3 ? notes.pole3.toFixed(2) + '"' : 'N/A'}</td>
+                      </tr>
+                      ` : ''}
+                  </table>
+              </div>
+          `;
+      }
+
+      const linkedDrawing = draftDrawings.find(d => d.jobId === (activeDocJob.jobId || activeDocJob.id));
+
+      return (
+          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.9)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 9999, overflowY: 'auto', padding: '40px 0' }}>
+              <div style={{ position: 'relative' }}>
+                  <div className="no-print" style={{ position: 'absolute', top: 0, right: '-120px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <button onClick={() => window.print()} style={{ padding: '15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', boxShadow: '4px 4px 0 #000' }}>🖨️ PRINT PDF</button>
+                      <button onClick={() => setActiveDocJob(null)} style={{ padding: '15px', background: '#d9534f', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', boxShadow: '4px 4px 0 #000' }}>❌ CLOSE</button>
+                  </div>
+
+                  <div id="printable-document" style={{ background: '#fff', width: '8.5in', minHeight: '11in', padding: '0.5in', boxSizing: 'border-box', fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: '#000', boxShadow: '0 0 20px rgba(0,0,0,0.5)', position: 'relative' }}>
+                      
+                      {activeDocType === 'FACTORY_ROUTER' ? (
+                          <div style={{ borderBottom: '4px solid #000', paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                              <div>
+                                  <div style={{ fontSize: '32px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px', lineHeight: 1 }}>{activeBrand}</div>
+                                  <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>Manufacturing Division</div>
+                              </div>
+                              <div style={{ fontSize: '24px', color: '#fff', background: '#d9534f', padding: '8px 20px', fontWeight: 'bold', textTransform: 'uppercase' }}>
+                                  FACTORY ROUTER
+                              </div>
+                          </div>
+                      ) : (
+                          <div style={{ borderBottom: '4px solid #000', paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                              {logoUrl ? (
+                                  <img src={logoUrl} alt={activeBrand} style={{ height: '60px', objectFit: 'contain' }} />
+                              ) : (
+                                  <div style={{ fontSize: '32px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px', lineHeight: 1 }}>{activeBrand}</div>
+                              )}
+                              <div style={{ fontSize: '20px', color: '#fff', background: '#000', padding: '6px 15px', textTransform: 'uppercase', fontWeight: 'bold' }}>
+                                  {activeDocType.replace('_', ' ')}
+                              </div>
+                          </div>
+                      )}
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '30px', background: '#f8f9fa', padding: '20px', border: '2px solid #000' }}>
+                          <div>
+                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Prepared For:</div>
+                              <div style={{ fontSize: '16px', fontWeight: 'bold', marginTop: '3px' }}>{activeDocJob.customer?.name || activeDocJob.clientName || 'N/A'}</div>
+                              {activeCrmRecord?.billingAddress && <div style={{ fontSize: '12px', marginTop: '5px', whiteSpace: 'pre-wrap' }}>{activeCrmRecord.billingAddress}</div>}
+                          </div>
+                          <div>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                  <div>
+                                      <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Document ID:</div>
+                                      <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.jobId || activeDocJob.id}</div>
+                                  </div>
+                                  <div>
+                                      <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Date:</div>
+                                      <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.dateSaved || new Date().toLocaleDateString()}</div>
+                                  </div>
+                                  <div style={{ gridColumn: 'span 2' }}>
+                                      <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Project / Sidemark:</div>
+                                      <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#007bff' }}>{activeDocJob.sidemark || activeDocJob.note || 'N/A'}</div>
+                                  </div>
+                              </div>
+                          </div>
+                      </div>
+
+                      {template.header && activeDocType !== 'FACTORY_ROUTER' && (
+                          <div style={{ marginBottom: '20px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>
+                              {template.header}
+                          </div>
+                      )}
+
+                      {activeDocType === 'FACTORY_ROUTER' && activeDocJob.engineeringNotes && (
+                          <div dangerouslySetInnerHTML={{ __html: mathSection }} />
+                      )}
+
+                      {activeDocType === 'FACTORY_ROUTER' && linkedDrawing && (
+                          <div style={{ marginBottom: '20px', border: '4px solid #000', padding: '10px' }}>
+                              <div dangerouslySetInnerHTML={{ __html: linkedDrawing.svgData }} style={{ width: '100%' }} />
+                          </div>
+                      )}
+
+                      <div style={{ border: '2px solid #000', marginBottom: '30px' }}>
+                          <div style={{ background: '#000', color: '#fff', padding: '10px 15px', fontWeight: 'bold', textTransform: 'uppercase', fontSize: '14px' }}>
+                              {activeDocType === 'FACTORY_ROUTER' ? 'BILL OF MATERIALS (BOM)' : 'CONFIGURATION DETAILS'}
+                          </div>
+                          
+                          {activeDocType === 'FACTORY_ROUTER' && (
+                              <div style={{ display: 'flex', padding: '10px 15px', background: '#eee', fontWeight: 'bold', fontSize: '12px', borderBottom: '1px solid #ccc' }}>
+                                  <span style={{ flex: 3 }}>COMPONENT / MATERIAL</span>
+                                  <span style={{ flex: 1, textAlign: 'center' }}>QTY</span>
+                              </div>
+                          )}
+
+                          {activeDocJob.cpqData?.breakdown ? (
+                              activeDocJob.cpqData.breakdown.map((item, i) => (
+                                  <div key={i} style={{ display: 'flex', padding: '12px 15px', borderBottom: '1px solid #eee', background: i % 2 === 0 ? '#fff' : '#f8f9fa', fontSize: '14px' }}>
+                                      <span style={{ flex: 3, fontWeight: activeDocType === 'FACTORY_ROUTER' ? 'bold' : 'normal' }}>{item.name}</span>
+                                      <span style={{ flex: 1, textAlign: 'center', fontWeight: activeDocType === 'FACTORY_ROUTER' ? 'bold' : 'normal', fontSize: activeDocType === 'FACTORY_ROUTER' ? '16px' : '14px' }}>
+                                          {activeDocType === 'FACTORY_ROUTER' ? item.qty : `QTY: ${item.qty}`}
+                                      </span>
+                                      {activeDocType !== 'FACTORY_ROUTER' && (
+                                          <span style={{ flex: 1, textAlign: 'right', fontWeight: 'bold' }}>${item.total.toFixed(2)}</span>
+                                      )}
+                                  </div>
+                              ))
+                          ) : (
+                              <div style={{ padding: '20px', fontStyle: 'italic', color: '#666', textAlign: 'center' }}>No line items configured.</div>
+                          )}
+
+                          {activeDocType !== 'FACTORY_ROUTER' && activeDocJob.cpqData?.totalPrice && (
+                              <div style={{ display: 'flex', padding: '15px', background: '#eafaf1', borderTop: '2px solid #000', fontSize: '18px', fontWeight: 'bold' }}>
+                                  <span style={{ flex: 4, textAlign: 'right', paddingRight: '20px' }}>TOTAL AMOUNT:</span>
+                                  <span style={{ flex: 1, textAlign: 'right', color: '#1e7e34' }}>${activeDocJob.cpqData.totalPrice.toFixed(2)}</span>
+                              </div>
+                          )}
+                      </div>
+
+                      {activeDocType === 'FACTORY_ROUTER' && !activeDocJob.engineeringNotes && (
+                          <div style={{ padding: '20px', textAlign: 'center', color: '#d9534f', fontWeight: 'bold', border: '2px dashed #d9534f', marginBottom: '20px', background: '#fff0f0' }}>
+                              ⚠️ NO ENGINEERING DIMENSIONS ATTACHED TO THIS CONFIGURATION
+                          </div>
+                      )}
+
+                      {template.footer && activeDocType !== 'FACTORY_ROUTER' && (
+                          <div style={{ marginBottom: '20px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.5', borderTop: '1px solid #ccc', paddingTop: '15px' }}>
+                              {template.footer}
+                          </div>
+                      )}
+
+                      {template.terms && activeDocType !== 'FACTORY_ROUTER' && (
+                          <div style={{ marginTop: '40px', fontSize: '9px', color: '#666', whiteSpace: 'pre-wrap', lineHeight: '1.4', borderTop: '1px solid #eee', paddingTop: '15px' }}>
+                              {template.terms}
+                          </div>
+                      )}
+
+                      <div style={{ marginTop: '50px', display: 'flex', justifyContent: 'space-between', gap: '30px' }}>
+                          <div style={{ flex: 1, borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>
+                              {activeDocType === 'FACTORY_ROUTER' ? 'FABRICATION SIGN-OFF' : 'CLIENT APPROVAL SIGNATURE'}
+                          </div>
+                          <div style={{ width: '200px', borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>
+                              DATE
+                          </div>
+                      </div>
+
+                      <style>{printStyles}</style>
+                  </div>
+              </div>
+          </div>
+      );
+  };
+
+  const counts = getActiveTabCounts();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
       
-      <div className="no-print" style={{ background: '#fff3cd', border: '2px solid #856404', padding: '10px', color: '#856404', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
-          <span>🔍 DATA RADAR:</span><span>TOTAL JOBS IN DB: {debugStats.total}</span><span>MATCHING ACTIVE BRAND ({activeBrand}): {debugStats.brandMatch}</span><span>INCEPTION STATUS: {debugStats.inception}</span><span style={{ color: '#28a745' }}>CONFIGURED STATUS: {debugStats.configured}</span>
-      </div>
-
-      <div className="no-print" style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
-        <div><h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>10. External Coop</h2><span style={{ fontSize: '0.7rem', color: '#666' }}>CLIENT & VENDOR PRESENTATION PORTAL</span></div>
-        <div style={{ display: 'flex', gap: '10px', background: '#eee', padding: '5px', border: '2px solid #000' }}>
-          <button onClick={() => { setActiveSubTab('CUSTOMERS'); setCrmSearchQuery(''); }} style={{ padding: '10px 30px', background: activeSubTab === 'CUSTOMERS' ? '#000' : 'transparent', color: activeSubTab === 'CUSTOMERS' ? '#fff' : '#666', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '0.9rem' }}>👥 CUSTOMERS</button>
-          <button onClick={() => { setActiveSubTab('VENDORS'); setCrmSearchQuery(''); }} style={{ padding: '10px 30px', background: activeSubTab === 'VENDORS' ? '#000' : 'transparent', color: activeSubTab === 'VENDORS' ? '#fff' : '#666', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '0.9rem' }}>🏢 VENDORS</button>
+      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+        <div>
+            <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>10. EXTERNAL COOP & CRM</h2>
+            <span style={{ fontSize: '0.7rem', color: '#666' }}>CUSTOMER RELATIONSHIP & PIPELINE MANAGEMENT</span>
         </div>
       </div>
 
-      <div className="no-print" style={{ background: '#f8f9fa', border: '2px solid #000', borderTop: 'none', padding: '15px', display: 'flex', alignItems: 'center', gap: '20px', boxShadow: '5px 5px 0 rgba(0,0,0,0.05)' }}>
-          <strong style={{ color: activeSubTab === 'CUSTOMERS' ? '#007bff' : '#fd7e14', fontSize: '0.9rem', whiteSpace: 'nowrap' }}>🔍 {activeSubTab} CRM DIRECTORY:</strong>
-          <div style={{ position: 'relative', flex: 1 }}>
-              <input 
-                  type="text" 
-                  placeholder={`Search ${activeSubTab.toLowerCase()} by name or ID...`} 
-                  value={crmSearchQuery} 
-                  onChange={e => setCrmSearchQuery(e.target.value)} 
-                  style={{ width: '100%', padding: '12px', fontSize: '1rem', border: `2px solid ${activeSubTab === 'CUSTOMERS' ? '#007bff' : '#fd7e14'}`, boxSizing: 'border-box', outline: 'none', fontWeight: 'bold' }} 
-              />
-              {crmSearchQuery && (
-                  <div style={{ position: 'absolute', top: '100%', left: 0, width: '100%', background: '#fff', border: '2px solid #000', borderTop: 'none', zIndex: 1000, maxHeight: '250px', overflowY: 'auto', boxShadow: '4px 4px 0 rgba(0,0,0,0.2)' }}>
-                      
-                      {crmSearchResults.map(record => (
-                          <div key={record.id} onClick={() => { setActiveCrmRecord(record); setCrmSearchQuery(''); }} style={{ padding: '15px', borderBottom: '1px solid #eee', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onMouseOver={(e) => e.currentTarget.style.background = '#f4f4f4'} onMouseOut={(e) => e.currentTarget.style.background = '#fff'}>
-                              <span style={{ fontWeight: 'bold', fontSize: '1rem' }}>{record.name}</span>
-                              <span style={{ fontSize: '0.75rem', color: '#fff', background: '#333', padding: '4px 8px', borderRadius: '3px' }}>{record.id}</span>
-                          </div>
-                      ))}
+      <div style={{ display: 'flex', gap: '20px', alignItems: 'stretch' }}>
+          
+          <div style={{ width: '250px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000', flexShrink: 0 }}>
+              <button onClick={() => { setActiveSubTab('CUSTOMERS'); setActiveCrmRecord(null); }} style={{ padding: '15px', textAlign: 'left', background: activeSubTab === 'CUSTOMERS' ? '#e6f2ff' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSubTab === 'CUSTOMERS' ? '4px solid #007bff' : '4px solid transparent' }}>👥 CUSTOMER CRM</button>
+              <button onClick={() => { setActiveSubTab('VENDORS'); setActiveCrmRecord(null); }} style={{ padding: '15px', textAlign: 'left', background: activeSubTab === 'VENDORS' ? '#fff0f0' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSubTab === 'VENDORS' ? '4px solid #dc3545' : '4px solid transparent' }}>🏭 VENDOR / COOP CRM</button>
+              <button onClick={() => { setActiveSubTab('PIPELINE'); setActiveCrmRecord(null); }} style={{ padding: '15px', textAlign: 'left', background: activeSubTab === 'PIPELINE' ? '#eafaf1' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSubTab === 'PIPELINE' ? '4px solid #28a745' : '4px solid transparent' }}>📊 GLOBAL PIPELINE</button>
+          </div>
 
-                      {!exactMatchExists && (
-                          <div 
-                              onClick={() => {
-                                  setNewCrmForm(prev => ({ ...prev, name: crmSearchQuery }));
-                                  setShowNewCrmModal(true);
-                              }} 
-                              style={{ padding: '15px', background: '#eafaf1', color: '#28a745', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px', borderTop: '2px dashed #28a745' }}
-                          >
-                              <span style={{ fontSize: '1.2rem' }}>+</span> 
-                              ADD AS NEW {targetCrmType}: "{crmSearchQuery}"
+          <div style={{ flex: 1, background: '#fff', border: '2px solid #000', minHeight: '600px', boxShadow: '10px 10px 0 #000' }}>
+              
+              {['CUSTOMERS', 'VENDORS'].includes(activeSubTab) && (
+                  <div style={{ display: 'flex', height: '100%' }}>
+                      
+                      <div style={{ width: '300px', borderRight: '2px solid #000', display: 'flex', flexDirection: 'column', background: '#f8f9fa' }}>
+                          <div style={{ padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span>{activeSubTab}</span>
+                              <button onClick={() => setShowNewCrmModal(true)} style={{ background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', padding: '4px 8px', cursor: 'pointer', fontSize: '0.7rem' }}>+ NEW</button>
                           </div>
-                      )}
+                          <div style={{ padding: '10px' }}>
+                              <input 
+                                  type="text" 
+                                  value={crmSearchQuery} 
+                                  onChange={e => setCrmSearchQuery(e.target.value)} 
+                                  placeholder="Search Name, ID, or Email..." 
+                                  style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} 
+                              />
+                          </div>
+                          <div style={{ flex: 1, overflowY: 'auto' }}>
+                              {getFilteredCrmRecords(activeSubTab === 'CUSTOMERS').length === 0 ? (
+                                  <div style={{ padding: '20px', color: '#999', fontStyle: 'italic', textAlign: 'center', fontSize: '0.8rem' }}>No records found.</div>
+                              ) : (
+                                  getFilteredCrmRecords(activeSubTab === 'CUSTOMERS').map(record => (
+                                      <div 
+                                          key={record.id} 
+                                          onClick={() => setActiveCrmRecord(record)}
+                                          style={{ 
+                                              padding: '15px', 
+                                              borderBottom: '1px solid #eee', 
+                                              cursor: 'pointer', 
+                                              background: activeCrmRecord?.id === record.id ? '#e6f2ff' : '#fff',
+                                              borderLeft: activeCrmRecord?.id === record.id ? '4px solid #007bff' : '4px solid transparent'
+                                          }}
+                                      >
+                                          <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#000' }}>{record.name}</div>
+                                          <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '3px' }}>ID: {record.id}</div>
+                                          <div style={{ fontSize: '0.7rem', color: '#666' }}>{record.email || 'No email'}</div>
+                                      </div>
+                                  ))
+                              )}
+                          </div>
+                      </div>
+
+                      <div style={{ flex: 1, padding: '20px', overflowY: 'auto' }}>
+                          {!activeCrmRecord ? (
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#999', fontWeight: 'bold', fontSize: '1.2rem' }}>
+                                  SELECT A {activeSubTab === 'CUSTOMERS' ? 'CUSTOMER' : 'VENDOR'} TO VIEW PROFILE
+                              </div>
+                          ) : (
+                              <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+                                  
+                                  {/* Left Panel: Profile & Financials */}
+                                  <div style={{ flex: 1.5, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                      
+                                      <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '15px' }}>
+                                              <div>
+                                                  <h3 style={{ margin: 0, fontSize: '1.5rem', color: '#000' }}>{activeCrmRecord.name}</h3>
+                                                  <span style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginTop: '5px' }}>{activeCrmRecord.type} ID: {activeCrmRecord.id}</span>
+                                              </div>
+                                          </div>
+
+                                          {/* Mini Dashboard for Financials */}
+                                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px', marginBottom: '20px', background: '#f8f9fa', padding: '15px', border: '1px solid #ccc' }}>
+                                              <div style={{ textAlign: 'center', borderRight: '1px solid #ccc' }}>
+                                                  <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>OPEN ORDERS</div>
+                                                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#17a2b8' }}>{activeCrmRecord.openOrders || 0}</div>
+                                              </div>
+                                              <div style={{ textAlign: 'center', borderRight: '1px solid #ccc' }}>
+                                                  <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>MTD VOLUME</div>
+                                                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>${(activeCrmRecord.mtd || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                                              </div>
+                                              <div style={{ textAlign: 'center' }}>
+                                                  <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>YTD VOLUME</div>
+                                                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>${(activeCrmRecord.ytd || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                                              </div>
+                                          </div>
+
+                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                                              
+                                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                                  <div>
+                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>PRIMARY CONTACT:</label>
+                                                      <input value={activeCrmRecord.contact || ''} onChange={e => handleUpdateActiveCrmField('contact', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
+                                                  </div>
+                                                  <div>
+                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>EMAIL:</label>
+                                                      <input value={activeCrmRecord.email || ''} onChange={e => handleUpdateActiveCrmField('email', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
+                                                  </div>
+                                                  <div>
+                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>PHONE:</label>
+                                                      <input value={activeCrmRecord.phone || ''} onChange={e => handleUpdateActiveCrmField('phone', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
+                                                  </div>
+                                              </div>
+
+                                              <div style={{ borderTop: '2px dashed #ccc', paddingTop: '15px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                                  <div>
+                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#17a2b8', display: 'block', marginBottom: '5px' }}>SALES REP:</label>
+                                                      <select value={activeCrmRecord.salesRep || ''} onChange={e => handleUpdateActiveCrmField('salesRep', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                                          <option value="">-- Unassigned --</option>
+                                                          {(globalLists.salesReps || []).map(r => <option key={r} value={r}>{r}</option>)}
+                                                      </select>
+                                                  </div>
+                                                  <div>
+                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#17a2b8', display: 'block', marginBottom: '5px' }}>PAYMENT TERMS:</label>
+                                                      <select value={activeCrmRecord.terms || ''} onChange={e => handleUpdateActiveCrmField('terms', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                                          <option value="">-- Select Terms --</option>
+                                                          {(globalLists.paymentTerms || []).map(t => <option key={t} value={t}>{t}</option>)}
+                                                      </select>
+                                                  </div>
+                                                  <div>
+                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#17a2b8', display: 'block', marginBottom: '5px' }}>CREDIT LIMIT ($):</label>
+                                                      <input type="number" value={activeCrmRecord.creditLimit || ''} onChange={e => handleUpdateActiveCrmField('creditLimit', parseFloat(e.target.value)||0)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }} />
+                                                  </div>
+                                                  <div>
+                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#17a2b8', display: 'block', marginBottom: '5px' }}>DISCOUNT TIER:</label>
+                                                      <select value={activeCrmRecord.discountCode || ''} onChange={e => handleUpdateActiveCrmField('discountCode', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                                          <option value="">-- No Discount --</option>
+                                                          {crmDiscounts.map(d => <option key={d.code} value={d.code}>{d.code} (-{d.percent}%)</option>)}
+                                                      </select>
+                                                  </div>
+                                              </div>
+
+                                              <div style={{ borderTop: '2px dashed #ccc', paddingTop: '15px' }}>
+                                                  <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>BILLING ADDRESS:</label>
+                                                  <textarea value={activeCrmRecord.billingAddress || ''} onChange={e => handleUpdateActiveCrmField('billingAddress', e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', resize: 'vertical', minHeight: '60px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                              </div>
+                                              
+                                              {/* 📍 NEW SHIPPING ADDRESSES RENDER BLOCK */}
+                                              <div style={{ marginTop: '15px', borderTop: '2px dashed #ccc', paddingTop: '15px' }}>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                                      <h4 style={{ margin: '0', color: '#007bff', fontSize: '0.9rem' }}>📍 SAVED SHIPPING ADDRESSES</h4>
+                                                  </div>
+                                                  
+                                                  {(activeCrmRecord.shippingAddresses || []).length === 0 ? (
+                                                      <span style={{ fontSize: '0.75rem', color: '#999', fontStyle: 'italic' }}>No shipping addresses synced.</span>
+                                                  ) : (
+                                                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '10px', maxHeight: '300px', overflowY: 'auto', paddingRight: '5px' }}>
+                                                          {activeCrmRecord.shippingAddresses.map((addr, idx) => (
+                                                              <div key={idx} style={{ 
+                                                                  padding: '10px', 
+                                                                  background: addr.isDefault ? '#eafaf1' : '#f8f9fa', 
+                                                                  border: '1px solid #ccc', 
+                                                                  borderLeft: addr.isDefault ? '4px solid #28a745' : '4px solid #ccc',
+                                                                  boxShadow: '2px 2px 0 rgba(0,0,0,0.05)'
+                                                              }}>
+                                                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', borderBottom: '1px solid #ddd', paddingBottom: '5px', marginBottom: '5px' }}>
+                                                                      <span style={{ color: '#000', fontSize: '0.85rem' }}>{addr.label || 'Address'}</span>
+                                                                      {addr.isDefault && <span style={{ color: '#28a745', fontSize: '0.65rem', padding: '2px 6px', background: '#fff', border: '1px solid #28a745', borderRadius: '4px' }}>DEFAULT</span>}
+                                                                  </div>
+                                                                  
+                                                                  <div style={{ fontSize: '0.8rem', color: '#333', lineHeight: '1.4' }}>
+                                                                      {addr.addressee && <div style={{ fontWeight: 'bold' }}>{addr.addressee}</div>}
+                                                                      <div>{addr.addr1} {addr.addr2}</div>
+                                                                      <div>{addr.city ? `${addr.city}, ` : ''}{addr.state} {addr.zip}</div>
+                                                                  </div>
+                                                                  
+                                                                  <div style={{ fontSize: '0.65rem', color: '#999', marginTop: '8px' }}>
+                                                                      {addr.addressBookId ? `NetSuite Address Book ID: ${addr.addressBookId}` : 'Manual Entry'}
+                                                                  </div>
+                                                              </div>
+                                                          ))}
+                                                      </div>
+                                                  )}
+                                              </div>
+                                          </div>
+                                      </div>
+
+                                      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', flex: 1, display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                                          <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>RELATIONSHIP NOTES</h4>
+                                          <textarea 
+                                              value={activeCrmRecord.notes || ''}
+                                              onChange={(e) => handleUpdateActiveCrmField('notes', e.target.value)}
+                                              style={{ flex: 1, padding: '10px', border: '1px solid #ccc', outline: 'none', resize: 'none', fontFamily: 'monospace', fontSize: '0.85rem' }}
+                                              placeholder="Add strategic notes, preferences, or warnings here..."
+                                          />
+                                      </div>
+                                  </div>
+
+                                  {/* Right Panel: Active & Archived Pipeline */}
+                                  <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)', flex: 1 }}>
+                                      
+                                      <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#007bff' }}>ACTIVE PIPELINE (PENDING)</h4>
+                                      <div style={{ maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px', paddingRight: '5px' }}>
+                                          {getCrmActivePipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No active configurations pending.</div>}
+                                          {getCrmActivePipeline(activeCrmRecord.id).map(job => (
+                                              <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: `4px solid ${job.status === 'CONFIGURED' ? '#28a745' : '#17a2b8'}`, padding: '10px', background: '#f4f4f4' }}>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                                      <span>{job.jobId || job.id}</span>
+                                                      <span style={{ color: job.status === 'CONFIGURED' ? '#28a745' : '#17a2b8' }}>{job.status}</span>
+                                                  </div>
+                                                  <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || job.note || 'No description'}</div>
+                                                  {job.cpqData?.totalPrice && <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '5px', color: '#28a745' }}>Value: ${job.cpqData.totalPrice.toFixed(2)}</div>}
+                                                  <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
+                                                      <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', cursor: 'pointer' }}>📄 QUOTE PDF</button>
+                                                      {job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0 && (
+                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FACTORY_ROUTER'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #e83e8c', color: '#e83e8c', cursor: 'pointer' }}>🏭 ROUTER PDF</button>
+                                                      )}
+                                                  </div>
+                                              </div>
+                                          ))}
+                                      </div>
+
+                                      <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#6c757d' }}>ARCHIVED / APPROVED JOBS</h4>
+                                      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '5px' }}>
+                                          {getCrmArchivedPipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No historical jobs found.</div>}
+                                          {getCrmArchivedPipeline(activeCrmRecord.id).map(job => (
+                                              <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: `4px solid #6c757d`, padding: '10px', background: '#fff' }}>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                                                      <span>{job.jobId || job.id}</span>
+                                                      <span style={{ color: '#6c757d' }}>{job.status}</span>
+                                                  </div>
+                                                  <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || job.note || 'No description'}</div>
+                                                  {job.cpqData?.totalPrice && <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '5px', color: '#000' }}>Value: ${job.cpqData.totalPrice.toFixed(2)}</div>}
+                                                  <div style={{ fontSize: '0.65rem', color: '#999', marginTop: '5px' }}>{new Date(job.createdAt?.seconds * 1000).toLocaleDateString()}</div>
+                                              </div>
+                                          ))}
+                                      </div>
+                                  </div>
+                              </div>
+                          )}
+                      </div>
+                  </div>
+              )}
+
+              {activeSubTab === 'PIPELINE' && (
+                  <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', overflowY: 'auto', boxSizing: 'border-box' }}>
+                      
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px', marginBottom: '10px' }}>
+                          <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '20px', textAlign: 'center' }}>
+                              <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#1e7e34' }}>ACTIVE CONFIGURATIONS</div>
+                              <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#28a745' }}>{counts.active}</div>
+                          </div>
+                          <div style={{ background: '#fff3cd', border: '2px solid #ffc107', padding: '20px', textAlign: 'center' }}>
+                              <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#856404' }}>PENDING REVIEW</div>
+                              <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#ffc107' }}>{counts.pending}</div>
+                          </div>
+                          <div style={{ background: '#f8f9fa', border: '2px solid #6c757d', padding: '20px', textAlign: 'center' }}>
+                              <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#495057' }}>COMPLETED / ARCHIVED</div>
+                              <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#6c757d' }}>{counts.complete}</div>
+                          </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '15px', background: '#f8f9fa', padding: '15px', border: '1px solid #ccc' }}>
+                          <input type="text" placeholder="Search ID, Client, Sidemark..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ flex: 1, padding: '10px', fontSize: '1rem', border: '1px solid #ccc' }} />
+                          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ padding: '10px', border: '1px solid #ccc' }} />
+                          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ padding: '10px', border: '1px solid #ccc' }} />
+                          <button onClick={() => { setSearchQuery(''); setStartDate(''); setEndDate(''); }} style={{ padding: '10px 20px', background: '#6c757d', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>CLEAR</button>
+                      </div>
+
+                      <div style={{ flex: 1, background: '#fff', border: '1px solid #ccc', overflowY: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                              <thead style={{ background: '#000', color: '#fff' }}>
+                                  <tr>
+                                      <th style={{ padding: '12px 15px' }}>JOB ID / REF</th>
+                                      <th style={{ padding: '12px 15px' }}>CUSTOMER / ENTITY</th>
+                                      <th style={{ padding: '12px 15px' }}>DATE SAVED</th>
+                                      <th style={{ padding: '12px 15px' }}>VALUE</th>
+                                      <th style={{ padding: '12px 15px' }}>STATUS</th>
+                                      <th style={{ padding: '12px 15px', textAlign: 'right' }}>ACTIONS</th>
+                                  </tr>
+                              </thead>
+                              <tbody>
+                                  {filteredConfigured.length === 0 ? (
+                                      <tr><td colSpan="6" style={{ padding: '20px', textAlign: 'center', color: '#999', fontStyle: 'italic' }}>No pipeline jobs found.</td></tr>
+                                  ) : (
+                                      filteredConfigured.map(job => (
+                                          <tr key={job.id} style={{ borderBottom: '1px solid #eee', background: job.status === 'APPROVED' ? '#eafaf1' : '#fff' }}>
+                                              <td style={{ padding: '12px 15px' }}>
+                                                  <div style={{ fontWeight: 'bold', color: '#007bff' }}>{job.jobId || job.id}</div>
+                                                  <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '3px' }}>{job.sidemark || job.note || 'No description'}</div>
+                                              </td>
+                                              <td style={{ padding: '12px 15px', fontWeight: 'bold' }}>{job.customer?.name || job.clientName || 'N/A'}</td>
+                                              <td style={{ padding: '12px 15px', color: '#666' }}>{job.dateSaved || new Date(job.createdAt?.seconds * 1000).toLocaleDateString() || 'N/A'}</td>
+                                              <td style={{ padding: '12px 15px', fontWeight: 'bold', color: '#28a745' }}>{job.cpqData?.totalPrice ? `$${job.cpqData.totalPrice.toFixed(2)}` : 'N/A'}</td>
+                                              <td style={{ padding: '12px 15px' }}>
+                                                  <span style={{ 
+                                                      background: job.status === 'APPROVED' ? '#28a745' : (job.status === 'CONFIGURED' ? '#17a2b8' : '#6c757d'), 
+                                                      color: '#fff', padding: '4px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 'bold' 
+                                                  }}>
+                                                      {job.status}
+                                                  </span>
+                                              </td>
+                                              <td style={{ padding: '12px 15px', textAlign: 'right' }}>
+                                                  {job.status === 'CONFIGURED' && (
+                                                      <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ padding: '6px 12px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '0.75rem', marginRight: '5px' }}>APPROVE</button>
+                                                  )}
+                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ padding: '6px 12px', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>📄 DOCS</button>
+                                              </td>
+                                          </tr>
+                                      ))
+                                  )}
+                              </tbody>
+                          </table>
+                      </div>
                   </div>
               )}
           </div>
       </div>
 
-      <div className="no-print" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-        
-        <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', gap: '20px', alignItems: 'flex-end', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-           <div style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: '5px' }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#007bff' }}>OMNI-SEARCH (ID, ENTITY, NOTES):</label><input type="text" placeholder={`Filter local ${activeSubTab.toLowerCase()} jobs...`} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ padding: '10px', fontSize: '1rem', border: '2px solid #ccc', outline: 'none' }} /></div>
-           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '5px' }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>START DATE:</label><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={{ padding: '10px', fontSize: '1rem', border: '2px solid #ccc', outline: 'none' }} /></div>
-           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '5px' }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>END DATE:</label><input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={{ padding: '10px', fontSize: '1rem', border: '2px solid #ccc', outline: 'none' }} /></div>
-           <button onClick={handleClearFilters} disabled={!searchQuery && !startDate && !endDate} style={{ padding: '12px 20px', background: '#f8f9fa', border: '2px solid #ccc', color: '#333', fontWeight: 'bold', cursor: (!searchQuery && !startDate && !endDate) ? 'not-allowed' : 'pointer', opacity: (!searchQuery && !startDate && !endDate) ? 0.5 : 1 }}>✖ CLEAR</button>
-        </div>
-
-        <div style={{ display: 'flex', gap: '25px', alignItems: 'flex-start' }}>
-          
-          <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 rgba(0,0,0,0.1)' }}>
-            <div style={{ padding: '12px 15px', background: '#e9ecef', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>📋 PRESENTATION QUEUE ({filteredInception.length})</span></div>
-            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px', background: '#f8f9fa', minHeight: '500px', maxHeight: '700px', overflowY: 'auto' }}>
-              {filteredInception.length === 0 && <div style={{ textAlign: 'center', color: '#999', marginTop: '20px', fontStyle: 'italic' }}>No inception jobs found.</div>}
-              {filteredInception.map(job => (
-                 <div key={job.id} style={{ background: '#fff', border: '1px solid #ccc', borderLeft: '4px solid #17a2b8', padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}><span style={{ fontWeight: 'bold', fontSize: '1rem', color: '#17a2b8' }}>{job.clientName || job.vendorName}</span><span style={{ fontSize: '0.7rem', color: '#888', fontWeight: 'bold' }}>{job.date || "Just now"}</span></div>
-                    <div style={{ fontSize: '0.8rem', color: '#333' }}><strong>ID:</strong> {job.jobId || job.id}</div>
-                    <div style={{ fontSize: '0.8rem', color: '#555', fontStyle: 'italic', background: '#f4f4f4', padding: '5px' }}>"{job.note}"</div>
-                    <div style={{ display: 'flex', gap: '10px', borderTop: '1px dotted #eee', paddingTop: '10px', marginTop: '5px' }}>
-                        <button onClick={() => setActiveModalJob(job)} style={{ flex: 1.5, padding: '8px 10px', background: '#000', color: '#fff', border: 'none', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>💬 OPEN INCEPTION WINDOW</button>
-                        <button onClick={() => handleEditJob(job)} style={{ flex: 1, padding: '8px 10px', background: '#fff', border: '1px solid #007bff', color: '#007bff', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>⚙️ START CPQ</button>
-                        <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ padding: '8px 10px', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>📄 PDF DOC</button>
-                    </div>
-                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ flex: 1.2, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #000' }}>
-            <div style={{ padding: '12px 15px', background: '#28a745', color: '#fff', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>⚙️ FULLY CONFIGURED QUOTES ({filteredConfigured.length})</span>
-              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', background: '#1e7e34', padding: '4px 8px', borderRadius: '4px' }}>PENDING APPROVAL</span>
-            </div>
-            
-            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px', background: '#eef5eb', minHeight: '500px', maxHeight: '700px', overflowY: 'auto' }}>
-              {filteredConfigured.length === 0 && <div style={{ textAlign: 'center', color: '#7ea97e', marginTop: '20px', fontStyle: 'italic' }}>No configured jobs waiting.</div>}
-              {filteredConfigured.map(job => {
-                 const hasDimensionalMath = job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0;
-
-                 return (
-                 <div key={job.id} style={{ background: '#fff', border: '2px solid #28a745', padding: '0', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
-                    <div style={{ padding: '10px 15px', background: '#f8f9fa', borderBottom: '1px solid #ddd', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div style={{ display: 'flex', gap: '10px', alignItems: 'baseline' }}><span style={{ fontSize: '1rem', fontWeight: 'bold', color: '#000' }}>{job.customer?.name || "Unknown"}</span><span style={{ fontSize: '0.65rem', color: '#666', background: '#e2e3e5', padding: '2px 5px', borderRadius: '3px' }}>ID: {job.jobId || job.id}</span></div>
-                        <span style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#28a745' }}>${job.cpqData?.totalPrice?.toFixed(2) || '0.00'}</span>
-                    </div>
-                    <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>SIDEMARK:</span><span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#000' }}>{job.sidemark || 'N/A'}</span></div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>DATE SAVED:</span><span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#000' }}>{job.dateSaved || job.date || 'Unknown'}</span></div>
-                    </div>
-                    
-                    <div style={{ padding: '10px', background: '#f1f1f1', borderTop: '1px solid #ddd', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                        <button onClick={() => handleEditJob(job)} style={{ flex: 1, padding: '8px', background: '#fff', border: '2px solid #007bff', color: '#007bff', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✏️ EDIT</button>
-                        <button onClick={() => handleEmailQuote(job)} style={{ flex: 1.5, padding: '8px', background: '#17a2b8', border: '2px solid #117a8b', color: '#fff', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📧 EMAIL QUOTE</button>
-                        <button onClick={() => handleApproveJob(job.id)} style={{ flex: 1.5, padding: '8px', background: '#28a745', border: '2px solid #1e7e34', color: '#fff', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✅ APPROVE</button>
-                        
-                        <div style={{ display: 'flex', gap: '5px', flex: 1.5 }}>
-                            <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '8px', background: '#fff', border: '2px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📄 QUOTE</button>
-                            {hasDimensionalMath && (
-                                <button onClick={() => { setActiveDocJob(job); setActiveDocType('FACTORY_ROUTER'); }} style={{ flex: 1, padding: '8px', background: '#fff', border: '2px solid #e83e8c', color: '#e83e8c', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>🏭 ROUTER</button>
-                            )}
-                        </div>
-                    </div>
-                 </div>
-              )})}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* --- NEW CRM MODAL --- */}
       {showNewCrmModal && (
-          <div className="no-print" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 4000 }}>
-              <div style={{ background: '#fff', border: '4px solid #000', width: '600px', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #28a745', maxHeight: '90vh', overflowY: 'auto' }}>
-                  <div style={{ padding: '20px', background: '#28a745', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 10 }}>
-                      <h2 style={{ margin: 0, fontSize: '1.2rem', textTransform: 'uppercase' }}>ADD NEW {targetCrmType}</h2>
+          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+              <div style={{ background: '#fff', border: '4px solid #000', width: '500px', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
+                  <div style={{ padding: '20px', background: '#000', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
+                      <h2 style={{ margin: 0, fontSize: '1.2rem', textTransform: 'uppercase' }}>ADD NEW {activeSubTab === 'CUSTOMERS' ? 'CUSTOMER' : 'VENDOR'}</h2>
                       <button onClick={() => setShowNewCrmModal(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
                   </div>
                   <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                      
                       <div>
-                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ENTITY / COMPANY NAME:</label>
-                          <input value={newCrmForm.name} onChange={e => setNewCrmForm({...newCrmForm, name: e.target.value})} autoFocus style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>Company / Entity Name *</label>
+                          <input value={newCrmForm.name} onChange={e => setNewCrmForm({...newCrmForm, name: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #007bff', boxSizing: 'border-box', fontSize: '1rem', fontWeight: 'bold' }} />
                       </div>
-
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PRIMARY CONTACT:</label><input value={newCrmForm.contact} onChange={e => setNewCrmForm({...newCrmForm, contact: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
-                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>EMAIL ADDRESS:</label><input value={newCrmForm.email} onChange={e => setNewCrmForm({...newCrmForm, email: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
-                      </div>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>PHONE NUMBER:</label><input value={newCrmForm.phone} onChange={e => setNewCrmForm({...newCrmForm, phone: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
-                          <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>SALES REP:</label>
-                              <select value={newCrmForm.salesRep} onChange={e => setNewCrmForm({...newCrmForm, salesRep: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }}>
-                                  <option value="">-- Unassigned --</option>
-                                  {(globalLists.salesReps || []).map(r => <option key={r} value={r}>{r}</option>)}
-                              </select>
-                          </div>
-                      </div>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px', borderTop: '2px solid #eee', paddingTop: '15px' }}>
                           <div>
-                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#17a2b8' }}>TERMS:</label>
-                              <select value={newCrmForm.terms} onChange={e => setNewCrmForm({...newCrmForm, terms: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #17a2b8', boxSizing: 'border-box', fontWeight: 'bold' }}>
-                                  <option value="">-- Select Terms --</option>
-                                  {(globalLists.paymentTerms || []).map(t => <option key={t} value={t}>{t}</option>)}
-                              </select>
+                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>Primary Contact</label>
+                              <input value={newCrmForm.contact} onChange={e => setNewCrmForm({...newCrmForm, contact: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
                           </div>
                           <div>
-                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#17a2b8' }}>CREDIT LIMIT ($):</label>
-                              <input type="number" step="100" value={newCrmForm.creditLimit} onChange={e => setNewCrmForm({...newCrmForm, creditLimit: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '10px', border: '1px solid #17a2b8', boxSizing: 'border-box', fontWeight: 'bold' }} />
-                          </div>
-                          <div>
-                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#17a2b8' }}>DISCOUNT TIER:</label>
-                              <select value={newCrmForm.discountCode} onChange={e => setNewCrmForm({...newCrmForm, discountCode: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #17a2b8', boxSizing: 'border-box', fontWeight: 'bold' }}>
-                                  <option value="">-- Base Price --</option>
-                                  {crmDiscounts.map(d => <option key={d.code} value={d.code}>{d.code} (-{d.percent}%)</option>)}
-                              </select>
+                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>Email</label>
+                              <input value={newCrmForm.email} onChange={e => setNewCrmForm({...newCrmForm, email: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
                           </div>
                       </div>
-
-                      <div style={{ borderTop: '2px solid #eee', paddingTop: '15px' }}>
-                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1' }}>BILLING ADDRESS:</label>
-                          <textarea value={newCrmForm.billingAddress} onChange={e => setNewCrmForm({...newCrmForm, billingAddress: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #6f42c1', boxSizing: 'border-box', minHeight: '60px', resize: 'vertical' }} />
-                      </div>
-
-                      {/* 🚀 UPGRADED: Dynamic Multiple Shipping Addresses Array */}
-                      <div style={{ background: '#f8f9fa', padding: '10px', border: '1px solid #ccc' }}>
-                          <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '10px' }}>SHIPPING ADDRESSES (Multiple Allowed):</label>
-                          
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '15px' }}>
-                              {newCrmForm.shippingAddresses.length === 0 && <span style={{ fontSize: '0.75rem', color: '#999', fontStyle: 'italic' }}>No shipping addresses added yet.</span>}
-                              {newCrmForm.shippingAddresses.map(addr => (
-                                  <div key={addr.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #eee', padding: '8px' }}>
-                                      <div>
-                                          <div style={{ fontWeight: 'bold', fontSize: '0.8rem', color: '#000' }}>{addr.label}</div>
-                                          <div style={{ fontSize: '0.75rem', color: '#666', whiteSpace: 'pre-wrap' }}>{addr.street}</div>
-                                      </div>
-                                      <button onClick={() => handleRemoveShippingAddress(addr.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>×</button>
-                                  </div>
-                              ))}
-                          </div>
-
-                          <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                              <input value={newAddressInput.label} onChange={e => setNewAddressInput({...newAddressInput, label: e.target.value})} placeholder="Label (e.g. Site B)" style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }} />
-                              <textarea value={newAddressInput.street} onChange={e => setNewAddressInput({...newAddressInput, street: e.target.value})} placeholder="Full Street Address" style={{ flex: 2, padding: '8px', border: '1px solid #ccc', resize: 'none', height: '32px' }} />
-                              <button onClick={handleAddShippingAddress} style={{ padding: '8px 15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', height: '32px' }}>ADD</button>
-                          </div>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: '10px', marginTop: '10px', position: 'sticky', bottom: 0, background: '#fff', paddingTop: '10px' }}>
-                          <button onClick={handleSaveNewCrm} disabled={!newCrmForm.name.trim()} style={{ flex: 1, padding: '15px', background: newCrmForm.name.trim() ? '#28a745' : '#ccc', color: '#fff', fontWeight: 'bold', border: 'none', cursor: newCrmForm.name.trim() ? 'pointer' : 'not-allowed' }}>💾 SAVE {targetCrmType}</button>
-                          <button onClick={() => setShowNewCrmModal(false)} style={{ padding: '15px 20px', background: '#eee', color: '#333', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>CANCEL</button>
-                      </div>
+                      <button onClick={handleCreateNewCrm} style={{ width: '100%', padding: '15px', background: '#28a745', color: '#fff', fontSize: '1.1rem', fontWeight: 'bold', border: 'none', cursor: 'pointer', marginTop: '10px' }}>
+                          💾 CREATE CRM PROFILE
+                      </button>
                   </div>
               </div>
           </div>
       )}
 
-      {/* --- 🚀 UPGRADED: CRM VIEWER / EDITOR MODAL --- */}
-      {activeCrmRecord && (
-          <div className="no-print" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000 }}>
-              <div style={{ background: '#fff', border: '4px solid #000', width: '1100px', height: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
-                  
-                  <div style={{ padding: '20px', background: activeSubTab === 'CUSTOMERS' ? '#007bff' : '#fd7e14', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                      <div>
-                          <input 
-                              type="text" 
-                              value={activeCrmRecord.name} 
-                              onChange={(e) => handleUpdateActiveCrmField('name', e.target.value)}
-                              style={{ margin: 0, fontSize: '1.5rem', textTransform: 'uppercase', background: 'transparent', border: 'none', color: '#fff', fontWeight: 'bold', width: '400px', borderBottom: '1px dashed rgba(255,255,255,0.5)', outline: 'none' }} 
-                          />
-                          <span style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginTop: '5px' }}>{activeCrmRecord.type} ID: {activeCrmRecord.id}</span>
-                      </div>
-                      <button onClick={() => setActiveCrmRecord(null)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '2rem', cursor: 'pointer' }}>×</button>
-                  </div>
-                  
-                  <div style={{ padding: '20px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa' }}>
-                      
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px' }}>
-                          <div style={{ background: '#fff', padding: '15px', border: '2px solid #000', textAlign: 'center', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                              <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>OPEN / PENDING QUOTES</div>
-                              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#17a2b8' }}>{activeCrmRecord.openOrders || 0}</div>
-                          </div>
-                          <div style={{ background: '#fff', padding: '15px', border: '2px solid #000', textAlign: 'center', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                              <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>INVOICED MTD</div>
-                              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>${(activeCrmRecord.mtd || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
-                          </div>
-                          <div style={{ background: '#fff', padding: '15px', border: '2px solid #000', textAlign: 'center', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                              <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>INVOICED YTD</div>
-                              <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>${(activeCrmRecord.ytd || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
-                          </div>
-                      </div>
+      {renderDocument()}
 
-                      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.5fr', gap: '20px', flex: 1 }}>
-                          
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                              
-                              <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                                  <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', display: 'flex', justifyContent: 'space-between' }}>
-                                      <span>CONTACT & FINANCIAL PROFILE</span>
-                                      <span style={{ fontSize: '0.6rem', color: '#28a745', fontWeight: 'bold' }}>AUTO-SAVES ON EDIT</span>
-                                  </h4>
-                                  
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px' }}>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#666' }}>POC:</label>
-                                          <input value={activeCrmRecord.contact || ''} onChange={e => handleUpdateActiveCrmField('contact', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
-                                      </div>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#666' }}>EMAIL:</label>
-                                          <input value={activeCrmRecord.email || ''} onChange={e => handleUpdateActiveCrmField('email', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
-                                      </div>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#666' }}>PHONE:</label>
-                                          <input value={activeCrmRecord.phone || ''} onChange={e => handleUpdateActiveCrmField('phone', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
-                                      </div>
-                                      
-                                      <div style={{ borderTop: '1px dashed #eee', margin: '5px 0' }}></div>
-
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#17a2b8' }}>SALES REP:</label>
-                                          <select value={activeCrmRecord.salesRep || ''} onChange={e => handleUpdateActiveCrmField('salesRep', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                                              <option value="">-- Unassigned --</option>
-                                              {(globalLists.salesReps || []).map(r => <option key={r} value={r}>{r}</option>)}
-                                          </select>
-                                      </div>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#17a2b8' }}>TERMS:</label>
-                                          <select value={activeCrmRecord.terms || ''} onChange={e => handleUpdateActiveCrmField('terms', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                                              <option value="">-- Select Terms --</option>
-                                              {(globalLists.paymentTerms || []).map(t => <option key={t} value={t}>{t}</option>)}
-                                          </select>
-                                      </div>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#17a2b8' }}>CREDIT LIMIT:</label>
-                                          <input type="number" value={activeCrmRecord.creditLimit || ''} onChange={e => handleUpdateActiveCrmField('creditLimit', parseFloat(e.target.value)||0)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }} />
-                                      </div>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', width: '80px', color: '#17a2b8' }}>DISCOUNT:</label>
-                                          <select value={activeCrmRecord.discountCode || ''} onChange={e => handleUpdateActiveCrmField('discountCode', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                                              <option value="">-- Base Price (No Disc.) --</option>
-                                              {crmDiscounts.map(d => <option key={d.code} value={d.code}>{d.code} (-{d.percent}%)</option>)}
-                                          </select>
-                                      </div>
-                                  </div>
-                              </div>
-
-                              <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                                  <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#6f42c1' }}>LOGISTICS & ADDRESSES</h4>
-                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                      <div>
-                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>BILLING ADDRESS:</label>
-                                          <textarea value={activeCrmRecord.billingAddress || ''} onChange={e => handleUpdateActiveCrmField('billingAddress', e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', resize: 'vertical', minHeight: '60px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
-                                      </div>
-                                      
-                                      <div style={{ borderTop: '2px dashed #ccc', paddingTop: '10px' }}>
-                                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>SHIPPING ADDRESSES:</label>
-                                          
-                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '10px', maxHeight: '120px', overflowY: 'auto' }}>
-                                              {(activeCrmRecord.shippingAddresses || []).length === 0 && <span style={{ fontSize: '0.75rem', color: '#999', fontStyle: 'italic' }}>No shipping addresses added.</span>}
-                                              {(activeCrmRecord.shippingAddresses || []).map(addr => (
-                                                  <div key={addr.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: '#f8f9fa', border: '1px solid #eee', padding: '5px' }}>
-                                                      <div>
-                                                          <div style={{ fontWeight: 'bold', fontSize: '0.75rem', color: '#000' }}>{addr.label}</div>
-                                                          <div style={{ fontSize: '0.7rem', color: '#666', whiteSpace: 'pre-wrap' }}>{addr.street}</div>
-                                                      </div>
-                                                      <button onClick={() => handleActiveCrmRemoveAddress(addr.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer', padding: '0 5px' }}>×</button>
-                                                  </div>
-                                              ))}
-                                          </div>
-
-                                          <div style={{ display: 'flex', gap: '5px', alignItems: 'flex-start' }}>
-                                              <input value={newAddressInput.label} onChange={e => setNewAddressInput({...newAddressInput, label: e.target.value})} placeholder="Label" style={{ flex: 1, padding: '5px', border: '1px solid #ccc', fontSize: '0.75rem' }} />
-                                              <textarea value={newAddressInput.street} onChange={e => setNewAddressInput({...newAddressInput, street: e.target.value})} placeholder="Street Address" style={{ flex: 2, padding: '5px', border: '1px solid #ccc', resize: 'none', height: '24px', fontSize: '0.75rem' }} />
-                                              <button onClick={() => { handleActiveCrmAddAddress(newAddressInput.label, newAddressInput.street); setNewAddressInput({label: '', street: ''}); }} style={{ padding: '5px 10px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', height: '24px', fontSize: '0.7rem' }}>ADD</button>
-                                          </div>
-                                      </div>
-                                  </div>
-                              </div>
-
-                              <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', flex: 1, display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                                  <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>RELATIONSHIP NOTES</h4>
-                                  <textarea 
-                                      value={activeCrmRecord.notes || ''}
-                                      onChange={(e) => handleUpdateActiveCrmField('notes', e.target.value)}
-                                      style={{ flex: 1, padding: '10px', border: '1px solid #ccc', outline: 'none', resize: 'none', fontFamily: 'monospace', fontSize: '0.85rem' }}
-                                      placeholder="Add strategic notes, preferences, or warnings here..."
-                                  />
-                              </div>
-                          </div>
-
-                          {/* Right Panel: Active & Archived CRM Pipeline */}
-                          <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                              
-                              <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#007bff' }}>ACTIVE PIPELINE (PENDING)</h4>
-                              <div style={{ maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px', paddingRight: '5px' }}>
-                                  {getCrmActivePipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No active configurations pending.</div>}
-                                  {getCrmActivePipeline(activeCrmRecord.id).map(job => (
-                                      <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: `4px solid ${job.status === 'CONFIGURED' ? '#28a745' : '#17a2b8'}`, padding: '10px', background: '#f4f4f4' }}>
-                                          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
-                                              <span>{job.jobId || job.id}</span>
-                                              <span style={{ color: job.status === 'CONFIGURED' ? '#28a745' : '#17a2b8' }}>{job.status}</span>
-                                          </div>
-                                          <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || job.note || 'No description'}</div>
-                                          {job.cpqData?.totalPrice && <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '5px', color: '#28a745' }}>Value: ${job.cpqData.totalPrice.toFixed(2)}</div>}
-                                          <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
-                                              <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', cursor: 'pointer' }}>📄 QUOTE PDF</button>
-                                              {job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0 && (
-                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('FACTORY_ROUTER'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #e83e8c', color: '#e83e8c', cursor: 'pointer' }}>🏭 ROUTER PDF</button>
-                                              )}
-                                          </div>
-                                      </div>
-                                  ))}
-                              </div>
-
-                              <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px', color: '#6c757d' }}>ARCHIVED / APPROVED JOBS</h4>
-                              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '5px' }}>
-                                  {getCrmArchivedPipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No historical jobs found.</div>}
-                                  {getCrmArchivedPipeline(activeCrmRecord.id).map(job => (
-                                      <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: '4px solid #6c757d', padding: '10px', background: '#fff' }}>
-                                          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
-                                              <span>{job.jobId || job.id}</span>
-                                              <span style={{ color: '#6c757d' }}>{job.status}</span>
-                                          </div>
-                                          <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || 'No description'}</div>
-                                          <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
-                                              <button onClick={() => { setActiveDocJob(job); setActiveDocType('QUOTE'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#eee', border: '1px solid #ccc', color: '#333', cursor: 'pointer' }}>📄 HISTORICAL QUOTE</button>
-                                              {job.cpqData?.dimensions && Object.keys(job.cpqData.dimensions).length > 0 && (
-                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('FACTORY_ROUTER'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#eee', border: '1px solid #ccc', color: '#333', cursor: 'pointer' }}>🏭 HISTORICAL ROUTER</button>
-                                              )}
-                                          </div>
-                                      </div>
-                                  ))}
-                              </div>
-                          </div>
-                      </div>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      {/* --- INCEPTION PRESENTATION MODAL --- */}
-      {activeModalJob && (
-        <div className="no-print" style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}>
-          <div style={{ background: '#e5e5e5', border: '4px solid #000', width: '90%', maxWidth: '1200px', height: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
-            <div style={{ padding: '15px 20px', background: '#17a2b8', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-               <div><h3 style={{ margin: 0, fontSize: '1.4rem', textTransform: 'uppercase' }}>EXTERNAL INCEPTION PORTAL</h3><span style={{ fontSize: '0.8rem' }}>Presenting to: <strong>{activeModalJob.clientName || activeModalJob.vendorName}</strong> | Ref: {activeAssembly?.itemName || 'Loading...'}</span></div>
-               <button onClick={() => setActiveModalJob(null)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '2rem', cursor: 'pointer' }}>×</button>
-            </div>
-            <div style={{ flex: 1, padding: '20px', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                {!activeAssembly ? ( <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#666', fontSize: '1.2rem' }}>Loading Master Assembly Data...</div> ) : (
-                    <div style={{ border: '2px solid #000', background: '#fff', display: 'flex', flexDirection: 'column', flex: 1 }}>
-                        <div style={{ padding: '10px 15px', background: '#000', color: '#fff', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                                <span>📍 EXTERNAL SPATIAL REVIEW</span>
-                                {activeRevisions.length > 0 && <select value={activeRevisionId || ''} onChange={(e) => setActiveRevisionId(e.target.value)} style={{ padding: '4px', fontSize: '0.75rem', fontWeight: 'bold', color: '#000', outline: 'none' }}>{activeRevisions.map(rev => <option key={rev.id} value={rev.id}>{rev.name}</option>)}</select>}
-                            </div>
-                            <button onClick={() => setIsAddingCallout(!isAddingCallout)} disabled={!currentRevisionObj?.url} style={{ padding: '6px 12px', background: isAddingCallout ? '#fff' : '#17a2b8', color: isAddingCallout ? '#17a2b8' : '#fff', border: 'none', fontWeight: 'bold', fontSize: '0.75rem', cursor: currentRevisionObj?.url ? 'pointer' : 'not-allowed' }}>{isAddingCallout ? 'CANCEL CALLOUT' : '+ DROP PIN & COMMENT'}</button>
-                        </div>
-                        <div style={{ position: 'relative', background: '#e9ecef', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: isAddingCallout ? 'crosshair' : 'default', overflow: 'hidden' }}>
-                            {!currentRevisionObj?.url ? ( <div style={{ color: '#999', fontStyle: 'italic' }}>No images available for presentation yet.</div> ) : (
-                                <svg ref={svgRef} onClick={handleSvgClick} viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" style={{ width: '100%', height: '100%', display: 'block' }}>
-                                    <image href={currentRevisionObj.url} x="0" y="0" width="1000" height="600" preserveAspectRatio="xMidYMid meet" />
-                                    {filteredCallouts.map(callout => {
-                                        const isActive = activeCalloutId === callout.id; const pinColor = '#17a2b8'; 
-                                        return (
-                                            <g key={callout.id} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); }} style={{ cursor: 'pointer' }}>
-                                                <line x1={callout.x} y1={callout.y} x2={callout.x + 30} y2={callout.y - 40} stroke={isActive ? '#007bff' : pinColor} strokeWidth="2" />
-                                                <circle cx={callout.x} cy={callout.y} r="6" fill={isActive ? '#007bff' : pinColor} stroke="#fff" strokeWidth="2" />
-                                                <foreignObject x={callout.x + 30} y={callout.y - 80} width="220" height="100" style={{ overflow: 'visible' }}>
-                                                    <div style={{ background: '#fff', border: `2px solid ${isActive ? '#007bff' : pinColor}`, padding: '5px', boxShadow: '2px 2px 5px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column' }}>
-                                                        <div style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#666', borderBottom: '1px solid #eee', marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}><span style={{ color: '#17a2b8' }}>{callout.user.replace(' (External Note)', '')}</span>{isActive && <button onClick={() => removeCallout(callout.id)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0 }}>✖</button>}</div>
-                                                        {isActive ? <textarea autoFocus placeholder="Type note here..." value={callout.text} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onBlur={saveCalloutTextToFirebase} style={{ width: '100%', fontSize: '0.75rem', border: 'none', outline: 'none', resize: 'none', minHeight: '60px', fontFamily: 'monospace' }} /> : <div style={{ fontSize: '0.75rem', color: '#000', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px' }}>{callout.text || <span style={{color:'#ccc', fontStyle:'italic'}}>Empty Note</span>}</div>}
-                                                    </div>
-                                                </foreignObject>
-                                            </g>
-                                        );
-                                    })}
-                                </svg>
-                            )}
-                        </div>
-                    </div>
-                )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 🚀 THE DOCUMENT GENERATOR STUDIO MODAL */}
-      {activeDocJob && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', zIndex: 4000, overflowY: 'auto', padding: '40px 0' }}>
-            
-            <div className="no-print" style={{ background: '#fff', border: '4px solid #000', width: '816px', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', boxShadow: '10px 10px 0 #000' }}>
-                <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                    <label style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>SELECT DOCUMENT FORMAT:</label>
-                    <select value={activeDocType} onChange={(e) => setActiveDocType(e.target.value)} style={{ padding: '8px', border: `2px solid ${activeDocType === 'FACTORY_ROUTER' ? '#e83e8c' : '#6f42c1'}`, fontWeight: 'bold', fontSize: '1rem', outline: 'none' }}>
-                        {DOC_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
-                        {activeDocJob.cpqData?.dimensions && Object.keys(activeDocJob.cpqData.dimensions).length > 0 && (
-                            <option value="FACTORY_ROUTER">FACTORY SHOP ROUTER</option>
-                        )}
-                    </select>
-                    <button onClick={() => window.print()} style={{ padding: '10px 20px', background: activeDocType === 'FACTORY_ROUTER' ? '#e83e8c' : '#6f42c1', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>🖨️ GENERATE PDF</button>
-                </div>
-                <button onClick={() => setActiveDocJob(null)} style={{ background: '#d9534f', color: '#fff', border: 'none', padding: '10px 20px', fontWeight: 'bold', cursor: 'pointer' }}>CLOSE STUDIO</button>
-            </div>
-
-            <div id="printable-document" style={{ background: '#fff', padding: '60px', border: '1px solid #ccc', minHeight: '1056px', width: '816px', boxShadow: '0 10px 20px rgba(0,0,0,0.3)', fontFamily: 'sans-serif', color: '#000', position: 'relative' }}>
-                
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '3px solid #000', paddingBottom: '30px', marginBottom: '40px' }}>
-                    <div style={{ width: '300px' }}>
-                        {currentLogo ? <img src={currentLogo} alt={activeBrand} style={{ maxWidth: '100%', maxHeight: '100px' }} /> : <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '2rem' }}>{activeBrand}</h2>}
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                        <h1 style={{ margin: '0 0 10px 0', fontSize: '2.5rem', color: activeDocType === 'FACTORY_ROUTER' ? '#000' : '#333', textTransform: 'uppercase', background: activeDocType === 'FACTORY_ROUTER' ? '#eee' : 'none', padding: activeDocType === 'FACTORY_ROUTER' ? '5px 15px' : '0' }}>
-                            {activeDocType.replace('_', ' ')}
-                        </h1>
-                        <div style={{ fontSize: '1rem', color: '#666', marginBottom: '5px' }}><strong>DOC ID:</strong> {activeDocJob.jobId || activeDocJob.id.substring(0, 8).toUpperCase()}</div>
-                        <div style={{ fontSize: '1rem', color: '#666' }}><strong>DATE:</strong> {activeDocJob.dateSaved || new Date().toLocaleDateString()}</div>
-                    </div>
-                </div>
-
-                {activeTemplate.header && activeDocType !== 'FACTORY_ROUTER' && (
-                    <div style={{ fontSize: '1rem', marginBottom: '40px', whiteSpace: 'pre-wrap', color: '#444' }}>{activeTemplate.header}</div>
-                )}
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', background: '#f8f9fa', padding: '20px', border: '1px solid #eee', marginBottom: '40px' }}>
-                    <div>
-                        <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#888', textTransform: 'uppercase', marginBottom: '5px' }}>PREPARED FOR:</div>
-                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{activeDocJob.customer?.name || activeDocJob.clientName || 'N/A'}</div>
-                        <div style={{ fontSize: '1rem', marginTop: '8px' }}><strong>Project:</strong> {activeDocJob.jobName || 'Standard Order'}</div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#888', textTransform: 'uppercase', marginBottom: '5px' }}>REFERENCE:</div>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{activeDocJob.sidemark || 'N/A'}</div>
-                    </div>
-                </div>
-
-                <div style={{ marginBottom: '40px' }}>
-                    <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#333', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px', textTransform: 'uppercase' }}>
-                        {activeDocType === 'FACTORY_ROUTER' ? 'BILL OF MATERIALS (BOM)' : 'ITEM SPECIFICATIONS & BUILD SHEET'}
-                    </div>
-                    
-                    {activeDocJob.imageUrl && activeDocType !== 'FACTORY_ROUTER' && (
-                        <div style={{ display: 'flex', gap: '30px', alignItems: 'flex-start' }}>
-                            <div style={{ width: '400px', border: '1px solid #ccc', padding: '10px', background: '#fff' }}>
-                                <img src={activeDocJob.imageUrl} alt="Scale Model" style={{ width: '100%', display: 'block' }} />
-                            </div>
-                            <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '10px' }}>Spatial Concept / Request For Info</div>
-                                <div style={{ fontSize: '1rem', whiteSpace: 'pre-wrap', color: '#444', lineHeight: '1.5' }}>{activeDocJob.note}</div>
-                            </div>
-                        </div>
-                    )}
-
-                    {activeDocJob.cpqData && (
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '1rem' }}>
-                            <thead>
-                                <tr style={{ background: '#000', color: '#fff' }}>
-                                    <th style={{ padding: '15px', textAlign: 'left' }}>DESCRIPTION</th>
-                                    <th style={{ padding: '15px', textAlign: 'right' }}>{activeDocType === 'FACTORY_ROUTER' ? 'QTY' : 'AMOUNT'}</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr style={{ borderBottom: '1px solid #eee' }}>
-                                    <td style={{ padding: '20px 15px', fontWeight: 'bold', fontSize: '1.1rem' }}>{getPartName(activeDocJob.linkedAssemblyId) || 'Master Assembly Base'}</td>
-                                    <td style={{ padding: '20px 15px', textAlign: 'right', fontWeight: 'bold', color: '#666' }}>{activeDocType === 'FACTORY_ROUTER' ? '1' : 'Base Included'}</td>
-                                </tr>
-                                {Object.entries(activeDocJob.cpqData.configuration || {}).map(([stepId, valueId], idx) => {
-                                    const qty = activeDocJob.cpqData.quantities?.[stepId] || 1;
-                                    return (
-                                        <tr key={idx} style={{ borderBottom: '1px solid #eee' }}>
-                                            <td style={{ padding: '15px', paddingLeft: '40px', color: '#555' }}>• {getPartName(valueId)}</td>
-                                            <td style={{ padding: '15px', textAlign: 'right', color: activeDocType === 'FACTORY_ROUTER' ? '#000' : '#999', fontWeight: activeDocType === 'FACTORY_ROUTER' ? 'bold' : 'normal' }}>
-                                                {activeDocType === 'FACTORY_ROUTER' ? qty : 'Included'}
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                                
-                                {activeDocType !== 'FACTORY_ROUTER' && (
-                                    <tr>
-                                        <td style={{ padding: '30px 15px', textAlign: 'right', fontWeight: 'bold', fontSize: '1.4rem' }}>TOTAL INVESTMENT:</td>
-                                        <td style={{ padding: '30px 15px', textAlign: 'right', fontWeight: 'bold', fontSize: '1.4rem', borderTop: '3px solid #000' }}>${activeDocJob.cpqData.totalPrice?.toFixed(2)}</td>
-                                    </tr>
-                                )}
-                            </tbody>
-                        </table>
-                    )}
-                </div>
-
-                {activeDocType === 'FACTORY_ROUTER' && activeDocJob.cpqData?.dimensions && Object.keys(activeDocJob.cpqData.dimensions).length > 0 && (
-                    <div style={{ marginTop: '20px', border: '2px dashed #000', padding: '15px', background: '#fff3cd' }}>
-                        <h4 style={{ margin: '0 0 10px 0', color: '#856404', textTransform: 'uppercase' }}>⚠️ DIMENSIONAL SHOP CUT SHEET</h4>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
-                            <tbody>
-                                {Object.entries(activeDocJob.cpqData.dimensions).map(([stepId, dims]) => (
-                                    <React.Fragment key={stepId}>
-                                        <tr><td colSpan="2" style={{ padding: '10px', fontWeight: 'bold', background: '#e9ecef', borderTop: '2px solid #000' }}>Dimensional Inputs</td></tr>
-                                        {Object.entries(dims).filter(([k,v]) => !k.startsWith('calc_') && v !== '').map(([key, val]) => (
-                                            <tr key={key}>
-                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee' }}>INPUT: {key.toUpperCase()}</td>
-                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee' }}>{val}</td>
-                                            </tr>
-                                        ))}
-                                        {dims.calc_cutLength && (
-                                            <tr>
-                                                <td style={{ padding: '8px', borderBottom: '1px dashed #d9534f', color: '#d9534f', fontWeight: 'bold', fontSize: '14px' }}>SHOP RAW CUT LENGTH</td>
-                                                <td style={{ padding: '8px', borderBottom: '1px dashed #d9534f', fontWeight: 'bold', fontSize: '16px', color: '#d9534f' }}>{dims.calc_cutLength}"</td>
-                                            </tr>
-                                        )}
-                                        {dims.calc_o2o && (
-                                            <tr>
-                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee', fontWeight: 'bold' }}>FINISHED O2O</td>
-                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee', fontWeight: 'bold' }}>{dims.calc_o2o}"</td>
-                                            </tr>
-                                        )}
-                                        {dims.calc_c2c && (
-                                            <tr>
-                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee', fontWeight: 'bold' }}>FINISHED C2C</td>
-                                                <td style={{ padding: '4px 8px', borderBottom: '1px solid #eee', fontWeight: 'bold' }}>{dims.calc_c2c}"</td>
-                                            </tr>
-                                        )}
-                                    </React.Fragment>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-
-                <div style={{ position: 'absolute', bottom: '60px', left: '60px', right: '60px' }}>
-                    {activeTemplate.footer && activeDocType !== 'FACTORY_ROUTER' && (
-                        <div style={{ fontSize: '1rem', marginBottom: '20px', whiteSpace: 'pre-wrap', textAlign: 'center', fontWeight: 'bold', color: '#333' }}>{activeTemplate.footer}</div>
-                    )}
-                    {activeTemplate.terms && activeDocType !== 'FACTORY_ROUTER' && (
-                        <div style={{ fontSize: '0.75rem', color: '#888', borderTop: '1px solid #ccc', paddingTop: '15px', whiteSpace: 'pre-wrap', textAlign: 'justify', lineHeight: '1.4' }}>{activeTemplate.terms}</div>
-                    )}
-                </div>
-            </div>
-        </div>
-      )}
     </div>
   );
 };
