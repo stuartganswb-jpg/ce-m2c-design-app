@@ -52,32 +52,31 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         loadRTGOrders();
     }, [activeBrand]);
 
-    // 🚀 THE DIAGNOSTIC NET (V2): Prefixed with 'Transaction.' to satisfy NetSuite's strict parser
+    // 🚀 THE DIAGNOSTIC NET (V3): Properly prefixed to satisfy the 400 'Unknown Identifier' Error
     const pullNSSalesOrders = async () => {
         setIsSyncing(true);
         setSyncLog([]); 
         
         try {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
-            addLog(`Initiating Diagnostic Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
+            addLog(`Initiating Wide Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
-            // 🚀 Restored Transaction. prefixes to prevent the 400 'Unknown Identifier' error.
-            // 🚀 Still pulling ALL SalesOrders (no status filter) to diagnose what happens locally.
+            // 🚀 We explicitly use lowercase 'transaction.' as demanded by the NetSuite error log
             const q = `
                 SELECT 
-                    Transaction.id AS ns_id,
-                    Transaction.tranid AS so_num,
-                    Transaction.custbody50 AS hq_job_id,
-                    Transaction.entity AS customer_id,
-                    Transaction.trandate,
-                    Transaction.memo,
-                    Transaction.status AS raw_status
+                    transaction.id AS ns_id,
+                    transaction.tranid AS so_num,
+                    transaction.custbody50 AS hq_job_id,
+                    transaction.entity AS customer_id,
+                    transaction.trandate,
+                    transaction.memo,
+                    transaction.status AS raw_status
                 FROM Transaction
-                WHERE Transaction.type = 'SalesOrd' 
-                AND Transaction.subsidiary = ${subsidiaryId}
+                WHERE transaction.type = 'SalesOrd' 
+                AND transaction.subsidiary = ${subsidiaryId}
             `;
             
-            addLog("Executing SuiteQL: Pulling all Sales Orders to evaluate locally...", "info");
+            addLog("Executing SuiteQL: Pulling Sales Orders to evaluate locally...", "info");
 
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
@@ -93,7 +92,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             if (!response.ok) throw new Error(JSON.stringify(result));
             
             const records = result.items || [];
-            addLog(`NetSuite returned ${records.length} total open orders. Isolating App Quotes...`, records.length > 0 ? "success" : "warn");
+            addLog(`NetSuite returned ${records.length} total orders for subsidiary. Isolating App Quotes...`, records.length > 0 ? "success" : "warn");
 
             let newOrders = 0;
             let skippedOrganic = 0;
