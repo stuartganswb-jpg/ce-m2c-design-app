@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, query } from "firebase/firestore";
 
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
@@ -14,6 +14,12 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     
     const [isSyncing, setIsSyncing] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
+    const [syncLog, setSyncLog] = useState([]);
+
+    const addLog = (msg, type = 'info') => {
+        const time = new Date().toLocaleTimeString();
+        setSyncLog(prev => [{ time, msg, type }, ...prev]);
+    };
 
     // 1. Fetch Local HQ Library Data
     useEffect(() => {
@@ -32,17 +38,23 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     // 2. Fetch Live Inventory from NetSuite
     const pullNetSuiteStock = async () => {
         setIsSyncing(true);
+        setSyncLog([]);
+        addLog("Initiating SuiteQL pull for Item Inventory...", "info");
+
         try {
-            // Simulated SuiteQL Query to pull Item Quantities
             const q = `
                 SELECT 
                     itemid AS legacy_id,
                     quantityonhand,
                     quantityavailable,
+                    quantityonorder,
+                    quantitybackordered,
                     averagecost
                 FROM Item
             `;
             
+            addLog(`Executing Query: Pulling on-hand, available, on-order, and backordered quantities...`, "info");
+
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -56,20 +68,26 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
             const result = await response.json();
             if (!response.ok) throw new Error(JSON.stringify(result));
             
+            addLog(`NetSuite returned ${result.items?.length || 0} items. Mapping to HQ catalog...`, "success");
+
             const stockMap = {};
             (result.items || []).forEach(row => {
-                stockMap[row.legacy_id.toUpperCase()] = {
-                    onHand: parseInt(row.quantityonhand) || 0,
-                    available: parseInt(row.quantityavailable) || 0,
-                    cost: parseFloat(row.averagecost) || 0
-                };
+                if (row.legacy_id) {
+                    stockMap[row.legacy_id.toUpperCase()] = {
+                        onHand: parseInt(row.quantityonhand) || 0,
+                        available: parseInt(row.quantityavailable) || 0,
+                        onOrder: parseInt(row.quantityonorder) || 0,
+                        backorder: parseInt(row.quantitybackordered) || 0,
+                        cost: parseFloat(row.averagecost) || 0
+                    };
+                }
             });
             
             setNsStock(stockMap);
-            alert(`✅ NetSuite Sync Complete. Updated ${result.items?.length || 0} inventory records.`);
+            addLog(`✅ Sync Complete. Inventory matched and updated successfully.`, "success");
         } catch (error) {
             console.error("NetSuite Sync Error:", error);
-            alert("Failed to sync inventory from NetSuite. Please check connection.");
+            addLog(`❌ FAILED: ${error.message}`, "error");
         }
         setIsSyncing(false);
     };
@@ -78,7 +96,6 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     const calculateSuggestedQty = (available, rop, moq, leadTime) => {
         if (available > rop) return 0;
         // Basic dynamic rate: Suggest ordering the ROP deficit + a 30-day buffer based on Lead Time
-        // In the future, "dynamicRateOfSale" can be pulled from historical SOs.
         const dynamicRateOfSale = 1.5; // Placeholder: 1.5 units per day
         const leadTimeBuffer = leadTime ? (leadTime * dynamicRateOfSale) : 10; 
         
@@ -123,6 +140,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         downloadAnchorNode.click();
         downloadAnchorNode.remove();
 
+        addLog(`✅ Exported PO Payload for ${activeVendor} (${lineItems.length} lines)`, "success");
         alert("✅ Purchase Order payload generated! Ready to push to NetSuite.");
         setOrderDrafts({}); // Clear draft after export
     };
@@ -130,7 +148,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     // Filters
     const enrichedInventory = hqParts.map(part => {
         const erpId = (part.legacyErpId || part.itemId).toUpperCase();
-        const stock = nsStock[erpId] || { onHand: 0, available: 0 };
+        const stock = nsStock[erpId] || { onHand: 0, available: 0, onOrder: 0, backorder: 0 };
         const specs = part.manufacturingSpecs || {};
         
         const rop = parseInt(specs.reorderPoint) || 0;
@@ -182,13 +200,15 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                                 <tr>
                                     <th style={{ padding: '12px', borderBottom: '2px solid #000' }}>ERP ID</th>
                                     <th style={{ padding: '12px', borderBottom: '2px solid #000' }}>ITEM NAME</th>
-                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>QTY ON HAND</th>
-                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>QTY AVAILABLE</th>
-                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>REORDER PT (ROP)</th>
+                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>ON HAND</th>
+                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>AVAIL</th>
+                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>ON ORDER</th>
+                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>BACKORDER</th>
+                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>ROP</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {displayItems.length === 0 && <tr><td colSpan="5" style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic' }}>No inventory items matched.</td></tr>}
+                                {displayItems.length === 0 && <tr><td colSpan="7" style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic' }}>No inventory items matched.</td></tr>}
                                 {!activeVendor && displayItems.map(item => (
                                     <tr key={item.id} style={{ borderBottom: '1px solid #eee', background: item.isLowStock ? '#fff0f0' : '#fff' }}>
                                         <td style={{ padding: '12px', fontWeight: 'bold', color: item.isLowStock ? '#d9534f' : '#007bff' }}>
@@ -198,17 +218,19 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                                         <td style={{ padding: '12px', fontWeight: 'bold' }}>{item.itemName}</td>
                                         <td style={{ padding: '12px', textAlign: 'center', fontSize: '1rem', fontWeight: 'bold' }}>{item.stock.onHand}</td>
                                         <td style={{ padding: '12px', textAlign: 'center', fontSize: '1rem', fontWeight: 'bold', color: item.isLowStock ? '#d9534f' : '#28a745' }}>{item.stock.available}</td>
+                                        <td style={{ padding: '12px', textAlign: 'center', fontSize: '1rem', fontWeight: 'bold', color: '#17a2b8' }}>{item.stock.onOrder}</td>
+                                        <td style={{ padding: '12px', textAlign: 'center', fontSize: '1rem', fontWeight: 'bold', color: item.stock.backorder > 0 ? '#d9534f' : '#333' }}>{item.stock.backorder}</td>
                                         <td style={{ padding: '12px', textAlign: 'center', fontWeight: 'bold', color: '#666' }}>{item.rop || '-'}</td>
                                     </tr>
                                 ))}
-                                {activeVendor && <tr><td colSpan="5" style={{ padding: '40px', textAlign: 'center', color: '#17a2b8', fontWeight: 'bold', fontSize: '1.2rem' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
+                                {activeVendor && <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: '#17a2b8', fontWeight: 'bold', fontSize: '1.2rem' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
                             </tbody>
                         </table>
                     </div>
                 </div>
 
-                {/* RIGHT: VENDOR PO BUILDER */}
-                <div style={{ flex: 1.2, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
+                {/* MIDDLE: VENDOR PO BUILDER */}
+                <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
                     <div style={{ padding: '15px', background: '#17a2b8', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem' }}>
                         🛒 VENDOR PO BUILDER
                     </div>
@@ -283,6 +305,30 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                             </button>
                         </div>
                     )}
+                </div>
+
+                {/* RIGHT: TERMINAL */}
+                <div style={{ flex: 0.8, background: '#1e1e1e', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000', height: '80vh', position: 'sticky', top: '20px' }}>
+                    <div style={{ padding: '10px 15px', background: '#333', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>>_ SUITEQL PULL TERMINAL</span>
+                        <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '0.7rem' }}>CLEAR</button>
+                    </div>
+                    <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                        {syncLog.length === 0 && <span style={{ color: '#666' }}>Awaiting command...</span>}
+                        {syncLog.map((log, idx) => {
+                            let color = '#fff';
+                            if (log.type === 'error') color = '#ff4d4d';
+                            if (log.type === 'success') color = '#28a745';
+                            if (log.type === 'warn') color = '#ffc107';
+                            
+                            return (
+                                <div key={idx} style={{ color, borderBottom: '1px dotted #333', paddingBottom: '4px' }}>
+                                    <span style={{ color: '#888', marginRight: '8px' }}>[{log.time}]</span>
+                                    {log.msg}
+                                </div>
+                            );
+                        })}
+                    </div>
                 </div>
 
             </div>
