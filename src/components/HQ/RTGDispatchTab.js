@@ -19,7 +19,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncLog, setSyncLog] = useState([]);
 
-    // 🚀 NEW: View Order Modal States
     const [activeViewOrder, setActiveViewOrder] = useState(null);
     const [activeJobDetails, setActiveJobDetails] = useState(null);
 
@@ -151,14 +150,50 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    // 🚀 NEW: View Order Details
+    // 🚀 NEW: Universal Data Extraction Engine
+    // Fetches the original CPQ Job, the Finish Code, and converts the SVG to a rendering-safe Data URI
+    const fetchEnrichedJobData = async (hqJobId) => {
+        let originalJob = null;
+        let svgUri = null;
+        let finishRecipe = "PENDING-RECIPE";
+
+        if (hqJobId) {
+            // 1. Fetch Job
+            const jSnap = await getDoc(doc(db, "jobs", hqJobId));
+            if (jSnap.exists()) originalJob = jSnap.data();
+
+            // 2. Fetch Shop Drawing & Convert to Data URI
+            const filesSnap = await getDocs(query(collection(db, "crm_files"), where("jobId", "==", hqJobId), where("type", "==", "VISION_DRAWING")));
+            if (!filesSnap.empty) {
+                const svgString = filesSnap.docs[0].data().svgData;
+                if (svgString) {
+                    // This encodes the raw SVG string so <img src={imageUrl} /> natively accepts it
+                    svgUri = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgString);
+                }
+            }
+
+            // 3. Fetch Master Finish Code
+            if (originalJob && originalJob.cpqData && originalJob.cpqData.configuration) {
+                const fSnap = await getDoc(doc(db, "system", "master_finishes"));
+                if (fSnap.exists() && fSnap.data().finishes) {
+                    const configVals = Object.values(originalJob.cpqData.configuration);
+                    const foundFin = fSnap.data().finishes.find(f => configVals.includes(f.id));
+                    if (foundFin) {
+                        finishRecipe = foundFin.code ? `${foundFin.code} - ${foundFin.name}` : foundFin.name;
+                    }
+                }
+            }
+        }
+        return { originalJob, svgUri, finishRecipe };
+    };
+
     const handleViewOrder = async (order) => {
         setActiveViewOrder(order);
-        setActiveJobDetails(null); // Reset details while loading
+        setActiveJobDetails(null); 
         if (order.hqJobId) {
-            const jobSnap = await getDoc(doc(db, "jobs", order.hqJobId));
-            if (jobSnap.exists()) {
-                setActiveJobDetails(jobSnap.data());
+            const { originalJob, finishRecipe, svgUri } = await fetchEnrichedJobData(order.hqJobId);
+            if (originalJob) {
+                setActiveJobDetails({ ...originalJob, finishRecipe, svgUri });
             } else {
                 addLog(`Warning: Original CPQ Job Document [${order.hqJobId}] not found in database.`, 'warn');
             }
@@ -170,14 +205,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
 
         try {
-            // 1. Fetch Original Job Details for the Payload
-            let originalJob = null;
-            if (hqOrder.hqJobId) {
-                const jSnap = await getDoc(doc(db, "jobs", hqOrder.hqJobId));
-                if (jSnap.exists()) originalJob = jSnap.data();
-            }
+            const { originalJob, finishRecipe, svgUri } = await fetchEnrichedJobData(hqOrder.hqJobId);
 
-            // 2. Map CPQ Breakdown to cpqSpecs Map
             let cpqSpecs = {};
             if (originalJob && originalJob.cpqData && originalJob.cpqData.breakdown) {
                 originalJob.cpqData.breakdown.forEach(item => {
@@ -196,12 +225,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 soNum: hqOrder.soId || null,
                 customer: originalJob?.customer?.name || hqOrder.customer || "Internal Stock", 
                 clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock", 
-                recipe: hqOrder.recipe || "PENDING-RECIPE",
+                recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : (hqOrder.recipe || "PENDING-RECIPE"), // 🚀 Injects Code
                 reqDate: hqOrder.reqDate || "",
                 type: hqOrder.type || "Mixed", 
                 totalParts: Number(hqOrder.totalParts) || 1,
                 note: hqOrder.memo || originalJob?.sidemark || "", 
-                cpqSpecs: cpqSpecs, // 🚀 Passed straight to Golden Modal
+                cpqSpecs: cpqSpecs, 
+                imageUrl: svgUri, // 🚀 Injects the SVG Drawing directly into the Finishing Modal
                 
                 dimensions: {
                     length: Number(hqOrder.length) || 10,
@@ -220,7 +250,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
             await setDoc(doc(db, "fin_workorders", finWorkOrderId), finPayload);
 
-            // 🚀 IMPORTANT: DO NOT change "status", just add a push flag so it stays on the board
             const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
             await updateDoc(doc(db, collectionName, hqOrder.id), { pushedToFinishing: true });
 
@@ -240,14 +269,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Shop Floor Custom Fabrication Queue?`)) return;
 
         try {
-            // 1. Fetch Original Job Details for the Payload
-            let originalJob = null;
-            if (hqOrder.hqJobId) {
-                const jSnap = await getDoc(doc(db, "jobs", hqOrder.hqJobId));
-                if (jSnap.exists()) originalJob = jSnap.data();
-            }
+            const { originalJob, svgUri } = await fetchEnrichedJobData(hqOrder.hqJobId);
 
-            // 2. Map CPQ Breakdown to cpqSpecs Map
             let cpqSpecs = {};
             if (originalJob && originalJob.cpqData && originalJob.cpqData.breakdown) {
                 originalJob.cpqData.breakdown.forEach(item => {
@@ -264,18 +287,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 item: hqOrder.hqJobId || 'Custom App Order', 
                 qty: Number(hqOrder.totalParts) || 1,
                 reqDate: hqOrder.reqDate || "",
-                category: 'Custom Fabrication', // Routes it to right column in ShopFloor.js
+                category: 'Custom Fabrication', 
                 status: 'Pending',
                 priority: 999,
                 clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
                 note: hqOrder.memo || originalJob?.sidemark || "",
-                cpqSpecs: cpqSpecs, // 🚀 Passed straight to Golden Modal
+                cpqSpecs: cpqSpecs, 
+                imageUrl: svgUri, // 🚀 Injects the SVG Drawing directly into the Shop Modal
                 createdAt: Date.now()
             };
 
             await setDoc(doc(db, "shop_custom_orders", shopJobId), shopPayload);
 
-            // 🚀 IMPORTANT: DO NOT change "status", just add a push flag
             const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
             await updateDoc(doc(db, collectionName, hqOrder.id), { pushedToShop: true });
 
@@ -344,7 +367,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                 )}
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                                    {/* 🚀 UPGRADED BUTTONS WITH VISUAL INDICATORS */}
                                     <button style={{ ...btnStyle, background: '#17a2b8' }} onClick={() => handleViewOrder(so)}>👁️ VIEW ORDER</button>
                                     <button style={{ ...btnStyle, background: so.pushedToFinishing ? '#28a745' : '#CC6600' }} onClick={() => pushToFinishing(so, 'sales')}>
                                         {so.pushedToFinishing ? '✅ Finishing Pushed' : 'Push to Finishing'}
@@ -449,7 +471,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
             </div>
 
-            {/* 🚀 NEW: VIEW ORDER MODAL */}
+            {/* 🚀 ENRICHED VIEW ORDER MODAL */}
             {activeViewOrder && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <div style={{ background: '#fff', padding: '30px', borderRadius: '12px', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: '4px solid #333', boxShadow: '10px 10px 0 #007bff' }}>
@@ -468,7 +490,15 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             </div>
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                
+                                {activeJobDetails.svgUri && (
+                                    <div style={{ border: '2px solid #ccc', borderRadius: '8px', padding: '10px', background: '#fff' }}>
+                                        <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold', marginBottom: '10px' }}>ENGINEERING DRAWING</div>
+                                        <img src={activeJobDetails.svgUri} alt="Shop Drawing" style={{ width: '100%', maxHeight: '300px', objectFit: 'contain' }} />
+                                    </div>
+                                )}
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
                                     <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
                                         <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>CUSTOMER / ENTITY</div>
                                         <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#000' }}>{activeJobDetails.customer?.name || activeViewOrder.customer}</div>
@@ -476,6 +506,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                     <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
                                         <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>PROJECT / SIDEMARK</div>
                                         <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#007bff' }}>{activeJobDetails.sidemark || activeViewOrder.memo || 'N/A'}</div>
+                                    </div>
+                                    <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
+                                        <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>FINISH RECIPE</div>
+                                        <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#CC6600' }}>{activeJobDetails.finishRecipe}</div>
                                     </div>
                                 </div>
 
@@ -498,7 +532,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                     )}
                                 </div>
 
-                                {/* Quick Dispatch Buttons right from the modal */}
                                 <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
                                     <button 
                                         onClick={() => { pushToFinishing(activeViewOrder, 'sales'); setActiveViewOrder(null); }} 
