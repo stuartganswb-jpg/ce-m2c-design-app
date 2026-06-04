@@ -35,47 +35,75 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         return () => unsub();
     }, []);
 
-    // 2. Fetch Live Inventory from NetSuite
+    // 2. Fetch Live Inventory from NetSuite (Batched to bypass 1000 record limit)
     const pullNetSuiteStock = async () => {
         setIsSyncing(true);
         setSyncLog([]);
         addLog("Initiating SuiteQL pull for Item Inventory...", "info");
 
         try {
-            // NetSuite Multi-Location Inventory requires joining AggregateItemLocation 
-            // to accurately pull on-order and backordered quantities.
-            const q = `
-                SELECT 
-                    Item.itemid AS legacy_id,
-                    SUM(AggregateItemLocation.quantityonhand) AS onhand,
-                    SUM(AggregateItemLocation.quantityavailable) AS available,
-                    SUM(AggregateItemLocation.quantityonorder) AS onorder,
-                    SUM(AggregateItemLocation.quantitybackordered) AS backordered,
-                    MAX(Item.averagecost) AS averagecost
-                FROM Item
-                LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id
-                GROUP BY Item.itemid
-            `;
-            
-            addLog(`Executing Query: Joining AggregateItemLocation to sum inventory fields...`, "info");
+            // Get all ERP IDs we care about from our local database
+            const erpIds = hqParts.map(p => p.legacyErpId || p.itemId).filter(Boolean);
+            if (erpIds.length === 0) {
+                addLog("No ERP IDs found in HQ catalog to sync.", "warn");
+                setIsSyncing(false);
+                return;
+            }
 
-            const response = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+            // Chunk IDs into batches of 500 to respect NetSuite query length limits
+            const chunkSize = 500;
+            const chunks = [];
+            for (let i = 0; i < erpIds.length; i += chunkSize) {
+                chunks.push(erpIds.slice(i, i + chunkSize));
+            }
+
+            addLog(`Found ${erpIds.length} tracked items. Splitting into ${chunks.length} batches to bypass the 1000 record limit...`, "info");
+
+            let allResults = [];
+            
+            for (let i = 0; i < chunks.length; i++) {
+                const chunk = chunks[i];
+                // Format IDs for SQL IN clause: 'ID1','ID2'
+                const idList = chunk.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
+
+                const q = `
+                    SELECT 
+                        Item.itemid AS legacy_id,
+                        SUM(AggregateItemLocation.quantityonhand) AS onhand,
+                        SUM(AggregateItemLocation.quantityavailable) AS available,
+                        SUM(AggregateItemLocation.quantityonorder) AS onorder,
+                        SUM(AggregateItemLocation.quantitybackordered) AS backordered,
+                        MAX(Item.averagecost) AS averagecost
+                    FROM Item
+                    LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id
+                    WHERE Item.itemid IN (${idList})
+                    GROUP BY Item.itemid
+                `;
+                
+                addLog(`Executing Query Batch ${i + 1} of ${chunks.length}...`, "info");
+
+                const response = await fetch(FIREBASE_FUNCTION_URL, {
                     method: 'POST',
-                    payload: { q }
-                })
-            });
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                        method: 'POST',
+                        payload: { q }
+                    })
+                });
+                
+                const result = await response.json();
+                if (!response.ok) throw new Error(JSON.stringify(result));
+                
+                if (result.items) {
+                    allResults = allResults.concat(result.items);
+                }
+            }
             
-            const result = await response.json();
-            if (!response.ok) throw new Error(JSON.stringify(result));
-            
-            addLog(`NetSuite returned ${result.items?.length || 0} items. Mapping to HQ catalog...`, "success");
+            addLog(`NetSuite returned ${allResults.length} total matched items. Mapping to HQ catalog...`, "success");
 
             const stockMap = {};
-            (result.items || []).forEach(row => {
+            allResults.forEach(row => {
                 if (row.legacy_id) {
                     stockMap[row.legacy_id.toUpperCase()] = {
                         onHand: parseInt(row.onhand) || 0,
