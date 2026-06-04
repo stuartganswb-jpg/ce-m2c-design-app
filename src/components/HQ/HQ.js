@@ -1,7 +1,9 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { db } from '../../firebase';
+import { db, auth, functions } from '../../firebase'; // 🚀 NEW: Added auth and functions
 import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
+import { signInWithCustomToken } from 'firebase/auth'; // 🚀 NEW: Import Custom Token Sign-In
+import { httpsCallable } from 'firebase/functions'; // 🚀 NEW: Import HTTPS Callable
 import '../../App.css';
 
 const InceptionTab = lazy(() => import('./InceptionTab'));
@@ -56,28 +58,36 @@ function HQ() {
     }
   }, []);
 
+  // 🚀 NEW: Secure Authentication Flow
   const attemptLogin = async (e) => {
     e.preventDefault();
     if (!pinInput) return;
+    
     try {
+      // 1. Call your new secure Cloud Function
+      const authenticatePin = httpsCallable(functions, 'authenticatePin');
+      const result = await authenticatePin({ pin: pinInput });
+      
+      const { token, user: userData } = result.data;
+
+      // 2. Officially sign into Firebase Auth with the minted token
+      await signInWithCustomToken(auth, token);
+
+      // 3. Set your local React states to load the UI
       if (pinInput === "1032") {
-        setUser({ name: "Master Admin", role: "admin" });
+        setUser(userData);
         setPerms({ admin: TABS });
-        return;
+      } else {
+        const pSnap = await getDoc(doc(db, "hq_config", "permissions"));
+        setPerms(pSnap.exists() ? pSnap.data() : {});
+        setUser(userData);
       }
       
-      const uSnap = await getDocs(query(collection(db, "hq_users"), where("pin", "==", pinInput)));
-      if (!uSnap.empty) {
-        const uData = uSnap.docs[0].data();
-        const pSnap = await getDoc(doc(db, "hq_config", "permissions"));
-        let pData = pSnap.exists() ? pSnap.data() : {};
-        
-        setPerms(pData);
-        setUser(uData);
-      } else {
-        alert("Invalid PIN.");
-      }
-    } catch (err) { console.error(err); alert("Authentication failed."); }
+    } catch (err) { 
+      console.error(err); 
+      alert("Authentication failed: " + (err.message || "Invalid PIN")); 
+      setPinInput(""); // Clear the input on failure
+    }
   };
 
   const selectBrand = (brand) => {
@@ -94,6 +104,7 @@ function HQ() {
     setUser(null);
     setPinInput("");
     localStorage.removeItem('m2c_brand');
+    auth.signOut(); // 🚀 NEW: Ensure Firebase session is destroyed on logout
   };
 
   if (!user) {
@@ -183,7 +194,6 @@ function HQ() {
               <h2 style={{ color: activeBrand.color }}>LOADING MODULE...</h2>
             </div>
           }>
-            {/* 🚀 UPDATED: Render array mapping mapped to new layout order */}
             {activeTab === TABS[0] && <InceptionTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[1] && <NodeClusterTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[2] && <VisualAssemblyTab currentUser={user.name} activeBrand={activeBrand.id} onProceed={() => setActiveTab(TABS[3])} />}

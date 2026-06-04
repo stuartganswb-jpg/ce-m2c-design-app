@@ -1,5 +1,56 @@
-const { onRequest } = require("firebase-functions/v2/https");
+const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
+const admin = require("firebase-admin");
 const CryptoJS = require("crypto-js");
+
+// Initialize Firebase Admin to securely access Firestore and Auth
+admin.initializeApp();
+
+// ============================================================================
+// 1. SECURE AUTHENTICATION FUNCTION (MINTING PRESS)
+// ============================================================================
+
+exports.authenticatePin = onCall(async (request) => {
+    // In v2 onCall, parameters are passed inside request.data
+    const pin = request.data.pin;
+    
+    if (!pin) {
+        throw new HttpsError('invalid-argument', 'PIN is required.');
+    }
+
+    // 1. Hardcoded Master Admin Bypass (Mirroring your current logic)
+    if (pin === '1032') {
+        const token = await admin.auth().createCustomToken('master-admin', { 
+            role: 'admin', 
+            name: 'Master Admin' 
+        });
+        return { token, user: { name: "Master Admin", role: "admin" } };
+    }
+
+    // 2. Query the hq_users collection securely on the server
+    const usersRef = admin.firestore().collection('hq_users');
+    const snapshot = await usersRef.where('pin', '==', pin).get();
+
+    if (snapshot.empty) {
+        throw new HttpsError('unauthenticated', 'Invalid PIN.');
+    }
+
+    const userDoc = snapshot.docs[0];
+    const userData = userDoc.data();
+    const safeRole = userData.role ? userData.role.toLowerCase() : 'operator';
+
+    // 3. Mint the custom token with the role claim baked in
+    const token = await admin.auth().createCustomToken(userDoc.id, {
+        role: safeRole,
+        name: userData.name
+    });
+
+    return { token, user: userData };
+});
+
+
+// ============================================================================
+// 2. NETSUITE API PROXY
+// ============================================================================
 
 // --- SECURE VAULT: NETSUITE CREDENTIALS ---
 const NS_ACCOUNT = "3728153";
