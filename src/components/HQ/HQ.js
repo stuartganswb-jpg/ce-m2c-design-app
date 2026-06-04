@@ -17,6 +17,7 @@ const ExternalCoopTab = lazy(() => import('./ExternalCoopTab'));
 const ProjectManagementTab = lazy(() => import('./ProjectManagementTab')); 
 const AdminTab = lazy(() => import('./AdminTab')); 
 const ERPPushPullTab = lazy(() => import('./ERPPushPullTab'));
+const StockViewTab = lazy(() => import('./StockViewTab'));
 const RTGDispatchTab = lazy(() => import('./RTGDispatchTab'));
 
 const AssetGalleryTab = lazy(() => import('../Shared/AssetGalleryTab'));
@@ -32,11 +33,11 @@ const BRANDS = [
   { id: 'leyla', name: 'Leyla Gans LLC', focus: 'Fine Jewelry', color: '#C5A880' } 
 ];
 
-// 🚀 UPDATED: Moved Node Grouping up and relabeled it 1.5
+// 🚀 UPDATED: Added 12.5 Stock View
 const TABS = [
   '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library',
   '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
-  '9. Client Vision', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '12. ERP Push / Pull', '13. RTG Dispatch',
+  '9. Client Vision', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor'
 ];
 
@@ -197,12 +198,12 @@ function HQ() {
             {activeTab === TABS[11] && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
             
             {activeTab === TABS[12] && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={null} />}
-            
             {activeTab === TABS[13] && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} />}
             {activeTab === TABS[14] && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[15] && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[16] && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[17] && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[15] && <StockViewTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[16] && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[17] && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[18] && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
           </Suspense>
 
         </div>
