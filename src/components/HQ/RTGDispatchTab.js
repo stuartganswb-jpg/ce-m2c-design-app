@@ -52,33 +52,33 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         loadRTGOrders();
     }, [activeBrand]);
 
-    // 🚀 HYPER-STRICT PULL: Only grabs SalesOrd:B with a valid App Quote ID
+    // 🚀 REWRITTEN PULL: Stripped out Table Aliases for Custom Fields
     const pullNSSalesOrders = async () => {
         setIsSyncing(true);
         setSyncLog([]); 
         
         try {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
-            addLog(`Initiating Strict Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
+            addLog(`Initiating Flat Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
-            // Strictly locking to Pending Fulfillment and ensuring custbody50 starts with our App's syntax
+            // 🚀 The Alias Bug Fix: Querying the fields directly without the "Transaction." prefix 
+            // to ensure NetSuite's REST engine correctly identifies the custom body field.
             const q = `
                 SELECT 
-                    Transaction.id AS ns_id,
-                    Transaction.tranid AS so_num,
-                    Transaction.custbody50 AS hq_job_id,
-                    Customer.companyname AS customer_name,
-                    Transaction.trandate,
-                    Transaction.memo
+                    id,
+                    tranid,
+                    custbody50,
+                    entity,
+                    trandate,
+                    memo
                 FROM Transaction
-                LEFT JOIN Customer ON Transaction.entity = Customer.id
-                WHERE Transaction.type = 'SalesOrd' 
-                AND Transaction.status = 'SalesOrd:B'
-                AND Transaction.subsidiary = ${subsidiaryId}
-                AND Transaction.custbody50 LIKE 'QUOTE-%'
+                WHERE type = 'SalesOrd' 
+                AND status IN ('SalesOrd:A', 'SalesOrd:B')
+                AND subsidiary = ${subsidiaryId}
+                AND custbody50 LIKE 'QUOTE-%'
             `;
             
-            addLog("Executing SuiteQL: Strict filter for 'Pending Fulfillment' AND 'QUOTE-*' signature...", "info");
+            addLog("Executing SuiteQL: Flat query, no joins, searching 'SalesOrd:A'/'SalesOrd:B'...", "info");
 
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
@@ -91,6 +91,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             });
             
             const result = await response.json();
+            
+            // Log the raw result so we can see EXACTLY what NetSuite passed back
+            console.log("Raw NetSuite Result:", result);
+
             if (!response.ok) throw new Error(JSON.stringify(result));
             
             const records = result.items || [];
@@ -99,16 +103,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             let newOrders = 0;
             
             for (const row of records) {
-                const hqSalesOrderId = `SO-${row.so_num}`;
+                const hqSalesOrderId = `SO-${row.tranid}`;
                 const soRef = doc(db, "hq_sales_orders", hqSalesOrderId);
                 const soSnap = await getDoc(soRef);
                 
                 if (!soSnap.exists()) {
                     await setDoc(soRef, {
                         id: hqSalesOrderId,
-                        soId: row.so_num,
-                        nsInternalId: row.ns_id,
-                        customer: row.customer_name || 'NetSuite Customer',
+                        soId: row.tranid,
+                        nsInternalId: row.id,
+                        customer: `NS Entity ID: ${row.entity}`, // Using raw ID since we removed the JOIN
                         status: "Approved",
                         brand: activeBrand,
                         recipe: "PENDING-RECIPE", 
@@ -116,11 +120,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                         totalParts: 1, 
                         length: 0, width: 0, height: 0,
                         reqDate: row.trandate || new Date().toISOString().split('T')[0],
-                        hqJobId: row.hq_job_id,
+                        hqJobId: row.custbody50,
                         memo: row.memo || ''
                     });
                     newOrders++;
-                    addLog(`Imported App-Generated SO: ${hqSalesOrderId} (Linked to ${row.hq_job_id})`, "success");
+                    addLog(`Imported App-Generated SO: ${hqSalesOrderId} (Linked to ${row.custbody50})`, "success");
                 } else {
                     addLog(`Skipped ${hqSalesOrderId} (Already exists on board).`, "info");
                 }
