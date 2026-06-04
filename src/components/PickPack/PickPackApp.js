@@ -141,10 +141,12 @@ const PickPackApp = ({ currentUser = "Warehouse Lead", activeBrand = "ce", setAc
                         </select>
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     <button onClick={() => setActiveTab('QUEUE')} style={{ padding: '10px 20px', background: activeTab === 'QUEUE' ? '#fff' : 'transparent', color: activeTab === 'QUEUE' ? '#28a745' : '#fff', border: '2px solid #fff', fontWeight: 'bold', cursor: 'pointer', transition: '0.1s' }}>📦 PICK QUEUE</button>
                     <button onClick={() => setActiveTab('PACKING')} style={{ padding: '10px 20px', background: activeTab === 'PACKING' ? '#fff' : 'transparent', color: activeTab === 'PACKING' ? '#28a745' : '#fff', border: '2px solid #fff', fontWeight: 'bold', cursor: 'pointer', transition: '0.1s' }}>🏷️ PACKAGING PREP</button>
                     <button onClick={() => setActiveTab('MESSAGING')} style={{ padding: '10px 20px', background: activeTab === 'MESSAGING' ? '#fff' : 'transparent', color: activeTab === 'MESSAGING' ? '#28a745' : '#fff', border: '2px solid #fff', fontWeight: 'bold', cursor: 'pointer', transition: '0.1s' }}>💬 MESSAGING</button>
+                    <div style={{ width: '2px', background: '#fff', height: '30px', margin: '0 5px' }}></div>
+                    <button onClick={() => window.location.href = '/'} style={{ padding: '10px 20px', background: '#d9534f', color: '#fff', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer', boxShadow: '3px 3px 0 #000', transition: '0.1s' }}>🏠 HUB / LOGOUT</button>
                 </div>
             </header>
 
