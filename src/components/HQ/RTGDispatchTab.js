@@ -19,6 +19,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncLog, setSyncLog] = useState([]);
 
+    // 🚀 NEW: View Order Modal States
+    const [activeViewOrder, setActiveViewOrder] = useState(null);
+    const [activeJobDetails, setActiveJobDetails] = useState(null);
+
     const addLog = (msg, type = 'info') => {
         const time = new Date().toLocaleTimeString();
         setSyncLog(prev => [{ time, msg, type }, ...prev]);
@@ -100,10 +104,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 const hqJobId = row.hq_job_id;
                 const rawStatus = row.raw_status || 'UNKNOWN';
 
-                if (row.so_num === 'SO58232' || row.so_num === '58232') {
-                    addLog(`🎯 FOUND SO58232! Internal Status: [${rawStatus}], Job ID: [${hqJobId || 'NULL'}]`, "warn");
-                }
-
                 if (!hqJobId || !hqJobId.startsWith('QUOTE-')) {
                     skippedOrganic++;
                     continue; 
@@ -151,11 +151,40 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    // --- 🚀 THE FINISHING BRIDGE: HQ to Finishing Floor ---
+    // 🚀 NEW: View Order Details
+    const handleViewOrder = async (order) => {
+        setActiveViewOrder(order);
+        setActiveJobDetails(null); // Reset details while loading
+        if (order.hqJobId) {
+            const jobSnap = await getDoc(doc(db, "jobs", order.hqJobId));
+            if (jobSnap.exists()) {
+                setActiveJobDetails(jobSnap.data());
+            } else {
+                addLog(`Warning: Original CPQ Job Document [${order.hqJobId}] not found in database.`, 'warn');
+            }
+        }
+    };
+
+    // 🚀 ENRICHED BRIDGE: HQ to Finishing Floor
     const pushToFinishing = async (hqOrder, orderType) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
 
         try {
+            // 1. Fetch Original Job Details for the Payload
+            let originalJob = null;
+            if (hqOrder.hqJobId) {
+                const jSnap = await getDoc(doc(db, "jobs", hqOrder.hqJobId));
+                if (jSnap.exists()) originalJob = jSnap.data();
+            }
+
+            // 2. Map CPQ Breakdown to cpqSpecs Map
+            let cpqSpecs = {};
+            if (originalJob && originalJob.cpqData && originalJob.cpqData.breakdown) {
+                originalJob.cpqData.breakdown.forEach(item => {
+                    cpqSpecs[item.name] = `Qty: ${item.qty}`;
+                });
+            }
+
             const finWorkOrderId = orderType === 'sales' ? `WO-${hqOrder.soId || Date.now()}` : `WO-${hqOrder.woId || Date.now()}`;
             
             const finPayload = {
@@ -165,13 +194,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 orderType: orderType,
                 soId: hqOrder.soId || null,
                 soNum: hqOrder.soId || null,
-                customer: hqOrder.customer || "Internal Stock", 
-                clientName: hqOrder.customer || "Internal Stock", 
+                customer: originalJob?.customer?.name || hqOrder.customer || "Internal Stock", 
+                clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock", 
                 recipe: hqOrder.recipe || "PENDING-RECIPE",
                 reqDate: hqOrder.reqDate || "",
                 type: hqOrder.type || "Mixed", 
                 totalParts: Number(hqOrder.totalParts) || 1,
-                note: hqOrder.memo || "", // Passes NetSuite memo to the Golden Payload Modal
+                note: hqOrder.memo || originalJob?.sidemark || "", 
+                cpqSpecs: cpqSpecs, // 🚀 Passed straight to Golden Modal
                 
                 dimensions: {
                     length: Number(hqOrder.length) || 10,
@@ -180,7 +210,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 },
                 
                 currentPhase: "Setup",
-                stepStatus: 'Pending', // Strictly required for SetupQueue.js start buttons
+                stepStatus: 'Pending', 
                 currentStepIndex: 0,
                 tasks: {
                     setup: { status: 'Pending', assignedTo: null }
@@ -190,8 +220,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
             await setDoc(doc(db, "fin_workorders", finWorkOrderId), finPayload);
 
+            // 🚀 IMPORTANT: DO NOT change "status", just add a push flag so it stays on the board
             const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
-            await updateDoc(doc(db, collectionName, hqOrder.id), { status: "Dispatched_Finishing" });
+            await updateDoc(doc(db, collectionName, hqOrder.id), { pushedToFinishing: true });
 
             addLog(`Dispatched ${finWorkOrderId} to Finishing Floor!`, "success");
             alert(`Successfully pushed ${finWorkOrderId} to Finishing Floor Setup Queue!`);
@@ -204,11 +235,26 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         }
     };
 
-    // --- 🚀 NEW SHOP BRIDGE: HQ to Shop Floor Custom Fabrication ---
+    // 🚀 ENRICHED BRIDGE: HQ to Shop Floor Custom Fabrication
     const pushToShop = async (hqOrder, orderType) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Shop Floor Custom Fabrication Queue?`)) return;
 
         try {
+            // 1. Fetch Original Job Details for the Payload
+            let originalJob = null;
+            if (hqOrder.hqJobId) {
+                const jSnap = await getDoc(doc(db, "jobs", hqOrder.hqJobId));
+                if (jSnap.exists()) originalJob = jSnap.data();
+            }
+
+            // 2. Map CPQ Breakdown to cpqSpecs Map
+            let cpqSpecs = {};
+            if (originalJob && originalJob.cpqData && originalJob.cpqData.breakdown) {
+                originalJob.cpqData.breakdown.forEach(item => {
+                    cpqSpecs[item.name] = `Qty: ${item.qty}`;
+                });
+            }
+
             const shopJobId = orderType === 'sales' ? `SHOP-${hqOrder.soId || Date.now()}` : `SHOP-${hqOrder.woId || Date.now()}`;
             
             const shopPayload = {
@@ -218,18 +264,20 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 item: hqOrder.hqJobId || 'Custom App Order', 
                 qty: Number(hqOrder.totalParts) || 1,
                 reqDate: hqOrder.reqDate || "",
-                category: 'Custom Fabrication', // This strictly routes it to the right column in ShopFloor.js
+                category: 'Custom Fabrication', // Routes it to right column in ShopFloor.js
                 status: 'Pending',
                 priority: 999,
-                clientName: hqOrder.customer || "Internal Stock",
-                note: hqOrder.memo || "", // Passes NetSuite memo to the Golden Payload Modal
+                clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
+                note: hqOrder.memo || originalJob?.sidemark || "",
+                cpqSpecs: cpqSpecs, // 🚀 Passed straight to Golden Modal
                 createdAt: Date.now()
             };
 
             await setDoc(doc(db, "shop_custom_orders", shopJobId), shopPayload);
 
+            // 🚀 IMPORTANT: DO NOT change "status", just add a push flag
             const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
-            await updateDoc(doc(db, collectionName, hqOrder.id), { status: "Dispatched_Shop" });
+            await updateDoc(doc(db, collectionName, hqOrder.id), { pushedToShop: true });
 
             addLog(`Dispatched ${shopJobId} to Shop Floor!`, "success");
             alert(`Successfully pushed ${shopJobId} to Shop Floor Custom Fabrication Queue!`);
@@ -295,9 +343,15 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                         "{so.memo}"
                                     </div>
                                 )}
-                                <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-                                    <button style={{ ...btnStyle, background: '#CC6600' }} onClick={() => pushToFinishing(so, 'sales')}>Push to Finishing</button>
-                                    <button style={{ ...btnStyle, background: '#f39c12', color: '#000' }} onClick={() => pushToShop(so, 'sales')}>Push to Shop</button>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                                    {/* 🚀 UPGRADED BUTTONS WITH VISUAL INDICATORS */}
+                                    <button style={{ ...btnStyle, background: '#17a2b8' }} onClick={() => handleViewOrder(so)}>👁️ VIEW ORDER</button>
+                                    <button style={{ ...btnStyle, background: so.pushedToFinishing ? '#28a745' : '#CC6600' }} onClick={() => pushToFinishing(so, 'sales')}>
+                                        {so.pushedToFinishing ? '✅ Finishing Pushed' : 'Push to Finishing'}
+                                    </button>
+                                    <button style={{ ...btnStyle, background: so.pushedToShop ? '#28a745' : '#f39c12', color: so.pushedToShop ? '#fff' : '#000' }} onClick={() => pushToShop(so, 'sales')}>
+                                        {so.pushedToShop ? '✅ Shop Pushed' : 'Push to Shop'}
+                                    </button>
                                 </div>
                             </div>
                         ))}
@@ -316,9 +370,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                     <button onClick={() => deleteOrder('hq_work_orders', wo.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>🗑️</button>
                                 </div>
-                                <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-                                    <button style={{ ...btnStyle, background: '#CC6600' }} onClick={() => pushToFinishing(wo, 'stock')}>Push to Finishing</button>
-                                    <button style={{ ...btnStyle, background: '#f39c12', color: '#000' }} onClick={() => pushToShop(wo, 'stock')}>Push to Shop</button>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                                    <button style={{ ...btnStyle, background: wo.pushedToFinishing ? '#28a745' : '#CC6600' }} onClick={() => pushToFinishing(wo, 'stock')}>
+                                        {wo.pushedToFinishing ? '✅ Finishing Pushed' : 'Push to Finishing'}
+                                    </button>
+                                    <button style={{ ...btnStyle, background: wo.pushedToShop ? '#28a745' : '#f39c12', color: wo.pushedToShop ? '#fff' : '#000' }} onClick={() => pushToShop(wo, 'stock')}>
+                                        {wo.pushedToShop ? '✅ Shop Pushed' : 'Push to Shop'}
+                                    </button>
                                 </div>
                             </div>
                         ))}
@@ -390,6 +448,77 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 </div>
 
             </div>
+
+            {/* 🚀 NEW: VIEW ORDER MODAL */}
+            {activeViewOrder && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ background: '#fff', padding: '30px', borderRadius: '12px', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: '4px solid #333', boxShadow: '10px 10px 0 #007bff' }}>
+                        
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #ccc', paddingBottom: '15px', marginBottom: '20px' }}>
+                            <div>
+                                <h2 style={{ color: '#007bff', margin: 0, fontSize: '1.8rem' }}>SALES ORDER: {activeViewOrder.soId}</h2>
+                                <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '5px' }}>CPQ App ID: {activeViewOrder.hqJobId || 'N/A'}</div>
+                            </div>
+                            <button onClick={() => setActiveViewOrder(null)} style={{ background: '#d9534f', border: 'none', color: '#fff', padding: '8px 12px', cursor: 'pointer', fontWeight: 'bold', borderRadius: '4px' }}>CLOSE</button>
+                        </div>
+
+                        {!activeJobDetails ? (
+                            <div style={{ padding: '40px', textAlign: 'center', color: '#666', fontSize: '1.2rem', fontWeight: 'bold' }}>
+                                ⏳ Fetching Original Configuration Data...
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                    <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
+                                        <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>CUSTOMER / ENTITY</div>
+                                        <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#000' }}>{activeJobDetails.customer?.name || activeViewOrder.customer}</div>
+                                    </div>
+                                    <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
+                                        <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>PROJECT / SIDEMARK</div>
+                                        <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#007bff' }}>{activeJobDetails.sidemark || activeViewOrder.memo || 'N/A'}</div>
+                                    </div>
+                                </div>
+
+                                <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '20px', borderRadius: '8px' }}>
+                                    <div style={{ fontSize: '14px', color: '#1e7e34', fontWeight: 'bold', marginBottom: '10px', textTransform: 'uppercase' }}>BILL OF MATERIALS / SPECIFICATIONS</div>
+                                    
+                                    {activeJobDetails.cpqData?.breakdown ? (
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', background: '#fff' }}>
+                                            <tbody>
+                                                {activeJobDetails.cpqData.breakdown.map((item, i) => (
+                                                    <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+                                                        <td style={{ padding: '10px', fontWeight: 'bold' }}>{item.name}</td>
+                                                        <td style={{ padding: '10px', textAlign: 'right', fontWeight: 'bold', color: '#007bff' }}>Qty: {item.qty}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    ) : (
+                                        <div style={{ fontStyle: 'italic', color: '#666' }}>No itemized breakdown found in source document.</div>
+                                    )}
+                                </div>
+
+                                {/* Quick Dispatch Buttons right from the modal */}
+                                <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                                    <button 
+                                        onClick={() => { pushToFinishing(activeViewOrder, 'sales'); setActiveViewOrder(null); }} 
+                                        style={{ flex: 1, padding: '15px', background: '#CC6600', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px', fontSize: '1rem' }}
+                                    >
+                                        PUSH TO FINISHING FLOOR ➔
+                                    </button>
+                                    <button 
+                                        onClick={() => { pushToShop(activeViewOrder, 'sales'); setActiveViewOrder(null); }} 
+                                        style={{ flex: 1, padding: '15px', background: '#f39c12', color: '#000', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px', fontSize: '1rem' }}
+                                    >
+                                        PUSH TO SHOP FLOOR ➔
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
         </div>
     );
 };
