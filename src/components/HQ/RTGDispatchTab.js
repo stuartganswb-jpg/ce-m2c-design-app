@@ -61,7 +61,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         
         try {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
-            addLog(`Initiating Wide Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
+            addLog(`Initiating Diagnostic Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
             const q = `
                 SELECT 
@@ -150,38 +150,53 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    // 🚀 NEW: Universal Data Extraction Engine
-    // Fetches the original CPQ Job, the Finish Code, and converts the SVG to a rendering-safe Data URI
+    // 🚀 UPGRADED: Robust Data Extraction Engine
+    // Bypasses Firebase Composite Indexes by filtering files locally
     const fetchEnrichedJobData = async (hqJobId) => {
         let originalJob = null;
         let svgUri = null;
         let finishRecipe = "PENDING-RECIPE";
 
         if (hqJobId) {
-            // 1. Fetch Job
-            const jSnap = await getDoc(doc(db, "jobs", hqJobId));
-            if (jSnap.exists()) originalJob = jSnap.data();
-
-            // 2. Fetch Shop Drawing & Convert to Data URI
-            const filesSnap = await getDocs(query(collection(db, "crm_files"), where("jobId", "==", hqJobId), where("type", "==", "VISION_DRAWING")));
-            if (!filesSnap.empty) {
-                const svgString = filesSnap.docs[0].data().svgData;
-                if (svgString) {
-                    // This encodes the raw SVG string so <img src={imageUrl} /> natively accepts it
-                    svgUri = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgString);
+            try {
+                // 1. Fetch Original CPQ Job
+                const jSnap = await getDoc(doc(db, "jobs", hqJobId));
+                if (jSnap.exists()) {
+                    originalJob = jSnap.data();
+                } else {
+                    addLog(`Database missed job document: ${hqJobId}`, 'warn');
                 }
-            }
 
-            // 3. Fetch Master Finish Code
-            if (originalJob && originalJob.cpqData && originalJob.cpqData.configuration) {
-                const fSnap = await getDoc(doc(db, "system", "master_finishes"));
-                if (fSnap.exists() && fSnap.data().finishes) {
-                    const configVals = Object.values(originalJob.cpqData.configuration);
-                    const foundFin = fSnap.data().finishes.find(f => configVals.includes(f.id));
-                    if (foundFin) {
-                        finishRecipe = foundFin.code ? `${foundFin.code} - ${foundFin.name}` : foundFin.name;
+                // 2. Fetch Shop Drawing (Bypassing Firebase index limitations)
+                const filesSnap = await getDocs(query(collection(db, "crm_files"), where("jobId", "==", hqJobId)));
+                if (!filesSnap.empty) {
+                    const drawingDoc = filesSnap.docs.find(d => d.data().type === 'VISION_DRAWING');
+                    if (drawingDoc) {
+                        const svgString = drawingDoc.data().svgData;
+                        if (svgString) {
+                            svgUri = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgString);
+                        }
+                    } else {
+                        addLog(`No Shop Drawing found attached to ${hqJobId}`, 'info');
+                    }
+                } else {
+                    addLog(`No files of any type attached to ${hqJobId}`, 'info');
+                }
+
+                // 3. Fetch Master Finish Code
+                if (originalJob && originalJob.cpqData && originalJob.cpqData.configuration) {
+                    const fSnap = await getDoc(doc(db, "system", "master_finishes"));
+                    if (fSnap.exists() && fSnap.data().finishes) {
+                        const configVals = Object.values(originalJob.cpqData.configuration);
+                        const foundFin = fSnap.data().finishes.find(f => configVals.includes(f.id));
+                        if (foundFin) {
+                            finishRecipe = foundFin.code ? `${foundFin.code} - ${foundFin.name}` : foundFin.name;
+                        }
                     }
                 }
+            } catch (err) {
+                console.error("Enrichment Fetch Error:", err);
+                addLog(`Warning: Failed to fetch enriched data - ${err.message}`, 'error');
             }
         }
         return { originalJob, svgUri, finishRecipe };
@@ -196,11 +211,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 setActiveJobDetails({ ...originalJob, finishRecipe, svgUri });
             } else {
                 addLog(`Warning: Original CPQ Job Document [${order.hqJobId}] not found in database.`, 'warn');
+                // Ensure the modal still works even if the job is deleted
+                setActiveJobDetails({ finishRecipe, svgUri });
             }
         }
     };
 
-    // 🚀 ENRICHED BRIDGE: HQ to Finishing Floor
+    // --- ENRICHED BRIDGE: HQ to Finishing Floor ---
     const pushToFinishing = async (hqOrder, orderType) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
 
@@ -225,13 +242,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 soNum: hqOrder.soId || null,
                 customer: originalJob?.customer?.name || hqOrder.customer || "Internal Stock", 
                 clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock", 
-                recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : (hqOrder.recipe || "PENDING-RECIPE"), // 🚀 Injects Code
+                recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : (hqOrder.recipe || "PENDING-RECIPE"), 
                 reqDate: hqOrder.reqDate || "",
                 type: hqOrder.type || "Mixed", 
                 totalParts: Number(hqOrder.totalParts) || 1,
                 note: hqOrder.memo || originalJob?.sidemark || "", 
                 cpqSpecs: cpqSpecs, 
-                imageUrl: svgUri, // 🚀 Injects the SVG Drawing directly into the Finishing Modal
+                imageUrl: svgUri || null, // 🚀 Injects SVG safely
                 
                 dimensions: {
                     length: Number(hqOrder.length) || 10,
@@ -264,7 +281,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         }
     };
 
-    // 🚀 ENRICHED BRIDGE: HQ to Shop Floor Custom Fabrication
+    // --- ENRICHED BRIDGE: HQ to Shop Floor Custom Fabrication ---
     const pushToShop = async (hqOrder, orderType) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Shop Floor Custom Fabrication Queue?`)) return;
 
@@ -293,7 +310,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
                 note: hqOrder.memo || originalJob?.sidemark || "",
                 cpqSpecs: cpqSpecs, 
-                imageUrl: svgUri, // 🚀 Injects the SVG Drawing directly into the Shop Modal
+                imageUrl: svgUri || null, // 🚀 Injects SVG safely
                 createdAt: Date.now()
             };
 
@@ -471,7 +488,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
             </div>
 
-            {/* 🚀 ENRICHED VIEW ORDER MODAL */}
+            {/* 🚀 VIEW ORDER MODAL */}
             {activeViewOrder && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <div style={{ background: '#fff', padding: '30px', borderRadius: '12px', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: '4px solid #333', boxShadow: '10px 10px 0 #007bff' }}>
@@ -491,17 +508,21 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                                 
-                                {activeJobDetails.svgUri && (
+                                {activeJobDetails.svgUri ? (
                                     <div style={{ border: '2px solid #ccc', borderRadius: '8px', padding: '10px', background: '#fff' }}>
                                         <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold', marginBottom: '10px' }}>ENGINEERING DRAWING</div>
                                         <img src={activeJobDetails.svgUri} alt="Shop Drawing" style={{ width: '100%', maxHeight: '300px', objectFit: 'contain' }} />
+                                    </div>
+                                ) : (
+                                    <div style={{ padding: '15px', background: '#fff3cd', color: '#856404', fontStyle: 'italic', border: '1px dashed #ffeeba', borderRadius: '8px' }}>
+                                        No Shop Drawing attached to this configuration.
                                     </div>
                                 )}
 
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
                                     <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
                                         <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>CUSTOMER / ENTITY</div>
-                                        <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#000' }}>{activeJobDetails.customer?.name || activeViewOrder.customer}</div>
+                                        <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#000' }}>{activeJobDetails.customer?.name || activeJobDetails.customer || activeViewOrder.customer}</div>
                                     </div>
                                     <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
                                         <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>PROJECT / SIDEMARK</div>
