@@ -52,33 +52,32 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         loadRTGOrders();
     }, [activeBrand]);
 
-    // 🚀 REWRITTEN PULL: Stripped out Table Aliases for Custom Fields
+    // 🚀 THE DIAGNOSTIC NET: Pulls all orders, filters out the non-app ones locally.
     const pullNSSalesOrders = async () => {
         setIsSyncing(true);
         setSyncLog([]); 
         
         try {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
-            addLog(`Initiating Flat Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
+            addLog(`Initiating Diagnostic Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
-            // 🚀 The Alias Bug Fix: Querying the fields directly without the "Transaction." prefix 
-            // to ensure NetSuite's REST engine correctly identifies the custom body field.
+            // 🚀 Restored the Transaction prefix to fix the 400 error.
+            // 🚀 Removed custbody50 from the WHERE clause so NetSuite doesn't filter it out prematurely.
             const q = `
                 SELECT 
-                    id,
-                    tranid,
-                    custbody50,
-                    entity,
-                    trandate,
-                    memo
+                    Transaction.id,
+                    Transaction.tranid,
+                    Transaction.custbody50,
+                    Transaction.entity,
+                    Transaction.trandate,
+                    Transaction.memo
                 FROM Transaction
-                WHERE type = 'SalesOrd' 
-                AND status IN ('SalesOrd:A', 'SalesOrd:B')
-                AND subsidiary = ${subsidiaryId}
-                AND custbody50 LIKE 'QUOTE-%'
+                WHERE Transaction.type = 'SalesOrd' 
+                AND Transaction.status IN ('SalesOrd:A', 'SalesOrd:B')
+                AND Transaction.subsidiary = ${subsidiaryId}
             `;
             
-            addLog("Executing SuiteQL: Flat query, no joins, searching 'SalesOrd:A'/'SalesOrd:B'...", "info");
+            addLog("Executing SuiteQL: Pulling all open Sales Orders to evaluate locally...", "info");
 
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
@@ -91,18 +90,23 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             });
             
             const result = await response.json();
-            
-            // Log the raw result so we can see EXACTLY what NetSuite passed back
-            console.log("Raw NetSuite Result:", result);
-
             if (!response.ok) throw new Error(JSON.stringify(result));
             
             const records = result.items || [];
-            addLog(`NetSuite returned ${records.length} strictly matching orders.`, records.length > 0 ? "success" : "warn");
+            addLog(`NetSuite returned ${records.length} total open orders. Isolating App Quotes...`, records.length > 0 ? "success" : "warn");
 
             let newOrders = 0;
+            let skippedOrganic = 0;
             
             for (const row of records) {
+                const hqJobId = row.custbody50;
+
+                // 🚀 LOCAL FILTER: Check if the custom field matches our App's signature
+                if (!hqJobId || !hqJobId.startsWith('QUOTE-')) {
+                    skippedOrganic++;
+                    continue; // Skip organic NetSuite orders entirely
+                }
+
                 const hqSalesOrderId = `SO-${row.tranid}`;
                 const soRef = doc(db, "hq_sales_orders", hqSalesOrderId);
                 const soSnap = await getDoc(soRef);
@@ -112,7 +116,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                         id: hqSalesOrderId,
                         soId: row.tranid,
                         nsInternalId: row.id,
-                        customer: `NS Entity ID: ${row.entity}`, // Using raw ID since we removed the JOIN
+                        customer: `NS Entity ID: ${row.entity || 'Unknown'}`,
                         status: "Approved",
                         brand: activeBrand,
                         recipe: "PENDING-RECIPE", 
@@ -120,17 +124,17 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                         totalParts: 1, 
                         length: 0, width: 0, height: 0,
                         reqDate: row.trandate || new Date().toISOString().split('T')[0],
-                        hqJobId: row.custbody50,
+                        hqJobId: hqJobId,
                         memo: row.memo || ''
                     });
                     newOrders++;
-                    addLog(`Imported App-Generated SO: ${hqSalesOrderId} (Linked to ${row.custbody50})`, "success");
+                    addLog(`Imported App-Generated SO: ${hqSalesOrderId} (Linked to ${hqJobId})`, "success");
                 } else {
                     addLog(`Skipped ${hqSalesOrderId} (Already exists on board).`, "info");
                 }
             }
             
-            addLog(`✅ Sync complete. Added ${newOrders} new orders to dispatch board.`, "success");
+            addLog(`✅ Sync complete. Added ${newOrders} new orders. (Ignored ${skippedOrganic} organic NetSuite orders).`, "success");
             loadRTGOrders();
         } catch(e) {
             console.error(e);
