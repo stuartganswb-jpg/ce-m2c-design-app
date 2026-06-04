@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, doc, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, doc, updateDoc, getDocs, where } from "firebase/firestore";
 import SharedMessaging from '../Shared/SharedMessaging';
 
-const PickPackApp = ({ currentUser = "Warehouse Lead", activeBrand = "ce", setActiveBrand }) => {
+const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
+    const [operator, setOperator] = useState(null);
+    const [pinInput, setPinInput] = useState("");
     const [activeTab, setActiveTab] = useState('QUEUE');
     const [jobs, setJobs] = useState([]);
     
@@ -13,6 +15,20 @@ const PickPackApp = ({ currentUser = "Warehouse Lead", activeBrand = "ce", setAc
     const [validation, setValidation] = useState({ bin: '', qty: '' });
     const [stagingScan, setStagingScan] = useState('');
     const [showNacho, setShowNacho] = useState(false);
+
+    const attemptLogin = async (e) => {
+        e.preventDefault();
+        if (!pinInput) return;
+        try {
+            const snap = await getDocs(query(collection(db, "directory"), where("pin", "==", pinInput)));
+            if (!snap.empty) {
+                setOperator(snap.docs[0].data());
+                setPinInput("");
+            } else { 
+                alert("Invalid PIN. Access Denied."); 
+            }
+        } catch (error) { console.error(error); alert("Authentication failed."); }
+    };
 
     useEffect(() => {
         // Fetch jobs pushed from Finishing Floor that need picking
@@ -48,6 +64,7 @@ const PickPackApp = ({ currentUser = "Warehouse Lead", activeBrand = "ce", setAc
                 printZebraLabel(activePickJob, 'SMALL_PARTS');
                 setActivePickJob(null);
                 setShowNacho(false);
+                setOperator(null); // Auto-logout after Pick
             }, 2000);
         }
     };
@@ -60,15 +77,31 @@ const PickPackApp = ({ currentUser = "Warehouse Lead", activeBrand = "ce", setAc
         if (!matchedJob) return alert("❌ No matching Picked order found for this Shop Label.");
         if (matchedJob.pickStatus !== 'Picked_Awaiting_Staging') return alert("❌ Small parts are not yet picked for this order.");
 
-        await updateDoc(doc(db, "fin_workorders", matchedJob.id), { pickStatus: 'Staged_Ready_For_Finishing' });
+       await updateDoc(doc(db, "fin_workorders", matchedJob.id), { pickStatus: 'Staged_Ready_For_Finishing' });
         alert(`✅ MATCH CONFIRMED: ${matchedJob.id} small parts and custom parts paired in staging!`);
         setStagingScan('');
+        setOperator(null); // Auto-logout after Pack match
     };
 
     const printZebraLabel = (job, type) => {
         console.log(`Spooled ZPL for ${type} - ${job.id}`);
         // Similar ZPL payload as Shop Floor for consistency
     };
+
+    if (!operator) {
+        return (
+            <div style={{ position: 'fixed', inset: 0, background: '#e5e5e5', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace' }}>
+                <div style={{ background: '#fff', padding: '40px', border: '2px solid #000', boxShadow: '15px 15px 0 #000', width: '350px', textAlign: 'center' }}>
+                    <h2 style={{ color: '#28a745', margin: '0 0 20px 0', fontSize: '2rem', textTransform: 'uppercase' }}>PICK & PACK LOGIN</h2>
+                    <form onSubmit={attemptLogin}>
+                        <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{ textAlign: 'center', fontSize: '24px', width: '100%', padding: '15px', margin: '8px 0 20px 0', border: '2px solid #000', boxSizing: 'border-box', fontFamily: 'monospace', fontWeight: 'bold' }} />
+                        <button type="submit" style={{ background: '#28a745', color: '#fff', border: '2px solid #000', padding: '15px', width: '100%', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.2rem', boxShadow: '4px 4px 0 #000' }}>LOGIN</button>
+                    </form>
+                    <button onClick={() => window.location.href = '/'} style={{ marginTop: '20px', background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem', textDecoration: 'underline' }}>← BACK TO HUB</button>
+                </div>
+            </div>
+        );
+    }
 
     // --- FULL SCREEN PICKING MODAL ---
     if (activePickJob) {
@@ -128,7 +161,7 @@ const PickPackApp = ({ currentUser = "Warehouse Lead", activeBrand = "ce", setAc
                 <div>
                     <h1 style={{ margin: 0, fontSize: '1.5rem', letterSpacing: '1px' }}>WMS: PICK & PACK</h1>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '5px' }}>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>OPERATOR: {currentUser.toUpperCase()}</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>OPERATOR: {operator?.name?.toUpperCase() || 'UNKNOWN'}</span>
                         <select 
                             value={activeBrand} 
                             onChange={(e) => setActiveBrand && setActiveBrand(e.target.value)} 
@@ -219,7 +252,7 @@ const PickPackApp = ({ currentUser = "Warehouse Lead", activeBrand = "ce", setAc
                 {/* 💬 TAB: MESSAGING */}
                 {activeTab === 'MESSAGING' && (
                     <div style={{ background: '#fff', border: '4px solid #000', height: '100%' }}>
-                        <SharedMessaging currentUser={currentUser} currentApp="PICK_PACK" writeLog={() => {}} />
+                        <SharedMessaging currentUser={operator?.name || 'Unknown'} currentApp="PICK_PACK" writeLog={() => {}} />
                     </div>
                 )}
 
