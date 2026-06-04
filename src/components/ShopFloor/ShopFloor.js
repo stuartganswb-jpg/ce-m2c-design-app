@@ -8,8 +8,6 @@ import './shopStyles.css';
 // IMPORT THE COMPONENTS
 import ShopEngineering from './ShopEngineering';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
-
-// 🚀 NEW: Import the Shared App
 import SharedMessaging from '../Shared/SharedMessaging';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
@@ -249,7 +247,6 @@ const ShopFloor = () => {
             if(qcForm.failImg) { const fRef = ref(storage, `fails/${Date.now()}.jpg`); await uploadBytesResumable(fRef, qcForm.failImg); imgUrl = await getDownloadURL(fRef); }
             await addDoc(shopDb.collection("shop_failures"), { machine: task.mach, program: prog.name, operator: user.name, reason: qcForm.failReason, notes: qcForm.failNotes, status: 'Open', timestamp: serverTimestamp() });
             
-            // 🚀 NEW: Auto-post Failure to Shared Message Board
             await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `⚠️ MACHINING FAILURE: ${prog.name} on ${task.mach}. Reason: ${qcForm.failReason}. \nNotes: ${qcForm.failNotes}`, t: serverTimestamp(), readBy: [], isSystem: true });
         }
 
@@ -264,25 +261,9 @@ const ShopFloor = () => {
                 const nextOp = routing.ops[nextIndex];
                 await addDoc(shopDb.collection("schedule"), { routingId: task.routingId, currentOpIndex: nextIndex, op: '', mach: nextOp.machine, prog: nextOp.progId, woNum: task.woNum, targetQty: grandTotalGood, reqDate: task.reqDate, notes: task.notes, customFileUrl: task.customFileUrl, phosphate: task.phosphate, status: "Pending", totalPausedMs: 0, partialGoodQty: 0, t: serverTimestamp() });
                 writeLog(`Spawned OP ${nextIndex + 1} for ${task.woNum}`, 'production');
-            } else if (!hasNextOp) {
-                const customOrder = customOrders.find(o => o.woNum === task.woNum && o.status !== 'Completed');
-                if (customOrder) handleCompleteCustomOrder(customOrder);
             }
         }
         writeLog(`Run finalized: OP ${task.currentOpIndex + 1} of ${task.routingId}`, 'production'); setActiveModal(null);
-    };
-
-    const handleCompleteCustomOrder = async (order) => {
-        if(!window.confirm(`Mark ${order.partNum} complete?`)) return;
-        await updateDoc(doc(shopDb.collection("custom_orders"), order.id), { status: 'Completed', completedAt: serverTimestamp(), completedBy: user.name });
-        const pendingForSO = customOrders.filter(o => o.soNum === order.soNum && o.status !== 'Completed' && o.id !== order.id);
-        if (pendingForSO.length === 0) {
-            
-            // 🚀 NEW: Auto-post Custom Order alert to Shared Message Board
-            await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `✅ CUSTOM ORDER READY: All custom parts for SO ${order.soNum} have finished machining and are ready for the Finishing Floor!`, t: serverTimestamp(), readBy: [], isSystem: true });
-
-            alert(`Part marked complete! Shared Message Board alerted.`);
-        } else { alert(`Part complete. SO ${order.soNum} still has ${pendingForSO.length} parts pending.`); }
     };
 
     const handleExportBatch = async () => {
@@ -388,7 +369,6 @@ const ShopFloor = () => {
                         const mJobs = activeJobs.filter(j => j.mach === m.name);
                         const isSetup = mJobs.some(j => j.status === 'Setup');
                         return (
-                            // 🚀 ADJUSTED: Border reduced from 3px/2px to 1px/2px for lighter aesthetic
                             <div key={m.id} style={{ background: '#fff', border: mJobs.length > 0 ? (isSetup ? '2px solid #0056b3' : '2px solid #f39c12') : '1px solid #ccc', borderRadius: '8px', padding: '20px', textAlign: 'center', cursor: 'pointer', transition: '0.2s' }} onClick={() => setActiveTab('scheduler')}>
                                 <h3 style={{ margin: '0 0 10px 0', fontSize: '22px' }}>{m.name}</h3>
                                 {mJobs.length > 0 ? (
@@ -541,11 +521,12 @@ const ShopFloor = () => {
                     ^XA
                     ^FO50,50^A0N,40,40^FDWO: ${order.woNum}^FS
                     ^FO50,100^A0N,30,30^FDSO: ${order.soNum}^FS
-                    ${order.poNum ? `^FO50,150^A0N,30,30^FDPO: ${order.poNum}^FS` : ''}
-                    ^FO50,${order.poNum ? '200' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
-                    ^FO50,${order.poNum ? '250' : '200'}^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
-                    ^FO50,${order.poNum ? '300' : '250'}^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
-                    ^FO50,${order.poNum ? '350' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.woNum}^FS
+                    ${order.isOutsourced ? `^FO50,150^A0N,30,30^FDFinish: ${order.finishRecipe}^FS` : ''}
+                    ${order.isOutsourced ? `^FO50,200^A0N,30,30^FDService/Ea: $${order.outsourcePrice}^FS` : ''}
+                    ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
+                    ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
+                    ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
+                    ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.woNum}^FS
                     ^XZ
                 `;
                 // Route this via PrintNode API or raw socket to your Wilmington floor printers
@@ -577,7 +558,7 @@ const ShopFloor = () => {
                 if (order.isOutsourced) {
                     await addDoc(collection(db, "global_messages"), { 
                         sender: 'System', sourceApp: 'SHOP', target: 'ALL', 
-                        msg: `🚚 OUTSOURCE DISPATCH: Custom parts for ${order.woNum} (PO: ${order.poNum || 'PENDING'}) sent to plating/finishing vendor.`, t: serverTimestamp(), isSystem: true 
+                        msg: `🚚 OUTSOURCE DISPATCH: Custom parts for ${order.woNum} sent to plating/finishing vendor.`, t: serverTimestamp(), isSystem: true 
                     });
                 } else {
                     // Ping Pick/Pack App that custom staging is ready

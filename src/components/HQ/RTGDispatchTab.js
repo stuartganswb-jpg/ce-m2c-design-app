@@ -68,7 +68,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     transaction.id AS ns_id,
                     transaction.tranid AS so_num,
                     transaction.custbody50 AS hq_job_id,
-                    transaction.custbody_outsource_po AS po_num,
                     transaction.entity AS customer_id,
                     transaction.trandate,
                     transaction.memo,
@@ -122,7 +121,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     await setDoc(soRef, {
                         id: hqSalesOrderId,
                         soId: row.so_num,
-                        poNum: row.po_num || null,
                         nsInternalId: row.ns_id,
                         customer: `NS Entity ID: ${row.customer_id || 'Unknown'}`,
                         status: "Approved",
@@ -152,7 +150,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    // 🚀 UPGRADED: Robust Data Extraction Engine
     const fetchEnrichedJobData = async (hqJobId) => {
         let originalJob = null;
         let svgUri = null;
@@ -160,7 +157,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
         if (hqJobId) {
             try {
-                // 1. Fetch Original CPQ Job
                 const jSnap = await getDoc(doc(db, "jobs", hqJobId));
                 if (jSnap.exists()) {
                     originalJob = jSnap.data();
@@ -168,7 +164,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     addLog(`Database missed job document: ${hqJobId}`, 'warn');
                 }
 
-                // 2. Fetch Shop Drawing 
                 const filesSnap = await getDocs(query(collection(db, "crm_files"), where("jobId", "==", hqJobId)));
                 if (!filesSnap.empty) {
                     const drawingDoc = filesSnap.docs.find(d => d.data().type === 'VISION_DRAWING');
@@ -184,7 +179,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     addLog(`No files of any type attached to ${hqJobId}`, 'info');
                 }
 
-                // 3. Fetch Master Finish Code
                 if (originalJob && originalJob.cpqData && originalJob.cpqData.configuration) {
                     const fSnap = await getDoc(doc(db, "system", "master_finishes"));
                     if (fSnap.exists() && fSnap.data().finishes) {
@@ -297,18 +291,21 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
             const shopJobId = orderType === 'sales' ? `SHOP-${hqOrder.soId || Date.now()}` : `SHOP-${hqOrder.woId || Date.now()}`;
             
-            // Check if recipe requires outsourced finishing
+            // Check if recipe requires outsourced finishing and fetch service price (multiplier)
             const outSnap = await getDocs(collection(db, "hq_outsource_finishes"));
-            const outsourceFinishes = outSnap.docs.map(d => d.data().name.toUpperCase());
-            const isOutsourced = outsourceFinishes.some(f => finishRecipe.toUpperCase().includes(f));
+            const outsourceFinishes = outSnap.docs.map(d => d.data());
+            const matchedOutsource = outsourceFinishes.find(f => finishRecipe.toUpperCase().includes(f.name.toUpperCase()));
+            
+            const isOutsourced = !!matchedOutsource;
+            const outsourcePrice = isOutsourced ? (matchedOutsource.multiplier || 0) : 0;
 
             const shopPayload = {
                 id: shopJobId,
                 woNum: shopJobId,
                 soNum: hqOrder.soId || 'N/A',
-                poNum: hqOrder.poNum || null,
                 isOutsourced: isOutsourced,
                 finishRecipe: finishRecipe,
+                outsourcePrice: outsourcePrice,
                 item: hqOrder.hqJobId || 'Custom App Order', 
                 qty: Number(hqOrder.totalParts) || 1,
                 reqDate: hqOrder.reqDate || "",
@@ -386,11 +383,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                     <button onClick={() => deleteOrder('hq_sales_orders', so.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>🗑️</button>
                                 </div>
-                                {so.poNum && (
-                                    <div style={{ fontSize: '0.8rem', color: '#17a2b8', fontWeight: 'bold', marginBottom: '5px' }}>
-                                        PO: {so.poNum}
-                                    </div>
-                                )}
                                 {so.memo && (
                                     <div style={{ fontSize: '0.75rem', color: '#007bff', marginBottom: '10px', fontStyle: 'italic' }}>
                                         "{so.memo}"
