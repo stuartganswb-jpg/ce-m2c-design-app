@@ -68,6 +68,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     transaction.id AS ns_id,
                     transaction.tranid AS so_num,
                     transaction.custbody50 AS hq_job_id,
+                    transaction.custbody_outsource_po AS po_num,
                     transaction.entity AS customer_id,
                     transaction.trandate,
                     transaction.memo,
@@ -121,6 +122,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     await setDoc(soRef, {
                         id: hqSalesOrderId,
                         soId: row.so_num,
+                        poNum: row.po_num || null,
                         nsInternalId: row.ns_id,
                         customer: `NS Entity ID: ${row.customer_id || 'Unknown'}`,
                         status: "Approved",
@@ -151,7 +153,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     };
 
     // 🚀 UPGRADED: Robust Data Extraction Engine
-    // Bypasses Firebase Composite Indexes by filtering files locally
     const fetchEnrichedJobData = async (hqJobId) => {
         let originalJob = null;
         let svgUri = null;
@@ -167,7 +168,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     addLog(`Database missed job document: ${hqJobId}`, 'warn');
                 }
 
-                // 2. Fetch Shop Drawing (Bypassing Firebase index limitations)
+                // 2. Fetch Shop Drawing 
                 const filesSnap = await getDocs(query(collection(db, "crm_files"), where("jobId", "==", hqJobId)));
                 if (!filesSnap.empty) {
                     const drawingDoc = filesSnap.docs.find(d => d.data().type === 'VISION_DRAWING');
@@ -211,7 +212,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 setActiveJobDetails({ ...originalJob, finishRecipe, svgUri });
             } else {
                 addLog(`Warning: Original CPQ Job Document [${order.hqJobId}] not found in database.`, 'warn');
-                // Ensure the modal still works even if the job is deleted
                 setActiveJobDetails({ finishRecipe, svgUri });
             }
         }
@@ -248,7 +248,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 totalParts: Number(hqOrder.totalParts) || 1,
                 note: hqOrder.memo || originalJob?.sidemark || "", 
                 cpqSpecs: cpqSpecs, 
-                imageUrl: svgUri || null, // 🚀 Injects SVG safely
+                imageUrl: svgUri || null, 
                 
                 dimensions: {
                     length: Number(hqOrder.length) || 10,
@@ -286,7 +286,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Shop Floor Custom Fabrication Queue?`)) return;
 
         try {
-            const { originalJob, svgUri } = await fetchEnrichedJobData(hqOrder.hqJobId);
+            const { originalJob, svgUri, finishRecipe } = await fetchEnrichedJobData(hqOrder.hqJobId);
 
             let cpqSpecs = {};
             if (originalJob && originalJob.cpqData && originalJob.cpqData.breakdown) {
@@ -297,10 +297,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
             const shopJobId = orderType === 'sales' ? `SHOP-${hqOrder.soId || Date.now()}` : `SHOP-${hqOrder.woId || Date.now()}`;
             
+            // Check if recipe requires outsourced finishing
+            const outSnap = await getDocs(collection(db, "hq_outsource_finishes"));
+            const outsourceFinishes = outSnap.docs.map(d => d.data().name.toUpperCase());
+            const isOutsourced = outsourceFinishes.some(f => finishRecipe.toUpperCase().includes(f));
+
             const shopPayload = {
                 id: shopJobId,
                 woNum: shopJobId,
                 soNum: hqOrder.soId || 'N/A',
+                poNum: hqOrder.poNum || null,
+                isOutsourced: isOutsourced,
+                finishRecipe: finishRecipe,
                 item: hqOrder.hqJobId || 'Custom App Order', 
                 qty: Number(hqOrder.totalParts) || 1,
                 reqDate: hqOrder.reqDate || "",
@@ -310,7 +318,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
                 note: hqOrder.memo || originalJob?.sidemark || "",
                 cpqSpecs: cpqSpecs, 
-                imageUrl: svgUri || null, // 🚀 Injects SVG safely
+                imageUrl: svgUri || null, 
                 createdAt: Date.now()
             };
 
@@ -378,6 +386,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                     <button onClick={() => deleteOrder('hq_sales_orders', so.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>🗑️</button>
                                 </div>
+                                {so.poNum && (
+                                    <div style={{ fontSize: '0.8rem', color: '#17a2b8', fontWeight: 'bold', marginBottom: '5px' }}>
+                                        PO: {so.poNum}
+                                    </div>
+                                )}
                                 {so.memo && (
                                     <div style={{ fontSize: '0.75rem', color: '#007bff', marginBottom: '10px', fontStyle: 'italic' }}>
                                         "{so.memo}"

@@ -530,7 +530,7 @@ const ShopFloor = () => {
     };
 
     const renderCustomTab = () => {
-        const activeOrders = customOrders.filter(o => o.status !== 'Completed').sort((a,b) => a.priority - b.priority);
+        const activeOrders = customOrders.filter(o => o.status !== 'Completed' && o.status !== 'Sent to Plating').sort((a,b) => a.priority - b.priority);
         const rods = activeOrders.filter(o => o.category === 'Cut to Size Rods');
         const fabs = activeOrders.filter(o => o.category === 'Custom Fabrication');
 
@@ -541,10 +541,11 @@ const ShopFloor = () => {
                     ^XA
                     ^FO50,50^A0N,40,40^FDWO: ${order.woNum}^FS
                     ^FO50,100^A0N,30,30^FDSO: ${order.soNum}^FS
-                    ^FO50,150^A0N,25,25^FDCustomer: ${order.clientName}^FS
-                    ^FO50,200^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
-                    ^FO50,250^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
-                    ^FO50,300^BY3,2,70^BCN,70,Y,N,N^FD${order.woNum}^FS
+                    ${order.poNum ? `^FO50,150^A0N,30,30^FDPO: ${order.poNum}^FS` : ''}
+                    ^FO50,${order.poNum ? '200' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
+                    ^FO50,${order.poNum ? '250' : '200'}^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
+                    ^FO50,${order.poNum ? '300' : '250'}^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
+                    ^FO50,${order.poNum ? '350' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.woNum}^FS
                     ^XZ
                 `;
                 // Route this via PrintNode API or raw socket to your Wilmington floor printers
@@ -562,23 +563,33 @@ const ShopFloor = () => {
             };
 
             const handleCompleteWithLabel = async () => {
-                if (!window.confirm(`Mark ${order.woNum} complete and print Zebra label?`)) return;
+                const actionText = order.isOutsourced ? 'complete and send to PLATING DISPATCH' : 'complete and print Zebra label';
+                if (!window.confirm(`Mark ${order.woNum} ${actionText}?`)) return;
                 
                 printZebraLabel(order);
                 
+                const finalStatus = order.isOutsourced ? 'Sent to Plating' : 'Completed';
+
                 await updateDoc(doc(db, "shop_custom_orders", order.id), { 
-                    status: 'Completed', completedAt: serverTimestamp(), completedBy: user.name 
+                    status: finalStatus, completedAt: serverTimestamp(), completedBy: user.name 
                 });
 
-                // Ping Pick/Pack App that custom staging is ready
-                await addDoc(collection(db, "global_messages"), { 
-                    sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', 
-                    msg: `STAGING ALERT: Custom parts for ${order.woNum} are arriving at staging.`, t: serverTimestamp(), isSystem: true 
-                });
+                if (order.isOutsourced) {
+                    await addDoc(collection(db, "global_messages"), { 
+                        sender: 'System', sourceApp: 'SHOP', target: 'ALL', 
+                        msg: `🚚 OUTSOURCE DISPATCH: Custom parts for ${order.woNum} (PO: ${order.poNum || 'PENDING'}) sent to plating/finishing vendor.`, t: serverTimestamp(), isSystem: true 
+                    });
+                } else {
+                    // Ping Pick/Pack App that custom staging is ready
+                    await addDoc(collection(db, "global_messages"), { 
+                        sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', 
+                        msg: `STAGING ALERT: Custom parts for ${order.woNum} are arriving at staging.`, t: serverTimestamp(), isSystem: true 
+                    });
 
-                const pendingForSO = customOrders.filter(o => o.soNum === order.soNum && o.status !== 'Completed' && o.id !== order.id);
-                if (pendingForSO.length === 0) {
-                    await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `✅ CUSTOM ORDER READY: All custom parts for SO ${order.soNum} have finished machining and are ready for the Finishing Floor!`, t: serverTimestamp(), readBy: [], isSystem: true });
+                    const pendingForSO = customOrders.filter(o => o.soNum === order.soNum && o.status !== 'Completed' && o.status !== 'Sent to Plating' && o.id !== order.id);
+                    if (pendingForSO.length === 0) {
+                        await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `✅ CUSTOM ORDER READY: All custom parts for SO ${order.soNum} have finished machining and are ready for the Finishing Floor!`, t: serverTimestamp(), readBy: [], isSystem: true });
+                    }
                 }
             };
 
@@ -588,9 +599,16 @@ const ShopFloor = () => {
                 <div style={{ background: '#fff', border: '1px solid #ccc', borderLeft: isRunning ? '6px solid #28a745' : (order.category === 'Cut to Size Rods' ? '6px solid #0056b3' : '6px solid #f39c12'), borderRadius: '8px', padding: '15px', marginBottom: '15px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                         <h4 style={{ margin: '0 0 5px 0', fontSize: '16px', color: '#333' }}>{order.item || order.partNum}</h4>
-                        <span style={{ background: isRunning ? '#28a745' : '#e9ecef', color: isRunning ? '#fff' : '#000', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' }}>
-                            {isRunning ? 'IN PROCESS' : `WO: ${order.woNum}`}
-                        </span>
+                        <div>
+                            <span style={{ background: isRunning ? '#28a745' : '#e9ecef', color: isRunning ? '#fff' : '#000', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' }}>
+                                {isRunning ? 'IN PROCESS' : `WO: ${order.woNum}`}
+                            </span>
+                            {order.isOutsourced && (
+                                <span style={{ marginLeft: '10px', background: '#17a2b8', color: '#fff', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' }}>
+                                    🚚 OUTSOURCED FINISH
+                                </span>
+                            )}
+                        </div>
                     </div>
                     <div style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>SO: {order.soNum}</div>
                     <div style={{ display: 'flex', gap: '15px', marginBottom: '10px', background: '#f8f9fa', padding: '10px', borderRadius: '6px' }}>
@@ -605,7 +623,9 @@ const ShopFloor = () => {
                         {!isRunning ? (
                             <button onClick={handleStartProcess} style={{ flex: 1.5, background: '#007bff', color: '#fff', border: 'none', padding: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>▶️ START PROCESS</button>
                         ) : (
-                            <button onClick={handleCompleteWithLabel} style={{ flex: 1.5, background: '#28a745', color: '#fff', border: 'none', padding: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>✅ COMPLETE & LABEL</button>
+                            <button onClick={handleCompleteWithLabel} style={{ flex: 1.5, background: order.isOutsourced ? '#17a2b8' : '#28a745', color: '#fff', border: 'none', padding: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>
+                                {order.isOutsourced ? '✅ SEND TO PLATING' : '✅ COMPLETE & LABEL'}
+                            </button>
                         )}
                     </div>
                 </div>
