@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, doc, updateDoc } from "firebase/firestore";
+import SharedMessaging from '../Shared/SharedMessaging';
 
-const PickPackApp = ({ currentUser = "Warehouse Lead", activeBrand = "ce" }) => {
+const PickPackApp = ({ currentUser = "Warehouse Lead", activeBrand = "ce", setActiveBrand }) => {
     const [activeTab, setActiveTab] = useState('QUEUE');
     const [jobs, setJobs] = useState([]);
     
@@ -121,64 +122,105 @@ const PickPackApp = ({ currentUser = "Warehouse Lead", activeBrand = "ce" }) => 
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#e5e5e5', fontFamily: 'monospace' }}>
-            {/* Header omitted for brevity, add PACKING tab to your header buttons */}
             
-            <main style={{ flex: 1, padding: '20px', display: 'flex', gap: '20px' }}>
+            {/* WAREHOUSE HEADER & TABS */}
+            <header style={{ background: '#28a745', color: '#fff', padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '4px solid #000' }}>
+                <div>
+                    <h1 style={{ margin: 0, fontSize: '1.5rem', letterSpacing: '1px' }}>WMS: PICK & PACK</h1>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '5px' }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>OPERATOR: {currentUser.toUpperCase()}</span>
+                        <select 
+                            value={activeBrand} 
+                            onChange={(e) => setActiveBrand && setActiveBrand(e.target.value)} 
+                            style={{ padding: '2px 5px', fontSize: '0.8rem', fontWeight: 'bold', background: '#fff', color: '#000', border: '2px solid #000', outline: 'none' }}
+                        >
+                            <option value="m2c">M2C Studio</option>
+                            <option value="uniquity">Uniquity</option>
+                            <option value="ce">Classical Elements</option>
+                            <option value="leyla">Leyla Gans</option>
+                        </select>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                    <button onClick={() => setActiveTab('QUEUE')} style={{ padding: '10px 20px', background: activeTab === 'QUEUE' ? '#fff' : 'transparent', color: activeTab === 'QUEUE' ? '#28a745' : '#fff', border: '2px solid #fff', fontWeight: 'bold', cursor: 'pointer', transition: '0.1s' }}>📦 PICK QUEUE</button>
+                    <button onClick={() => setActiveTab('PACKING')} style={{ padding: '10px 20px', background: activeTab === 'PACKING' ? '#fff' : 'transparent', color: activeTab === 'PACKING' ? '#28a745' : '#fff', border: '2px solid #fff', fontWeight: 'bold', cursor: 'pointer', transition: '0.1s' }}>🏷️ PACKAGING PREP</button>
+                    <button onClick={() => setActiveTab('MESSAGING')} style={{ padding: '10px 20px', background: activeTab === 'MESSAGING' ? '#fff' : 'transparent', color: activeTab === 'MESSAGING' ? '#28a745' : '#fff', border: '2px solid #fff', fontWeight: 'bold', cursor: 'pointer', transition: '0.1s' }}>💬 MESSAGING</button>
+                </div>
+            </header>
+
+            <main style={{ flex: 1, padding: '20px', overflowY: 'auto' }}>
                 
-                {/* 📦 ACTIVE PICK QUEUE */}
-                <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ padding: '15px', background: '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem' }}>AWAITING PICK (SMALL PARTS)</div>
-                    <div style={{ padding: '20px', overflowY: 'auto' }}>
-                        {jobs.filter(j => j.pickStatus === 'Pending').map(job => (
-                            <div key={job.id} style={{ border: '2px solid #ccc', padding: '15px', marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div>
-                                    <h3 style={{ margin: 0 }}>{job.id}</h3>
-                                    <div style={{ color: '#666' }}>{job.partsList?.length || 0} Line Items</div>
-                                </div>
-                                <button onClick={() => { setActivePickJob(job); setCurrentPickLine(0); }} style={{ padding: '15px 30px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }}>
-                                    START PICKING
-                                </button>
+                {/* 📦 TAB: PICK QUEUE */}
+                {activeTab === 'QUEUE' && (
+                    <div style={{ display: 'flex', gap: '20px', height: '100%' }}>
+                        <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ padding: '15px', background: '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem' }}>AWAITING PICK (SMALL PARTS)</div>
+                            <div style={{ padding: '20px', overflowY: 'auto' }}>
+                                {jobs.filter(j => j.pickStatus === 'Pending').map(job => (
+                                    <div key={job.id} style={{ border: '2px solid #ccc', padding: '15px', marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div>
+                                            <h3 style={{ margin: 0 }}>{job.id}</h3>
+                                            <div style={{ color: '#666' }}>{job.partsList?.length || 0} Line Items</div>
+                                        </div>
+                                        <button onClick={() => { setActivePickJob(job); setCurrentPickLine(0); }} style={{ padding: '15px 30px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }}>
+                                            START PICKING
+                                        </button>
+                                    </div>
+                                ))}
+                                {jobs.filter(j => j.pickStatus === 'Pending').length === 0 && (
+                                    <div style={{ color: '#888', fontStyle: 'italic' }}>No orders currently require picking.</div>
+                                )}
                             </div>
-                        ))}
-                    </div>
-                </div>
-
-                {/* 🔗 STAGING & MATCHING */}
-                <div style={{ width: '400px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ padding: '15px', background: '#f39c12', color: '#000', fontWeight: 'bold', fontSize: '1.2rem' }}>STAGING HANDSHAKE</div>
-                    <div style={{ padding: '20px' }}>
-                        <p style={{ color: '#666', fontWeight: 'bold' }}>Scan Shop Floor Custom Label to match with picked small parts.</p>
-                        <form onSubmit={handleStagingMatch}>
-                            <input autoFocus placeholder="SCAN SHOP LABEL..." value={stagingScan} onChange={e => setStagingScan(e.target.value)} style={{ width: '100%', padding: '15px', fontSize: '1.2rem', border: '3px solid #000', boxSizing: 'border-box' }} />
-                            <button type="submit" style={{ width: '100%', padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', marginTop: '10px', border: 'none', cursor: 'pointer' }}>MATCH ORDER</button>
-                        </form>
-
-                        <div style={{ marginTop: '30px', borderTop: '2px solid #eee', paddingTop: '15px' }}>
-                            <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>AWAITING SHOP MATCH:</div>
-                            {jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging').map(job => (
-                                <div key={job.id} style={{ background: '#fffdf5', border: '1px solid #f39c12', padding: '10px', marginBottom: '5px', fontSize: '0.9rem', fontWeight: 'bold' }}>
-                                    {job.id} (Picked, in racks)
-                                </div>
-                            ))}
                         </div>
-                    </div>
-                </div>
 
-                {/* 📦 PACKAGING PREP TAB (Can be toggled via State if preferred) */}
-                {activeTab === 'PACKING' && (
-                    <div style={{ position: 'absolute', inset: '100px 20px 20px 20px', background: '#fff', border: '4px solid #000', padding: '20px', overflowY: 'auto' }}>
-                        <h2 style={{ borderBottom: '2px solid #000', paddingBottom: '10px' }}>PACKAGING PREP QUEUE</h2>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
-                            {jobs.filter(j => j.pickStatus === 'Staged_Ready_For_Finishing').map(job => (
-                                <div key={job.id} style={{ border: '2px solid #ccc', padding: '20px' }}>
-                                    <h3 style={{ margin: '0 0 10px 0', color: '#007bff' }}>{job.id}</h3>
-                                    <div style={{ fontWeight: 'bold' }}>Dimensions: {job.dimensions?.length}"L x {job.dimensions?.width}"W</div>
-                                    <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '10px' }}>Review box sizes & tube lengths to prep materials while finishing cures.</div>
+                        <div style={{ width: '400px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ padding: '15px', background: '#f39c12', color: '#000', fontWeight: 'bold', fontSize: '1.2rem' }}>STAGING HANDSHAKE</div>
+                            <div style={{ padding: '20px' }}>
+                                <p style={{ color: '#666', fontWeight: 'bold' }}>Scan Shop Floor Custom Label to match with picked small parts.</p>
+                                <form onSubmit={handleStagingMatch}>
+                                    <input autoFocus placeholder="SCAN SHOP LABEL..." value={stagingScan} onChange={e => setStagingScan(e.target.value)} style={{ width: '100%', padding: '15px', fontSize: '1.2rem', border: '3px solid #000', boxSizing: 'border-box' }} />
+                                    <button type="submit" style={{ width: '100%', padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', marginTop: '10px', border: 'none', cursor: 'pointer' }}>MATCH ORDER</button>
+                                </form>
+
+                                <div style={{ marginTop: '30px', borderTop: '2px solid #eee', paddingTop: '15px' }}>
+                                    <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>AWAITING SHOP MATCH:</div>
+                                    {jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging').map(job => (
+                                        <div key={job.id} style={{ background: '#fffdf5', border: '1px solid #f39c12', padding: '10px', marginBottom: '5px', fontSize: '0.9rem', fontWeight: 'bold' }}>
+                                            {job.id} (Picked, in racks)
+                                        </div>
+                                    ))}
                                 </div>
-                            ))}
+                            </div>
                         </div>
                     </div>
                 )}
+
+                {/* 🏷️ TAB: PACKAGING PREP */}
+                {activeTab === 'PACKING' && (
+                    <div style={{ background: '#fff', border: '4px solid #000', padding: '20px', minHeight: '100%' }}>
+                        <h2 style={{ borderBottom: '2px solid #000', paddingBottom: '10px', color: '#007bff' }}>PACKAGING PREP QUEUE</h2>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+                            {jobs.filter(j => j.pickStatus === 'Staged_Ready_For_Finishing').map(job => (
+                                <div key={job.id} style={{ border: '2px solid #ccc', padding: '20px', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                                    <h3 style={{ margin: '0 0 10px 0', color: '#007bff' }}>{job.id}</h3>
+                                    <div style={{ fontWeight: 'bold' }}>Dimensions: {job.dimensions?.length || 0}"L x {job.dimensions?.width || 0}"W</div>
+                                    <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '10px' }}>Review box sizes & tube lengths to prep materials while finishing cures.</div>
+                                </div>
+                            ))}
+                            {jobs.filter(j => j.pickStatus === 'Staged_Ready_For_Finishing').length === 0 && (
+                                <div style={{ gridColumn: '1 / -1', color: '#888', fontStyle: 'italic' }}>No orders currently awaiting packaging prep.</div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {/* 💬 TAB: MESSAGING */}
+                {activeTab === 'MESSAGING' && (
+                    <div style={{ background: '#fff', border: '4px solid #000', height: '100%' }}>
+                        <SharedMessaging currentUser={currentUser} currentApp="PICK_PACK" writeLog={() => {}} />
+                    </div>
+                )}
+
             </main>
         </div>
     );
