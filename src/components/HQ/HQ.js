@@ -154,7 +154,7 @@ function HQ() {
         </div>
       </header>
 
-      <<nav style={{ display: 'flex', backgroundColor: '#fff', borderBottom: '3px solid #000', overflowX: 'auto' }}>
+     <nav style={{ display: 'flex', backgroundColor: '#fff', borderBottom: '3px solid #000', overflowX: 'auto' }}>
         {TABS.filter(t => myTabs.includes(t) && t !== 'ERP_WRITE_BACK').map((tab) => (
           <button
             key={tab}
