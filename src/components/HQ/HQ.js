@@ -38,7 +38,8 @@ const TABS = [
   '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library',
   '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
   '9. Client Vision', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
-  '14. Asset Gallery', '14.5 Batch Processor'
+  '14. Asset Gallery', '14.5 Batch Processor', 'ERP_WRITE_BACK'
+];
 ];
 
 function HQ() { 
@@ -155,8 +156,8 @@ function HQ() {
         </div>
       </header>
 
-      <nav style={{ display: 'flex', backgroundColor: '#fff', borderBottom: '3px solid #000', overflowX: 'auto' }}>
-        {TABS.filter(t => myTabs.includes(t)).map((tab) => (
+      <<nav style={{ display: 'flex', backgroundColor: '#fff', borderBottom: '3px solid #000', overflowX: 'auto' }}>
+        {TABS.filter(t => myTabs.includes(t) && t !== 'ERP_WRITE_BACK').map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}

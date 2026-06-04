@@ -99,6 +99,29 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [dynamicUploadProgress, setDynamicUploadProgress] = useState({});
   const [cloneSourceId, setCloneSourceId] = useState("");
 
+  const [userPerms, setUserPerms] = useState([]);
+  const [isPushingErp, setIsPushingErp] = useState(false);
+  const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
+
+  useEffect(() => {
+      if (!currentUser) return;
+      const unsubUser = onSnapshot(collection(db, "hq_users"), (snap) => {
+          const users = snap.docs.map(d => d.data());
+          const me = users.find(u => u.name === currentUser);
+          
+          if (me && me.role) {
+              onSnapshot(doc(db, "hq_config", "permissions"), (permSnap) => {
+                  if (permSnap.exists()) {
+                      setUserPerms(permSnap.data()[me.role] || []);
+                  }
+              });
+          }
+      });
+      return () => unsubUser();
+  }, [currentUser]);
+
+  const hasErpWriteAccess = isAdmin || userPerms.includes("ERP_WRITE_BACK");
+
   useEffect(() => { setAdminBrandFilter(activeBrand); }, [activeBrand]);
 
   useEffect(() => {
@@ -352,6 +375,47 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       await setDoc(doc(db, "Approved_Designs", activePart.id), { ...activePart, ...payload }, { merge: true });
       setTimeout(() => { setIsSaving(false); setActivePart(null); setUploadProgress(0); setCadUploadProgress(0); }, 500);
     } catch (err) { console.error(err); setIsSaving(false); alert("Failed to save."); }
+  };
+
+  const handlePushUpdatesToNetSuite = async () => {
+      if (!activePart || activePart.legacyErpId === "PENDING" || !activePart.netSuiteInternalId) {
+          return alert("This item is not mapped to a NetSuite Internal ID yet. Sync it from ERP first.");
+      }
+      if (!window.confirm(`Push current local updates for ${activePart.legacyErpId} directly to NetSuite?`)) return;
+
+      setIsPushingErp(true);
+      try {
+          const nsId = activePart.netSuiteInternalId;
+          const recordType = activePart.partClass === 'Inventory' ? 'inventoryitem' : 'assemblyitem';
+
+          const payload = {
+              itemid: editSpecs.tempLegacyId || activePart.legacyErpId,
+              displayname: editSpecs.tempName || activePart.itemName,
+              cost: parseFloat(editSpecs.cost) || 0,
+              custitem9: parseFloat(editSpecs.basePrice) || 0
+          };
+
+          const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${recordType}/${nsId}`;
+
+          const response = await fetch(FIREBASE_FUNCTION_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  targetUrl: targetUrl,
+                  method: 'PATCH',
+                  payload: payload
+              })
+          });
+
+          const result = await response.json();
+          if (!response.ok) throw new Error(JSON.stringify(result));
+
+          alert("✅ Successfully updated NetSuite ERP record!");
+      } catch (error) {
+          console.error("NetSuite Push Error:", error);
+          alert(`❌ Failed to push to NetSuite. Check console for details.`);
+      }
+      setIsPushingErp(false);
   };
 
   const toggleSystemWindowBrand = async (windowKey, brandId) => {
@@ -1037,6 +1101,17 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 
               <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
                 <button onClick={savePartUpdates} style={{ flex: 2, padding: '15px', background: isSaving ? '#28a745' : '#000', color: '#fff', fontWeight: 'bold', fontSize: '1rem', border: '2px solid #000', cursor: 'pointer', transition: '0.3s', boxShadow: '4px 4px 0 rgba(0,0,0,0.2)' }}>{isSaving ? "SAVED ✓" : `SAVE ${partClassFilter.toUpperCase()} CONFIGURATION`}</button>
+                
+                {hasErpWriteAccess && activePart.netSuiteInternalId && (
+                    <button 
+                        onClick={handlePushUpdatesToNetSuite} 
+                        disabled={isPushingErp} 
+                        style={{ flex: 1.5, padding: '15px', background: isPushingErp ? '#ccc' : '#6f42c1', color: '#fff', border: '2px solid #6f42c1', fontWeight: 'bold', cursor: isPushingErp ? 'wait' : 'pointer', boxShadow: '4px 4px 0 rgba(111, 66, 193, 0.2)' }}
+                    >
+                        {isPushingErp ? "☁️ SYNCING..." : "☁️ WRITE TO ERP"}
+                    </button>
+                )}
+                
                 {!activePart.isNew && <button onClick={handleDeletePart} style={{ flex: 1, padding: '15px', background: '#fff', color: '#d9534f', border: '2px solid #d9534f', fontWeight: 'bold', cursor: 'pointer', boxShadow: '4px 4px 0 rgba(217,83,79,0.2)' }}>🗑️ DELETE</button>}
               </div>
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query } from "firebase/firestore";
+import { collection, onSnapshot, query, doc } from "firebase/firestore";
 
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
@@ -16,15 +16,22 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     const [searchQuery, setSearchQuery] = useState("");
     const [syncLog, setSyncLog] = useState([]);
 
+    // --- NEW FILTER STATES ---
+    const [globalLists, setGlobalLists] = useState({});
+    const [collectionsData, setCollectionsData] = useState([]);
+    const [partClassFilter, setPartClassFilter] = useState("ALL");
+    const [typeFilter, setTypeFilter] = useState("");
+    const [collectionFilter, setCollectionFilter] = useState("");
+
     const addLog = (msg, type = 'info') => {
         const time = new Date().toLocaleTimeString();
         setSyncLog(prev => [{ time, msg, type }, ...prev]);
     };
 
-    // 1. Fetch Local HQ Library Data
+    // 1. Fetch Local HQ Library Data & Master Lists
     useEffect(() => {
         const q = query(collection(db, "Approved_Designs"));
-        const unsub = onSnapshot(q, (snap) => {
+        const unsubParts = onSnapshot(q, (snap) => {
             const parts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
             
             // Extract unique vendors for the dropdown
@@ -32,10 +39,19 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
             setVendors(uniqueVendors.sort());
             setHqParts(parts);
         });
-        return () => unsub();
+
+        const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
+            if (docSnap.exists()) setGlobalLists(docSnap.data());
+        });
+
+        const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => {
+            setCollectionsData(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        });
+
+        return () => { unsubParts(); unsubLists(); unsubCollections(); };
     }, []);
 
-    // 2. Fetch Live Inventory from NetSuite (Batched to bypass 1000 record limit)
+    // 2. Fetch Live Inventory from NetSuite (Batched)
     const pullNetSuiteStock = async () => {
         setIsSyncing(true);
         setSyncLog([]);
@@ -127,12 +143,11 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     // Calculate dynamic reorder suggestion
     const calculateSuggestedQty = (available, rop, moq, leadTime) => {
         if (available > rop) return 0;
-        // Basic dynamic rate: Suggest ordering the ROP deficit + a 30-day buffer based on Lead Time
-        const dynamicRateOfSale = 1.5; // Placeholder: 1.5 units per day
+        const dynamicRateOfSale = 1.5; 
         const leadTimeBuffer = leadTime ? (leadTime * dynamicRateOfSale) : 10; 
         
         let suggested = (rop - available) + leadTimeBuffer;
-        if (moq && suggested < moq) suggested = moq; // Must meet vendor MOQ
+        if (moq && suggested < moq) suggested = moq; 
         
         return Math.ceil(suggested);
     };
@@ -158,12 +173,11 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
 
         const poPayload = {
             vendor: activeVendor,
-            subsidiary: "2", // Default to CE or derive from activeBrand
+            subsidiary: "2", 
             memo: "Auto-Generated via Fab-OS Stock View",
             items: lineItems
         };
 
-        // Export as JSON for NetSuite Script consumption
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(poPayload, null, 2));
         const downloadAnchorNode = document.createElement('a');
         downloadAnchorNode.setAttribute("href", dataStr);
@@ -174,10 +188,10 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
 
         addLog(`✅ Exported PO Payload for ${activeVendor} (${lineItems.length} lines)`, "success");
         alert("✅ Purchase Order payload generated! Ready to push to NetSuite.");
-        setOrderDrafts({}); // Clear draft after export
+        setOrderDrafts({}); 
     };
 
-    // Filters
+    // --- ENRICHED INVENTORY & ADVANCED MULTI-FILTER ---
     const enrichedInventory = hqParts.map(part => {
         const erpId = (part.legacyErpId || part.itemId).toUpperCase();
         const stock = nsStock[erpId] || { onHand: 0, available: 0, onOrder: 0, backorder: 0 };
@@ -192,7 +206,32 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
 
     const displayItems = activeVendor 
         ? enrichedInventory.filter(p => p.manufacturingSpecs?.vendorName === activeVendor && !p.manufacturingSpecs?.isInHouse)
-        : enrichedInventory.filter(p => p.partClass === 'Inventory' && (p.itemName.toLowerCase().includes(searchQuery.toLowerCase()) || (p.legacyErpId || '').toLowerCase().includes(searchQuery.toLowerCase())));
+        : enrichedInventory.filter(part => {
+            const term = searchQuery.toLowerCase();
+            const specs = part.manufacturingSpecs || {};
+
+            // Search Term
+            const matchesSearch = part.itemName?.toLowerCase().includes(term) || 
+                                  (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term));
+            
+            // Product Type
+            let matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase() || (part.productType || "").toUpperCase() === typeFilter.toUpperCase();
+            
+            // Collection
+            const partCollections = specs.collections ? specs.collections.map(c=>c.toUpperCase()) : (specs.customData?.collection ? [specs.customData.collection.toUpperCase()] : []);
+            let matchesCollection = collectionFilter === "" || partCollections.includes(collectionFilter.toUpperCase()); 
+            
+            // Part Class
+            let matchesClass = true;
+            if (partClassFilter !== "ALL") {
+                if (partClassFilter === "INVENTORY") matchesClass = part.partClass === "Inventory" && specs.isInHouse !== false;
+                else if (partClassFilter === "OUTSOURCED") matchesClass = part.partClass === "Inventory" && specs.isInHouse === false;
+                else if (partClassFilter === "UNASSIGNED") matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && (!part.routingType || part.routingType === "UNASSIGNED");
+                else matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && part.routingType?.toUpperCase() === partClassFilter.toUpperCase();
+            }
+            
+            return matchesSearch && matchesType && matchesCollection && matchesClass;
+        });
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
@@ -203,15 +242,39 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                     <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#17a2b8' }}>ERP Stock & Sourcing View</h2>
                     <span style={{ fontSize: '0.8rem', color: '#666' }}>Live NetSuite Inventory Integration</span>
                 </div>
-                <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                
+                {/* --- ADVANCED FILTER BAR --- */}
+                <div style={{ display: 'flex', gap: '15px', width: '75%', alignItems: 'center', justifyContent: 'flex-end' }}>
+                    
+                    <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '10px', border: '2px solid #17a2b8', fontWeight: 'bold', background: '#e0f7fa', color: '#17a2b8', textTransform: 'uppercase' }}>
+                        <option value="ALL">ALL CLASSES</option>
+                        <option value="INVENTORY">RAW MAT / COMPONENTS</option>
+                        <option value="OUTSOURCED">OUTSOURCED COMPONENTS</option>
+                        <optgroup label="ASSEMBLIES & KITS">
+                            <option value="UNASSIGNED">UNASSIGNED / PENDING</option>
+                            {(globalLists.assemblyTypes || []).map(type => <option key={type} value={type}>{type}</option>)}
+                        </optgroup>
+                    </select>
+                    
+                    <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '10px', border: '2px solid #000', fontWeight: 'bold' }}>
+                        <option value="">ALL CATEGORIES</option>
+                        {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                    </select>
+
+                    <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '10px', border: '2px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold' }}>
+                        <option value="">ALL COLLECTIONS</option>
+                        {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                    </select>
+
                     <input 
                         placeholder="🔍 Search Global Inventory..." 
                         value={searchQuery} 
                         onChange={(e) => setSearchQuery(e.target.value)} 
                         disabled={!!activeVendor}
-                        style={{ padding: '10px', border: '2px solid #ccc', fontWeight: 'bold', width: '300px' }} 
+                        style={{ flex: 1, padding: '10px', border: '2px solid #ccc', fontWeight: 'bold' }} 
                     />
-                    <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '10px 20px', background: isSyncing ? '#ccc' : '#17a2b8', color: '#fff', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer', boxShadow: '3px 3px 0 #000' }}>
+                    
+                    <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '10px 20px', background: isSyncing ? '#ccc' : '#17a2b8', color: '#fff', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer', boxShadow: '3px 3px 0 #000', whiteSpace: 'nowrap' }}>
                         {isSyncing ? '🔄 SYNCING...' : '⬇️ PULL NETSUITE STOCK'}
                     </button>
                 </div>
