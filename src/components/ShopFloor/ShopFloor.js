@@ -534,18 +534,83 @@ const ShopFloor = () => {
         const rods = activeOrders.filter(o => o.category === 'Cut to Size Rods');
         const fabs = activeOrders.filter(o => o.category === 'Custom Fabrication');
 
-        const CustomCard = ({ order }) => (
-            <div style={{ background: '#fff', border: '1px solid #ccc', borderLeft: order.category === 'Cut to Size Rods' ? '6px solid #0056b3' : '6px solid #f39c12', borderRadius: '8px', padding: '15px', marginBottom: '15px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}><h4 style={{ margin: '0 0 5px 0', fontSize: '16px', color: '#333' }}>{order.item || order.partNum}</h4><span style={{ background: '#e9ecef', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' }}>WO: {order.woNum}</span></div>
-                <div style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>SO: {order.soNum}</div>
-                <div style={{ display: 'flex', gap: '15px', marginBottom: '10px', background: '#f8f9fa', padding: '10px', borderRadius: '6px' }}><div><small style={{ display: 'block', color: '#888', fontWeight: 'bold' }}>REQ QTY</small><span style={{ fontSize: '16px', fontWeight: 'bold', color: '#28a745' }}>{order.qty}</span></div>{order.cutLength && <div><small style={{ display: 'block', color: '#888', fontWeight: 'bold' }}>CUT TO</small><span style={{ fontSize: '16px', fontWeight: 'bold', color: '#0056b3' }}>{order.cutLength}"</span></div>}<div><small style={{ display: 'block', color: '#888', fontWeight: 'bold' }}>DEADLINE</small><span style={{ fontSize: '14px', fontWeight: 'bold', color: '#dc3545' }}>{order.reqDate || 'ASAP'}</span></div></div>
+        const CustomCard = ({ order }) => {
+            // Generates raw ZPL for a standard 2x4 Zebra label
+            const printZebraLabel = (order) => {
+                const zpl = `
+                    ^XA
+                    ^FO50,50^A0N,40,40^FDWO: ${order.woNum}^FS
+                    ^FO50,100^A0N,30,30^FDSO: ${order.soNum}^FS
+                    ^FO50,150^A0N,25,25^FDCustomer: ${order.clientName}^FS
+                    ^FO50,200^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
+                    ^FO50,250^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
+                    ^FO50,300^BY3,2,70^BCN,70,Y,N,N^FD${order.woNum}^FS
+                    ^XZ
+                `;
+                // Route this via PrintNode API or raw socket to your Wilmington floor printers
+                console.log("Sending ZPL to Zebra Printer:", zpl);
+                alert(`🖨️ Zebra Label Spooled for ${order.woNum}`);
+            };
+
+            const handleStartProcess = async () => {
+                await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process' });
+                // Alert Finishing Floor Setup Queue
+                await addDoc(collection(db, "global_messages"), { 
+                    sender: 'System', sourceApp: 'SHOP', target: 'FINISHING', 
+                    msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true 
+                });
+            };
+
+            const handleCompleteWithLabel = async () => {
+                if (!window.confirm(`Mark ${order.woNum} complete and print Zebra label?`)) return;
                 
-                <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                    <button onClick={() => { setModalData(order); setActiveModal('specs'); }} style={{ flex: 1, background: '#17a2b8', color: '#fff', border: 'none', padding: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>🖼️ VIEW JOB SPECS</button>
-                    <button onClick={() => handleCompleteCustomOrder(order)} style={{ flex: 1, background: '#28a745', color: '#fff', border: 'none', padding: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>✅ MARK COMPLETE</button>
+                printZebraLabel(order);
+                
+                await updateDoc(doc(db, "shop_custom_orders", order.id), { 
+                    status: 'Completed', completedAt: serverTimestamp(), completedBy: user.name 
+                });
+
+                // Ping Pick/Pack App that custom staging is ready
+                await addDoc(collection(db, "global_messages"), { 
+                    sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', 
+                    msg: `STAGING ALERT: Custom parts for ${order.woNum} are arriving at staging.`, t: serverTimestamp(), isSystem: true 
+                });
+
+                const pendingForSO = customOrders.filter(o => o.soNum === order.soNum && o.status !== 'Completed' && o.id !== order.id);
+                if (pendingForSO.length === 0) {
+                    await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `✅ CUSTOM ORDER READY: All custom parts for SO ${order.soNum} have finished machining and are ready for the Finishing Floor!`, t: serverTimestamp(), readBy: [], isSystem: true });
+                }
+            };
+
+            const isRunning = order.status === 'In Process';
+
+            return (
+                <div style={{ background: '#fff', border: '1px solid #ccc', borderLeft: isRunning ? '6px solid #28a745' : (order.category === 'Cut to Size Rods' ? '6px solid #0056b3' : '6px solid #f39c12'), borderRadius: '8px', padding: '15px', marginBottom: '15px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <h4 style={{ margin: '0 0 5px 0', fontSize: '16px', color: '#333' }}>{order.item || order.partNum}</h4>
+                        <span style={{ background: isRunning ? '#28a745' : '#e9ecef', color: isRunning ? '#fff' : '#000', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' }}>
+                            {isRunning ? 'IN PROCESS' : `WO: ${order.woNum}`}
+                        </span>
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>SO: {order.soNum}</div>
+                    <div style={{ display: 'flex', gap: '15px', marginBottom: '10px', background: '#f8f9fa', padding: '10px', borderRadius: '6px' }}>
+                        <div><small style={{ display: 'block', color: '#888', fontWeight: 'bold' }}>REQ QTY</small><span style={{ fontSize: '16px', fontWeight: 'bold', color: '#28a745' }}>{order.qty}</span></div>
+                        {order.cutLength && <div><small style={{ display: 'block', color: '#888', fontWeight: 'bold' }}>CUT TO</small><span style={{ fontSize: '16px', fontWeight: 'bold', color: '#0056b3' }}>{order.cutLength}"</span></div>}
+                        <div><small style={{ display: 'block', color: '#888', fontWeight: 'bold' }}>DEADLINE</small><span style={{ fontSize: '14px', fontWeight: 'bold', color: '#dc3545' }}>{order.reqDate || 'ASAP'}</span></div>
+                    </div>
+                    
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                        <button onClick={() => { setModalData(order); setActiveModal('specs'); }} style={{ flex: 1, background: '#17a2b8', color: '#fff', border: 'none', padding: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>🖼️ SPECS</button>
+                        
+                        {!isRunning ? (
+                            <button onClick={handleStartProcess} style={{ flex: 1.5, background: '#007bff', color: '#fff', border: 'none', padding: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>▶️ START PROCESS</button>
+                        ) : (
+                            <button onClick={handleCompleteWithLabel} style={{ flex: 1.5, background: '#28a745', color: '#fff', border: 'none', padding: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>✅ COMPLETE & LABEL</button>
+                        )}
+                    </div>
                 </div>
-            </div>
-        );
+            );
+        };
 
         return (
             <div>

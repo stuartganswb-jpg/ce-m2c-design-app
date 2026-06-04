@@ -382,8 +382,11 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               const smallParts = (wo.partsList || []).filter(p => p.name.toUpperCase().includes('RING') || p.name.toUpperCase().includes('FINIAL') || p.name.toUpperCase().includes('BRACKET'));
               const customParts = (wo.partsList || []).filter(p => p.name.toUpperCase().includes('POLE') || p.name.toUpperCase().includes('TRACK') || p.name.toUpperCase().includes('SPLICE'));
 
+              const customPartsStatus = wo.customPartsStatus || 'Pending Shop';
+              const isCustomRunning = customPartsStatus === 'In Process';
+
               return (
-                  <div key={`note-${wo.id}`} style={{ background: '#f4f4f4', border: '2px solid #333', padding: '15px', boxShadow: '-6px 6px 0px rgba(0,0,0,0.1)' }}>
+                  <div key={`note-${wo.id}`} style={{ background: '#f4f4f4', border: isCustomRunning ? '3px solid #28a745' : '2px solid #333', padding: '15px', boxShadow: '-6px 6px 0px rgba(0,0,0,0.1)' }}>
                       <div style={{ fontWeight: 'bold', borderBottom: '2px solid #333', paddingBottom: '8px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                           <div style={{ display: 'flex', flexDirection: 'column' }}>
                               <span style={{ fontSize: '0.9rem', color: '#007bff' }}>WO: {wo.id}</span>
@@ -392,6 +395,24 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           <span style={{ color: '#fff', background: '#CC6600', padding: '3px 8px', fontSize: '0.75rem', fontWeight: 'bold' }}>{wo.recipe}</span>
                       </div>
                       
+                      {/* Custom Fab Status Indicator */}
+                      <div style={{ padding: '8px', background: isCustomRunning ? '#eafaf1' : '#eee', border: isCustomRunning ? '1px solid #28a745' : '1px solid #ccc', marginBottom: '10px', fontSize: '0.8rem', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span>CUSTOM FAB STATUS:</span>
+                          <span style={{ color: isCustomRunning ? '#28a745' : '#666' }}>{isCustomRunning ? '🟢 IN PROCESS' : '⚪ IN QUEUE'}</span>
+                      </div>
+
+                      {/* Dispatch Button */}
+                      {isCustomRunning && !wo.sentToPickPack && (
+                          <button 
+                              onClick={async () => {
+                                  await updateDoc(doc(db, "fin_workorders", wo.id), { sentToPickPack: true, pickStatus: 'Pending' });
+                                  alert(`Small parts for ${wo.id} dispatched to Pick/Pack App.`);
+                              }}
+                              style={{ width: '100%', padding: '10px', background: '#007bff', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', marginBottom: '10px', fontSize: '0.75rem' }}>
+                              📤 DISPATCH SMALL PARTS TO PICK
+                          </button>
+                      )}
+
                       <div style={{ fontSize: '0.7rem', color: '#333', marginBottom: '5px', fontWeight: 'bold', textTransform: 'uppercase', background: '#e3f2fd', padding: '4px', border: '1px solid #007bff' }}>
                           MACHINE LOADOUT: {smallParts.reduce((acc, p) => acc + p.qty, 0)} PARTS
                       </div>
