@@ -52,7 +52,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         loadRTGOrders();
     }, [activeBrand]);
 
-    // 🚀 THE DIAGNOSTIC NET (V3): Properly prefixed to satisfy the 400 'Unknown Identifier' Error
+    // 🚀 THE DIAGNOSTIC NET (V4): Added ORDER BY to bypass the 1000 record pagination limit
     const pullNSSalesOrders = async () => {
         setIsSyncing(true);
         setSyncLog([]); 
@@ -61,7 +61,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
             addLog(`Initiating Wide Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
-            // 🚀 We explicitly use lowercase 'transaction.' as demanded by the NetSuite error log
+            // 🚀 Added ORDER BY transaction.id DESC to ensure we get the NEWEST 1000 orders
             const q = `
                 SELECT 
                     transaction.id AS ns_id,
@@ -74,9 +74,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 FROM Transaction
                 WHERE transaction.type = 'SalesOrd' 
                 AND transaction.subsidiary = ${subsidiaryId}
+                ORDER BY transaction.id DESC
             `;
             
-            addLog("Executing SuiteQL: Pulling Sales Orders to evaluate locally...", "info");
+            addLog("Executing SuiteQL: Pulling the 1000 NEWEST Sales Orders to evaluate locally...", "info");
 
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
@@ -92,7 +93,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             if (!response.ok) throw new Error(JSON.stringify(result));
             
             const records = result.items || [];
-            addLog(`NetSuite returned ${records.length} total orders for subsidiary. Isolating App Quotes...`, records.length > 0 ? "success" : "warn");
+            addLog(`NetSuite returned ${records.length} recent orders for subsidiary. Isolating App Quotes...`, records.length > 0 ? "success" : "warn");
 
             let newOrders = 0;
             let skippedOrganic = 0;
