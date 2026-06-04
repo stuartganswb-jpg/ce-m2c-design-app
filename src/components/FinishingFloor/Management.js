@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import { db } from '../../firebase';
 import { doc, setDoc, deleteDoc, collection, getDocs, writeBatch } from "firebase/firestore";
-import { initializeApp } from 'firebase/app';
-import { getFirestore, collection as oldCol, getDocs as oldGetDocs } from 'firebase/firestore';
 
 const btnStyle = { padding: '10px 15px', border: 'none', borderRadius: 0, cursor: 'pointer', fontWeight: 'bold', textTransform: 'uppercase' };
 const inputStyle = { padding: '8px', border: '2px solid #ccc', borderRadius: 0, width: '100%', boxSizing: 'border-box', fontFamily: 'Avenir, sans-serif' };
@@ -199,6 +197,44 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                         ))}
                     </div>
                 </div>
+
+                {/* RESTORED PERMISSIONS MATRIX */}
+                <h2 style={{ borderBottom: '2px solid #333', paddingBottom: '10px', marginTop: '30px', color: '#333' }}>PERMISSIONS MATRIX</h2>
+                <div style={{ background: '#fff', border: '2px solid #333', padding: '20px', overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center', fontSize: '0.75rem' }}>
+                        <thead style={{ background: '#eee' }}>
+                            <tr>
+                                <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #000' }}>TAB</th>
+                                {ROLES.map(r => (
+                                    <th key={r} style={{ padding: '10px', borderBottom: '2px solid #000', borderLeft: '1px solid #ccc' }}>
+                                        {r.toUpperCase().replace(/_/g, ' ')}
+                                    </th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {TABS.map(tab => (
+                                <tr key={tab} style={{ borderBottom: '1px solid #eee' }}>
+                                    <td style={{ padding: '10px', textAlign: 'left', fontWeight: 'bold', borderRight: '2px solid #eee' }}>{tab}</td>
+                                    {ROLES.map(role => (
+                                        <td key={role} style={{ padding: '10px', borderLeft: '1px solid #eee' }}>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={permissions[role]?.includes(tab) || false} 
+                                                onChange={() => togglePermission(tab, role)} 
+                                                style={{ cursor: 'pointer', transform: 'scale(1.2)' }}
+                                            />
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    <button onClick={handleSavePermissions} style={{ ...btnStyle, width: '100%', background: '#28a745', color: '#fff', marginTop: '15px' }}>
+                        💾 SAVE PERMISSIONS MATRIX
+                    </button>
+                </div>
+
             </div>
 
             <div>
