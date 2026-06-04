@@ -52,31 +52,32 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         loadRTGOrders();
     }, [activeBrand]);
 
-    // 🚀 THE WIDE NET: Pulls all orders, removes status from SQL, evaluates locally.
+    // 🚀 THE DIAGNOSTIC NET (V2): Prefixed with 'Transaction.' to satisfy NetSuite's strict parser
     const pullNSSalesOrders = async () => {
         setIsSyncing(true);
         setSyncLog([]); 
         
         try {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
-            addLog(`Initiating Wide Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
+            addLog(`Initiating Diagnostic Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
-            // 🚀 Removed the Status Filter. We are pulling ALL Sales Orders for this subsidiary.
+            // 🚀 Restored Transaction. prefixes to prevent the 400 'Unknown Identifier' error.
+            // 🚀 Still pulling ALL SalesOrders (no status filter) to diagnose what happens locally.
             const q = `
                 SELECT 
-                    id,
-                    tranid,
-                    custbody50,
-                    entity,
-                    trandate,
-                    memo,
-                    status
+                    Transaction.id AS ns_id,
+                    Transaction.tranid AS so_num,
+                    Transaction.custbody50 AS hq_job_id,
+                    Transaction.entity AS customer_id,
+                    Transaction.trandate,
+                    Transaction.memo,
+                    Transaction.status AS raw_status
                 FROM Transaction
-                WHERE type = 'SalesOrd' 
-                AND subsidiary = ${subsidiaryId}
+                WHERE Transaction.type = 'SalesOrd' 
+                AND Transaction.subsidiary = ${subsidiaryId}
             `;
             
-            addLog("Executing SuiteQL: Bypassing SQL Status filters. Pulling raw data...", "info");
+            addLog("Executing SuiteQL: Pulling all Sales Orders to evaluate locally...", "info");
 
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
@@ -92,18 +93,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             if (!response.ok) throw new Error(JSON.stringify(result));
             
             const records = result.items || [];
-            addLog(`NetSuite returned ${records.length} total Sales Orders. Scanning for App Quotes...`, records.length > 0 ? "success" : "warn");
+            addLog(`NetSuite returned ${records.length} total open orders. Isolating App Quotes...`, records.length > 0 ? "success" : "warn");
 
             let newOrders = 0;
             let skippedOrganic = 0;
             let skippedStatus = 0;
             
             for (const row of records) {
-                const hqJobId = row.custbody50;
-                const rawStatus = row.status || 'UNKNOWN';
+                const hqJobId = row.hq_job_id;
+                const rawStatus = row.raw_status || 'UNKNOWN';
 
                 // 🚀 DIAGNOSTIC TRACKER: Look specifically for your test order
-                if (row.tranid === 'SO58232' || row.tranid === '58232') {
+                if (row.so_num === 'SO58232' || row.so_num === '58232') {
                     addLog(`🎯 FOUND SO58232! Internal Status: [${rawStatus}], Job ID: [${hqJobId || 'NULL'}]`, "warn");
                 }
 
@@ -119,16 +120,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     continue; 
                 }
 
-                const hqSalesOrderId = `SO-${row.tranid}`;
+                const hqSalesOrderId = `SO-${row.so_num}`;
                 const soRef = doc(db, "hq_sales_orders", hqSalesOrderId);
                 const soSnap = await getDoc(soRef);
                 
                 if (!soSnap.exists()) {
                     await setDoc(soRef, {
                         id: hqSalesOrderId,
-                        soId: row.tranid,
-                        nsInternalId: row.id,
-                        customer: `NS Entity ID: ${row.entity || 'Unknown'}`,
+                        soId: row.so_num,
+                        nsInternalId: row.ns_id,
+                        customer: `NS Entity ID: ${row.customer_id || 'Unknown'}`,
                         status: "Approved",
                         brand: activeBrand,
                         recipe: "PENDING-RECIPE", 
