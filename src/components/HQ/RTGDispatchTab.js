@@ -52,32 +52,31 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         loadRTGOrders();
     }, [activeBrand]);
 
-    // 🚀 THE DIAGNOSTIC NET: Pulls all orders, filters out the non-app ones locally.
+    // 🚀 THE WIDE NET: Pulls all orders, removes status from SQL, evaluates locally.
     const pullNSSalesOrders = async () => {
         setIsSyncing(true);
         setSyncLog([]); 
         
         try {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
-            addLog(`Initiating Diagnostic Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
+            addLog(`Initiating Wide Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
-            // 🚀 Restored the Transaction prefix to fix the 400 error.
-            // 🚀 Removed custbody50 from the WHERE clause so NetSuite doesn't filter it out prematurely.
+            // 🚀 Removed the Status Filter. We are pulling ALL Sales Orders for this subsidiary.
             const q = `
                 SELECT 
-                    Transaction.id,
-                    Transaction.tranid,
-                    Transaction.custbody50,
-                    Transaction.entity,
-                    Transaction.trandate,
-                    Transaction.memo
+                    id,
+                    tranid,
+                    custbody50,
+                    entity,
+                    trandate,
+                    memo,
+                    status
                 FROM Transaction
-                WHERE Transaction.type = 'SalesOrd' 
-                AND Transaction.status IN ('SalesOrd:A', 'SalesOrd:B')
-                AND Transaction.subsidiary = ${subsidiaryId}
+                WHERE type = 'SalesOrd' 
+                AND subsidiary = ${subsidiaryId}
             `;
             
-            addLog("Executing SuiteQL: Pulling all open Sales Orders to evaluate locally...", "info");
+            addLog("Executing SuiteQL: Bypassing SQL Status filters. Pulling raw data...", "info");
 
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
@@ -93,18 +92,31 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             if (!response.ok) throw new Error(JSON.stringify(result));
             
             const records = result.items || [];
-            addLog(`NetSuite returned ${records.length} total open orders. Isolating App Quotes...`, records.length > 0 ? "success" : "warn");
+            addLog(`NetSuite returned ${records.length} total Sales Orders. Scanning for App Quotes...`, records.length > 0 ? "success" : "warn");
 
             let newOrders = 0;
             let skippedOrganic = 0;
+            let skippedStatus = 0;
             
             for (const row of records) {
                 const hqJobId = row.custbody50;
+                const rawStatus = row.status || 'UNKNOWN';
 
-                // 🚀 LOCAL FILTER: Check if the custom field matches our App's signature
+                // 🚀 DIAGNOSTIC TRACKER: Look specifically for your test order
+                if (row.tranid === 'SO58232' || row.tranid === '58232') {
+                    addLog(`🎯 FOUND SO58232! Internal Status: [${rawStatus}], Job ID: [${hqJobId || 'NULL'}]`, "warn");
+                }
+
+                // 1. Check if it's an App-generated Quote
                 if (!hqJobId || !hqJobId.startsWith('QUOTE-')) {
                     skippedOrganic++;
-                    continue; // Skip organic NetSuite orders entirely
+                    continue; 
+                }
+
+                // 2. Local Status Filter (Checking common variations of Pending Approval/Fulfillment)
+                if (!['SalesOrd:A', 'SalesOrd:B', 'A', 'B'].includes(rawStatus)) {
+                    skippedStatus++;
+                    continue; 
                 }
 
                 const hqSalesOrderId = `SO-${row.tranid}`;
@@ -134,7 +146,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 }
             }
             
-            addLog(`✅ Sync complete. Added ${newOrders} new orders. (Ignored ${skippedOrganic} organic NetSuite orders).`, "success");
+            addLog(`✅ Sync complete. Added ${newOrders} new orders. (Ignored ${skippedOrganic} organic orders, ${skippedStatus} wrong status).`, "success");
             loadRTGOrders();
         } catch(e) {
             console.error(e);
