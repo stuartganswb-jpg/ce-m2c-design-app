@@ -42,19 +42,19 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         addLog("Initiating SuiteQL pull for Item Inventory...", "info");
 
         try {
-            // SuiteQL 'Item' table uses 'totalquantityonhand'. 
-            // 'quantityavailable' is typically location-specific, so we calculate it locally to prevent schema errors.
+            // The generic 'Item' table requires the 'total' prefix for global cross-location roll-ups.
             const q = `
                 SELECT 
                     itemid AS legacy_id,
-                    totalquantityonhand AS quantityonhand,
-                    quantityonorder,
-                    quantitybackordered,
+                    totalquantityonhand,
+                    totalquantityavailable,
+                    totalquantityonorder,
+                    totalquantitybackordered,
                     averagecost
                 FROM Item
             `;
             
-            addLog(`Executing Query: Pulling on-hand, on-order, and backordered quantities...`, "info");
+            addLog(`Executing Query: Pulling total global quantities (Hand, Avail, Order, Backorder)...`, "info");
 
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
@@ -74,27 +74,15 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
             const stockMap = {};
             (result.items || []).forEach(row => {
                 if (row.legacy_id) {
-                    const onHand = parseInt(row.quantityonhand) || 0;
-                    const backorder = parseInt(row.quantitybackordered) || 0;
-                    
                     stockMap[row.legacy_id.toUpperCase()] = {
-                        onHand: onHand,
-                        available: onHand - backorder, // Safely calculated locally
-                        onOrder: parseInt(row.quantityonorder) || 0,
-                        backorder: backorder,
+                        onHand: parseInt(row.totalquantityonhand) || 0,
+                        available: parseInt(row.totalquantityavailable) || 0,
+                        onOrder: parseInt(row.totalquantityonorder) || 0,
+                        backorder: parseInt(row.totalquantitybackordered) || 0,
                         cost: parseFloat(row.averagecost) || 0
                     };
                 }
             });
-            
-            setNsStock(stockMap);
-            addLog(`✅ Sync Complete. Inventory matched and updated successfully.`, "success");
-        } catch (error) {
-            console.error("NetSuite Sync Error:", error);
-            addLog(`❌ FAILED: ${error.message}`, "error");
-        }
-        setIsSyncing(false);
-    };
 
     // Calculate dynamic reorder suggestion
     const calculateSuggestedQty = (available, rop, moq, leadTime) => {
