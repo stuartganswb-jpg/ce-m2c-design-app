@@ -52,7 +52,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         loadRTGOrders();
     }, [activeBrand]);
 
-    // 🚀 THE DIAGNOSTIC NET (V4): Added ORDER BY to bypass the 1000 record pagination limit
     const pullNSSalesOrders = async () => {
         setIsSyncing(true);
         setSyncLog([]); 
@@ -61,7 +60,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
             addLog(`Initiating Wide Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
-            // 🚀 Added ORDER BY transaction.id DESC to ensure we get the NEWEST 1000 orders
             const q = `
                 SELECT 
                     transaction.id AS ns_id,
@@ -74,10 +72,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 FROM Transaction
                 WHERE transaction.type = 'SalesOrd' 
                 AND transaction.subsidiary = ${subsidiaryId}
-                ORDER BY transaction.id DESC
             `;
             
-            addLog("Executing SuiteQL: Pulling the 1000 NEWEST Sales Orders to evaluate locally...", "info");
+            addLog("Executing SuiteQL: Pulling Sales Orders to evaluate locally...", "info");
 
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
@@ -93,7 +90,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             if (!response.ok) throw new Error(JSON.stringify(result));
             
             const records = result.items || [];
-            addLog(`NetSuite returned ${records.length} recent orders for subsidiary. Isolating App Quotes...`, records.length > 0 ? "success" : "warn");
+            addLog(`NetSuite returned ${records.length} total orders for subsidiary. Isolating App Quotes...`, records.length > 0 ? "success" : "warn");
 
             let newOrders = 0;
             let skippedOrganic = 0;
@@ -103,18 +100,15 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 const hqJobId = row.hq_job_id;
                 const rawStatus = row.raw_status || 'UNKNOWN';
 
-                // 🚀 DIAGNOSTIC TRACKER: Look specifically for your test order
                 if (row.so_num === 'SO58232' || row.so_num === '58232') {
                     addLog(`🎯 FOUND SO58232! Internal Status: [${rawStatus}], Job ID: [${hqJobId || 'NULL'}]`, "warn");
                 }
 
-                // 1. Check if it's an App-generated Quote
                 if (!hqJobId || !hqJobId.startsWith('QUOTE-')) {
                     skippedOrganic++;
                     continue; 
                 }
 
-                // 2. Local Status Filter (Checking common variations of Pending Approval/Fulfillment)
                 if (!['SalesOrd:A', 'SalesOrd:B', 'A', 'B'].includes(rawStatus)) {
                     skippedStatus++;
                     continue; 
@@ -157,7 +151,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    // --- THE BRIDGE: HQ to Finishing Floor ---
+    // --- 🚀 THE FINISHING BRIDGE: HQ to Finishing Floor ---
     const pushToFinishing = async (hqOrder, orderType) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
 
@@ -166,13 +160,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             
             const finPayload = {
                 id: finWorkOrderId,
+                displayId: finWorkOrderId, 
+                woNum: finWorkOrderId,
                 orderType: orderType,
                 soId: hqOrder.soId || null,
+                soNum: hqOrder.soId || null,
                 customer: hqOrder.customer || "Internal Stock", 
+                clientName: hqOrder.customer || "Internal Stock", 
                 recipe: hqOrder.recipe || "PENDING-RECIPE",
                 reqDate: hqOrder.reqDate || "",
                 type: hqOrder.type || "Mixed", 
                 totalParts: Number(hqOrder.totalParts) || 1,
+                note: hqOrder.memo || "", // Passes NetSuite memo to the Golden Payload Modal
                 
                 dimensions: {
                     length: Number(hqOrder.length) || 10,
@@ -181,6 +180,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 },
                 
                 currentPhase: "Setup",
+                stepStatus: 'Pending', // Strictly required for SetupQueue.js start buttons
                 currentStepIndex: 0,
                 tasks: {
                     setup: { status: 'Pending', assignedTo: null }
@@ -201,6 +201,44 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             console.error("Dispatch Error:", error);
             addLog(`Dispatch Failed: ${error.message}`, "error");
             alert("Failed to push to Finishing Floor. Check permissions/console.");
+        }
+    };
+
+    // --- 🚀 NEW SHOP BRIDGE: HQ to Shop Floor Custom Fabrication ---
+    const pushToShop = async (hqOrder, orderType) => {
+        if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Shop Floor Custom Fabrication Queue?`)) return;
+
+        try {
+            const shopJobId = orderType === 'sales' ? `SHOP-${hqOrder.soId || Date.now()}` : `SHOP-${hqOrder.woId || Date.now()}`;
+            
+            const shopPayload = {
+                id: shopJobId,
+                woNum: shopJobId,
+                soNum: hqOrder.soId || 'N/A',
+                item: hqOrder.hqJobId || 'Custom App Order', 
+                qty: Number(hqOrder.totalParts) || 1,
+                reqDate: hqOrder.reqDate || "",
+                category: 'Custom Fabrication', // This strictly routes it to the right column in ShopFloor.js
+                status: 'Pending',
+                priority: 999,
+                clientName: hqOrder.customer || "Internal Stock",
+                note: hqOrder.memo || "", // Passes NetSuite memo to the Golden Payload Modal
+                createdAt: Date.now()
+            };
+
+            await setDoc(doc(db, "shop_custom_orders", shopJobId), shopPayload);
+
+            const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
+            await updateDoc(doc(db, collectionName, hqOrder.id), { status: "Dispatched_Shop" });
+
+            addLog(`Dispatched ${shopJobId} to Shop Floor!`, "success");
+            alert(`Successfully pushed ${shopJobId} to Shop Floor Custom Fabrication Queue!`);
+            loadRTGOrders(); 
+
+        } catch (error) {
+            console.error("Dispatch Error:", error);
+            addLog(`Dispatch Failed: ${error.message}`, "error");
+            alert("Failed to push to Shop Floor. Check permissions/console.");
         }
     };
 
@@ -259,7 +297,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                 )}
                                 <div style={{ display: 'flex', flexWrap: 'wrap' }}>
                                     <button style={{ ...btnStyle, background: '#CC6600' }} onClick={() => pushToFinishing(so, 'sales')}>Push to Finishing</button>
-                                    <button style={{ ...btnStyle, background: '#555' }} onClick={() => alert('Shop Floor push coming soon')}>Push to Shop</button>
+                                    <button style={{ ...btnStyle, background: '#f39c12', color: '#000' }} onClick={() => pushToShop(so, 'sales')}>Push to Shop</button>
                                 </div>
                             </div>
                         ))}
@@ -280,7 +318,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                 </div>
                                 <div style={{ display: 'flex', flexWrap: 'wrap' }}>
                                     <button style={{ ...btnStyle, background: '#CC6600' }} onClick={() => pushToFinishing(wo, 'stock')}>Push to Finishing</button>
-                                    <button style={{ ...btnStyle, background: '#555' }} onClick={() => alert('Shop Floor push coming soon')}>Push to Shop</button>
+                                    <button style={{ ...btnStyle, background: '#f39c12', color: '#000' }} onClick={() => pushToShop(wo, 'stock')}>Push to Shop</button>
                                 </div>
                             </div>
                         ))}
