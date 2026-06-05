@@ -3,6 +3,8 @@ import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
+const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
+
 const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [assets, setAssets] = useState([]);
     const [hqParts, setHqParts] = useState([]);
@@ -12,7 +14,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [inhouseFinishes, setInhouseFinishes] = useState([]);
 
     const [globalLists, setGlobalLists] = useState({ prodTypes: [], customers: [] });
-    const [collectionsData, setCollectionsData] = useState([]); // 🚀 Hooked up to new Collection DB
+    const [collectionsData, setCollectionsData] = useState([]);
 
     const [searchQuery, setSearchQuery] = useState('');
     
@@ -360,22 +362,22 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', backgroundColor: theme.paper, minHeight: '100vh', fontFamily: theme.sans }}>
             
-            <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px 30px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 4px 24px rgba(0,0,0,0.02)', borderRadius: '2px' }}>
                 <div>
-                    <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.6rem', color: '#6f42c1' }}>Dynamic Asset Gallery</h2>
-                    <span style={{ fontSize: '0.8rem', color: '#666', fontWeight: 'bold' }}>SEARCHABLE DAM (SYNCED WITH TAB 4)</span>
+                    <h2 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.6rem', fontWeight: 500, color: theme.ink }}>Dynamic Asset Gallery</h2>
+                    <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.18em', textTransform: 'uppercase' }}>SEARCHABLE DAM (SYNCED WITH TAB 4)</span>
                 </div>
                 
                 <div style={{ flex: 0.6, position: 'relative' }}>
-                    <span style={{ position: 'absolute', left: '15px', top: '50%', transform: 'translateY(-50%)', fontSize: '1.2rem' }}>🔍</span>
+                    <span style={{ position: 'absolute', left: '15px', top: '50%', transform: 'translateY(-50%)', fontSize: '1.2rem', color: theme.inkSoft }}>⚲</span>
                     <input 
                         type="text" 
                         placeholder="Deep Search (e.g. 'H1-75BS/EP01', 'CUST-888', 'Heavyweight')..." 
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        style={{ width: '100%', padding: '15px 15px 15px 45px', fontSize: '1rem', border: '2px solid #6f42c1', borderRadius: '30px', outline: 'none', fontWeight: 'bold', boxSizing: 'border-box' }}
+                        style={{ width: '100%', padding: '12px 15px 12px 45px', fontSize: '0.95rem', fontFamily: theme.sans, border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box', backgroundColor: theme.paper }}
                     />
                 </div>
             </div>
@@ -383,55 +385,55 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
                 
                 {/* UPLOAD PANEL */}
-                <div style={{ width: '350px', background: '#fff', border: '2px solid #000', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                    <div style={{ fontWeight: 'bold', fontSize: '1.2rem', color: '#000', borderBottom: '2px solid #000', paddingBottom: '10px' }}>UPLOAD NEW ASSET</div>
+                <div style={{ width: '350px', background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', display: 'flex', flexDirection: 'column', gap: '15px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                    <div style={{ fontFamily: theme.serif, fontWeight: 500, fontSize: '1.4rem', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>Upload New Asset</div>
                     
-                    <input type="file" accept="image/png, image/jpeg" ref={fileInputRef} onChange={e => setUploadFile(e.target.files[0])} style={{ padding: '10px', border: '1px dashed #ccc', background: '#f8f9fa', cursor: 'pointer', width: '100%', boxSizing: 'border-box' }} />
-                    <input type="text" placeholder="Friendly Name (Optional)" value={metaForm.name} onChange={e => setMetaForm({...metaForm, name: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }} />
+                    <input type="file" accept="image/png, image/jpeg" ref={fileInputRef} onChange={e => setUploadFile(e.target.files[0])} style={{ padding: '10px', border: `1px dashed ${theme.brass}`, background: theme.paper, cursor: 'pointer', width: '100%', boxSizing: 'border-box', fontFamily: theme.sans, fontSize: '0.85rem' }} />
+                    <input type="text" placeholder="Friendly Name (Optional)" value={metaForm.name} onChange={e => setMetaForm({...metaForm, name: e.target.value})} style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans }} />
                     
                     <div style={{ display: 'flex', gap: '10px' }}>
                         <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>PATTERN ID</label>
-                            <input type="text" placeholder="e.g. H1-75BS" value={metaForm.patternId} onChange={e => setMetaForm({...metaForm, patternId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #d9534f', fontWeight: 'bold', boxSizing: 'border-box' }} />
+                            <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>PATTERN ID</label>
+                            <input type="text" placeholder="e.g. H1-75BS" value={metaForm.patternId} onChange={e => setMetaForm({...metaForm, patternId: e.target.value})} style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans }} />
                         </div>
                         <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>FINISH ID</label>
-                            <input type="text" placeholder="e.g. EP01" value={metaForm.finishId} onChange={e => setMetaForm({...metaForm, finishId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #d9534f', fontWeight: 'bold', boxSizing: 'border-box' }} />
+                            <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>FINISH ID</label>
+                            <input type="text" placeholder="e.g. EP01" value={metaForm.finishId} onChange={e => setMetaForm({...metaForm, finishId: e.target.value})} style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans }} />
                         </div>
                     </div>
 
                     <div style={{ display: 'flex', gap: '10px' }}>
                         <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CUSTOMER</label>
-                            <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box' }}>
+                            <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>CUSTOMER</label>
+                            <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, background: '#fff' }}>
                                 <option value="">Select...</option>
                                 {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
                         <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CLIENT SKU</label>
-                            <input type="text" placeholder="e.g. CUST-999" value={metaForm.clientSku || ''} onChange={e => setMetaForm({...metaForm, clientSku: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box' }} />
+                            <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>CLIENT SKU</label>
+                            <input type="text" placeholder="e.g. CUST-999" value={metaForm.clientSku || ''} onChange={e => setMetaForm({...metaForm, clientSku: e.target.value})} style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans }} />
                         </div>
                     </div>
 
                     <div style={{ display: 'flex', gap: '10px' }}>
                         <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>COLLECTION</label>
-                            <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
+                            <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>COLLECTION</label>
+                            <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, background: '#fff' }}>
                                 <option value="">Select...</option>
                                 {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                             </select>
                         </div>
                         <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>PROD TYPE</label>
-                            <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
+                            <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>PROD TYPE</label>
+                            <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, background: '#fff' }}>
                                 <option value="">Select...</option>
                                 {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
                     </div>
 
-                    <textarea placeholder="Searchable Notes (e.g. 'Lifestyle angle')" value={metaForm.notes} onChange={e => setMetaForm({...metaForm, notes: e.target.value})} style={{ padding: '10px', border: '1px solid #ccc', minHeight: '60px', fontFamily: 'monospace', boxSizing: 'border-box', resize: 'vertical' }} />
+                    <textarea placeholder="Searchable Notes (e.g. 'Lifestyle angle')" value={metaForm.notes} onChange={e => setMetaForm({...metaForm, notes: e.target.value})} style={{ padding: '10px', border: `1px solid ${theme.line}`, minHeight: '60px', fontFamily: theme.sans, boxSizing: 'border-box', resize: 'vertical' }} />
 
                     {/* PARTS ASSIGNMENT */}
                     <select 
@@ -440,7 +442,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                 setMetaForm(prev => ({ ...prev, associatedParts: [...prev.associatedParts, e.target.value] }));
                             }
                         }} 
-                        style={{ width: '100%', padding: '10px', border: '2px solid #007bff', fontWeight: 'bold', boxSizing: 'border-box' }}
+                        style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, background: '#fff' }}
                     >
                         <option value="">+ Link to Master Library Part...</option>
                         {safeHqParts.slice(0, 200).map(p => <option key={p.id} value={p.id}>{String(p.itemName || p.id)}</option>)}
@@ -449,7 +451,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                     {metaForm.associatedParts.length > 0 && (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
                             {metaForm.associatedParts.map(partId => (
-                                <span key={partId} style={{ background: '#007bff', color: '#fff', padding: '4px 8px', fontSize: '0.7rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                <span key={partId} style={{ background: theme.paper, color: theme.ink, padding: '4px 8px', fontSize: '10px', fontFamily: theme.mono, letterSpacing: '.05em', border: `1px solid ${theme.line}`, borderRadius: '2px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                                     {String(safeHqParts.find(p => p.id === partId)?.itemName || partId)}
                                     <span onClick={() => setMetaForm(prev => ({...prev, associatedParts: prev.associatedParts.filter(id => id !== partId)}))} style={{ cursor: 'pointer', fontWeight: 'bold' }}>×</span>
                                 </span>
@@ -464,7 +466,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                 setMetaForm(prev => ({ ...prev, associatedFinishes: [...prev.associatedFinishes, e.target.value] }));
                             }
                         }} 
-                        style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', fontWeight: 'bold', boxSizing: 'border-box' }}
+                        style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, background: '#fff' }}
                     >
                         <option value="">+ Link to Master Finish...</option>
                         <optgroup label="In-House & Global Finishes">
@@ -478,7 +480,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                     {metaForm.associatedFinishes.length > 0 && (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
                             {metaForm.associatedFinishes.map(finId => (
-                                <span key={finId} style={{ background: '#6f42c1', color: '#fff', padding: '4px 8px', fontSize: '0.7rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                <span key={finId} style={{ background: theme.paper, color: theme.ink, padding: '4px 8px', fontSize: '10px', fontFamily: theme.mono, letterSpacing: '.05em', border: `1px solid ${theme.line}`, borderRadius: '2px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                                     {String(allFinishes.find(f => f.id === finId)?.name || finId)}
                                     <span onClick={() => setMetaForm(prev => ({...prev, associatedFinishes: prev.associatedFinishes.filter(id => id !== finId)}))} style={{ cursor: 'pointer', fontWeight: 'bold' }}>×</span>
                                 </span>
@@ -487,53 +489,53 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                     )}
 
                     {isUploading ? (
-                        <div style={{ background: '#e9ecef', height: '40px', borderRadius: '4px', overflow: 'hidden', position: 'relative', marginTop: '10px' }}>
-                            <div style={{ background: '#28a745', height: '100%', width: `${uploadProgress}%`, transition: '0.2s' }}></div>
-                            <div style={{ position: 'absolute', top: '10px', width: '100%', textAlign: 'center', fontWeight: 'bold', color: uploadProgress > 50 ? '#fff' : '#000', fontSize: '0.8rem' }}>UPLOADING {Math.round(uploadProgress)}%</div>
+                        <div style={{ background: theme.paper, height: '40px', border: `1px solid ${theme.line}`, overflow: 'hidden', position: 'relative', marginTop: '10px' }}>
+                            <div style={{ background: theme.brass, height: '100%', width: `${uploadProgress}%`, transition: '0.2s' }}></div>
+                            <div style={{ position: 'absolute', top: '10px', width: '100%', textAlign: 'center', fontFamily: theme.mono, color: uploadProgress > 50 ? '#fff' : theme.ink, fontSize: '10px', letterSpacing: '.1em' }}>UPLOADING {Math.round(uploadProgress)}%</div>
                         </div>
                     ) : (
-                        <button onClick={handleUpload} style={{ background: '#6f42c1', color: '#fff', border: '2px solid #000', padding: '15px', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', boxShadow: '3px 3px 0 #000', transition: '0.1s', marginTop: '10px' }}>
-                            ☁️ UPLOAD TO DAM
+                        <button onClick={handleUpload} style={{ background: theme.ink, color: '#fff', border: 'none', padding: '15px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.18em', textTransform: 'uppercase', cursor: 'pointer', transition: 'background 0.2s', marginTop: '10px' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
+                            UPLOAD TO DAM
                         </button>
                     )}
                 </div>
 
                 {/* THE THUMBNAIL MASONRY GRID */}
-                <div style={{ flex: 1, background: '#fff', border: '2px solid #000', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', minHeight: '600px', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
+                <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', minHeight: '600px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                     
                     {filteredAssets.length > MAX_DISPLAY && (
-                        <div style={{ background: '#fffdf5', border: '2px solid #f39c12', color: '#f39c12', padding: '10px', textAlign: 'center', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                        <div style={{ background: theme.paper, border: `1px solid ${theme.brass}`, color: theme.brass, padding: '10px', textAlign: 'center', fontFamily: theme.sans, fontSize: '0.9rem' }}>
                             ⚠️ Showing {MAX_DISPLAY} of {filteredAssets.length} matching results. Keep typing to deep-search.
                         </div>
                     )}
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '20px', alignContent: 'start' }}>
                         {displayAssets.length === 0 ? (
-                            <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '50px', color: '#888', fontWeight: 'bold', fontSize: '1.2rem' }}>
+                            <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '50px', color: theme.inkSoft, fontFamily: theme.serif, fontSize: '1.2rem', fontStyle: 'italic' }}>
                                 {searchQuery ? 'NO MATCHING ASSETS FOUND IN LIBRARY' : 'NO ASSETS UPLOADED YET'}
                             </div>
                         ) : (
                             displayAssets.map(asset => (
-                                <div key={asset.id} onClick={() => openModal(asset)} style={{ border: '2px solid #ccc', borderRadius: '8px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', background: '#f8f9fa' }} onMouseOver={e => e.currentTarget.style.borderColor = '#6f42c1'} onMouseOut={e => e.currentTarget.style.borderColor = '#ccc'}>
+                                <div key={asset.id} onClick={() => openModal(asset)} style={{ border: `1px solid ${theme.line}`, borderRadius: '2px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', background: '#fff' }} onMouseOver={e => { e.currentTarget.style.borderColor = theme.brass; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.05)'; }} onMouseOut={e => { e.currentTarget.style.borderColor = theme.line; e.currentTarget.style.boxShadow = 'none'; }}>
                                     
-                                    <div style={{ position: 'relative', width: '100%', height: '200px', background: '#e5e5e5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'2rem'}}>🖼️</span>}
+                                    <div style={{ position: 'relative', width: '100%', height: '200px', background: theme.paper, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'1.5rem', color: theme.inkSoft}}>⚲</span>}
                                         
-                                        <div style={{ position: 'absolute', bottom: '8px', left: '8px', color: '#333', fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 'bold', background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #ccc', zIndex: 2 }}>
+                                        <div style={{ position: 'absolute', bottom: '8px', left: '8px', color: theme.ink, fontFamily: theme.mono, fontSize: '10px', background: 'rgba(255,255,255,0.9)', padding: '4px 8px', border: `1px solid ${theme.line}` }}>
                                             {String(asset.patternId || '')}{asset.finishId ? `/${String(asset.finishId)}` : ''}
                                         </div>
                                         
                                         {(asset.clientSku || asset.customerPartId) && (
-                                            <div style={{ position: 'absolute', top: '8px', right: '8px', color: '#fff', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 'bold', background: '#28a745', padding: '2px 6px', borderRadius: '4px', zIndex: 2 }}>
+                                            <div style={{ position: 'absolute', top: '8px', right: '8px', color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.05em', background: theme.inkSoft, padding: '3px 6px', zIndex: 2 }}>
                                                 CUST: {String(asset.clientSku || asset.customerPartId)}
                                             </div>
                                         )}
                                     </div>
                                     
-                                    <div style={{ padding: '10px' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '5px' }}>
-                                            <span style={{ fontSize: '0.7rem', background: '#e9ecef', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold', color: '#555' }}>{String(asset.productType || 'N/A')}</span>
-                                            <span style={{ fontSize: '0.7rem', background: '#e9ecef', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold', color: '#555' }}>{String(asset.collection || 'N/A')}</span>
+                                    <div style={{ padding: '12px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                            <span style={{ fontSize: '10px', fontFamily: theme.mono, color: theme.inkSoft }}>{String(asset.productType || 'N/A')}</span>
+                                            <span style={{ fontSize: '10px', fontFamily: theme.mono, color: theme.inkSoft }}>{String(asset.collection || 'N/A')}</span>
                                         </div>
                                     </div>
                                 </div>
@@ -548,12 +550,12 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 const availableClientSKUs = getAssetClientSKUs(activeAsset);
 
                 return (
-                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-                        <div style={{ background: '#fff', border: '4px solid #000', width: '90%', maxWidth: '1400px', height: '90vh', display: 'flex', boxShadow: '20px 20px 0 #000', overflow: 'hidden' }}>
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                        <div style={{ background: '#fff', width: '90%', maxWidth: '1400px', height: '90vh', display: 'flex', boxShadow: '0 10px 40px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
                             
                             {/* 🚀 LEFT: FULL SIZE IMAGE (NOW WITH ZOOM CROP) */}
                             <div 
-                                style={{ flex: 2, background: '#e5e5e5', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden', cursor: isZoomed ? 'zoom-out' : 'zoom-in' }}
+                                style={{ flex: 2, background: theme.paper, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden', cursor: isZoomed ? 'zoom-out' : 'zoom-in' }}
                                 onClick={() => setIsZoomed(!isZoomed)}
                             >
                                 <div style={{ flex: 1, position: 'relative', overflow: 'hidden', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -561,35 +563,36 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                         src={activeAsset.originalUrl || activeAsset.url} 
                                         alt={activeAsset.patternId} 
                                         style={{ 
-                                            maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
+                                            maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 4px 24px rgba(0,0,0,0.05)',
                                             transform: isZoomed ? 'scale(2)' : 'scale(1)', transition: 'transform 0.25s ease-in-out'
                                         }} 
                                     />
                                 </div>
 
                                 {!isZoomed && (
-                                    <div style={{ position: 'absolute', top: '20px', left: '20px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '8px 12px', borderRadius: '4px', fontSize: '0.9rem', fontWeight: 'bold', pointerEvents: 'none' }}>
-                                        🔍 CLICK TO CROP / ZOOM
+                                    <div style={{ position: 'absolute', top: '20px', left: '20px', background: 'rgba(255,255,255,0.8)', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 12px', fontSize: '11px', fontFamily: theme.mono, letterSpacing: '.1em', pointerEvents: 'none' }}>
+                                        ⚲ CLICK TO CROP / ZOOM
                                     </div>
                                 )}
                                 
-                                <div style={{ padding: '15px', background: '#000', display: 'flex', gap: '15px', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap', zIndex: 10 }} onClick={e => e.stopPropagation()}>
-                                    <button onClick={() => window.open(activeAsset.originalUrl || activeAsset.url, '_blank')} style={{ padding: '10px 15px', background: '#fff', color: '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer', borderRadius: '4px' }}>
-                                        📥 DL ORIGINAL (CLEAN)
+                                <div style={{ padding: '15px', background: '#fff', borderTop: `1px solid ${theme.line}`, display: 'flex', gap: '15px', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap', zIndex: 10 }} onClick={e => e.stopPropagation()}>
+                                    <button onClick={() => window.open(activeAsset.originalUrl || activeAsset.url, '_blank')} style={{ padding: '10px 20px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => e.currentTarget.style.borderColor = theme.ink} onMouseOut={(e) => e.currentTarget.style.borderColor = theme.line}>
+                                        DL ORIGINAL (CLEAN)
                                     </button>
                                     
                                     <button 
-                                        onClick={() => handleDynamicDownload(activeAsset.originalUrl || activeAsset.url, `${activeAsset.patternId || 'UNKNOWN'}${activeAsset.finishId ? `/${activeAsset.finishId}` : ''}`, '#333333', 'HQ')} 
-                                        style={{ padding: '10px 15px', background: '#f39c12', color: '#fff', border: '2px solid #e67e22', fontWeight: 'bold', cursor: 'pointer', borderRadius: '4px' }}
+                                        onClick={() => handleDynamicDownload(activeAsset.originalUrl || activeAsset.url, `${activeAsset.patternId || 'UNKNOWN'}${activeAsset.finishId ? `/${activeAsset.finishId}` : ''}`, theme.ink, 'HQ')} 
+                                        style={{ padding: '10px 20px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}
+                                        onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}
                                     >
-                                        📥 DL HQ (BURN ID)
+                                        DL HQ (BURN ID)
                                     </button>
 
-                                    <div style={{ display: 'flex', border: '2px solid #007bff', borderRadius: '4px', overflow: 'hidden' }}>
+                                    <div style={{ display: 'flex', border: `1px solid ${theme.line}`, background: theme.paper }}>
                                         <select 
                                             value={downloadSku} 
                                             onChange={e => setDownloadSku(e.target.value)}
-                                            style={{ padding: '10px', border: 'none', outline: 'none', fontWeight: 'bold', background: '#e9ecef', maxWidth: '250px', cursor: 'pointer', boxSizing: 'border-box' }}
+                                            style={{ padding: '10px', border: 'none', outline: 'none', fontFamily: theme.sans, fontSize: '0.85rem', background: 'transparent', maxWidth: '250px', cursor: 'pointer', boxSizing: 'border-box' }}
                                         >
                                             {availableClientSKUs.length === 0 && <option value="">-- No Linked Client SKUs --</option>}
                                             {availableClientSKUs.map(s => <option key={s.clientSku} value={s.clientSku}>{s.customerId}: {s.clientSku}</option>)}
@@ -597,58 +600,58 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                         <button 
                                             onClick={() => {
                                                 if(!downloadSku) return alert("Select a Client SKU from the dropdown first.");
-                                                handleDynamicDownload(activeAsset.originalUrl || activeAsset.url, downloadSku, '#007bff', 'CLIENT');
+                                                handleDynamicDownload(activeAsset.originalUrl || activeAsset.url, downloadSku, theme.inkSoft, 'CLIENT');
                                             }} 
-                                            style={{ padding: '10px 15px', background: '#007bff', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}
+                                            style={{ padding: '10px 15px', background: theme.paper2, color: theme.ink, borderLeft: `1px solid ${theme.line}`, borderTop: 'none', borderRight: 'none', borderBottom: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}
                                         >
-                                            📥 DL CLIENT SKU
+                                            DL CLIENT SKU
                                         </button>
                                     </div>
                                 </div>
                             </div>
 
-                            <div style={{ flex: 1, borderLeft: '4px solid #000', padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa', overflowY: 'auto' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '15px' }}>
-                                    <h2 style={{ margin: 0, color: '#6f42c1' }}>ASSET METADATA</h2>
-                                    <button onClick={() => { setActiveAsset(null); setIsZoomed(false); }} style={{ background: 'none', border: 'none', fontSize: '2rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                            <div style={{ flex: 1, borderLeft: `1px solid ${theme.line}`, padding: '40px', display: 'flex', flexDirection: 'column', gap: '20px', background: '#fff', overflowY: 'auto' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}`, paddingBottom: '20px' }}>
+                                    <h2 style={{ margin: 0, color: theme.ink, fontFamily: theme.serif, fontWeight: 500, fontSize: '1.6rem' }}>Asset Metadata</h2>
+                                    <button onClick={() => { setActiveAsset(null); setIsZoomed(false); }} style={{ background: 'none', border: 'none', fontSize: '2rem', color: theme.inkSoft, cursor: 'pointer', lineHeight: 1, fontFamily: theme.sans }}>×</button>
                                 </div>
 
                                 <div style={{ display: 'flex', gap: '10px' }}>
                                     <div style={{ flex: 1 }}>
-                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>PATTERN ID</label>
-                                        <input type="text" value={metaForm.patternId} onChange={e => setMetaForm({...metaForm, patternId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase' }} />
+                                        <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>PATTERN ID</label>
+                                        <input type="text" value={metaForm.patternId} onChange={e => setMetaForm({...metaForm, patternId: e.target.value})} style={{ width: '100%', padding: '12px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, textTransform: 'uppercase' }} />
                                     </div>
                                     <div style={{ flex: 1 }}>
-                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>FINISH ID</label>
-                                        <input type="text" value={metaForm.finishId} onChange={e => setMetaForm({...metaForm, finishId: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase' }} />
+                                        <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>FINISH ID</label>
+                                        <input type="text" value={metaForm.finishId} onChange={e => setMetaForm({...metaForm, finishId: e.target.value})} style={{ width: '100%', padding: '12px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, textTransform: 'uppercase' }} />
                                     </div>
                                 </div>
                                 
                                 <div style={{ display: 'flex', gap: '10px' }}>
                                     <div style={{ flex: 1 }}>
-                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#28a745' }}>CUSTOMER</label>
-                                        <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box' }}>
+                                        <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>CUSTOMER</label>
+                                        <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '12px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, background: '#fff' }}>
                                             <option value="">Select...</option>
                                             {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
                                         </select>
                                     </div>
                                     <div style={{ flex: 1 }}>
-                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#28a745' }}>CLIENT SKU</label>
-                                        <input type="text" value={metaForm.clientSku || ''} onChange={e => setMetaForm({...metaForm, clientSku: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase' }} />
+                                        <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>CLIENT SKU</label>
+                                        <input type="text" value={metaForm.clientSku || ''} onChange={e => setMetaForm({...metaForm, clientSku: e.target.value})} style={{ width: '100%', padding: '12px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, textTransform: 'uppercase' }} />
                                     </div>
                                 </div>
 
                                 <div style={{ display: 'flex', gap: '10px' }}>
                                     <div style={{ flex: 1 }}>
-                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>COLLECTION</label>
-                                        <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
+                                        <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>COLLECTION</label>
+                                        <select value={metaForm.collection} onChange={e => setMetaForm({...metaForm, collection: e.target.value})} style={{ width: '100%', padding: '12px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, background: '#fff' }}>
                                             <option value="">Select...</option>
                                             {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                         </select>
                                     </div>
                                     <div style={{ flex: 1 }}>
-                                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>PROD TYPE</label>
-                                        <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
+                                        <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>PROD TYPE</label>
+                                        <select value={metaForm.productType} onChange={e => setMetaForm({...metaForm, productType: e.target.value})} style={{ width: '100%', padding: '12px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, background: '#fff' }}>
                                             <option value="">Select...</option>
                                             {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
                                         </select>
@@ -656,32 +659,32 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                 </div>
 
                                 <div>
-                                    <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>SEARCHABLE OPEN NOTES</label>
-                                    <textarea value={metaForm.notes} onChange={e => setMetaForm({...metaForm, notes: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', minHeight: '80px', fontFamily: 'monospace', boxSizing: 'border-box' }} />
+                                    <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>SEARCHABLE OPEN NOTES</label>
+                                    <textarea value={metaForm.notes} onChange={e => setMetaForm({...metaForm, notes: e.target.value})} style={{ width: '100%', padding: '12px', border: `1px solid ${theme.line}`, minHeight: '80px', fontFamily: theme.sans, boxSizing: 'border-box', outline: 'none' }} />
                                 </div>
 
                                 <div>
-                                    <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>MASTER LIBRARY ASSOCIATIONS</label>
+                                    <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>MASTER LIBRARY ASSOCIATIONS</label>
                                     {metaForm.associatedParts.length === 0 ? (
-                                        <div style={{ fontSize: '0.8rem', color: '#999', fontStyle: 'italic', padding: '10px 0' }}>No parts linked.</div>
+                                        <div style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic', padding: '10px 0', fontFamily: theme.serif }}>No parts linked.</div>
                                     ) : (
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', padding: '10px 0' }}>
                                             {metaForm.associatedParts.map(partId => (
-                                                <span key={partId} style={{ background: '#007bff', color: '#fff', padding: '4px 8px', fontSize: '0.8rem', borderRadius: '4px', fontWeight: 'bold' }}>
+                                                <span key={partId} style={{ background: theme.paper, border: `1px solid ${theme.line}`, color: theme.ink, padding: '4px 8px', fontSize: '10px', fontFamily: theme.mono, letterSpacing: '.05em' }}>
                                                     {String(safeHqParts.find(p => p.id === partId)?.itemName || partId)}
-                                                    <span onClick={() => setMetaForm(prev => ({...prev, associatedParts: prev.associatedParts.filter(id => id !== partId)}))} style={{ cursor: 'pointer', marginLeft: '5px' }}>×</span>
+                                                    <span onClick={() => setMetaForm(prev => ({...prev, associatedParts: prev.associatedParts.filter(id => id !== partId)}))} style={{ cursor: 'pointer', marginLeft: '5px', color: theme.inkSoft }}>×</span>
                                                 </span>
                                             ))}
                                         </div>
                                     )}
                                 </div>
 
-                                <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                    <div style={{ fontSize: '0.7rem', color: '#999', textAlign: 'center' }}>
+                                <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                                    <div style={{ fontSize: '10px', fontFamily: theme.mono, color: theme.inkSoft, textAlign: 'center', letterSpacing: '.05em' }}>
                                         Uploaded by {String(activeAsset?.uploadedBy || 'Unknown')} on {new Date(activeAsset?.createdAt?.seconds * 1000).toLocaleDateString()}
                                     </div>
-                                    <button onClick={handleUpdateMetadata} style={{ padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '1rem', border: '2px solid #000', cursor: 'pointer', boxShadow: '3px 3px 0 #000' }}>💾 SAVE METADATA CHANGES</button>
-                                    <button onClick={() => handleDeleteAsset(activeAsset)} style={{ padding: '15px', background: 'transparent', color: '#d9534f', fontWeight: 'bold', fontSize: '1rem', border: '2px solid #d9534f', cursor: 'pointer' }}>🗑️ PERMANENTLY DELETE ASSET</button>
+                                    <button onClick={handleUpdateMetadata} style={{ padding: '15px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.18em', textTransform: 'uppercase', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>SAVE METADATA CHANGES</button>
+                                    <button onClick={() => handleDeleteAsset(activeAsset)} style={{ padding: '15px', background: 'transparent', color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', border: 'none', textDecoration: 'underline', cursor: 'pointer' }}>PERMANENTLY DELETE ASSET</button>
                                 </div>
                             </div>
 

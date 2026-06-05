@@ -3,6 +3,8 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, doc, updateDoc, getDocs, where } from "firebase/firestore";
 import SharedMessaging from '../Shared/SharedMessaging';
 
+const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
+
 const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [operator, setOperator] = useState(null);
     const [pinInput, setPinInput] = useState("");
@@ -31,7 +33,6 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     };
 
     useEffect(() => {
-        // Fetch jobs pushed from Finishing Floor that need picking
         const unsub = onSnapshot(collection(db, "fin_workorders"), (snap) => {
             const fetched = snap.docs.map(d => ({ id: d.id, ...d.data() }));
             setJobs(fetched.filter(j => j.sentToPickPack));
@@ -51,27 +52,24 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             return alert(`❌ Quantity Mismatch. Expected ${lineItem.qty}.`);
         }
 
-        // Success for this line
         setValidation({ bin: '', qty: '' });
         
         if (currentPickLine + 1 < activePickJob.partsList.length) {
             setCurrentPickLine(prev => prev + 1);
         } else {
-            // Whole order picked
             setShowNacho(true);
             setTimeout(async () => {
                 await updateDoc(doc(db, "fin_workorders", activePickJob.id), { pickStatus: 'Picked_Awaiting_Staging' });
                 printZebraLabel(activePickJob, 'SMALL_PARTS');
                 setActivePickJob(null);
                 setShowNacho(false);
-                setOperator(null); // Auto-logout after Pick
+                setOperator(null);
             }, 2000);
         }
     };
 
     const handleStagingMatch = async (e) => {
         e.preventDefault();
-        // Assuming stagingScan matches the WO/SO of a picked order
         const matchedJob = jobs.find(j => j.id.includes(stagingScan) || (j.soNum && j.soNum.includes(stagingScan)));
         
         if (!matchedJob) return alert("❌ No matching Picked order found for this Shop Label.");
@@ -80,69 +78,68 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
        await updateDoc(doc(db, "fin_workorders", matchedJob.id), { pickStatus: 'Staged_Ready_For_Finishing' });
         alert(`✅ MATCH CONFIRMED: ${matchedJob.id} small parts and custom parts paired in staging!`);
         setStagingScan('');
-        setOperator(null); // Auto-logout after Pack match
+        setOperator(null);
     };
 
     const printZebraLabel = (job, type) => {
         console.log(`Spooled ZPL for ${type} - ${job.id}`);
-        // Similar ZPL payload as Shop Floor for consistency
     };
 
     if (!operator) {
         return (
-            <div style={{ position: 'fixed', inset: 0, background: '#e5e5e5', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace' }}>
-                <div style={{ background: '#fff', padding: '40px', border: '2px solid #000', boxShadow: '15px 15px 0 #000', width: '350px', textAlign: 'center' }}>
-                    <h2 style={{ color: '#28a745', margin: '0 0 20px 0', fontSize: '2rem', textTransform: 'uppercase' }}>PICK & PACK LOGIN</h2>
+            <div style={{ position: 'fixed', inset: 0, backgroundColor: theme.paper, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: theme.sans }}>
+                <div style={{ background: '#fff', padding: '50px 40px', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.02)', width: '400px', textAlign: 'center' }}>
+                    <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.25em', textTransform: 'uppercase', color: theme.brass, display: 'block', marginBottom: '1rem' }}>WMS Portal</span>
+                    <h2 style={{ fontFamily: theme.serif, margin: '0 0 30px 0', fontSize: '2.2rem', fontWeight: 500, color: theme.ink }}>Pick & Pack</h2>
                     <form onSubmit={attemptLogin}>
-                        <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{ textAlign: 'center', fontSize: '24px', width: '100%', padding: '15px', margin: '8px 0 20px 0', border: '2px solid #000', boxSizing: 'border-box', fontFamily: 'monospace', fontWeight: 'bold' }} />
-                        <button type="submit" style={{ background: '#28a745', color: '#fff', border: '2px solid #000', padding: '15px', width: '100%', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.2rem', boxShadow: '4px 4px 0 #000' }}>LOGIN</button>
+                        <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{ width: '100%', padding: '15px', border: `1px solid ${theme.line}`, marginBottom: '20px', boxSizing: 'border-box', textAlign: 'center', fontSize: '1.5rem', letterSpacing: '10px', fontFamily: theme.mono, color: theme.ink, outline: 'none' }} />
+                        <button type="submit" style={{ width: '100%', padding: '15px', background: theme.ink, color: '#fff', fontWeight: 400, fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.18em', textTransform: 'uppercase', cursor: 'pointer', border: 'none', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>LOGIN</button>
                     </form>
-                    <button onClick={() => window.location.href = '/'} style={{ marginTop: '20px', background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem', textDecoration: 'underline' }}>← BACK TO HUB</button>
+                    <button onClick={() => window.location.href = '/'} style={{ marginTop: '30px', background: 'none', border: 'none', color: theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', borderBottom: `1px solid ${theme.brass}`, paddingBottom: '2px' }}>← BACK TO HUB</button>
                 </div>
             </div>
         );
     }
 
-    // --- FULL SCREEN PICKING MODAL ---
     if (activePickJob) {
         const line = activePickJob.partsList[currentPickLine];
         return (
-            <div style={{ position: 'fixed', inset: 0, background: '#222', color: '#fff', zIndex: 9999, display: 'flex', flexDirection: 'column', padding: '40px', fontFamily: 'monospace' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '4px solid #007bff', paddingBottom: '20px', marginBottom: '40px' }}>
-                    <h1 style={{ margin: 0, fontSize: '3rem' }}>PICKING: {activePickJob.id}</h1>
-                    <button onClick={() => setActivePickJob(null)} style={{ background: '#d9534f', color: '#fff', border: 'none', padding: '20px', fontSize: '1.5rem', fontWeight: 'bold', cursor: 'pointer' }}>ABORT PICK</button>
+            <div style={{ position: 'fixed', inset: 0, backgroundColor: theme.paper, color: theme.ink, zIndex: 9999, display: 'flex', flexDirection: 'column', padding: '40px', fontFamily: theme.sans }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: `1px solid ${theme.line}`, paddingBottom: '20px', marginBottom: '40px' }}>
+                    <h1 style={{ margin: 0, fontSize: '2.5rem', fontFamily: theme.serif, fontWeight: 500, color: theme.ink }}>Picking: {activePickJob.id}</h1>
+                    <button onClick={() => setActivePickJob(null)} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
                 </div>
 
                 {showNacho ? (
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
                         <div style={{ fontSize: '6rem' }}>🐕</div>
-                        <h2 style={{ color: '#28a745', fontSize: '3rem' }}>GOOD BOY! ORDER COMPLETE.</h2>
-                        <p style={{ fontSize: '1.5rem' }}>Printing Staging Label...</p>
+                        <h2 style={{ color: theme.brass, fontFamily: theme.serif, fontSize: '2.5rem', fontWeight: 500, margin: '20px 0' }}>Order Complete.</h2>
+                        <p style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>Printing Staging Label...</p>
                     </div>
                 ) : (
                     <div style={{ flex: 1, display: 'flex', gap: '40px' }}>
-                        <div style={{ flex: 1, background: '#333', padding: '40px', borderRadius: '15px', border: '2px solid #555' }}>
-                            <div style={{ fontSize: '1.5rem', color: '#aaa' }}>ITEM {currentPickLine + 1} OF {activePickJob.partsList.length}</div>
-                            <div style={{ fontSize: '4rem', fontWeight: 'bold', color: '#007bff', margin: '20px 0' }}>{line.name}</div>
-                            <div style={{ fontSize: '2rem', color: '#f39c12', marginBottom: '40px' }}>BIN: {line.binLocation || 'UNASSIGNED'}</div>
+                        <div style={{ flex: 1, background: '#fff', padding: '40px', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                            <div style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>Item {currentPickLine + 1} of {activePickJob.partsList.length}</div>
+                            <div style={{ fontSize: '3rem', fontWeight: 300, color: theme.ink, margin: '20px 0', fontFamily: theme.serif }}>{line.name}</div>
+                            <div style={{ fontSize: '1.2rem', fontFamily: theme.mono, color: theme.brass, marginBottom: '40px' }}>BIN: {line.binLocation || 'UNASSIGNED'}</div>
                             
-                            <a href={line.assetUrl || '#'} target="_blank" rel="noreferrer" style={{ display: 'inline-block', background: '#eef5ff', color: '#007bff', padding: '15px 30px', fontSize: '1.5rem', textDecoration: 'none', borderRadius: '8px', fontWeight: 'bold' }}>
-                                🖼️ OPEN REFERENCE PHOTO
+                            <a href={line.assetUrl || '#'} target="_blank" rel="noreferrer" style={{ display: 'inline-block', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textDecoration: 'none', textTransform: 'uppercase' }}>
+                                OPEN REFERENCE PHOTO
                             </a>
                         </div>
 
-                        <div style={{ flex: 1, background: '#000', padding: '40px', borderRadius: '15px', border: '4px solid #007bff' }}>
-                            <h2 style={{ margin: '0 0 30px 0', fontSize: '2.5rem', color: '#28a745' }}>TARGET QTY: {line.qty}</h2>
+                        <div style={{ flex: 1, background: '#fff', padding: '40px', border: `1px solid ${theme.brass}`, boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                            <h2 style={{ margin: '0 0 30px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink, fontWeight: 500 }}>Target Qty: {line.qty}</h2>
                             <form onSubmit={handlePickValidation} style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
                                 <div>
-                                    <label style={{ fontSize: '1.5rem', color: '#aaa', display: 'block', marginBottom: '10px' }}>1. SCAN BIN BARCODE</label>
-                                    <input autoFocus value={validation.bin} onChange={e => setValidation({...validation, bin: e.target.value})} style={{ width: '100%', padding: '20px', fontSize: '2rem', background: '#222', color: '#fff', border: '2px solid #555' }} />
+                                    <label style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', color: theme.inkSoft, display: 'block', marginBottom: '10px', textTransform: 'uppercase' }}>1. SCAN BIN BARCODE</label>
+                                    <input autoFocus value={validation.bin} onChange={e => setValidation({...validation, bin: e.target.value})} style={{ width: '100%', padding: '15px', fontSize: '1.2rem', fontFamily: theme.mono, background: theme.paper, border: `1px solid ${theme.line}`, outline: 'none' }} />
                                 </div>
                                 <div>
-                                    <label style={{ fontSize: '1.5rem', color: '#aaa', display: 'block', marginBottom: '10px' }}>2. ENTER QTY PICKED</label>
-                                    <input type="number" value={validation.qty} onChange={e => setValidation({...validation, qty: e.target.value})} style={{ width: '100%', padding: '20px', fontSize: '2rem', background: '#222', color: '#fff', border: '2px solid #555' }} />
+                                    <label style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', color: theme.inkSoft, display: 'block', marginBottom: '10px', textTransform: 'uppercase' }}>2. ENTER QTY PICKED</label>
+                                    <input type="number" value={validation.qty} onChange={e => setValidation({...validation, qty: e.target.value})} style={{ width: '100%', padding: '15px', fontSize: '1.2rem', fontFamily: theme.mono, background: theme.paper, border: `1px solid ${theme.line}`, outline: 'none' }} />
                                 </div>
-                                <button type="submit" style={{ padding: '30px', background: '#007bff', color: '#fff', fontSize: '2rem', fontWeight: 'bold', border: 'none', cursor: 'pointer', marginTop: '20px' }}>
+                                <button type="submit" style={{ padding: '20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', border: 'none', cursor: 'pointer', marginTop: '20px', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
                                     CONFIRM PICK
                                 </button>
                             </form>
@@ -154,19 +151,14 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     }
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#e5e5e5', fontFamily: 'monospace' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: theme.paper, fontFamily: theme.sans }}>
             
-            {/* WAREHOUSE HEADER & TABS */}
-            <header style={{ background: '#28a745', color: '#fff', padding: '15px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '4px solid #000' }}>
+            <header style={{ backgroundColor: '#fff', borderBottom: `1px solid ${theme.line}`, padding: '18px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                    <h1 style={{ margin: 0, fontSize: '1.5rem', letterSpacing: '1px' }}>WMS: PICK & PACK</h1>
+                    <h1 style={{ fontFamily: theme.serif, margin: 0, fontSize: '1.6rem', fontWeight: 500, color: theme.ink, letterSpacing: '0.05em' }}>WMS: Pick & Pack</h1>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '5px' }}>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>OPERATOR: {operator?.name?.toUpperCase() || 'UNKNOWN'}</span>
-                        <select 
-                            value={activeBrand} 
-                            onChange={(e) => setActiveBrand && setActiveBrand(e.target.value)} 
-                            style={{ padding: '2px 5px', fontSize: '0.8rem', fontWeight: 'bold', background: '#fff', color: '#000', border: '2px solid #000', outline: 'none' }}
-                        >
+                        <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.18em', textTransform: 'uppercase' }}>Operator: {operator?.name || 'Unknown'}</span>
+                        <select value={activeBrand} onChange={(e) => setActiveBrand && setActiveBrand(e.target.value)} style={{ padding: '2px 5px', fontSize: '10px', fontFamily: theme.mono, background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, outline: 'none', textTransform: 'uppercase' }}>
                             <option value="m2c">M2C Studio</option>
                             <option value="uniquity">Uniquity</option>
                             <option value="ce">Classical Elements</option>
@@ -175,53 +167,54 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    <button onClick={() => setActiveTab('QUEUE')} style={{ padding: '10px 20px', background: activeTab === 'QUEUE' ? '#fff' : 'transparent', color: activeTab === 'QUEUE' ? '#28a745' : '#fff', border: '2px solid #fff', fontWeight: 'bold', cursor: 'pointer', transition: '0.1s' }}>📦 PICK QUEUE</button>
-                    <button onClick={() => setActiveTab('PACKING')} style={{ padding: '10px 20px', background: activeTab === 'PACKING' ? '#fff' : 'transparent', color: activeTab === 'PACKING' ? '#28a745' : '#fff', border: '2px solid #fff', fontWeight: 'bold', cursor: 'pointer', transition: '0.1s' }}>🏷️ PACKAGING PREP</button>
-                    <button onClick={() => setActiveTab('MESSAGING')} style={{ padding: '10px 20px', background: activeTab === 'MESSAGING' ? '#fff' : 'transparent', color: activeTab === 'MESSAGING' ? '#28a745' : '#fff', border: '2px solid #fff', fontWeight: 'bold', cursor: 'pointer', transition: '0.1s' }}>💬 MESSAGING</button>
-                    <div style={{ width: '2px', background: '#fff', height: '30px', margin: '0 5px' }}></div>
-                    <button onClick={() => window.location.href = '/'} style={{ padding: '10px 20px', background: '#d9534f', color: '#fff', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer', boxShadow: '3px 3px 0 #000', transition: '0.1s' }}>🏠 HUB / LOGOUT</button>
+                    {['QUEUE', 'PACKING', 'MESSAGING'].map(tab => (
+                        <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '10px 16px', background: 'transparent', color: activeTab === tab ? theme.ink : theme.inkSoft, borderBottom: activeTab === tab ? `2px solid ${theme.brass}` : '2px solid transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
+                            {tab.replace('QUEUE', 'PICK QUEUE').replace('PACKING', 'PACKAGING PREP')}
+                        </button>
+                    ))}
+                    <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
+                    <button onClick={() => window.location.href = '/'} style={{ padding: '8px 16px', fontSize: '10px', fontFamily: theme.mono, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', background: theme.ink, color: '#fff', border: 'none', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>HUB / LOGOUT</button>
                 </div>
             </header>
 
-            <main style={{ flex: 1, padding: '20px', overflowY: 'auto' }}>
+            <main style={{ flex: 1, padding: '30px', overflowY: 'auto' }}>
                 
-                {/* 📦 TAB: PICK QUEUE */}
                 {activeTab === 'QUEUE' && (
-                    <div style={{ display: 'flex', gap: '20px', height: '100%' }}>
-                        <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column' }}>
-                            <div style={{ padding: '15px', background: '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem' }}>AWAITING PICK (SMALL PARTS)</div>
+                    <div style={{ display: 'flex', gap: '30px', height: '100%' }}>
+                        <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                            <div style={{ padding: '20px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem' }}>Awaiting Pick (Small Parts)</div>
                             <div style={{ padding: '20px', overflowY: 'auto' }}>
                                 {jobs.filter(j => j.pickStatus === 'Pending').map(job => (
-                                    <div key={job.id} style={{ border: '2px solid #ccc', padding: '15px', marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div key={job.id} style={{ border: `1px solid ${theme.line}`, padding: '20px', marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                         <div>
-                                            <h3 style={{ margin: 0 }}>{job.id}</h3>
-                                            <div style={{ color: '#666' }}>{job.partsList?.length || 0} Line Items</div>
+                                            <h3 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.2rem', fontWeight: 500 }}>{job.id}</h3>
+                                            <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{job.partsList?.length || 0} Line Items</div>
                                         </div>
-                                        <button onClick={() => { setActivePickJob(job); setCurrentPickLine(0); }} style={{ padding: '15px 30px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }}>
+                                        <button onClick={() => { setActivePickJob(job); setCurrentPickLine(0); }} style={{ padding: '10px 20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
                                             START PICKING
                                         </button>
                                     </div>
                                 ))}
                                 {jobs.filter(j => j.pickStatus === 'Pending').length === 0 && (
-                                    <div style={{ color: '#888', fontStyle: 'italic' }}>No orders currently require picking.</div>
+                                    <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No orders currently require picking.</div>
                                 )}
                             </div>
                         </div>
 
-                        <div style={{ width: '400px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column' }}>
-                            <div style={{ padding: '15px', background: '#f39c12', color: '#000', fontWeight: 'bold', fontSize: '1.2rem' }}>STAGING HANDSHAKE</div>
+                        <div style={{ width: '400px', background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                            <div style={{ padding: '20px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem' }}>Staging Handshake</div>
                             <div style={{ padding: '20px' }}>
-                                <p style={{ color: '#666', fontWeight: 'bold' }}>Scan Shop Floor Custom Label to match with picked small parts.</p>
+                                <p style={{ color: theme.inkSoft, fontFamily: theme.sans, fontSize: '0.9rem', marginBottom: '20px' }}>Scan Shop Floor Custom Label to match with picked small parts.</p>
                                 <form onSubmit={handleStagingMatch}>
-                                    <input autoFocus placeholder="SCAN SHOP LABEL..." value={stagingScan} onChange={e => setStagingScan(e.target.value)} style={{ width: '100%', padding: '15px', fontSize: '1.2rem', border: '3px solid #000', boxSizing: 'border-box' }} />
-                                    <button type="submit" style={{ width: '100%', padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', marginTop: '10px', border: 'none', cursor: 'pointer' }}>MATCH ORDER</button>
+                                    <input autoFocus placeholder="SCAN SHOP LABEL..." value={stagingScan} onChange={e => setStagingScan(e.target.value)} style={{ width: '100%', padding: '15px', fontSize: '1rem', fontFamily: theme.mono, border: `1px solid ${theme.line}`, boxSizing: 'border-box', outline: 'none' }} />
+                                    <button type="submit" style={{ width: '100%', padding: '15px', background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', marginTop: '10px', border: 'none', cursor: 'pointer' }}>MATCH ORDER</button>
                                 </form>
 
-                                <div style={{ marginTop: '30px', borderTop: '2px solid #eee', paddingTop: '15px' }}>
-                                    <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>AWAITING SHOP MATCH:</div>
+                                <div style={{ marginTop: '30px', borderTop: `1px solid ${theme.line}`, paddingTop: '20px' }}>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: '15px' }}>AWAITING SHOP MATCH:</div>
                                     {jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging').map(job => (
-                                        <div key={job.id} style={{ background: '#fffdf5', border: '1px solid #f39c12', padding: '10px', marginBottom: '5px', fontSize: '0.9rem', fontWeight: 'bold' }}>
-                                            {job.id} (Picked, in racks)
+                                        <div key={job.id} style={{ background: theme.paper, border: `1px solid ${theme.line}`, padding: '12px', marginBottom: '8px', fontSize: '0.9rem', fontFamily: theme.mono, color: theme.ink }}>
+                                            {job.id} <span style={{ color: theme.inkSoft, fontSize: '0.8rem' }}>(Picked)</span>
                                         </div>
                                     ))}
                                 </div>
@@ -230,28 +223,26 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                     </div>
                 )}
 
-                {/* 🏷️ TAB: PACKAGING PREP */}
                 {activeTab === 'PACKING' && (
-                    <div style={{ background: '#fff', border: '4px solid #000', padding: '20px', minHeight: '100%' }}>
-                        <h2 style={{ borderBottom: '2px solid #000', paddingBottom: '10px', color: '#007bff' }}>PACKAGING PREP QUEUE</h2>
+                    <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                        <h2 style={{ borderBottom: `1px solid ${theme.line}`, paddingBottom: '15px', color: theme.ink, fontFamily: theme.serif, fontWeight: 500, margin: '0 0 30px 0' }}>Packaging Prep Queue</h2>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
                             {jobs.filter(j => j.pickStatus === 'Staged_Ready_For_Finishing').map(job => (
-                                <div key={job.id} style={{ border: '2px solid #ccc', padding: '20px', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                                    <h3 style={{ margin: '0 0 10px 0', color: '#007bff' }}>{job.id}</h3>
-                                    <div style={{ fontWeight: 'bold' }}>Dimensions: {job.dimensions?.length || 0}"L x {job.dimensions?.width || 0}"W</div>
-                                    <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '10px' }}>Review box sizes & tube lengths to prep materials while finishing cures.</div>
+                                <div key={job.id} style={{ border: `1px solid ${theme.line}`, padding: '20px', background: theme.paper }}>
+                                    <h3 style={{ margin: '0 0 10px 0', color: theme.ink, fontFamily: theme.serif, fontWeight: 500, fontSize: '1.3rem' }}>{job.id}</h3>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', color: theme.ink }}>Dims: {job.dimensions?.length || 0}"L x {job.dimensions?.width || 0}"W</div>
+                                    <div style={{ fontSize: '0.85rem', color: theme.inkSoft, marginTop: '10px' }}>Review box sizes & tube lengths to prep materials while finishing cures.</div>
                                 </div>
                             ))}
                             {jobs.filter(j => j.pickStatus === 'Staged_Ready_For_Finishing').length === 0 && (
-                                <div style={{ gridColumn: '1 / -1', color: '#888', fontStyle: 'italic' }}>No orders currently awaiting packaging prep.</div>
+                                <div style={{ gridColumn: '1 / -1', color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No orders currently awaiting packaging prep.</div>
                             )}
                         </div>
                     </div>
                 )}
 
-                {/* 💬 TAB: MESSAGING */}
                 {activeTab === 'MESSAGING' && (
-                    <div style={{ background: '#fff', border: '4px solid #000', height: '100%' }}>
+                    <div style={{ background: '#fff', border: `1px solid ${theme.line}`, height: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                         <SharedMessaging currentUser={operator?.name || 'Unknown'} currentApp="PICK_PACK" writeLog={() => {}} />
                     </div>
                 )}
