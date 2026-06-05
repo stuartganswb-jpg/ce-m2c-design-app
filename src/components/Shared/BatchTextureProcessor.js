@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, doc, updateDoc, onSnapshot } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -20,10 +20,13 @@ const BatchTextureProcessor = ({ currentUser }) => {
     const [conflictWarning, setConflictWarning] = useState(null);
     const [aiPrompt, setAiPrompt] = useState("");
     
-    // Simple 1:1 Crop State (Simulated Bounding Box)
+    // Dynamic Crop State
     const imageRef = useRef(null);
     const canvasRef = useRef(null);
-    const [cropSize, setCropSize] = useState(250); // Visual representation size
+    const [imgDims, setImgDims] = useState({ w: 0, h: 0, natW: 0, natH: 0 });
+    const [cropScale, setCropScale] = useState(100); // 10% to 100% size
+    const [cropX, setCropX] = useState(50); // Pan X percentage
+    const [cropY, setCropY] = useState(50); // Pan Y percentage
 
     // 1. Fetch Existing Finishes for Conflict Checking
     useEffect(() => {
@@ -54,11 +57,15 @@ const BatchTextureProcessor = ({ currentUser }) => {
             setImageSrc(objectUrl);
             setAiPrompt("");
             
-            // Extract code (e.g., "Texture_EP03.jpg" -> "EP03")
-            let rawName = file.name.split('.')[0].toUpperCase();
-            let parts = rawName.split(/[_.-]/);
-            let extractedCode = parts[parts.length - 1];
-            setFinishCode(extractedCode);
+            // Regex: Look for "P" or "EP" followed by exactly two digits anywhere in the filename
+            let rawName = file.name.toUpperCase();
+            let match = rawName.match(/(EP|P)\d{2}/);
+            setFinishCode(match ? match[0] : "");
+            
+            // Reset Cropper state for the new image
+            setCropScale(100);
+            setCropX(50);
+            setCropY(50);
             
             return () => URL.revokeObjectURL(objectUrl);
         } else {
@@ -85,7 +92,17 @@ const BatchTextureProcessor = ({ currentUser }) => {
         }
     }, [finishCode, globalFinishes, outsourceFinishes]);
 
-    // 5. Generate Cropped Image (1024x1024 Target)
+    // Track actual rendered size of the image to keep the overlay accurate
+    const handleImageLoad = (e) => {
+        setImgDims({
+            w: e.target.width,
+            h: e.target.height,
+            natW: e.target.naturalWidth,
+            natH: e.target.naturalHeight
+        });
+    };
+
+    // 5. Generate Cropped Image (Extract the exact pixels mapped by the overlay)
     const getCroppedBlob = () => {
         return new Promise((resolve) => {
             if (!imageRef.current || !canvasRef.current) return resolve(null);
@@ -94,16 +111,19 @@ const BatchTextureProcessor = ({ currentUser }) => {
             const canvas = canvasRef.current;
             const ctx = canvas.getContext('2d');
             
-            // Target Texture Size
+            // Force 1024x1024 output for the renderer
             canvas.width = 1024;
             canvas.height = 1024;
             
-            // Calculate center crop (1:1 ratio)
-            const minDim = Math.min(img.naturalWidth, img.naturalHeight);
-            const sx = (img.naturalWidth - minDim) / 2;
-            const sy = (img.naturalHeight - minDim) / 2;
+            // Calculate natural coordinates
+            const minDimNat = Math.min(imgDims.natW, imgDims.natH);
+            const boxNatPx = minDimNat * (cropScale / 100);
+            const maxNatX = imgDims.natW - boxNatPx;
+            const maxNatY = imgDims.natH - boxNatPx;
+            const sx = maxNatX * (cropX / 100);
+            const sy = maxNatY * (cropY / 100);
             
-            ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 1024, 1024);
+            ctx.drawImage(img, sx, sy, boxNatPx, boxNatPx, 0, 0, 1024, 1024);
             
             canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.95);
         });
@@ -124,12 +144,9 @@ const BatchTextureProcessor = ({ currentUser }) => {
             // ====================================================================
             if (aiPrompt) {
                 console.log(`Sending image to AI with prompt: ${aiPrompt}`);
-                /* TODO: Hook up your external API here.
+                /* TODO: External API Hook
                    const base64Image = await convertBlobToBase64(finalBlob);
-                   const aiResponse = await fetch('YOUR_AI_ENDPOINT', {
-                       method: 'POST',
-                       body: JSON.stringify({ image: base64Image, prompt: aiPrompt })
-                   });
+                   const aiResponse = await fetch('YOUR_AI_ENDPOINT', { ... });
                    finalBlob = await aiResponse.blob();
                 */
             }
@@ -151,7 +168,6 @@ const BatchTextureProcessor = ({ currentUser }) => {
                 await updateDoc(doc(db, "hq_outsource_finishes", conflictWarning.finish.id), { textureUrl: downloadUrl });
             }
             
-            // Move to Next
             setCurrentIndex(prev => prev + 1);
         } catch (error) {
             console.error("Texture Processing Error:", error);
@@ -164,10 +180,17 @@ const BatchTextureProcessor = ({ currentUser }) => {
     const remaining = Math.max(0, queue.length - currentIndex);
     const isDone = queue.length > 0 && currentIndex >= queue.length;
 
+    // Calculate visual box overlay dimensions based on slider state
+    const minDimRendered = Math.min(imgDims.w, imgDims.h);
+    const boxPx = minDimRendered * (cropScale / 100);
+    const maxLeft = imgDims.w - boxPx;
+    const maxTop = imgDims.h - boxPx;
+    const leftPx = maxLeft * (cropX / 100);
+    const topPx = maxTop * (cropY / 100);
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', backgroundColor: theme.paper, minHeight: '100vh', fontFamily: theme.sans }}>
             
-            {/* Header */}
             <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px 30px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                     <h2 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.6rem', fontWeight: 500, color: theme.ink }}>Texture Ingestion Engine</h2>
@@ -175,7 +198,7 @@ const BatchTextureProcessor = ({ currentUser }) => {
                 </div>
                 <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
                     <div style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', color: remaining > 0 ? theme.brass : theme.inkSoft }}>{remaining} REMAINING</div>
-                    <label style={{ background: theme.ink, color: '#fff', padding: '10px 20px', fontFamily: theme.mono, fontSize: '11px', cursor: 'pointer' }}>
+                    <label style={{ background: theme.ink, color: '#fff', padding: '10px 20px', fontFamily: theme.mono, fontSize: '11px', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={e=>e.currentTarget.style.background=theme.brass} onMouseOut={e=>e.currentTarget.style.background=theme.ink}>
                         + SELECT BATCH
                         <input type="file" multiple accept="image/*" onChange={handleFileSelect} style={{ display: 'none' }} />
                     </label>
@@ -192,36 +215,63 @@ const BatchTextureProcessor = ({ currentUser }) => {
                     <button onClick={() => { setQueue([]); setCurrentIndex(0); }} style={{ padding: '12px 24px', background: theme.ink, color: '#fff', cursor: 'pointer' }}>NEW BATCH</button>
                 </div>
             ) : (
-                <div style={{ display: 'flex', gap: '20px', flex: 1, padding: '0 20px' }}>
+                <div style={{ display: 'flex', gap: '20px', flex: 1, padding: '0 20px', paddingBottom: '30px' }}>
                     
                     {/* Visual Cropper Area */}
-                    <div style={{ flex: 2, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+                    <div style={{ flex: 2, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column' }}>
                         <div style={{ padding: '15px', background: theme.paper2, borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em' }}>
                             SOURCE IMAGE: {queue[currentIndex]?.name}
                         </div>
                         
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px', position: 'relative', overflow: 'hidden' }}>
-                            {/* Hidden canvas for extraction */}
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px' }}>
                             <canvas ref={canvasRef} style={{ display: 'none' }} />
                             
                             {imageSrc && (
-                                <div style={{ position: 'relative', display: 'inline-block' }}>
+                                <div style={{ position: 'relative', display: 'inline-block', overflow: 'hidden' }}>
                                     <img 
                                         ref={imageRef} 
                                         src={imageSrc} 
                                         alt="Raw Texture" 
-                                        style={{ maxHeight: '60vh', maxWidth: '100%', objectFit: 'contain', opacity: 0.8 }} 
+                                        onLoad={handleImageLoad}
+                                        style={{ maxHeight: '55vh', maxWidth: '100%', objectFit: 'contain', display: 'block' }} 
                                     />
-                                    {/* Simulated Bounding Box Overlay (Center Crop) */}
-                                    <div style={{ 
-                                        position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                                        width: '50%', height: '0', paddingBottom: '50%', /* Forces 1:1 Aspect Ratio Box */
-                                        border: `2px dashed ${theme.brass}`, background: 'rgba(255,255,255,0.1)',
-                                        pointerEvents: 'none', boxShadow: '0 0 0 9999px rgba(0,0,0,0.4)'
-                                    }}>
-                                        <div style={{ position: 'absolute', top: '-25px', left: 0, color: '#fff', fontFamily: theme.mono, fontSize: '10px', background: theme.brass, padding: '2px 6px' }}>
-                                            1024x1024 TARGET AREA
+                                    {imgDims.w > 0 && (
+                                        <div style={{ 
+                                            position: 'absolute',
+                                            top: `${topPx}px`, left: `${leftPx}px`,
+                                            width: `${boxPx}px`, height: `${boxPx}px`,
+                                            border: `2px dashed ${theme.brass}`,
+                                            background: 'rgba(255,255,255,0.1)', pointerEvents: 'none',
+                                            boxShadow: '0 0 0 9999px rgba(28,26,22,0.6)'
+                                        }}>
+                                            <div style={{ position: 'absolute', top: '-25px', left: '-2px', color: '#fff', fontFamily: theme.mono, fontSize: '10px', background: theme.brass, padding: '4px 8px' }}>
+                                                1024x1024 EXTRACTION ZONE
+                                            </div>
                                         </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Slider Controls */}
+                            {imgDims.w > 0 && (
+                                <div style={{ width: '100%', maxWidth: '400px', marginTop: '30px', display: 'flex', flexDirection: 'column', gap: '15px', padding: '20px', background: theme.paper2, border: `1px solid ${theme.line}` }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                        <label style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, display: 'flex', justifyContent: 'space-between' }}>
+                                            <span>VIEWFINDER SIZE</span> <span>{cropScale}%</span>
+                                        </label>
+                                        <input type="range" min="10" max="100" value={cropScale} onChange={e => setCropScale(e.target.value)} style={{ width: '100%' }} />
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                        <label style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, display: 'flex', justifyContent: 'space-between' }}>
+                                            <span>PAN X (HORIZONTAL)</span> <span>{cropX}%</span>
+                                        </label>
+                                        <input type="range" min="0" max="100" value={cropX} onChange={e => setCropX(e.target.value)} style={{ width: '100%' }} />
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                        <label style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, display: 'flex', justifyContent: 'space-between' }}>
+                                            <span>PAN Y (VERTICAL)</span> <span>{cropY}%</span>
+                                        </label>
+                                        <input type="range" min="0" max="100" value={cropY} onChange={e => setCropY(e.target.value)} style={{ width: '100%' }} />
                                     </div>
                                 </div>
                             )}
@@ -241,7 +291,6 @@ const BatchTextureProcessor = ({ currentUser }) => {
                             />
                         </div>
 
-                        {/* Overwrite Warning System */}
                         <div style={{ minHeight: '80px' }}>
                             {conflictWarning ? (
                                 <div style={{ background: conflictWarning.hasTexture ? '#fff3cd' : '#d4edda', border: `1px solid ${conflictWarning.hasTexture ? '#ffeeba' : '#c3e6cb'}`, padding: '15px' }}>
@@ -282,7 +331,7 @@ const BatchTextureProcessor = ({ currentUser }) => {
                                     padding: '15px', background: (isProcessing || !conflictWarning) ? theme.paper2 : theme.ink, 
                                     color: (isProcessing || !conflictWarning) ? theme.inkSoft : '#fff', 
                                     border: 'none', cursor: (isProcessing || !conflictWarning) ? 'not-allowed' : 'pointer',
-                                    fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em'
+                                    fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s'
                                 }}
                             >
                                 {isProcessing ? "PROCESSING..." : "APPROVE & NEXT IMAGE"}
