@@ -75,7 +75,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [newCollection, setNewCollection] = useState({ name: '', allowedCustomers: [], allowedFinishes: [] }); 
   const [newCustomWindow, setNewCustomWindow] = useState({ name: '', brands: [activeBrand], hasImage: true, hasCode: true, hasVendor: false, hasMultiplier: true });
   
-  // 🚀 BRAND NEW: Finish Editing States & Client Mappings
   const [editingGlobalFinish, setEditingGlobalFinish] = useState(null);
   const [editingOutsourceFinish, setEditingOutsourceFinish] = useState(null);
   const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '', clientMapping: [] });
@@ -94,7 +93,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, clientPricing: [], collections: [] }); 
   const [isSaving, setIsSaving] = useState(false);
   
-  // 🚀 BRAND NEW: Added clientSalesPrice to pricing tier
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' }); 
 
   const [pdfFile, setPdfFile] = useState(null);
@@ -494,7 +492,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       if (addedCount > 0) { await setDoc(doc(db, "system", "master_finishes"), { finishes: currentFinishes }, { merge: true }); alert(`Successfully synced ${addedCount} recipes!`); } else alert("HQ is in sync with floor database!");
   };
 
-  // 🚀 BRAND NEW: Add / Edit Global Finish Logic
   const handleAddGlobalFinish = async () => {
       if (!newFinishConfig.name) return alert("Finish name required.");
       let updatedFinishes;
@@ -574,7 +571,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       await setDoc(doc(db, "system", "master_finishes"), { finishes: globalFinishes.filter(f => f.id !== idToRemove) }, { merge: true });
   };
 
-  // 🚀 BRAND NEW: Add / Edit Outsource Finish Logic
   const handleAddOutsourceFinish = async () => {
       if (!newOutsourceFinishConfig.name) return alert("Finish name required.");
       const safeId = editingOutsourceFinish || `FIN-${newOutsourceFinishConfig.name.toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
@@ -666,102 +662,107 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       await setDoc(doc(db, "system", "master_lists"), { ...globalLists, cpqRoutingTypes: updated });
   };
 
+  // Reusable styling objects
+  const fieldStyle = { width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' };
+  const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
+  const sectionHeaderStyle = { margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' };
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
       {/* HEADER WITH TIERED INVENTORY TOGGLE */}
-      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div>
-            <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>4. Master Library & Data Rules</h2>
-            <span style={{ fontSize: '0.7rem', color: '#666' }}>{inventory.length} APPROVED RECORDS</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>{inventory.length} Approved Records</span>
+            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Master Library & Data Rules</h2>
         </div>
-        <div style={{ display: 'flex', gap: '15px', width: '75%', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
           
-          <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} style={{ padding: '10px', border: '2px solid #007bff', fontWeight: 'bold', background: '#eafaf1', color: '#007bff', minWidth: '150px', textTransform: 'uppercase' }}>
-              <option value="ALL">ALL CLASSES</option>
-              <option value="INVENTORY">RAW MAT / COMPONENTS (IN-HOUSE)</option>
-              <option value="OUTSOURCED">OUTSOURCED COMPONENTS</option>
-              <optgroup label="ASSEMBLIES & KITS">
-                  <option value="UNASSIGNED">UNASSIGNED / PENDING</option>
+          <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper-2)', minWidth: '150px' }}>
+              <option value="ALL">All Classes</option>
+              <option value="INVENTORY">Raw Mat / Components (In-House)</option>
+              <option value="OUTSOURCED">Outsourced Components</option>
+              <optgroup label="Assemblies & Kits">
+                  <option value="UNASSIGNED">Unassigned / Pending</option>
                   {(globalLists.assemblyTypes || []).map(type => (
                       <option key={type} value={type}>{type}</option>
                   ))}
               </optgroup>
           </select>
           
-          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px', background: '#ffeeba', padding: '5px 10px', border: '1px solid #856404' }}>
-              <input type="checkbox" checked={isAdmin} onChange={() => setIsAdmin(!isAdmin)} /> SIMULATE ADMIN
+          <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--paper-2)', padding: '12px 16px', border: '1px solid var(--line)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={isAdmin} onChange={() => setIsAdmin(!isAdmin)} /> Simulate Admin
           </label>
           
-          <button onClick={handleCreateNewPart} style={{ padding: '10px 15px', background: '#000', color: '#fff', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer', whiteSpace: 'nowrap' }}>+ NEW RECORD</button>
+          <button onClick={handleCreateNewPart} style={{ padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>+ New Record</button>
           
           {windowConfig.system.prodTypes?.includes(activeBrand) && (
-              <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ padding: '10px', border: '2px solid #000', fontWeight: 'bold', flex: 1 }}>
-                  <option value="">ALL CATEGORIES</option>
+              <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                  <option value="">All Categories</option>
                   {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}
               </select>
           )}
 
           {windowConfig.system.collections?.includes(activeBrand) && (
-              <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ padding: '10px', border: '2px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', flex: 1 }}>
-                  <option value="">ALL COLLECTIONS</option>
+              <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                  <option value="">All Collections</option>
                   {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
               </select>
           )}
 
-          <input placeholder="🔍 Search by Name, ERP, Bin, or Cust ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ flex: 2, padding: '10px', border: '2px solid #000', fontWeight: 'bold', fontSize: '1rem' }} />
+          <input placeholder="Search Name, ERP, Bin..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '250px', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
         
         {/* LEFT LIST */}
-        <div style={{ flex: activePart ? 1.5 : 1, display: 'grid', gridTemplateColumns: activePart ? 'repeat(auto-fill, minmax(200px, 1fr))' : 'repeat(auto-fill, minmax(250px, 1fr))', gap: '15px', alignContent: 'start' }}>
-          {filteredInventory.length === 0 && <div style={{ color: '#666', fontStyle: 'italic', padding: '20px' }}>No {partClassFilter === 'ALL' ? 'records' : partClassFilter} found in this category.</div>}
+        <div style={{ flex: activePart ? 1 : 1, display: 'grid', gridTemplateColumns: activePart ? 'repeat(auto-fill, minmax(200px, 1fr))' : 'repeat(auto-fill, minmax(250px, 1fr))', gap: '16px', alignContent: 'start' }}>
+          {filteredInventory.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', padding: '24px', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>No {partClassFilter === 'ALL' ? 'records' : partClassFilter} found in this category.</div>}
           {filteredInventory.map(part => {
             const specs = part.manufacturingSpecs || {};
             const isWatchlist = specs.watchList && specs.watchList !== "NONE" || (specs.customData?.watchlist && specs.customData.watchlist !== "NONE" && specs.customData.watchlist !== "N/A");
             const displayId = part.legacyErpId && part.legacyErpId !== "PENDING" ? part.legacyErpId : part.itemId;
             const isSharedIn = part.brandId !== activeBrand; 
 
-            let classColor = '#007bff'; 
-            if (part.partClass === 'Assembly') classColor = '#28a745'; 
-            if (part.partClass === 'Master Assembly') classColor = '#e83e8c'; 
+            let classColor = 'var(--ink-soft)'; 
+            if (part.partClass === 'Assembly') classColor = 'var(--ink)'; 
+            if (part.partClass === 'Master Assembly') classColor = 'var(--brass)'; 
 
             return (
-              <div key={part.id} onClick={() => openPartDetails(part)} style={{ background: activePart?.id === part.id ? '#fff9c4' : '#fff', border: '2px solid #000', cursor: 'pointer', position: 'relative', display: 'flex', flexDirection: 'column', transition: '0.2s', boxShadow: activePart?.id === part.id ? `5px 5px 0 ${classColor}` : '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                {isWatchlist && <div style={{ position: 'absolute', top: '-10px', right: '-10px', background: '#d9534f', color: '#fff', padding: '5px 8px', fontSize: '0.6rem', fontWeight: 'bold', border: '2px solid #000', zIndex: 2 }}>★ WATCH</div>}
-                {isSharedIn && <div style={{ position: 'absolute', top: '5px', left: '5px', background: '#ffc107', color: '#000', padding: '2px 5px', fontSize: '0.55rem', fontWeight: 'bold', border: '1px solid #000', zIndex: 2 }}>SHARED FROM {part.brandId.toUpperCase()}</div>}
+              <div key={part.id} onClick={() => openPartDetails(part)} style={{ background: '#fff', border: activePart?.id === part.id ? `1px solid ${classColor}` : '1px solid var(--line)', cursor: 'pointer', position: 'relative', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', boxShadow: activePart?.id === part.id ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}>
+                {isWatchlist && <div style={{ position: 'absolute', top: '-10px', right: '-10px', background: '#d9534f', color: '#fff', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', zIndex: 2 }}>★ Watch</div>}
+                {isSharedIn && <div style={{ position: 'absolute', top: '10px', left: '10px', background: 'var(--paper-2)', color: 'var(--ink)', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', zIndex: 2 }}>Shared from {part.brandId.toUpperCase()}</div>}
 
-                <div style={{ height: '150px', background: '#f4f4f4', borderBottom: '2px solid #000', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                  {part.finalImageUrl ? <img src={part.finalImageUrl} alt="Part" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <span style={{ color: '#aaa', fontSize: '2rem' }}>{part.manufacturingSpecs?.cadUrl ? '🧊 3D CAD' : '⚙️'}</span>}
+                <div style={{ height: '180px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                  {part.finalImageUrl ? <img src={part.finalImageUrl} alt="Part" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <span style={{ color: 'var(--ink-soft)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>{part.manufacturingSpecs?.cadUrl ? '🧊 3D CAD' : 'No Image'}</span>}
                 </div>
 
-                <div style={{ padding: '15px', flex: 1, display: 'flex', flexDirection: 'column' }}>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: classColor, marginBottom: '5px' }}>{displayId} <span style={{fontSize:'0.65rem', color:'#666'}}>({part.partClass})</span></div>
+                <div style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: classColor, marginBottom: '8px' }}>{displayId} <span style={{opacity: 0.6}}>({part.partClass})</span></div>
                   
                   {part.clientPricing && part.clientPricing.length > 0 && (
-                      <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745', marginBottom: '2px' }}>
-                          {part.clientPricing.length} CLIENT MAPPING(S)
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink)', marginBottom: '4px' }}>
+                          {part.clientPricing.length} Client Mapping(s)
                       </div>
                   )}
                   {specs.binLocation && (
-                      <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', marginBottom: '2px' }}>
-                          BIN: {specs.binLocation}
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px' }}>
+                          Bin: {specs.binLocation}
                       </div>
                   )}
 
-                  <div style={{ fontSize: '0.85rem', fontWeight: 'bold', lineHeight: '1.2', flex: 1 }}>{part.itemName}</div>
+                  <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, lineHeight: '1.4', color: 'var(--ink)', flex: 1 }}>{part.itemName}</div>
                   
                   {part.partClass === "Inventory" ? (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #eee', paddingTop: '10px', marginTop: '10px' }}>
-                      <span style={{ fontSize: '0.65rem', background: '#eee', padding: '3px 6px', borderRadius: '3px', border: '1px solid #ccc' }}>{specs.productType || "NO TYPE"}</span>
-                      <span style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#CC6600' }}>{specs.parametric?.length || 0}L × {specs.parametric?.width || 0}W</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--line)', paddingTop: '12px', marginTop: '16px' }}>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{specs.productType || "No Type"}</span>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{specs.parametric?.length || 0}L × {specs.parametric?.width || 0}W</span>
                     </div>
                   ) : (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #eee', paddingTop: '10px', marginTop: '10px' }}>
-                      <span style={{ fontSize: '0.65rem', background: '#eafaf1', color: '#1e7e34', padding: '3px 6px', borderRadius: '3px', border: '1px solid #28a745', fontWeight: 'bold' }}>{part.project || 'NO PROJECT'}</span>
-                      <span style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1' }}>{part.routingType || 'UNASSIGNED'}</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--line)', paddingTop: '12px', marginTop: '16px' }}>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{part.project || 'No Project'}</span>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{part.routingType || 'Unassigned'}</span>
                     </div>
                   )}
                 </div>
@@ -772,41 +773,42 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 
         {/* RIGHT EDIT PANEL */}
         {activePart && (
-          <div style={{ flex: 1.5, background: '#fff', border: '3px solid #000', boxShadow: '10px 10px 0 #000', position: 'sticky', top: '20px', maxHeight: '90vh', overflowY: 'auto' }}>
-            <div style={{ padding: '20px', background: '#000', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 10 }}>
-              <div><h3 style={{ margin: 0, fontSize: '1.2rem' }}>{activePart.isNew ? `NEW ${partClassFilter.toUpperCase()} SETUP` : (activePart.legacyErpId !== "PENDING" ? activePart.legacyErpId : activePart.itemId)}</h3><span style={{ fontSize: '0.7rem', color: '#aaa' }}>{activePart.isNew ? "Define Master Details Below" : activePart.itemName}</span></div>
-              <button onClick={() => setActivePart(null)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+          <div style={{ flex: 1.5, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'sticky', top: '20px', maxHeight: '90vh', overflowY: 'auto', borderRadius: '2px', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 10, borderBottom: '1px solid var(--line)' }}>
+              <div>
+                  <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>{activePart.isNew ? `New ${partClassFilter} Setup` : (activePart.legacyErpId !== "PENDING" ? activePart.legacyErpId : activePart.itemId)}</h3>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '4px', display: 'block' }}>{activePart.isNew ? "Define Master Details Below" : activePart.itemName}</span>
+              </div>
+              <button onClick={() => setActivePart(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
             </div>
 
-            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div style={{ padding: '30px', display: 'flex', flexDirection: 'column', gap: '30px' }}>
               
               {activePart.partClass !== 'Inventory' && (
-                  <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '15px' }}>
-                      <h4 style={{ margin: '0 0 10px 0', color: '#1e7e34', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          📦 ASSEMBLY CONFIGURATION
-                      </h4>
+                  <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '24px' }}>
+                      <h4 style={sectionHeaderStyle}>Assembly Configuration</h4>
                       
-                      <div style={{ background: '#fff3cd', border: '2px dashed #ffc107', padding: '10px', display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '15px' }}>
+                      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px', display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
                           <input 
                               type="checkbox" 
                               checked={editSpecs.isProjectManaged || false} 
                               onChange={e => setEditSpecs({...editSpecs, isProjectManaged: e.target.checked})} 
-                              style={{ transform: 'scale(1.5)', cursor: 'pointer', marginLeft: '5px' }} 
+                              style={{ cursor: 'pointer' }} 
                           />
                           <div>
-                              <div style={{ fontWeight: 'bold', color: '#856404', fontSize: '0.85rem' }}>FLAG AS COMPLEX PROJECT (ROUTE TO TAB 10.5)</div>
-                              <div style={{ fontSize: '0.7rem', color: '#666' }}>Checking this box ensures that when this product is quoted/ordered, it routes to the Project Management dashboard for multi-WO/PO dissection.</div>
+                              <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500, color: 'var(--ink)' }}>Flag as Complex Project (Route to Project Mgmt)</div>
+                              <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Checking this box ensures that when this product is quoted/ordered, it routes to the Project Management dashboard for multi-WO/PO dissection.</div>
                           </div>
                       </div>
                       
                       {activePart.revisions && activePart.revisions.length > 0 && (
-                          <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
-                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>REVISION GALLERY ({activePart.revisions.length} Angles/Images):</label>
-                              <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '10px' }}>
+                          <div style={{ marginBottom: '24px' }}>
+                              <label style={labelStyle}>Revision Gallery ({activePart.revisions.length} Angles/Images)</label>
+                              <div style={{ display: 'flex', gap: '12px', overflowX: 'auto', paddingBottom: '12px' }}>
                                   {activePart.revisions.map((rev, idx) => (
-                                      <div key={idx} style={{ flexShrink: 0, width: '80px', height: '80px', border: rev.url === activePart.finalImageUrl || rev.url === activePart.manufacturingSpecs?.cadUrl ? '3px solid #28a745' : '1px solid #ccc', background: '#f4f4f4', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-                                          {rev.is3D || rev.name?.includes('3D') ? <span style={{fontSize:'1.5rem'}}>🧊</span> : <img src={rev.url} alt="Rev" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
-                                          {(rev.url === activePart.finalImageUrl || rev.url === activePart.manufacturingSpecs?.cadUrl) && <div style={{ position: 'absolute', bottom: 0, width: '100%', background: '#28a745', color: '#fff', fontSize: '0.5rem', textAlign: 'center', fontWeight: 'bold' }}>MASTER</div>}
+                                      <div key={idx} style={{ flexShrink: 0, width: '100px', height: '100px', border: rev.url === activePart.finalImageUrl || rev.url === activePart.manufacturingSpecs?.cadUrl ? '2px solid var(--brass)' : '1px solid var(--line)', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+                                          {rev.is3D || rev.name?.includes('3D') ? <span style={{fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)'}}>3D CAD</span> : <img src={rev.url} alt="Rev" style={{ width: '100%', height: '100%', objectFit: 'contain', padding: '4px' }} />}
+                                          {(rev.url === activePart.finalImageUrl || rev.url === activePart.manufacturingSpecs?.cadUrl) && <div style={{ position: 'absolute', bottom: 0, width: '100%', background: 'var(--brass)', color: '#fff', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', textAlign: 'center', letterSpacing: '.1em', padding: '2px 0' }}>Master</div>}
                                       </div>
                                   ))}
                               </div>
@@ -815,15 +817,15 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 
                       {/* --- FILE CABINET FOR MASTER ASSEMBLIES --- */}
                       {activePart.partClass === 'Master Assembly' && (
-                          <div style={{ marginTop: '15px', background: '#fff', border: '1px solid #28a745', padding: '10px', fontFamily: 'monospace' }}>
-                              <div style={{ fontWeight: 'bold', color: '#000', marginBottom: '5px' }}>🗄️ FILE CABINET: {activePart.legacyErpId !== "PENDING" ? activePart.legacyErpId : activePart.itemId}</div>
+                          <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px' }}>
+                              <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '12px' }}>File Cabinet: {activePart.legacyErpId !== "PENDING" ? activePart.legacyErpId : activePart.itemId}</div>
                               {activeBomPins.length === 0 ? (
-                                  <div style={{ paddingLeft: '20px', color: '#999', fontStyle: 'italic', fontSize: '0.85rem' }}>↳ No nested components pinned yet. (Configure in Tab 2)</div>
+                                  <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>↳ No nested components pinned yet. (Configure in Visual Assembly)</div>
                               ) : (
                                   activeBomPins.map(pin => (
-                                      <div key={pin.id} style={{ paddingLeft: '20px', color: '#333', marginTop: '5px', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.85rem' }}>
-                                          <span style={{ color: '#28a745' }}>↳</span> 
-                                          <span><strong>{pin.defaultQty || 1}x</strong> {pin.partName} <span style={{ color: '#007bff' }}>[{pin.legacyErpId}]</span></span>
+                                      <div key={pin.id} style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                          <span style={{ color: 'var(--ink-soft)' }}>↳</span> 
+                                          <span><strong>{pin.defaultQty || 1}x</strong> {pin.partName} <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>[{pin.legacyErpId}]</span></span>
                                       </div>
                                   ))
                               )}
@@ -833,91 +835,89 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               )}
 
               {/* --- CLONE SPECS ENGINE --- */}
-              <div style={{ background: '#f8f9fa', padding: '15px', border: '2px dashed #007bff', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '5px' }}>
-                      <span>🧬 CLONE CPQ ATTRIBUTES & SPECS FROM EXISTING RECORD</span>
+              <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <label style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>
+                      Clone CPQ Attributes & Specs
                   </label>
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                      <select value={cloneSourceId} onChange={(e) => setCloneSourceId(e.target.value)} style={{ flex: 1, padding: '10px', border: '1px solid #007bff', outline: 'none', fontWeight: 'bold' }}>
+                  <div style={{ display: 'flex', gap: '16px' }}>
+                      <select value={cloneSourceId} onChange={(e) => setCloneSourceId(e.target.value)} style={fieldStyle}>
                           <option value="">-- Select Source Record --</option>
                           {inventory.filter(p => p.id !== activePart.id).map(p => (
                               <option key={p.id} value={p.id}>{p.legacyErpId && p.legacyErpId !== "PENDING" ? `[${p.legacyErpId}] ` : ''}{p.itemName}</option>
                           ))}
                       </select>
-                      <button onClick={handleCloneSpecs} disabled={!cloneSourceId} style={{ padding: '10px 20px', background: cloneSourceId ? '#007bff' : '#ccc', color: '#fff', fontWeight: 'bold', border: 'none', cursor: cloneSourceId ? 'pointer' : 'not-allowed' }}>CLONE DATA</button>
+                      <button onClick={handleCloneSpecs} disabled={!cloneSourceId} style={{ padding: '0 24px', background: cloneSourceId ? 'var(--ink)' : 'transparent', color: cloneSourceId ? '#fff' : 'var(--ink-soft)', border: cloneSourceId ? 'none' : '1px solid var(--line)', cursor: cloneSourceId ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Clone Data</button>
                   </div>
               </div>
 
               <div>
-                 <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>IDENTIFICATION</h4>
+                 <h4 style={sectionHeaderStyle}>Identification</h4>
                  
-                 <div style={{ display: 'flex', gap: '10px' }}>
-                     <div style={{ flex: 2 }}>
-                         <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>RECORD NAME / DESCRIPTION:</label>
-                         <input name="tempName" value={editSpecs.tempName !== undefined ? editSpecs.tempName : activePart.itemName} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                     <div>
+                         <label style={labelStyle}>Record Name / Description</label>
+                         <input name="tempName" value={editSpecs.tempName !== undefined ? editSpecs.tempName : activePart.itemName} onChange={handleSpecChange} style={fieldStyle} />
                      </div>
-                     <div style={{ flex: 1 }}>
-                         <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff' }}>ERP LEGACY ID (Internal):</label>
-                         <input name="tempLegacyId" value={editSpecs.tempLegacyId !== undefined ? editSpecs.tempLegacyId : (activePart.legacyErpId === "PENDING" ? "" : activePart.legacyErpId)} onChange={handleSpecChange} placeholder="e.g. P-1234" style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box', textTransform: 'uppercase' }} />
-                     </div>
-                 </div>
-
-                 <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '10px', marginTop: '15px' }}>
-                     <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>📍 WAREHOUSE BIN LOCATION (BARCODE/REF)</label>
-                     <input name="binLocation" value={editSpecs.binLocation || ''} onChange={handleSpecChange} placeholder="e.g. A1-B2-04" style={{ width: '100%', padding: '10px', border: '1px solid #6f42c1', boxSizing: 'border-box', textTransform: 'uppercase', fontWeight: 'bold', fontSize: '1.1rem' }} />
-                     <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '5px', fontStyle: 'italic' }}>
-                         Used by the Pick/Pack App to guide operators to the physical item location.
+                     <div>
+                         <label style={labelStyle}>ERP Legacy ID (Internal)</label>
+                         <input name="tempLegacyId" value={editSpecs.tempLegacyId !== undefined ? editSpecs.tempLegacyId : (activePart.legacyErpId === "PENDING" ? "" : activePart.legacyErpId)} onChange={handleSpecChange} placeholder="e.g. P-1234" style={{ ...fieldStyle, textTransform: 'uppercase' }} />
                      </div>
                  </div>
 
-                 <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', marginTop: '15px' }}>
-                    <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
+                 <div style={{ marginBottom: '30px' }}>
+                     <label style={labelStyle}>Warehouse Bin Location (Barcode/Ref)</label>
+                     <input name="binLocation" value={editSpecs.binLocation || ''} onChange={handleSpecChange} placeholder="e.g. A1-B2-04" style={{ ...fieldStyle, textTransform: 'uppercase' }} />
+                     <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '6px' }}>Used by the Pick/Pack App to guide operators to the physical item location.</div>
+                 </div>
+
+                 <div style={{ background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)' }}>
+                    <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Client-Specific Pricing & SKUs</h4>
                     
-                    <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '15px' }}>
+                    <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end', marginBottom: '24px' }}>
                         <div style={{ flex: 1.5 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOMER (NAME - ID):</label>
-                           <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                            <label style={labelStyle}>Customer (Name - ID)</label>
+                           <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={fieldStyle}>
                                 <option value="">Select Customer...</option>
                                 {liveCustomers.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                             </select>
                         </div>
                         <div style={{ flex: 1.5 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CLIENT SKU / PART #:</label>
-                            <input value={newClientPricing.clientSku} onChange={e => setNewClientPricing({...newClientPricing, clientSku: e.target.value})} placeholder="e.g. Brimar-8483" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                            <label style={labelStyle}>Client SKU / Part #</label>
+                            <input value={newClientPricing.clientSku} onChange={e => setNewClientPricing({...newClientPricing, clientSku: e.target.value})} placeholder="e.g. Brimar-8483" style={fieldStyle} />
                         </div>
                         <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CLIENT COST ($):</label>
-                            <input type="number" step="0.01" value={newClientPricing.price} onChange={e => setNewClientPricing({...newClientPricing, price: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                            <label style={labelStyle}>Client Cost ($)</label>
+                            <input type="number" step="0.01" value={newClientPricing.price} onChange={e => setNewClientPricing({...newClientPricing, price: e.target.value})} placeholder="0.00" style={fieldStyle} />
                         </div>
                         <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CLIENT SALES PRICE ($):</label>
-                            <input type="number" step="0.01" value={newClientPricing.clientSalesPrice} onChange={e => setNewClientPricing({...newClientPricing, clientSalesPrice: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid #28a745', fontWeight: 'bold' }} />
+                            <label style={labelStyle}>Client Sales Price ($)</label>
+                            <input type="number" step="0.01" value={newClientPricing.clientSalesPrice} onChange={e => setNewClientPricing({...newClientPricing, clientSalesPrice: e.target.value})} placeholder="0.00" style={fieldStyle} />
                         </div>
-                        <button onClick={handleAddClientPricing} style={{ padding: '9px 15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ ADD</button>
+                        <button onClick={handleAddClientPricing} style={{ padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Add</button>
                     </div>
                     
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                        {(editSpecs.clientPricing || []).length === 0 && <div style={{ fontSize: '0.75rem', color: '#666', fontStyle: 'italic' }}>No custom client pricing assigned. Defaults to Base Price.</div>}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {(editSpecs.clientPricing || []).length === 0 && <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No custom client pricing assigned. Defaults to Base Price.</div>}
                         {(editSpecs.clientPricing || []).map((cp, idx) => (
-                            <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #ccc', padding: '8px 12px' }}>
-                                <div style={{ display: 'flex', gap: '20px', fontSize: '0.8rem', width: '100%', alignItems: 'center' }}>
-                                    <span style={{ fontWeight: 'bold', color: '#007bff', flex: 1 }}>{cp.customerId}</span>
-                                    <span style={{ flex: 1 }}><strong style={{ color: '#666' }}>SKU:</strong> {cp.clientSku || 'N/A'}</span>
-                                    <span style={{ color: '#333', fontWeight: 'bold', width: '100px', textAlign: 'right' }}>COST: ${parseFloat(cp.price || 0).toFixed(2)}</span>
-                                    <span style={{ color: '#28a745', fontWeight: 'bold', width: '120px', textAlign: 'right' }}>SALES: ${parseFloat(cp.clientSalesPrice || 0).toFixed(2)}</span>
+                            <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid var(--line)', padding: '12px 16px' }}>
+                                <div style={{ display: 'flex', gap: '24px', fontSize: '0.9rem', width: '100%', alignItems: 'center', color: 'var(--ink)' }}>
+                                    <span style={{ fontWeight: 500, flex: 1 }}>{cp.customerId}</span>
+                                    <span style={{ flex: 1, color: 'var(--ink-soft)' }}>SKU: <span style={{ color: 'var(--ink)' }}>{cp.clientSku || 'N/A'}</span></span>
+                                    <span style={{ width: '100px', textAlign: 'right' }}>Cost: ${parseFloat(cp.price || 0).toFixed(2)}</span>
+                                    <span style={{ fontWeight: 500, width: '120px', textAlign: 'right' }}>Sales: ${parseFloat(cp.clientSalesPrice || 0).toFixed(2)}</span>
                                 </div>
-                                <button onClick={() => handleRemoveClientPricing(idx)} style={{ background: 'none', border: 'none', color: '#d9534f', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.2rem', marginLeft: '10px' }}>×</button>
+                                <button onClick={() => handleRemoveClientPricing(idx)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer', marginLeft: '16px' }}>×</button>
                             </div>
                         ))}
                     </div>
                  </div>
 
-                 <div style={{ marginTop: '15px', background: '#f8f9fa', padding: '10px', border: '2px solid #ccc' }}>
-                   <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>RECORD VISIBILITY & CROSS-BRAND SHARING:</label>
-                   <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+                 <div style={{ marginTop: '30px', background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
+                   <label style={labelStyle}>Record Visibility & Cross-Brand Sharing</label>
+                   <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
                      {AVAILABLE_BRANDS.map(brand => {
                         const isOwner = activePart.brandId === brand.id; const isShared = editSpecs.sharedBrands?.includes(brand.id);
-                        return ( <label key={brand.id} style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px', cursor: isOwner ? 'not-allowed' : 'pointer', opacity: isOwner ? 0.7 : 1 }}><input type="checkbox" checked={isOwner || isShared} disabled={isOwner} onChange={() => handleBrandToggle(brand.id)} />{brand.name} {isOwner && "(Owner)"}</label> );
+                        return ( <label key={brand.id} style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px', cursor: isOwner ? 'not-allowed' : 'pointer', opacity: isOwner ? 0.6 : 1, color: 'var(--ink)' }}><input type="checkbox" checked={isOwner || isShared} disabled={isOwner} onChange={() => handleBrandToggle(brand.id)} />{brand.name} {isOwner && "(Owner)"}</label> );
                      })}
                    </div>
                  </div>
@@ -925,14 +925,14 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 
               {/* BRAND-AWARE CORE ATTRIBUTES */}
               <div>
-                 <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>CORE ATTRIBUTES</h4>
-                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                 <h4 style={sectionHeaderStyle}>Core Attributes</h4>
+                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                    
                    {windowConfig.system.prodTypes?.includes(activeBrand) && (
                        <div>
-                           <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label>
-                           <select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000' }}>
-                               <option value="">SELECT...</option>
+                           <label style={labelStyle}>Prod Type</label>
+                           <select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={fieldStyle}>
+                               <option value="">Select...</option>
                                {editSpecs.productType && !(globalLists.prodTypes || []).map(p=>p.toUpperCase()).includes(editSpecs.productType) && (
                                    <option value={editSpecs.productType}>⭐ {editSpecs.productType} (From ERP)</option>
                                )}
@@ -942,26 +942,26 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                    )}
 
                    <div>
-                       <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>{activePart.partClass === 'Inventory' ? 'INVENTORY CATEGORY:' : 'ROUTING CLASSIFICATION:'}</label>
-                       <select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
-                           <option value="">UNASSIGNED</option>
+                       <label style={labelStyle}>{activePart.partClass === 'Inventory' ? 'Inventory Category' : 'Routing Classification'}</label>
+                       <select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}>
+                           <option value="">Unassigned</option>
                            {(activePart.partClass === 'Inventory' ? (globalLists.inventoryTypes || []) : (globalLists.assemblyTypes || [])).map(t => <option key={t} value={t}>{t}</option>)}
                        </select>
                    </div>
                    
                    <div>
-                       <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c' }}>PROJECT / GROUPING:</label>
-                       <input name="project" value={editSpecs.project || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #e83e8c', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                       <label style={labelStyle}>Project / Grouping</label>
+                       <input name="project" value={editSpecs.project || ""} onChange={handleSpecChange} style={fieldStyle} />
                    </div>
 
                    {windowConfig.system.partHandling?.includes(activeBrand) && (
-                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label><select name="partHandling" value={editSpecs.partHandling || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}><option value="">UNASSIGNED / STANDARD</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
+                       <div><label style={labelStyle}>Part Handling</label><select name="partHandling" value={editSpecs.partHandling || ""} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}><option value="">Unassigned / Standard</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
                    )}
                    
                    {windowConfig.system.uom?.includes(activeBrand) && (
                        <div>
-                           <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label>
-                           <select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>
+                           <label style={labelStyle}>UOM</label>
+                           <select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={fieldStyle}>
                                {editSpecs.uom && !(globalLists.uom || []).map(u=>u.toUpperCase()).includes(editSpecs.uom) && (
                                    <option value={editSpecs.uom}>⭐ {editSpecs.uom} (From ERP)</option>
                                )}
@@ -972,13 +972,13 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 
                    {windowConfig.system.collections?.includes(activeBrand) && (
                        <div style={{ gridColumn: 'span 2' }}>
-                           <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>COLLECTIONS (MULTI-SELECT FOR CPQ):</label>
-                           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '10px', border: '2px solid #6f42c1', background: '#f8f9fa', maxHeight: '120px', overflowY: 'auto' }}>
-                               {collectionsData.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No collections defined in Admin.</span>}
+                           <label style={labelStyle}>Collections (Multi-Select for CPQ)</label>
+                           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '16px', border: '1px solid var(--line)', background: 'var(--paper)', maxHeight: '150px', overflowY: 'auto' }}>
+                               {collectionsData.length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No collections defined in Admin.</span>}
                                {collectionsData.map(c => {
                                    const isSelected = (editSpecs.collections || []).includes(c.name.toUpperCase());
                                    return (
-                                       <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', background: isSelected ? '#d8b4e2' : '#fff', color: isSelected ? '#4a148c' : '#333', border: `1px solid ${isSelected ? '#6f42c1' : '#ccc'}`, padding: '6px 12px', borderRadius: '20px', transition: '0.2s' }}>
+                                       <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer', background: isSelected ? 'var(--ink)' : '#fff', color: isSelected ? '#fff' : 'var(--ink)', border: `1px solid ${isSelected ? 'var(--ink)' : 'var(--line)'}`, padding: '6px 14px', borderRadius: '20px', transition: 'all 0.2s' }}>
                                            <input type="checkbox" checked={isSelected} onChange={() => handleToggleCollection(c.name.toUpperCase())} style={{ display: 'none' }} />
                                            {c.name}
                                        </label>
@@ -989,58 +989,58 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                    )}
 
                    {windowConfig.system.pillowSizes?.includes(activeBrand) && (
-                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PILLOW SIZE:</label><select name="pillowSize" value={editSpecs.pillowSize || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                       <div><label style={labelStyle}>Pillow Size</label><select name="pillowSize" value={editSpecs.pillowSize || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
                    {windowConfig.system.fillTypes?.includes(activeBrand) && (
-                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>FILL TYPE:</label><select name="fillType" value={editSpecs.fillType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.fillTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                       <div><label style={labelStyle}>Fill Type</label><select name="fillType" value={editSpecs.fillType || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.fillTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
                    {windowConfig.system.flangeStyles?.includes(activeBrand) && (
-                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>EDGE/FLANGE:</label><select name="flangeStyle" value={editSpecs.flangeStyle || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.flangeStyles || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                       <div><label style={labelStyle}>Edge/Flange</label><select name="flangeStyle" value={editSpecs.flangeStyle || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.flangeStyles || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
                    {windowConfig.system.stitchTypes?.includes(activeBrand) && (
-                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>STITCH ROUTING:</label><select name="stitchType" value={editSpecs.stitchType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.stitchTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                       <div><label style={labelStyle}>Stitch Routing</label><select name="stitchType" value={editSpecs.stitchType || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.stitchTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
                    {windowConfig.system.seamCounts?.includes(activeBrand) && (
-                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>SEAM COUNT:</label><select name="seamCount" value={editSpecs.seamCount || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                       <div><label style={labelStyle}>Seam Count</label><select name="seamCount" value={editSpecs.seamCount || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
                    {windowConfig.system.outsourceActions?.includes(activeBrand) && (
-                       <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>OUTSOURCE ACTION:</label><select name="outsourceAction" value={editSpecs.outsourceAction || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                       <div><label style={labelStyle}>Outsource Action</label><select name="outsourceAction" value={editSpecs.outsourceAction || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
                    
                    {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
                        <div key={w.id}>
-                           <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c', textTransform: 'uppercase' }}>{w.name}:</label>
-                           <select value={editSpecs.dynamicDicts?.[w.id] || ""} onChange={(e) => handleDictChange(w.id, e.target.value)} style={{ width: '100%', padding: '8px', border: '2px solid #e83e8c', outline: 'none', fontWeight: 'bold' }}>
-                               <option value="">SELECT...</option><option value="N/A">N/A</option>
+                           <label style={labelStyle}>{w.name}</label>
+                           <select value={editSpecs.dynamicDicts?.[w.id] || ""} onChange={(e) => handleDictChange(w.id, e.target.value)} style={fieldStyle}>
+                               <option value="">Select...</option><option value="N/A">N/A</option>
                                {dynamicAssets.filter(a => a.windowId === w.id).map(a => <option key={a.id} value={a.name}>{a.name} {a.code ? `(${a.code})` : ''}</option>)}
                            </select>
                        </div>
                    ))}
 
                    {customSchema.map(field => (
-                       <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#eafaf1', padding: '5px', border: '1px solid #28a745' }}>
-                           <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
+                       <div key={field.key}>
+                           <label style={labelStyle}>{field.label} (Custom)</label>
                            {field.type === 'dropdown' ? (
-                               <select value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745' }}>
+                               <select value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={fieldStyle}>
                                    <option value="">Select...</option>{(field.options || "").split(',').map(opt => <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>)}
                                </select>
                            ) : field.type === 'file' ? (
-                               <div>
-                                   {editSpecs.customData?.[field.key] && <a href={editSpecs.customData[field.key]} target="_blank" rel="noreferrer" style={{ fontSize: '0.65rem', color: '#007bff', display: 'block', marginBottom: '5px' }}>[View Current File]</a>}
-                                   <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0])} style={{ width: '100%', fontSize: '0.75rem' }} />
-                                   {dynamicUploadProgress[field.key] > 0 && <progress value={dynamicUploadProgress[field.key]} max="100" style={{ width: '100%', marginTop: '5px' }} />}
+                               <div style={{ background: 'var(--paper)', padding: '12px', border: '1px solid var(--line)' }}>
+                                   {editSpecs.customData?.[field.key] && <a href={editSpecs.customData[field.key]} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--ink)', textDecoration: 'underline', display: 'block', marginBottom: '8px' }}>View Current File</a>}
+                                   <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
+                                   {dynamicUploadProgress[field.key] > 0 && <progress value={dynamicUploadProgress[field.key]} max="100" style={{ width: '100%', marginTop: '8px' }} />}
                                </div>
                            ) : (
-                               <input type={field.type} value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box' }} />
+                               <input type={field.type} value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={fieldStyle} />
                            )}
                        </div>
                    ))}
 
                    {windowConfig.system.watchLists?.includes(activeBrand) && (
-                       <div style={{ gridColumn: 'span 2', background: '#fff3cd', border: '2px solid #ffc107', padding: '10px', marginTop: '10px' }}>
-                           <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: editSpecs.watchList !== "NONE" ? '#d9534f' : '#000' }}>ASSIGN TO WATCHLIST:</label>
-                           <select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', fontWeight: 'bold' }}>
-                               <option value="NONE">NONE</option>
+                       <div style={{ gridColumn: 'span 2' }}>
+                           <label style={labelStyle}>Assign to Watchlist</label>
+                           <select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={fieldStyle}>
+                               <option value="NONE">None</option>
                                {editSpecs.watchList && editSpecs.watchList !== "NONE" && !(globalLists.watchLists || []).map(w=>w.toUpperCase()).includes(editSpecs.watchList) && (
                                    <option value={editSpecs.watchList}>⭐ {editSpecs.watchList} (From ERP)</option>
                                )}
@@ -1051,132 +1051,151 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                  </div>
               </div>
 
-              <div style={{ background: '#f8f9fa', border: '2px solid #d4af37', padding: '15px', marginTop: '10px' }}>
-                  <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+              <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', marginTop: '10px' }}>
+                  <h4 style={sectionHeaderStyle}>Hardware CPQ Metadata (Vision Engine)</h4>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                       <div>
-                          <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET PROJECTION (INCHES):</label>
-                          <select value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', fontWeight: 'bold' }}>
-                              <option value="">-- NO PROJECTION / NOT BRACKET --</option>
-                              {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" PROJECTION</option>)}
+                          <label style={labelStyle}>Bracket Projection (Inches)</label>
+                          <select value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={fieldStyle}>
+                              <option value="">-- No Projection / Not Bracket --</option>
+                              {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" Projection</option>)}
                           </select>
                       </div>
                       <div>
-                          <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET MOUNT TYPE:</label>
-                          <select value={editSpecs.customData?.bracketType || ""} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', fontWeight: 'bold' }}>
-                              <option value="">-- NOT A BRACKET --</option>
-                              <option value="WALL">WALL MOUNT</option>
-                              <option value="CEILING">CEILING MOUNT</option>
-                              <option value="INSIDE MOUNT">INSIDE MOUNT</option>
+                          <label style={labelStyle}>Bracket Mount Type</label>
+                          <select value={editSpecs.customData?.bracketType || ""} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={fieldStyle}>
+                              <option value="">-- Not a Bracket --</option>
+                              <option value="WALL">Wall Mount</option>
+                              <option value="CEILING">Ceiling Mount</option>
+                              <option value="INSIDE MOUNT">Inside Mount</option>
                           </select>
                       </div>
                       <div style={{ gridColumn: 'span 2' }}>
-                          <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>SERVICE / FEE TYPE (AUTO-APPEND):</label>
-                          <select value={editSpecs.customData?.feeType || ""} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', fontWeight: 'bold' }}>
-                              <option value="">-- NO SPECIAL FEE --</option>
-                              <option value="SPLICE">SPLICE FEE</option>
-                              <option value="MITER_CUT">MITER CUT FEE</option>
-                              <option value="BENT_RETURN">BENT RETURN (FR) FEE</option>
-                              <option value="MITER_RETURN">MITER RETURN FEE</option>
+                          <label style={labelStyle}>Service / Fee Type (Auto-Append)</label>
+                          <select value={editSpecs.customData?.feeType || ""} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
+                              <option value="">-- No Special Fee --</option>
+                              <option value="SPLICE">Splice Fee</option>
+                              <option value="MITER_CUT">Miter Cut Fee</option>
+                              <option value="BENT_RETURN">Bent Return (FR) Fee</option>
+                              <option value="MITER_RETURN">Miter Return Fee</option>
                           </select>
-                          <span style={{ fontSize: '0.6rem', color: '#666', fontStyle: 'italic', display: 'block', marginTop: '4px' }}>If selected, the Vision System will automatically bill for this item when triggered (e.g. mapping "Splice Fee" to splices).</span>
+                          <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>If selected, the Vision System will automatically bill for this item when triggered.</span>
                       </div>
                   </div>
               </div>
 
               {activePart.partClass === 'Inventory' && (
                   <div>
-                    <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px', color: '#007bff' }}>LOGISTICS & SOURCING</h4>
+                    <h4 style={sectionHeaderStyle}>Logistics & Sourcing</h4>
                     
-                    <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}><button onClick={() => setEditSpecs({...editSpecs, isInHouse: true})} style={{ flex: 1, padding: '10px', background: editSpecs.isInHouse ? '#000' : '#eee', color: editSpecs.isInHouse ? '#fff' : '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer' }}>IN-HOUSE</button><button onClick={() => setEditSpecs({...editSpecs, isInHouse: false})} style={{ flex: 1, padding: '10px', background: !editSpecs.isInHouse ? '#000' : '#eee', color: !editSpecs.isInHouse ? '#fff' : '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer' }}>OUTSOURCED</button></div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ display: 'flex', gap: '16px', marginBottom: '24px' }}>
+                        <button onClick={() => setEditSpecs({...editSpecs, isInHouse: true})} style={{ flex: 1, padding: '12px', background: editSpecs.isInHouse ? 'var(--ink)' : 'transparent', color: editSpecs.isInHouse ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>In-House</button>
+                        <button onClick={() => setEditSpecs({...editSpecs, isInHouse: false})} style={{ flex: 1, padding: '12px', background: !editSpecs.isInHouse ? 'var(--ink)' : 'transparent', color: !editSpecs.isInHouse ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Outsourced</button>
+                    </div>
+                    
+                    <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
                       {editSpecs.isInHouse ? (
-                        <>
-                          <div style={{ display: 'flex', gap: '10px' }}>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROGRAM #:</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>RAW MAT:</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE PRICE ($):</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE COST ($):</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                          </div>
-                        </>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                            <div><label style={labelStyle}>Program #</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                            <div><label style={labelStyle}>Raw Mat</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                            <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                            <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                        </div>
                       ) : (
-                        <>
-                          <div style={{ display: 'flex', gap: '10px' }}>
-                            <div style={{ flex: 2 }}>
-                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME (FROM CO-OP CRM):</label>
-                                <select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }}>
-                                    <option value="">SELECT VENDOR...</option>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px' }}>
+                            <div>
+                                <label style={labelStyle}>Vendor Name (From CRM)</label>
+                                <select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={fieldStyle}>
+                                    <option value="">Select Vendor...</option>
                                     {editSpecs.vendorName && !liveVendors.find(v => (v.name || '').toUpperCase() === editSpecs.vendorName.toUpperCase()) && (
                                         <option value={editSpecs.vendorName}>⭐ {editSpecs.vendorName} (From ERP)</option>
                                     )}
                                     {liveVendors.map(v => <option key={v.id} value={v.name}>{v.name}</option>)}
                                 </select>
                             </div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff' }}>VENDOR PART # / SKU:</label><input name="vendorId" value={editSpecs.vendorId || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box' }} /></div>
+                            <div><label style={labelStyle}>Vendor Part # / SKU</label><input name="vendorId" value={editSpecs.vendorId || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                           </div>
-                          <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between' }}>PURCHASE LINK (URL): {editSpecs.vendorUrl && <a href={editSpecs.vendorUrl.startsWith('http') ? editSpecs.vendorUrl : `https://${editSpecs.vendorUrl}`} target="_blank" rel="noreferrer" style={{color: '#007bff', textDecoration: 'none'}}>Open ↗</a>}</label><input name="vendorUrl" value={editSpecs.vendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between' }}>ALT ITEM LINK (URL): {editSpecs.altVendorUrl && <a href={editSpecs.altVendorUrl.startsWith('http') ? editSpecs.altVendorUrl : `https://${editSpecs.altVendorUrl}`} target="_blank" rel="noreferrer" style={{color: '#007bff', textDecoration: 'none'}}>Open ↗</a>}</label><input name="altVendorUrl" value={editSpecs.altVendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                            <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}><label style={labelStyle}>Purchase Link (URL)</label>{editSpecs.vendorUrl && <a href={editSpecs.vendorUrl.startsWith('http') ? editSpecs.vendorUrl : `https://${editSpecs.vendorUrl}`} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--ink)', textDecoration: 'underline' }}>Open ↗</a>}</div>
+                                <input name="vendorUrl" value={editSpecs.vendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={fieldStyle} />
+                            </div>
+                            <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}><label style={labelStyle}>Alt Item Link (URL)</label>{editSpecs.altVendorUrl && <a href={editSpecs.altVendorUrl.startsWith('http') ? editSpecs.altVendorUrl : `https://${editSpecs.altVendorUrl}`} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--ink)', textDecoration: 'underline' }}>Open ↗</a>}</div>
+                                <input name="altVendorUrl" value={editSpecs.altVendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={fieldStyle} />
+                            </div>
                           </div>
-                          <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE PRICE ($):</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE COST ($):</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>MOQ:</label><input name="moq" type="number" value={editSpecs.moq || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>LEAD (DAYS):</label><input name="leadTime" type="number" value={editSpecs.leadTime || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d9534f' }}>REORDER PT (ROP):</label><input name="reorderPoint" type="number" value={editSpecs.reorderPoint || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #d9534f', boxSizing: 'border-box' }} /></div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px' }}>
+                            <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                            <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                            <div><label style={labelStyle}>MOQ</label><input name="moq" type="number" value={editSpecs.moq || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                            <div><label style={labelStyle}>Lead (Days)</label><input name="leadTime" type="number" value={editSpecs.leadTime || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                            <div><label style={labelStyle}>Reorder Pt (ROP)</label><input name="reorderPoint" type="number" value={editSpecs.reorderPoint || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                           </div>
-                        </>
+                        </div>
                       )}
                     </div>
                     
-                    <div style={{ borderTop: '2px solid #eee', paddingTop: '10px', marginTop: '5px', display: 'flex', gap: '15px' }}>
-                      <div style={{ flex: 1 }}>
-                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>UPLOAD PRINT (PDF):</label>
-                          {editSpecs.pdfUrl && <a href={editSpecs.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>[View Current PDF]</a>}
-                          <input type="file" accept="application/pdf" onChange={(e) => setPdfFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                          {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)', marginTop: '20px' }}>
+                      <div>
+                          <label style={labelStyle}>Upload Print (PDF)</label>
+                          {editSpecs.pdfUrl && <a href={editSpecs.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--ink)', textDecoration: 'underline', display: 'block', marginBottom: '10px' }}>View Current PDF</a>}
+                          <input type="file" accept="application/pdf" onChange={(e) => setPdfFile(e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
+                          {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '8px' }}/>}
                       </div>
-                      <div style={{ flex: 1, borderLeft: '1px solid #eee', paddingLeft: '15px' }}>
-                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>3D CAD MODEL (.GLB / .GLTF):</label>
-                          {editSpecs.cadUrl && <div style={{ fontSize: '0.7rem', color: '#28a745', marginBottom: '5px', fontWeight: 'bold' }}>[✓ 3D Model Assigned]</div>}
-                          <input type="file" accept=".glb,.gltf" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                          {cadUploadProgress > 0 && <progress value={cadUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
+                      <div>
+                          <label style={labelStyle}>3D CAD Model (.glb / .gltf)</label>
+                          {editSpecs.cadUrl && <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '10px' }}>✓ 3D Model Assigned</div>}
+                          <input type="file" accept=".glb,.gltf" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
+                          {cadUploadProgress > 0 && <progress value={cadUploadProgress} max="100" style={{ width: '100%', marginTop: '8px' }}/>}
                       </div>
                     </div>
                   </div>
               )}
 
               {/* GEOMETRY & CAD RULES */}
-              <div style={{ background: '#f8f9fa', border: '2px solid #CC6600', padding: '15px', marginTop: '10px' }}>
-                <h4 style={{ margin: '0 0 10px 0', color: '#CC6600', display: 'flex', alignItems: 'center', gap: '5px' }}>📐 GEOMETRY & Z-INDEX RULES</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '15px' }}>
-                  <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>LENGTH (in):</label><input name="length" type="number" step="0.1" value={editSpecs.parametric?.length || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                  <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>WIDTH (in):</label><input name="width" type="number" step="0.1" value={editSpecs.parametric?.width || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                  <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>HEIGHT (in):</label><input name="height" type="number" step="0.1" value={editSpecs.parametric?.height || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                </div>
-                <div style={{ marginBottom: '15px' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}><input type="checkbox" name="isCutToSize" checked={editSpecs.parametric?.isCutToSize || false} onChange={handleParametricChange} />DYNAMIC CUSTOM LENGTH ALLOWED (STRETCHABLE POLE / TRACK)</label>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  <div style={{ gridColumn: 'span 2' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d9534f' }}>Z-INDEX / RENDER LAYER:</label><input name="layeringSequence" type="number" step="10" value={editSpecs.layeringSequence || ""} onChange={handleSpecChange} placeholder="e.g. 10 (Back), 30 (Front)" style={{ width: '100%', padding: '8px', border: '2px solid #ccc', boxSizing: 'border-box' }} /></div>
-                  <div style={{ gridColumn: 'span 2', background: '#e3f2fd', padding: '10px', border: '2px solid #007bff' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>WIDTH OFFSET / DEDUCTION (INCHES):</label><input name="widthOffset" type="number" step="0.125" value={editSpecs.parametric?.widthOffset || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box', fontWeight: 'bold' }} /></div>
+              <div>
+                <h4 style={sectionHeaderStyle}>Geometry & Z-Index Rules</h4>
+                <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                      <div><label style={labelStyle}>Length (in)</label><input name="length" type="number" step="0.1" value={editSpecs.parametric?.length || ""} onChange={handleParametricChange} style={fieldStyle} /></div>
+                      <div><label style={labelStyle}>Width (in)</label><input name="width" type="number" step="0.1" value={editSpecs.parametric?.width || ""} onChange={handleParametricChange} style={fieldStyle} /></div>
+                      <div><label style={labelStyle}>Height (in)</label><input name="height" type="number" step="0.1" value={editSpecs.parametric?.height || ""} onChange={handleParametricChange} style={fieldStyle} /></div>
+                    </div>
+                    <div style={{ marginBottom: '24px' }}>
+                      <label style={{ fontSize: '0.9rem', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <input type="checkbox" name="isCutToSize" checked={editSpecs.parametric?.isCutToSize || false} onChange={handleParametricChange} />
+                          Dynamic Custom Length Allowed (Stretchable Pole / Track)
+                      </label>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                      <div style={{ gridColumn: 'span 2' }}><label style={labelStyle}>Z-Index / Render Layer</label><input name="layeringSequence" type="number" step="10" value={editSpecs.layeringSequence || ""} onChange={handleSpecChange} placeholder="e.g. 10 (Back), 30 (Front)" style={fieldStyle} /></div>
+                      <div style={{ gridColumn: 'span 2', background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)' }}><label style={labelStyle}>Width Offset / Deduction (Inches)</label><input name="widthOffset" type="number" step="0.125" value={editSpecs.parametric?.widthOffset || ""} onChange={handleParametricChange} style={fieldStyle} /></div>
+                    </div>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                <button onClick={savePartUpdates} style={{ flex: 2, padding: '15px', background: isSaving ? '#28a745' : '#000', color: '#fff', fontWeight: 'bold', fontSize: '1rem', border: '2px solid #000', cursor: 'pointer', transition: '0.3s', boxShadow: '4px 4px 0 rgba(0,0,0,0.2)' }}>{isSaving ? "SAVED ✓" : `SAVE ${partClassFilter.toUpperCase()} CONFIGURATION`}</button>
+              <div style={{ display: 'flex', gap: '16px', marginTop: '20px' }}>
+                <button onClick={savePartUpdates} style={{ flex: 2, padding: '16px', background: isSaving ? 'var(--brass-light)' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.3s ease' }}>
+                    {isSaving ? "Saving..." : "Save Configuration"}
+                </button>
                 
                 {hasErpWriteAccess && activePart.netSuiteInternalId && (
                     <button 
                         onClick={handlePushUpdatesToNetSuite} 
                         disabled={isPushingErp} 
-                        style={{ flex: 1.5, padding: '15px', background: isPushingErp ? '#ccc' : '#6f42c1', color: '#fff', border: '2px solid #6f42c1', fontWeight: 'bold', cursor: isPushingErp ? 'wait' : 'pointer', boxShadow: '4px 4px 0 rgba(111, 66, 193, 0.2)' }}
+                        style={{ flex: 1.5, padding: '16px', background: isPushingErp ? 'var(--paper)' : '#fff', color: isPushingErp ? 'var(--ink-soft)' : 'var(--ink)', border: '1px solid var(--ink)', cursor: isPushingErp ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.3s ease' }}
                     >
-                        {isPushingErp ? "☁️ SYNCING..." : "☁️ WRITE TO ERP"}
+                        {isPushingErp ? "Syncing..." : "Write to ERP"}
                     </button>
                 )}
                 
-                {!activePart.isNew && <button onClick={handleDeletePart} style={{ flex: 1, padding: '15px', background: '#fff', color: '#d9534f', border: '2px solid #d9534f', fontWeight: 'bold', cursor: 'pointer', boxShadow: '4px 4px 0 rgba(217,83,79,0.2)' }}>🗑️ DELETE</button>}
+                {!activePart.isNew && (
+                    <button onClick={handleDeletePart} style={{ flex: 1, padding: '16px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => { e.currentTarget.style.background = '#d9534f'; e.currentTarget.style.color = '#fff'; }} onMouseOut={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#d9534f'; }}>
+                        Delete
+                    </button>
+                )}
               </div>
 
             </div>
@@ -1185,114 +1204,113 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       </div>
 
       {isAdmin && (
-          <div style={{ marginTop: '40px' }}>
+          <div style={{ marginTop: '50px' }}>
               <button 
                   onClick={() => setShowAdminDashboard(!showAdminDashboard)} 
-                  style={{ width: '100%', padding: '15px', background: '#333', color: '#fff', fontWeight: 'bold', fontSize: '1.1rem', cursor: 'pointer', border: '2px solid #000', textAlign: 'left' }}
+                  style={{ width: '100%', padding: '20px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}
               >
-                  {showAdminDashboard ? '➖ HIDE SYSTEM DATA & DICTIONARIES' : '➕ EXPAND SYSTEM DATA & DICTIONARIES'}
+                  {showAdminDashboard ? 'Hide System Data & Dictionaries' : 'Expand System Data & Dictionaries'}
               </button>
 
               {showAdminDashboard && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '20px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', marginTop: '30px' }}>
                     
-                    <div style={{ padding: '15px', background: '#fff', color: '#000', display: 'flex', alignItems: 'center', gap: '20px', border: '2px solid #000' }}>
-                        <strong style={{ fontSize: '1.1rem', color: '#007bff' }}>ADMIN BRAND MASTER SWITCH:</strong>
-                        <div style={{ display: 'flex', gap: '15px' }}>
+                    <div style={{ padding: '24px', background: '#fff', border: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: '24px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <strong style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)' }}>Admin Brand Master Switch:</strong>
+                        <div style={{ display: 'flex', gap: '20px' }}>
                             {AVAILABLE_BRANDS.map(b => (
-                                <label key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer', fontWeight: 'bold', color: adminBrandFilter === b.id ? '#007bff' : '#333' }}>
-                                    <input type="radio" checked={adminBrandFilter === b.id} onChange={() => setAdminBrandFilter(b.id)} style={{ cursor: 'pointer', transform: 'scale(1.2)' }} />
-                                    {b.name.toUpperCase()}
+                                <label key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: adminBrandFilter === b.id ? 'var(--ink)' : 'var(--ink-soft)' }}>
+                                    <input type="radio" checked={adminBrandFilter === b.id} onChange={() => setAdminBrandFilter(b.id)} style={{ cursor: 'pointer' }} />
+                                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500 }}>{b.name}</span>
                                 </label>
                             ))}
                         </div>
-                        <button onClick={() => setShowWindowManager(true)} style={{ marginLeft: 'auto', padding: '8px 15px', background: '#333', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>⚙️ MANAGE BRAND WINDOWS</button>
+                        <button onClick={() => setShowWindowManager(true)} style={{ marginLeft: 'auto', padding: '12px 24px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Manage Brand Windows</button>
                     </div>
                     
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
                         
                         {windowConfig.system.inHouseFinishes?.includes(adminBrandFilter) && (
-                            <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 darkslategrey' }}>
-                                <div style={{ padding: '15px', background: 'darkslategrey', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                                    <span>🎨 IN-HOUSE MASTER FINISHES (CPQ LIBRARY)</span>
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <button onClick={handleSyncFloorRecipes} style={{ background: '#ffc107', color: '#000', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>🔄 SYNC FLOOR RECIPES</button>
-                                        <button onClick={() => { setShowFinishForm(!showFinishForm); setEditingGlobalFinish(null); setNewFinishConfig({name: '', code: '', type: '', textureUrl: '', clientMapping: []}); }} style={{ background: '#fff', color: 'darkslategrey', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>{showFinishForm && !editingGlobalFinish ? 'CLOSE' : '+ ADD FINISH'}</button>
+                            <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                <div style={{ padding: '24px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>In-House Master Finishes</span>
+                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                        <button onClick={handleSyncFloorRecipes} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Sync Floor Recipes</button>
+                                        <button onClick={() => { setShowFinishForm(!showFinishForm); setEditingGlobalFinish(null); setNewFinishConfig({name: '', code: '', type: '', textureUrl: '', clientMapping: []}); }} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showFinishForm && !editingGlobalFinish ? 'Close' : 'Add Finish'}</button>
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                                     {showFinishForm && (
-                                        <div style={{ padding: '20px', background: '#f3e8ff', borderBottom: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                            <div style={{ fontWeight: 'bold', color: 'darkslategrey', borderBottom: '2px solid darkslategrey', paddingBottom: '5px', marginBottom: '5px' }}>
-                                                {editingGlobalFinish ? `✏️ EDITING: ${newFinishConfig.name}` : '✨ NEW IN-HOUSE FINISH'}
+                                        <div style={{ padding: '30px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                            <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px', marginBottom: '10px' }}>
+                                                {editingGlobalFinish ? `Editing: ${newFinishConfig.name}` : 'New In-House Finish'}
                                             </div>
-                                            <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>FINISH NAME:</label><input value={newFinishConfig.name} onChange={(e) => setNewFinishConfig({...newFinishConfig, name: e.target.value})} placeholder="e.g. Matte Brass" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                                            <div style={{ display: 'flex', gap: '10px' }}>
-                                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>CODE:</label><input value={newFinishConfig.code} onChange={(e) => setNewFinishConfig({...newFinishConfig, code: e.target.value})} placeholder="MB" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>CATEGORY / TYPE:</label><input value={newFinishConfig.type} onChange={(e) => setNewFinishConfig({...newFinishConfig, type: e.target.value})} placeholder="e.g. METAL, WOOD" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', textTransform: 'uppercase' }} /></div>
+                                            <div><label style={labelStyle}>Finish Name</label><input value={newFinishConfig.name} onChange={(e) => setNewFinishConfig({...newFinishConfig, name: e.target.value})} placeholder="e.g. Matte Brass" style={fieldStyle} /></div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                                <div><label style={labelStyle}>Code</label><input value={newFinishConfig.code} onChange={(e) => setNewFinishConfig({...newFinishConfig, code: e.target.value})} placeholder="MB" style={fieldStyle} /></div>
+                                                <div><label style={labelStyle}>Category / Type</label><input value={newFinishConfig.type} onChange={(e) => setNewFinishConfig({...newFinishConfig, type: e.target.value})} placeholder="e.g. METAL, WOOD" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
                                             </div>
-                                            <div style={{ background: '#fff', padding: '10px', border: '2px solid #000' }}>
-                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>SEAMLESS TEXTURE MAP (JPG/PNG):</label>
-                                                {newFinishConfig.textureUrl && <div style={{ color: '#28a745', fontWeight: 'bold', fontSize: '0.7rem', marginBottom: '5px' }}>✅ Asset Ready</div>}
-                                                <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0])} style={{ fontSize: '0.75rem', width: '100%', cursor: 'pointer' }} />
-                                                {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
+                                            <div style={{ background: '#fff', padding: '16px', border: '1px solid var(--line)' }}>
+                                                <label style={labelStyle}>Seamless Texture Map (JPG/PNG)</label>
+                                                {newFinishConfig.textureUrl && <div style={{ color: 'var(--ink-soft)', fontSize: '0.85rem', marginBottom: '8px' }}>Asset Ready</div>}
+                                                <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', width: '100%', cursor: 'pointer' }} />
+                                                {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
                                             </div>
 
-                                            {/* 🚀 BRAND NEW: Client mapping for global finishes */}
-                                            <div style={{ background: '#fff', border: '2px solid #007bff', padding: '10px', marginTop: '10px' }}>
-                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#007bff', display: 'block', marginBottom: '8px' }}>🤝 CLIENT-SPECIFIC FINISH NAMES (CPQ MAPPING):</label>
-                                                <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                                                    <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px', marginTop: '10px' }}>
+                                                <label style={labelStyle}>Client-Specific Finish Names (CPQ Mapping)</label>
+                                                <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                                                    <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={fieldStyle}>
                                                         <option value="">Select Customer...</option>
                                                         {liveCustomers.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                                     </select>
-                                                    <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={{ flex: 1, padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                                    <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={fieldStyle} />
                                                     <button onClick={() => {
                                                         if(!newFinishClientMapping.customerId || !newFinishClientMapping.clientFinishName) return alert("Select customer and enter finish name.");
                                                         setNewFinishConfig(prev => ({...prev, clientMapping: [...(prev.clientMapping || []), newFinishClientMapping]}));
                                                         setNewFinishClientMapping({customerId: '', clientFinishName: ''});
-                                                    }} style={{ padding: '8px 15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ MAP</button>
+                                                    }} style={{ padding: '0 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Map</button>
                                                 </div>
-                                                <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                                <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                                     {(newFinishConfig.clientMapping || []).map((mapping, idx) => (
-                                                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: '#f4f4f4', padding: '5px 10px', border: '1px solid #ccc', fontSize: '0.8rem' }}>
-                                                            <span><strong style={{ color: '#007bff' }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
-                                                            <span style={{ color: '#d9534f', cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setNewFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
+                                                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: 'var(--paper-2)', padding: '10px 16px', border: '1px solid var(--line)', fontSize: '0.9rem' }}>
+                                                            <span><strong style={{ color: 'var(--ink)' }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
+                                                            <span style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
                                                         </div>
                                                     ))}
                                                 </div>
                                             </div>
 
-                                            <button onClick={handleAddGlobalFinish} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '10px' }}>
-                                                {editingGlobalFinish ? 'SAVE CHANGES' : 'SAVE NEW FINISH'}
+                                            <button onClick={handleAddGlobalFinish} style={{ padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                {editingGlobalFinish ? 'Save Changes' : 'Save New Finish'}
                                             </button>
                                         </div>
                                     )}
-                                    <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto', background: '#f8f9fa' }}>
-                                        {globalFinishes.length === 0 && <span style={{ color: '#999', fontStyle: 'italic' }}>No finishes added yet.</span>}
+                                    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                        {globalFinishes.length === 0 && <span style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem' }}>No finishes added yet.</span>}
                                         {globalFinishes.map(finish => {
                                             const hasRecipe = activeRecipes.includes(finish.code) || activeRecipes.includes(finish.name);
                                             return (
-                                                <div key={finish.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', padding: '15px', border: '2px solid #ccc', borderLeft: `6px solid darkslategrey`, boxShadow: '3px 3px 0 rgba(0,0,0,0.05)' }}>
-                                                    <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                                                        <div style={{ width: '40px', height: '40px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : '#eee', borderRadius: '50%', border: '2px solid #000' }} />
+                                                <div key={finish.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)', borderLeft: `2px solid var(--brass)` }}>
+                                                    <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                                                        <div style={{ width: '48px', height: '48px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : 'var(--paper-2)', borderRadius: '50%', border: '1px solid var(--line)' }} />
                                                         <div>
-                                                            <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#000' }}>{finish.name} {finish.code && `(${finish.code})`}</div>
-                                                            <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold', marginTop: '3px' }}>STATUS: {hasRecipe ? 'PRODUCTION READY' : 'WORKING / R&D'}</div>
+                                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: 'var(--ink)' }}>{finish.name} {finish.code && `(${finish.code})`}</div>
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '6px' }}>Status: {hasRecipe ? 'Production Ready' : 'Working / R&D'}</div>
                                                             {finish.clientMapping && finish.clientMapping.length > 0 && (
-                                                                <div style={{ fontSize: '0.65rem', color: '#007bff', fontWeight: 'bold', marginTop: '3px' }}>{finish.clientMapping.length} CLIENT MAP(S) ACTIVE</div>
+                                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', marginTop: '4px' }}>{finish.clientMapping.length} Client Map(s) Active</div>
                                                             )}
-                                                            <div style={{ marginTop: '5px' }}>
-                                                                <label style={{ fontSize: '0.65rem', cursor: 'pointer', color: '#007bff', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-                                                                    {inlineTextureProgress[finish.id] > 0 ? `UPLOADING ${inlineTextureProgress[finish.id]}%` : (finish.textureUrl ? '🔄 REPLACE TEXTURE MAP' : '⬆️ UPLOAD TEXTURE MAP')}
+                                                            <div style={{ marginTop: '10px' }}>
+                                                                <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '2px', display: 'inline-block' }}>
+                                                                    {inlineTextureProgress[finish.id] > 0 ? `Uploading ${inlineTextureProgress[finish.id]}%` : (finish.textureUrl ? 'Replace Texture Map' : 'Upload Texture Map')}
                                                                     <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleUpdateExistingFinishTexture(finish.id, e.target.files[0])} />
                                                                 </label>
                                                             </div>
                                                         </div>
                                                     </div>
-                                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                                        <button onClick={() => handleEditGlobalFinish(finish)} style={{ background: 'none', border: 'none', color: '#007bff', fontSize: '1.2rem', cursor: 'pointer' }} title="Edit Finish">✏️</button>
-                                                        <button onClick={() => handleRemoveFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }} title="Delete Finish">🗑️</button>
+                                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                                        <button onClick={() => handleEditGlobalFinish(finish)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer' }} title="Edit Finish">Edit</button>
+                                                        <button onClick={() => handleRemoveFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }} title="Delete Finish">Del</button>
                                                     </div>
                                                 </div>
                                             )
@@ -1302,64 +1320,64 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #6f42c1' }}>
-                            <div style={{ padding: '15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                                <span>📁 MASTER COLLECTIONS DICTIONARY</span>
-                                <button onClick={() => setShowCollectionForm(!showCollectionForm)} style={{ background: '#fff', color: '#6f42c1', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>{showCollectionForm ? 'CLOSE' : '+ ADD COLLECTION'}</button>
+                        <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                            <div style={{ padding: '24px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                                <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Master Collections</span>
+                                <button onClick={() => setShowCollectionForm(!showCollectionForm)} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showCollectionForm ? 'Close' : 'Add Collection'}</button>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                                 {showCollectionForm && (
-                                    <div style={{ padding: '20px', background: '#f3e8ff', borderBottom: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                                    <div style={{ padding: '30px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
                                         <div>
-                                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>COLLECTION NAME:</label>
-                                            <input value={newCollection.name} onChange={(e) => setNewCollection({...newCollection, name: e.target.value})} placeholder="e.g. Modern Industrial" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} />
+                                            <label style={labelStyle}>Collection Name</label>
+                                            <input value={newCollection.name} onChange={(e) => setNewCollection({...newCollection, name: e.target.value})} placeholder="e.g. Modern Industrial" style={fieldStyle} />
                                         </div>
                                         
-                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                                            <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '250px', overflowY: 'auto' }}>
-                                               <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#007bff' }}>RESTRICT TO CUSTOMERS (Optional):</label>
-                                                {liveCustomers.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No customers in database.</span>}
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px', maxHeight: '250px', overflowY: 'auto' }}>
+                                               <label style={labelStyle}>Restrict to Customers (Optional)</label>
+                                                {liveCustomers.length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No customers in database.</span>}
                                                 {liveCustomers.map(c => (
-                                                    <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
+                                                    <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', marginBottom: '8px', cursor: 'pointer', color: 'var(--ink)' }}>
                                                         <input type="checkbox" checked={newCollection.allowedCustomers.includes(c.name)} onChange={() => toggleCollectionCustomer(c.name)} /> {c.name}
                                                     </label>
                                                 ))}
                                             </div>
 
-                                            <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '250px', overflowY: 'auto' }}>
-                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#28a745' }}>ALLOWED FINISHES (Optional):</label>
+                                            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px', maxHeight: '250px', overflowY: 'auto' }}>
+                                                <label style={labelStyle}>Allowed Finishes (Optional)</label>
                                                 
-                                                <div style={{ fontWeight: 'bold', fontSize: '0.65rem', background: '#eee', padding: '4px', marginBottom: '5px' }}>IN-HOUSE FINISHES</div>
-                                                {globalFinishes.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic', display: 'block', padding: '5px' }}>No in-house finishes.</span>}
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', background: 'var(--paper-2)', padding: '6px', marginBottom: '10px' }}>In-House Finishes</div>
+                                                {globalFinishes.length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic', display: 'block', padding: '5px' }}>No in-house finishes.</span>}
                                                 {globalFinishes.map(f => (
-                                                    <label key={`inhouse-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
+                                                    <label key={`inhouse-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', marginBottom: '8px', cursor: 'pointer', color: 'var(--ink)' }}>
                                                         <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name} {f.code && `(${f.code})`}
                                                     </label>
                                                 ))}
 
-                                                <div style={{ fontWeight: 'bold', fontSize: '0.65rem', background: '#e0f7fa', padding: '4px', marginTop: '15px', marginBottom: '5px' }}>OUTSOURCED FINISHES</div>
-                                                {outsourceFinishes.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic', display: 'block', padding: '5px' }}>No outsourced finishes.</span>}
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', background: 'var(--paper-2)', padding: '6px', marginTop: '20px', marginBottom: '10px' }}>Outsourced Finishes</div>
+                                                {outsourceFinishes.length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic', display: 'block', padding: '5px' }}>No outsourced finishes.</span>}
                                                 {outsourceFinishes.map(f => (
-                                                    <label key={`outsource-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
+                                                    <label key={`outsource-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', marginBottom: '8px', cursor: 'pointer', color: 'var(--ink)' }}>
                                                         <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name}
                                                     </label>
                                                 ))}
                                             </div>
                                         </div>
 
-                                        <button onClick={handleAddCollection} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '5px' }}>SAVE COLLECTION</button>
+                                        <button onClick={handleAddCollection} style={{ padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Collection</button>
                                     </div>
                                 )}
-                                <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto', background: '#f8f9fa' }}>
-                                    {collectionsData.length === 0 && <span style={{ color: '#999', fontStyle: 'italic' }}>No collections mapped yet.</span>}
+                                <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                    {collectionsData.length === 0 && <span style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem' }}>No collections mapped yet.</span>}
                                     {collectionsData.map(col => (
-                                        <div key={col.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: '#fff', padding: '15px', border: '2px solid #ccc', borderLeft: `6px solid #6f42c1`, boxShadow: '3px 3px 0 rgba(0,0,0,0.05)' }}>
+                                        <div key={col.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)', borderLeft: `2px solid var(--brass)` }}>
                                             <div>
-                                                <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#000' }}>{col.name}</div>
-                                                <div style={{ fontSize: '0.65rem', color: '#007bff', fontWeight: 'bold', marginTop: '5px' }}>CUSTOMERS: {col.allowedCustomers?.length > 0 ? col.allowedCustomers.join(', ') : 'ALL (Unrestricted)'}</div>
-                                                <div style={{ fontSize: '0.65rem', color: '#28a745', fontWeight: 'bold', marginTop: '3px' }}>FINISHES: {col.allowedFinishes?.length > 0 ? col.allowedFinishes.join(', ') : 'ALL (Unrestricted)'}</div>
+                                                <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{col.name}</div>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>Customers: <span style={{color: 'var(--ink)'}}>{col.allowedCustomers?.length > 0 ? col.allowedCustomers.join(', ') : 'All (Unrestricted)'}</span></div>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>Finishes: <span style={{color: 'var(--ink)'}}>{col.allowedFinishes?.length > 0 ? col.allowedFinishes.join(', ') : 'All (Unrestricted)'}</span></div>
                                             </div>
-                                            <button onClick={() => handleDeleteCollection(col.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                                            <button onClick={() => handleDeleteCollection(col.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
                                         </div>
                                     ))}
                                 </div>
@@ -1367,83 +1385,82 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                         </div>
 
                         {windowConfig.system.outsourceFinishes?.includes(adminBrandFilter) && (
-                            <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #17a2b8' }}>
-                                <div style={{ padding: '15px', background: '#17a2b8', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                                    <span>🚚 OUTSOURCED MASTER FINISHES (CPQ LIBRARY)</span>
-                                    <button onClick={() => { setShowOutsourceFinishForm(!showOutsourceFinishForm); setEditingOutsourceFinish(null); setNewOutsourceFinishConfig({name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: []}); }} style={{ background: '#fff', color: '#17a2b8', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>{showOutsourceFinishForm && !editingOutsourceFinish ? 'CLOSE' : '+ ADD FINISH'}</button>
+                            <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                <div style={{ padding: '24px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Outsourced Master Finishes</span>
+                                    <button onClick={() => { setShowOutsourceFinishForm(!showOutsourceFinishForm); setEditingOutsourceFinish(null); setNewOutsourceFinishConfig({name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: []}); }} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showOutsourceFinishForm && !editingOutsourceFinish ? 'Close' : 'Add Finish'}</button>
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                                     {showOutsourceFinishForm && (
-                                        <div style={{ padding: '20px', background: '#e0f7fa', borderBottom: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                            <div style={{ fontWeight: 'bold', color: '#17a2b8', borderBottom: '2px solid #17a2b8', paddingBottom: '5px', marginBottom: '5px' }}>
-                                                {editingOutsourceFinish ? `✏️ EDITING: ${newOutsourceFinishConfig.name}` : '✨ NEW OUTSOURCED FINISH'}
+                                        <div style={{ padding: '30px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                            <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px', marginBottom: '10px' }}>
+                                                {editingOutsourceFinish ? `Editing: ${newOutsourceFinishConfig.name}` : 'New Outsourced Finish'}
                                             </div>
-                                            <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>FINISH NAME:</label><input value={newOutsourceFinishConfig.name} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, name: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                                            <div style={{ display: 'flex', gap: '10px' }}>
-                                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>APPROVED VENDOR:</label><select value={newOutsourceFinishConfig.vendor} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, vendor: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }}><option value="">Select...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
-                                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>PRICE MULTIPLIER (x):</label><input type="number" step="0.1" value={newOutsourceFinishConfig.multiplier} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, multiplier: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
+                                            <div><label style={labelStyle}>Finish Name</label><input value={newOutsourceFinishConfig.name} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, name: e.target.value})} style={fieldStyle} /></div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                                <div><label style={labelStyle}>Approved Vendor</label><select value={newOutsourceFinishConfig.vendor} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, vendor: e.target.value})} style={fieldStyle}><option value="">Select...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
+                                                <div><label style={labelStyle}>Price Multiplier (x)</label><input type="number" step="0.1" value={newOutsourceFinishConfig.multiplier} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, multiplier: e.target.value})} style={fieldStyle} /></div>
                                             </div>
                                             
-                                            <div style={{ background: '#fff', padding: '10px', border: '2px solid #000' }}>
-                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>SEAMLESS TEXTURE MAP (JPG/PNG):</label>
-                                                {newOutsourceFinishConfig.textureUrl && <div style={{ color: '#28a745', fontWeight: 'bold', fontSize: '0.7rem', marginBottom: '5px' }}>✅ Asset Ready</div>}
-                                                <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0], true)} style={{ fontSize: '0.75rem', width: '100%', cursor: 'pointer' }} />
-                                                {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
+                                            <div style={{ background: '#fff', padding: '16px', border: '1px solid var(--line)' }}>
+                                                <label style={labelStyle}>Seamless Texture Map (JPG/PNG)</label>
+                                                {newOutsourceFinishConfig.textureUrl && <div style={{ color: 'var(--ink-soft)', fontSize: '0.85rem', marginBottom: '8px' }}>Asset Ready</div>}
+                                                <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0], true)} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', width: '100%', cursor: 'pointer' }} />
+                                                {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
                                             </div>
 
-                                            {/* 🚀 BRAND NEW: Client mapping for outsource finishes */}
-                                            <div style={{ background: '#fff', border: '2px solid #007bff', padding: '10px', marginTop: '10px' }}>
-                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#007bff', display: 'block', marginBottom: '8px' }}>🤝 CLIENT-SPECIFIC FINISH NAMES (CPQ MAPPING):</label>
-                                                <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                                                    <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px', marginTop: '10px' }}>
+                                                <label style={labelStyle}>Client-Specific Finish Names (CPQ Mapping)</label>
+                                                <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                                                    <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={fieldStyle}>
                                                         <option value="">Select Customer...</option>
                                                         {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
                                                     </select>
-                                                    <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={{ flex: 1, padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                                    <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={fieldStyle} />
                                                     <button onClick={() => {
                                                         if(!newFinishClientMapping.customerId || !newFinishClientMapping.clientFinishName) return alert("Select customer and enter finish name.");
                                                         setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: [...(prev.clientMapping || []), newFinishClientMapping]}));
                                                         setNewFinishClientMapping({customerId: '', clientFinishName: ''});
-                                                    }} style={{ padding: '8px 15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ MAP</button>
+                                                    }} style={{ padding: '0 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Map</button>
                                                 </div>
-                                                <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                                <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                                     {(newOutsourceFinishConfig.clientMapping || []).map((mapping, idx) => (
-                                                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: '#f4f4f4', padding: '5px 10px', border: '1px solid #ccc', fontSize: '0.8rem' }}>
-                                                            <span><strong style={{ color: '#007bff' }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
-                                                            <span style={{ color: '#d9534f', cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
+                                                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: 'var(--paper-2)', padding: '10px 16px', border: '1px solid var(--line)', fontSize: '0.9rem' }}>
+                                                            <span><strong style={{ color: 'var(--ink)' }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
+                                                            <span style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
                                                         </div>
                                                     ))}
                                                 </div>
                                             </div>
                                             
-                                            <button onClick={handleAddOutsourceFinish} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '10px' }}>
-                                                {editingOutsourceFinish ? 'SAVE CHANGES' : 'SAVE OUTSOURCED FINISH'}
+                                            <button onClick={handleAddOutsourceFinish} style={{ padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                {editingOutsourceFinish ? 'Save Changes' : 'Save Outsourced Finish'}
                                             </button>
                                         </div>
                                     )}
-                                    <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto', background: '#f8f9fa' }}>
-                                        {outsourceFinishes.length === 0 && <span style={{ color: '#999', fontStyle: 'italic' }}>No outsourced finishes added yet.</span>}
+                                    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                        {outsourceFinishes.length === 0 && <span style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem' }}>No outsourced finishes added yet.</span>}
                                         {outsourceFinishes.map(finish => (
-                                            <div key={finish.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', padding: '15px', border: '2px solid #ccc', borderLeft: `6px solid #17a2b8` }}>
-                                                <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                                                    <div style={{ width: '40px', height: '40px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : '#eee', borderRadius: '50%', border: '2px solid #000' }} />
+                                            <div key={finish.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)', borderLeft: `2px solid var(--brass)` }}>
+                                                <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                                                    <div style={{ width: '48px', height: '48px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : 'var(--paper-2)', borderRadius: '50%', border: '1px solid var(--line)' }} />
                                                     <div>
-                                                        <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#000' }}>{finish.name}</div>
-                                                        <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold', marginTop: '3px' }}>VENDOR: {finish.vendor || 'UNASSIGNED'} | MULT: x{finish.multiplier}</div>
+                                                        <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: 'var(--ink)' }}>{finish.name}</div>
+                                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '6px' }}>Vendor: <span style={{color: 'var(--ink)'}}>{finish.vendor || 'Unassigned'}</span> | Mult: <span style={{color: 'var(--ink)'}}>x{finish.multiplier}</span></div>
                                                         {finish.clientMapping && finish.clientMapping.length > 0 && (
-                                                            <div style={{ fontSize: '0.65rem', color: '#007bff', fontWeight: 'bold', marginTop: '3px' }}>{finish.clientMapping.length} CLIENT MAP(S) ACTIVE</div>
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', marginTop: '4px' }}>{finish.clientMapping.length} Client Map(s) Active</div>
                                                         )}
-                                                        <div style={{ marginTop: '5px' }}>
-                                                            <label style={{ fontSize: '0.65rem', cursor: 'pointer', color: '#007bff', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-                                                                {inlineTextureProgress[finish.id] > 0 ? `UPLOADING ${inlineTextureProgress[finish.id]}%` : (finish.textureUrl ? '🔄 REPLACE TEXTURE MAP' : '⬆️ UPLOAD TEXTURE MAP')}
+                                                        <div style={{ marginTop: '10px' }}>
+                                                            <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '2px', display: 'inline-block' }}>
+                                                                {inlineTextureProgress[finish.id] > 0 ? `Uploading ${inlineTextureProgress[finish.id]}%` : (finish.textureUrl ? 'Replace Texture Map' : 'Upload Texture Map')}
                                                                 <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleUpdateExistingFinishTexture(finish.id, e.target.files[0], true)} />
                                                             </label>
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <div style={{ display: 'flex', gap: '10px' }}>
-                                                    <button onClick={() => handleEditOutsourceFinish(finish)} style={{ background: 'none', border: 'none', color: '#007bff', fontSize: '1.2rem', cursor: 'pointer' }} title="Edit Finish">✏️</button>
-                                                    <button onClick={() => handleRemoveOutsourceFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }} title="Delete Finish">🗑️</button>
+                                                <div style={{ display: 'flex', gap: '12px' }}>
+                                                    <button onClick={() => handleEditOutsourceFinish(finish)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer' }} title="Edit Finish">Edit</button>
+                                                    <button onClick={() => handleRemoveOutsourceFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }} title="Delete Finish">Del</button>
                                                 </div>
                                             </div>
                                         ))}
@@ -1458,43 +1475,43 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                             const isFormOpen = activeDictForms[w.id];
 
                             return (
-                                <div key={w.id} style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #e83e8c' }}>
-                                    <div style={{ padding: '15px', background: '#e83e8c', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                                        <span>📦 CPQ ASSET DICTIONARY: {w.name.toUpperCase()}</span>
-                                        <button onClick={() => setActiveDictForms(prev => ({ ...prev, [w.id]: !isFormOpen }))} style={{ background: '#fff', color: '#e83e8c', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>{isFormOpen ? 'CLOSE' : '+ ADD ITEM'}</button>
+                                <div key={w.id} style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                    <div style={{ padding: '24px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>CPQ Asset Dictionary: {w.name}</span>
+                                        <button onClick={() => setActiveDictForms(prev => ({ ...prev, [w.id]: !isFormOpen }))} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{isFormOpen ? 'Close' : 'Add Item'}</button>
                                     </div>
                                     <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                                         {isFormOpen && (
-                                            <div style={{ padding: '20px', background: '#fce4ec', borderBottom: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                                <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>ITEM NAME:</label><input value={myForm.name || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, name: e.target.value}})} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                                                <div style={{ display: 'flex', gap: '10px' }}>
-                                                    {w.hasCode && <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>CODE:</label><input value={myForm.code || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, code: e.target.value}})} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>}
-                                                    {w.hasMultiplier && <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>MULT (x):</label><input type="number" step="0.1" value={myForm.multiplier || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, multiplier: e.target.value}})} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>}
+                                            <div style={{ padding: '30px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                                <div><label style={labelStyle}>Item Name</label><input value={myForm.name || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, name: e.target.value}})} style={fieldStyle} /></div>
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                                    {w.hasCode && <div><label style={labelStyle}>Code</label><input value={myForm.code || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, code: e.target.value}})} style={fieldStyle} /></div>}
+                                                    {w.hasMultiplier && <div><label style={labelStyle}>Mult (x)</label><input type="number" step="0.1" value={myForm.multiplier || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, multiplier: e.target.value}})} style={fieldStyle} /></div>}
                                                 </div>
-                                                {w.hasVendor && <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>VENDOR:</label><select value={myForm.vendor || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, vendor: e.target.value}})} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }}><option value="">Select...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>}
+                                                {w.hasVendor && <div><label style={labelStyle}>Vendor</label><select value={myForm.vendor || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, vendor: e.target.value}})} style={fieldStyle}><option value="">Select...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>}
                                                 {w.hasImage && (
-                                                    <div style={{ background: '#fff', padding: '10px', border: '1px solid #000' }}>
-                                                        <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>ASSET (IMAGE/TEXTURE):</label>
-                                                        {myForm.textureUrl && <span style={{ color: '#28a745', fontSize: '0.7rem', fontWeight: 'bold' }}>✅ Uploaded</span>}
-                                                        <input type="file" accept="image/*" onChange={e => handleDynamicAssetTextureUpload(w.id, e.target.files[0])} style={{ fontSize: '0.75rem', width: '100%' }} />
+                                                    <div style={{ background: '#fff', padding: '16px', border: '1px solid var(--line)' }}>
+                                                        <label style={labelStyle}>Asset (Image/Texture)</label>
+                                                        {myForm.textureUrl && <span style={{ color: 'var(--ink-soft)', fontSize: '0.85rem', marginBottom: '8px', display: 'block' }}>Asset Ready</span>}
+                                                        <input type="file" accept="image/*" onChange={e => handleDynamicAssetTextureUpload(w.id, e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', width: '100%' }} />
                                                     </div>
                                                 )}
-                                                <button onClick={() => handleAddDynamicAsset(w)} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '10px' }}>SAVE ITEM</button>
+                                                <button onClick={() => handleAddDynamicAsset(w)} style={{ padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Item</button>
                                             </div>
                                         )}
-                                        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto', background: '#f8f9fa' }}>
-                                            {myData.length === 0 && <span style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem' }}>No items added yet.</span>}
+                                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                            {myData.length === 0 && <span style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem' }}>No items added yet.</span>}
                                             {myData.map(item => (
-                                                <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', padding: '15px', border: '2px solid #ccc', borderLeft: `6px solid #e83e8c`, boxShadow: '3px 3px 0 rgba(0,0,0,0.05)' }}>
-                                                    <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                                                        {w.hasImage && <div style={{ width: '30px', height: '30px', background: item.textureUrl ? `url(${item.textureUrl}) center/cover` : '#eee', borderRadius: '50%', border: '1px solid #000' }} />}
+                                                <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)', borderLeft: `2px solid var(--brass)` }}>
+                                                    <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                                                        {w.hasImage && <div style={{ width: '40px', height: '40px', background: item.textureUrl ? `url(${item.textureUrl}) center/cover` : 'var(--paper-2)', borderRadius: '50%', border: '1px solid var(--line)' }} />}
                                                         <div>
-                                                            <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#000' }}>{item.name} {item.code && `(${item.code})`}</div>
-                                                            {w.hasVendor && <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold', marginTop: '3px' }}>VENDOR: {item.vendor || 'N/A'}</div>}
-                                                            <div style={{ fontSize: '0.65rem', color: '#e83e8c', fontWeight: 'bold', marginTop: '3px' }}>NS ID: {item.legacyErpId || 'PENDING'} {w.hasMultiplier && `| MULT: x${item.multiplier}`}</div>
+                                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: 'var(--ink)' }}>{item.name} {item.code && <span style={{ color: 'var(--ink-soft)' }}>({item.code})</span>}</div>
+                                                            {w.hasVendor && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '6px' }}>Vendor: <span style={{ color: 'var(--ink)' }}>{item.vendor || 'N/A'}</span></div>}
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>ERP ID: <span style={{ color: 'var(--ink)' }}>{item.legacyErpId || 'Pending'}</span> {w.hasMultiplier && `| Mult: x${item.multiplier}`}</div>
                                                         </div>
                                                     </div>
-                                                    <button onClick={() => handleRemoveDynamicAsset(item.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                                                    <button onClick={() => handleRemoveDynamicAsset(item.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
                                                 </div>
                                             ))}
                                         </div>
@@ -1503,69 +1520,72 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                             );
                         })}
 
-                        <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #28a745' }}>
-                            <div style={{ padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                                <span>⚙️ STATIC PART ATTRIBUTES</span>
-                                <button onClick={() => setShowSchemaForm(!showSchemaForm)} style={{ background: '#fff', color: '#28a745', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>
-                                    {showSchemaForm ? 'CLOSE' : '+ ADD ATTRIBUTE'}
+                        <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                            <div style={{ padding: '24px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                                <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Static Part Attributes</span>
+                                <button onClick={() => setShowSchemaForm(!showSchemaForm)} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                    {showSchemaForm ? 'Close' : 'Add Attribute'}
                                 </button>
                             </div>
                             
                             <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                                 {showSchemaForm && (
-                                    <div style={{ padding: '20px', background: '#eafaf1', borderBottom: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                        <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>NEW ATTRIBUTE LABEL:</label><input value={newFieldConfig.label} onChange={(e) => setNewFieldConfig({...newFieldConfig, label: e.target.value})} placeholder="e.g. Weight Class" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                                        <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>DATA TYPE:</label><select value={newFieldConfig.type} onChange={(e) => setNewFieldConfig({...newFieldConfig, type: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }}><option value="text">Text (String)</option><option value="number">Number</option><option value="dropdown">Dropdown</option><option value="file">File Upload (PNG, PDF)</option></select></div>
-                                        {newFieldConfig.type === 'dropdown' && <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#007bff' }}>OPTIONS (Comma Separated):</label><input value={newFieldConfig.options} onChange={(e) => setNewFieldConfig({...newFieldConfig, options: e.target.value})} placeholder="A, B, C" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>}
-                                        <button onClick={handleAddSchemaField} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '10px' }}>SAVE ATTRIBUTE</button>
+                                    <div style={{ padding: '30px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                        <div><label style={labelStyle}>New Attribute Label</label><input value={newFieldConfig.label} onChange={(e) => setNewFieldConfig({...newFieldConfig, label: e.target.value})} placeholder="e.g. Weight Class" style={fieldStyle} /></div>
+                                        <div><label style={labelStyle}>Data Type</label><select value={newFieldConfig.type} onChange={(e) => setNewFieldConfig({...newFieldConfig, type: e.target.value})} style={fieldStyle}><option value="text">Text (String)</option><option value="number">Number</option><option value="dropdown">Dropdown</option><option value="file">File Upload (PNG, PDF)</option></select></div>
+                                        {newFieldConfig.type === 'dropdown' && <div><label style={labelStyle}>Options (Comma Separated)</label><input value={newFieldConfig.options} onChange={(e) => setNewFieldConfig({...newFieldConfig, options: e.target.value})} placeholder="A, B, C" style={fieldStyle} /></div>}
+                                        <button onClick={handleAddSchemaField} style={{ padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Attribute</button>
                                     </div>
                                 )}
-                                <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto', background: '#f8f9fa' }}>
-                                    {customSchema.length === 0 && <span style={{ color: '#999', fontStyle: 'italic' }}>No custom attributes mapped.</span>}
+                                <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                    {customSchema.length === 0 && <span style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem' }}>No custom attributes mapped.</span>}
                                     {customSchema.map(field => (
-                                        <div key={field.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', padding: '15px', border: '2px solid #ccc', boxShadow: '3px 3px 0 rgba(0,0,0,0.05)' }}>
-                                            <div><div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#000' }}>{field.label}</div><div style={{ fontSize: '0.65rem', color: '#666', marginTop: '3px', fontWeight: 'bold' }}>TYPE: {field.type.toUpperCase()} | ID: {field.key}</div></div>
-                                            <button onClick={() => handleRemoveSchemaField(field.key)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                                        <div key={field.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
+                                            <div>
+                                                <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: 'var(--ink)' }}>{field.label}</div>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '6px' }}>Type: <span style={{ color: 'var(--ink)' }}>{field.type}</span> | ID: <span style={{ color: 'var(--ink)' }}>{field.key}</span></div>
+                                            </div>
+                                            <button onClick={() => handleRemoveSchemaField(field.key)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
                                         </div>
                                     ))}
                                 </div>
                             </div>
                         </div>
 
-                        <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #fd7e14' }}>
-                            <div style={{ padding: '15px', background: '#fd7e14', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                                <span>📋 SIMPLE DROPDOWN LISTS</span>
-                                <button onClick={handleAddNewListCategory} style={{ background: '#fff', color: '#fd7e14', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>
-                                    + ADD CATEGORY
+                        <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                            <div style={{ padding: '24px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                                <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Simple Dropdown Lists</span>
+                                <button onClick={handleAddNewListCategory} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                    Add Category
                                 </button>
                             </div>
                             
-                            <div style={{ padding: '20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px', background: '#f8f9fa', maxHeight: '500px', overflowY: 'auto' }}>
+                            <div style={{ padding: '30px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '30px', background: '#fff', maxHeight: '600px', overflowY: 'auto' }}>
                                 {Object.keys(globalLists).filter(k => windowConfig.system[k]?.includes(adminBrandFilter) && k !== 'cpqRoutingTypes' && k !== 'collections').map(listKey => {
                                     return (
-                                        <div key={listKey} style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #eee', paddingBottom: '8px', marginBottom: '15px' }}>
-                                                <h4 style={{ margin: 0, textTransform: 'uppercase', color: '#000', fontSize: '0.9rem' }}>{LIST_LABELS[listKey] || listKey.replace(/([A-Z])/g, ' $1').trim()}</h4>
-                                                <button onClick={() => handleDeleteListCategory(listKey)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.1rem', cursor: 'pointer' }} title="Delete Category">🗑️</button>
+                                        <div key={listKey} style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '20px' }}>
+                                                <h4 style={{ margin: 0, fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{LIST_LABELS[listKey] || listKey.replace(/([A-Z])/g, ' $1').trim()}</h4>
+                                                <button onClick={() => handleDeleteListCategory(listKey)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.1rem', cursor: 'pointer' }} title="Delete Category">×</button>
                                             </div>
-                                            <div style={{ display: 'flex', gap: '5px', marginBottom: '15px' }}>
-                                                <input value={newListItems[listKey] || ''} onChange={(e) => setNewListItems({...newListItems, [listKey]: e.target.value})} style={{ flex: 1, padding: '8px', border: '2px solid #000', fontWeight: 'bold' }} placeholder="Add item..." />
-                                                <button onClick={() => handleAddListItem(listKey)} style={{ background: '#000', color: '#fff', border: '2px solid #000', cursor: 'pointer', padding: '0 15px', fontWeight: 'bold', fontSize: '1.2rem' }}>+</button>
+                                            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+                                                <input value={newListItems[listKey] || ''} onChange={(e) => setNewListItems({...newListItems, [listKey]: e.target.value})} style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} placeholder="Add item..." />
+                                                <button onClick={() => handleAddListItem(listKey)} style={{ background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', padding: '0 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
                                             </div>
-                                            <div style={{ maxHeight: '150px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                                {(globalLists[listKey] || []).length === 0 && <div style={{ fontSize: '0.7rem', color: '#999', fontStyle: 'italic' }}>List is empty.</div>}
+                                            <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                {(globalLists[listKey] || []).length === 0 && <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>List is empty.</div>}
                                                 {(globalLists[listKey] || []).map(item => (
-                                                    <div key={item} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', background: '#f4f4f4', padding: '8px 10px', border: '1px solid #ccc', fontWeight: 'bold', color: '#333' }}>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                    <div key={item} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem', background: '#fff', padding: '12px 16px', border: '1px solid var(--line)', color: 'var(--ink)' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                                             {listKey === 'assemblyTypes' && (
-                                                                <label style={{ fontSize: '0.65rem', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', color: '#007bff' }}>
+                                                                <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: 'var(--ink-soft)' }}>
                                                                     <input type="checkbox" checked={globalLists.cpqRoutingTypes?.includes(item) || false} onChange={(e) => handleToggleCpqRouting(item, e.target.checked)} />
                                                                     CPQ Enabled
                                                                 </label>
                                                             )}
                                                             <span>{item}</span>
                                                         </div>
-                                                        <span onClick={() => handleRemoveListItem(listKey, item)} style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem', padding: '0 5px' }}>×</span>
+                                                        <span onClick={() => handleRemoveListItem(listKey, item)} style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem', opacity: 0.7 }}>×</span>
                                                     </div>
                                                 ))}
                                             </div>

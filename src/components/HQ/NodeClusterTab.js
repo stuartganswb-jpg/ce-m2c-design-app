@@ -70,25 +70,25 @@ const SceneNodeTree = ({ node, level = 0, selectedNodes, hiddenNodes, onToggleSe
     }, [isSelected]);
 
     return (
-        <div ref={nodeRef} style={{ paddingLeft: `${level * 12}px`, marginBottom: '2px', fontFamily: 'monospace' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: isSelected ? '#e6f2ff' : 'transparent', padding: '4px', border: isSelected ? '1px solid #007bff' : '1px solid transparent', borderRadius: '4px' }}>
+        <div ref={nodeRef} style={{ paddingLeft: `${level * 16}px`, marginBottom: '4px', fontFamily: 'var(--mono)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: isSelected ? 'var(--paper-2)' : 'transparent', padding: '6px', border: isSelected ? '1px solid var(--brass)' : '1px solid transparent', borderRadius: '2px' }}>
                 
                 {hasChildren ? (
-                    <button onClick={() => setIsExpanded(!isExpanded)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.7rem', width: '15px' }}>{isExpanded ? '▼' : '▶'}</button>
-                ) : <div style={{ width: '15px' }} />}
+                    <button onClick={() => setIsExpanded(!isExpanded)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.7rem', width: '20px', color: 'var(--ink-soft)' }}>{isExpanded ? '▼' : '▶'}</button>
+                ) : <div style={{ width: '20px' }} />}
 
-                <button onClick={() => hasName && onToggleHide(node.name)} disabled={!hasName} style={{ background: 'none', border: 'none', cursor: hasName ? 'pointer' : 'not-allowed', fontSize: '0.9rem', opacity: hasName ? 1 : 0.3 }} title="Toggle Visibility">
+                <button onClick={() => hasName && onToggleHide(node.name)} disabled={!hasName} style={{ background: 'none', border: 'none', cursor: hasName ? 'pointer' : 'not-allowed', fontSize: '1rem', opacity: hasName ? 1 : 0.3 }} title="Toggle Visibility">
                     {isHidden ? '👁️‍🗨️' : '👁️'}
                 </button>
 
-                <div onClick={() => hasName && onToggleSelect(node.name)} style={{ cursor: hasName ? 'pointer' : 'not-allowed', fontWeight: node.type === 'Group' ? 'bold' : 'normal', color: hasName ? (isSelected ? '#007bff' : '#333') : '#aaa', fontSize: '0.75rem', flex: 1, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <div onClick={() => hasName && onToggleSelect(node.name)} style={{ cursor: hasName ? 'pointer' : 'not-allowed', fontWeight: node.type === 'Group' ? 600 : 400, color: hasName ? (isSelected ? 'var(--ink)' : 'var(--ink-soft)') : 'var(--line)', fontSize: '0.8rem', flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
                     {node.type === 'Mesh' ? '🧊' : '📁'} 
                     {hasName ? node.name : <span style={{ fontStyle: 'italic' }}>Unnamed {node.type}</span>}
                 </div>
             </div>
             
             {isExpanded && hasChildren && (
-                <div style={{ borderLeft: '1px dashed #ccc', marginLeft: '6px', paddingTop: '2px' }}>
+                <div style={{ borderLeft: '1px dashed var(--line)', marginLeft: '10px', paddingTop: '4px' }}>
                     {node.children.map(c => (
                         <SceneNodeTree key={c.uuid} node={c} level={level + 1} selectedNodes={selectedNodes} hiddenNodes={hiddenNodes} onToggleSelect={onToggleSelect} onToggleHide={onToggleHide} />
                     ))}
@@ -100,7 +100,7 @@ const SceneNodeTree = ({ node, level = 0, selectedNodes, hiddenNodes, onToggleSe
 
 // --- 3D INTERACTIVE HIGHLIGHT & VISIBILITY MODEL ---
 const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, highlightUnassigned, onMeshClick, onLoaded }) => {
-    const { scene } = useGLTF(url);
+    const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
     useEffect(() => {
@@ -137,13 +137,13 @@ const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, hi
                 const isClustered = existingClusters.some(cl => isDescendantOf(child, cl.nodes));
 
                 if (isSelected) {
-                    child.material = new THREE.MeshStandardMaterial({ color: '#007bff', emissive: '#007bff', emissiveIntensity: 0.5, transparent: true, opacity: 0.9 });
+                    child.material = new THREE.MeshStandardMaterial({ color: '#b08d57', emissive: '#b08d57', emissiveIntensity: 0.5, transparent: true, opacity: 0.9 });
                 } else if (highlightUnassigned && !isClustered) {
-                    child.material = new THREE.MeshStandardMaterial({ color: '#fd7e14', emissive: '#fd7e14', emissiveIntensity: 0.8, transparent: true, opacity: 0.9 });
+                    child.material = new THREE.MeshStandardMaterial({ color: '#d9534f', emissive: '#d9534f', emissiveIntensity: 0.5, transparent: true, opacity: 0.9 });
                 } else if (highlightUnassigned && isClustered) {
-                    child.material = new THREE.MeshBasicMaterial({ color: '#aaaaaa', transparent: true, opacity: 0.1 });
+                    child.material = new THREE.MeshBasicMaterial({ color: '#cccccc', transparent: true, opacity: 0.1 });
                 } else if (isClustered) {
-                    child.material = new THREE.MeshStandardMaterial({ color: '#28a745', emissive: '#28a745', emissiveIntensity: 0.2, transparent: true, opacity: 0.9 });
+                    child.material = new THREE.MeshStandardMaterial({ color: '#524e46', emissive: '#524e46', emissiveIntensity: 0.2, transparent: true, opacity: 0.9 });
                 } else {
                     child.material = child.userData.originalMaterial;
                 }
@@ -222,7 +222,6 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         return matchesSearch && matchesProject && matchesStatus;
     });
 
-    // 🚀 NEW: CASCADING SELECTION LOGIC
     const handleToggleSelect = (nodeName) => {
         const targetNode = findNodeByName(sceneGraph, nodeName);
         const descendants = targetNode ? getAllNames(targetNode) : [nodeName];
@@ -231,17 +230,14 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         setSelectedNodes(prev => {
             const isCurrentlySelected = prev.includes(nodeName);
             if (isCurrentlySelected) {
-                // Toggling OFF: Remove node, all its descendants, AND all its parent ancestors
                 const toRemove = new Set([...descendants, ...ancestors]);
                 return prev.filter(n => !toRemove.has(n));
             } else {
-                // Toggling ON: Select node and all its descendants
                 return [...new Set([...prev, ...descendants])];
             }
         });
     };
 
-    // 🚀 NEW: CASCADING VISIBILITY LOGIC
     const handleToggleHide = (nodeName) => {
         const targetNode = findNodeByName(sceneGraph, nodeName);
         const descendants = targetNode ? getAllNames(targetNode) : [nodeName];
@@ -250,13 +246,10 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         setHiddenNodes(prev => {
             const isCurrentlyHidden = prev.includes(nodeName);
             if (isCurrentlyHidden) {
-                // Unhiding: Unhide the node, its descendants, and its parent ancestors
                 const toRemove = new Set([...descendants, ...ancestors]);
                 return prev.filter(n => !toRemove.has(n));
             } else {
-                // Hiding: Hide the node and its descendants
                 const toDeselect = new Set([...descendants, ...ancestors]);
-                // Automatically deselect hidden items to prevent phantom saves
                 setSelectedNodes(curr => curr.filter(n => !toDeselect.has(n)));
                 return [...new Set([...prev, ...descendants])];
             }
@@ -300,109 +293,109 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const existingClusters = activeAssembly?.nodeClusters || [];
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
-            
-            <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', gap: '15px', boxShadow: '5px 5px 0 #000' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div>
-                        <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#6f42c1' }}>1.5 Node Grouping Studio</h2>
-                        <span style={{ fontSize: '0.7rem', color: '#666' }}>EXTRACT SUB-ASSEMBLIES DIRECTLY FROM CAD NATIVE DATA</span>
-                    </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
+            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+                <div>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Extract Sub-Assemblies from Native CAD</span>
+                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Node Grouping Studio</h2>
                 </div>
                 
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', background: '#f8f9fa', padding: '10px', border: '1px solid #ccc' }}>
-                    <div style={{ flex: 1 }}>
-                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block' }}>SEARCH:</label>
-                        <input type="text" placeholder="Search Assembly Name or ID..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }} />
+                <div style={{ display: 'flex', gap: '20px', alignItems: 'center', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
+                    <div style={{ flex: 1.5 }}>
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Search</label>
+                        <input type="text" placeholder="Search Assembly Name or ID..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }} />
                     </div>
                     <div style={{ flex: 1 }}>
-                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block' }}>PROJECT:</label>
-                        <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
-                            <option value="ALL">ALL PROJECTS</option>
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Project</label>
+                        <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }}>
+                            <option value="ALL">All Projects</option>
                             {availableProjects.map(p => <option key={p} value={p}>{p}</option>)}
                         </select>
                     </div>
                     <div style={{ flex: 1 }}>
-                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block' }}>STATUS:</label>
-                        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}>
-                            <option value="ALL">ALL STATUSES</option>
-                            <option value="NO_CAD">⚠️ AWAITING CAD</option>
-                            <option value="NEEDS_CLUSTERING">⚙️ NEEDS CLUSTERING</option>
-                            <option value="CLUSTERED">✅ FULLY CLUSTERED</option>
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Status</label>
+                        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }}>
+                            <option value="ALL">All Statuses</option>
+                            <option value="NO_CAD">Awaiting CAD</option>
+                            <option value="NEEDS_CLUSTERING">Needs Clustering</option>
+                            <option value="CLUSTERED">Fully Clustered</option>
                         </select>
                     </div>
                 </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start', flex: 1 }}>
+            <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start', flex: 1 }}>
                 
-                <div style={{ width: '220px', display: 'flex', flexDirection: 'column', gap: '15px', flexShrink: 0, maxHeight: '800px', overflowY: 'auto' }}>
-                    {filteredAssemblies.length === 0 && <div style={{ color: '#999', fontStyle: 'italic', padding: '10px' }}>No assemblies match criteria.</div>}
+                {/* LEFT: ASSEMBLY SELECTOR */}
+                <div style={{ width: '280px', display: 'flex', flexDirection: 'column', gap: '16px', flexShrink: 0, maxHeight: '800px', overflowY: 'auto' }}>
+                    {filteredAssemblies.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', padding: '20px', fontFamily: 'var(--serif)', fontSize: '1.1rem' }}>No assemblies match criteria.</div>}
                     {filteredAssemblies.map(asm => {
                         const hasCAD = !!asm.manufacturingSpecs?.cadUrl;
                         const clusterCount = asm.nodeClusters?.length || 0;
                         
-                        let statusColor = '#666';
-                        let statusText = '⚠️ AWAITING CAD';
+                        let statusColor = 'var(--ink-soft)';
+                        let statusText = 'Awaiting CAD';
                         if (hasCAD) {
-                            statusColor = clusterCount > 0 ? '#28a745' : '#6f42c1';
-                            statusText = clusterCount > 0 ? `✅ CLUSTERED (${clusterCount})` : '⚙️ NEEDS CLUSTERING';
+                            statusColor = clusterCount > 0 ? 'var(--brass)' : 'var(--ink)';
+                            statusText = clusterCount > 0 ? `Clustered (${clusterCount})` : 'Needs Clustering';
                         }
 
                         return (
-                            <div key={asm.id} onClick={() => { setActiveAssembly(asm); setSelectedNodes([]); setSceneGraph(null); setHiddenNodes([]); setHighlightUnassigned(false); }} style={{ background: activeAssembly?.id === asm.id ? '#e6e6fa' : '#fff', border: activeAssembly?.id === asm.id ? '3px solid #6f42c1' : '2px solid #ccc', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', boxShadow: activeAssembly?.id === asm.id ? '5px 5px 0 #6f42c1' : 'none' }}>
-                                <div style={{ padding: '5px 10px', background: statusColor, color: '#fff', fontSize: '0.65rem', fontWeight: 'bold', textAlign: 'center' }}>
+                            <div key={asm.id} onClick={() => { setActiveAssembly(asm); setSelectedNodes([]); setSceneGraph(null); setHiddenNodes([]); setHighlightUnassigned(false); }} style={{ background: activeAssembly?.id === asm.id ? 'var(--paper-2)' : '#fff', border: activeAssembly?.id === asm.id ? '1px solid var(--brass)' : '1px solid var(--line)', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', boxShadow: activeAssembly?.id === asm.id ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}>
+                                <div style={{ padding: '8px 12px', background: 'var(--paper)', color: statusColor, fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', borderBottom: '1px solid var(--line)' }}>
                                     {statusText}
                                 </div>
-                                <div style={{ padding: '15px' }}>
-                                    <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#000' }}>{asm.legacyErpId !== "PENDING" ? asm.legacyErpId : asm.itemId}</div>
-                                    <div style={{ fontSize: '1rem', fontWeight: 'bold', marginTop: '5px' }}>{asm.itemName}</div>
+                                <div style={{ padding: '20px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{asm.legacyErpId !== "PENDING" ? asm.legacyErpId : asm.itemId}</div>
+                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: 'var(--ink)', marginTop: '8px' }}>{asm.itemName}</div>
                                 </div>
                             </div>
                         )
                     })}
                 </div>
 
+                {/* CENTER & RIGHT PANEL */}
                 {activeAssembly && activeAssembly.manufacturingSpecs?.cadUrl ? (
-                    <div style={{ flex: 1, display: 'flex', gap: '20px', minHeight: '600px' }}>
+                    <div style={{ flex: 1, display: 'flex', gap: '24px', minHeight: '600px' }}>
                         
-                        <div style={{ flex: 1.8, background: '#fff', border: '3px solid #000', boxShadow: '10px 10px 0 #000', position: 'relative' }}>
-                            <div style={{ position: 'absolute', top: '15px', left: '15px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '10px', border: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>🟦 CURRENT SELECTION</div>
-                                <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#28a745' }}>🟩 CLUSTERED / BOUND</div>
-                                <div style={{ fontSize: '0.65rem', color: '#666', borderTop: '1px dotted #ccc', paddingTop: '5px', marginTop: '2px' }}>
-                                    <i>Tip: Right-click & drag to pan.</i>
+                        {/* 3D VIEWER */}
+                        <div style={{ flex: 1.8, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'relative', borderRadius: '2px', overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '16px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', letterSpacing: '.1em' }}>■ Current Selection</div>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>■ Clustered / Bound</div>
+                                <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', borderTop: '1px solid var(--line)', paddingTop: '8px', marginTop: '4px', fontStyle: 'italic' }}>
+                                    Tip: Right-click & drag to pan.
                                 </div>
                             </div>
 
-                            <div style={{ position: 'absolute', top: '15px', right: '15px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '10px', border: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end' }}>
-                                <div style={{ display: 'flex', gap: '5px' }}>
+                            <div style={{ position: 'absolute', top: '20px', right: '20px', zIndex: 10, display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'flex-end' }}>
+                                <div style={{ display: 'flex', gap: '8px', background: '#fff', border: '1px solid var(--line)', padding: '4px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
                                     <button 
                                         onClick={() => setInteractionMode('select')} 
-                                        style={{ padding: '6px 12px', background: interactionMode === 'select' ? '#007bff' : '#fff', color: interactionMode === 'select' ? '#fff' : '#000', fontWeight: 'bold', border: '1px solid #000', cursor: 'pointer', fontSize: '0.75rem' }}
+                                        style={{ padding: '8px 16px', background: interactionMode === 'select' ? 'var(--ink)' : 'transparent', color: interactionMode === 'select' ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}
                                     >
-                                        🖱️ SELECT
+                                        Select
                                     </button>
                                     <button 
                                         onClick={() => setInteractionMode('hide')} 
-                                        style={{ padding: '6px 12px', background: interactionMode === 'hide' ? '#d9534f' : '#fff', color: interactionMode === 'hide' ? '#fff' : '#000', fontWeight: 'bold', border: '1px solid #000', cursor: 'pointer', fontSize: '0.75rem' }}
+                                        style={{ padding: '8px 16px', background: interactionMode === 'hide' ? 'var(--ink)' : 'transparent', color: interactionMode === 'hide' ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}
                                     >
-                                        👁️‍🗨️ HIDE PARTS
+                                        Hide Parts
                                     </button>
                                 </div>
                                 <button 
                                     onClick={() => setHighlightUnassigned(!highlightUnassigned)}
-                                    style={{ padding: '6px 12px', background: highlightUnassigned ? '#fd7e14' : '#fff', color: highlightUnassigned ? '#fff' : '#fd7e14', fontWeight: 'bold', border: '1px solid #fd7e14', cursor: 'pointer', fontSize: '0.75rem', width: '100%' }}
+                                    style={{ padding: '10px 20px', background: highlightUnassigned ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', width: '100%', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
                                 >
-                                    {highlightUnassigned ? '🛑 CLEAR HIGHLIGHT' : '🔍 HIGHLIGHT UNASSIGNED'}
+                                    {highlightUnassigned ? 'Clear Highlight' : 'Highlight Unassigned'}
                                 </button>
 
                                 {hiddenNodes.length > 0 && (
                                     <button 
                                         onClick={() => setHiddenNodes([])}
-                                        style={{ padding: '6px 12px', background: '#ffc107', color: '#000', fontWeight: 'bold', border: '1px solid #000', cursor: 'pointer', fontSize: '0.75rem', width: '100%' }}
+                                        style={{ padding: '10px 20px', background: '#fff', color: 'var(--brass)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', width: '100%', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
                                     >
-                                        👁️ SHOW ALL ({hiddenNodes.length} HIDDEN)
+                                        Show All ({hiddenNodes.length} Hidden)
                                     </button>
                                 )}
                             </div>
@@ -425,15 +418,15 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                             </Canvas>
                         </div>
 
-                        <div style={{ flex: 1.2, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        <div style={{ flex: 1.2, display: 'flex', flexDirection: 'column', gap: '24px' }}>
                             
-                            <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', height: '350px', boxShadow: '5px 5px 0 #17a2b8' }}>
-                                <div style={{ padding: '10px 15px', background: '#17a2b8', color: '#fff', fontWeight: 'bold', fontSize: '1rem', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span>🌲 NATIVE CAD HIERARCHY</span>
+                            <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', height: '400px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                <div style={{ padding: '20px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Native CAD Hierarchy</span>
                                 </div>
-                                <div style={{ flex: 1, overflowY: 'auto', padding: '15px', background: '#f8f9fa' }}>
+                                <div style={{ flex: 1, overflowY: 'auto', padding: '24px', background: '#fff' }}>
                                     {!sceneGraph ? (
-                                        <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem' }}>Parsing GLTF Nodes...</div>
+                                        <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', fontFamily: 'var(--serif)' }}>Parsing GLTF Nodes...</div>
                                     ) : (
                                         <SceneNodeTree 
                                             node={sceneGraph} 
@@ -446,37 +439,37 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                 </div>
                             </div>
 
-                            <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', boxShadow: '5px 5px 0 #6f42c1', display: 'flex', flexDirection: 'column' }}>
-                                <h3 style={{ margin: '0 0 15px 0', color: '#6f42c1' }}>CREATE SUB-ASSEMBLY</h3>
-                                <div style={{ background: '#e6f2ff', padding: '10px', border: '1px solid #007bff', marginBottom: '15px', fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff' }}>
+                            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                <h3 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Create Sub-Assembly</h3>
+                                <div style={{ background: 'var(--paper)', padding: '16px', border: '1px solid var(--line)', marginBottom: '20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)' }}>
                                     {selectedNodes.length} Nodes / Groups Selected
                                 </div>
                                 
-                                <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>NAME THIS CLUSTER:</label>
+                                <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Name This Cluster:</label>
                                 <input 
                                     value={newClusterName} 
                                     onChange={e => setNewClusterName(e.target.value)} 
                                     placeholder="e.g. UPPER EXTENSION POLE"
-                                    style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', marginBottom: '15px', fontWeight: 'bold', textTransform: 'uppercase' }}
+                                    style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', marginBottom: '20px', fontFamily: 'var(--sans)', fontSize: '1rem', textTransform: 'uppercase' }}
                                 />
                                 
-                                <button onClick={handleSaveCluster} style={{ width: '100%', padding: '15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>💾 SAVE TO MASTER FILE CABINET</button>
-                                <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '10px', textAlign: 'center' }}>
-                                    Saving this cluster makes it instantly available to the BOM Engine in Tab 2.
+                                <button onClick={handleSaveCluster} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>Save to Master File Cabinet</button>
+                                <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '12px', textAlign: 'center' }}>
+                                    Saving this cluster makes it instantly available to the BOM Engine.
                                 </div>
                             </div>
 
-                            <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', flex: 1, overflowY: 'auto' }}>
-                                <h3 style={{ margin: '0 0 15px 0' }}>SAVED BOM BINDINGS ({existingClusters.length})</h3>
-                                {existingClusters.length === 0 && <div style={{ color: '#666', fontStyle: 'italic', fontSize: '0.8rem' }}>No meshes bound to BOM components yet.</div>}
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', flex: 1, overflowY: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                <h3 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Saved BOM Bindings ({existingClusters.length})</h3>
+                                {existingClusters.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', fontFamily: 'var(--serif)' }}>No meshes bound to BOM components yet.</div>}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                     {existingClusters.map(cl => (
-                                        <div key={cl.id} style={{ border: '2px solid #28a745', padding: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#eafaf1' }}>
+                                        <div key={cl.id} style={{ border: '1px solid var(--line)', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper)', borderLeft: '2px solid var(--brass)' }}>
                                             <div>
-                                                <div style={{ fontWeight: 'bold', color: '#1e7e34' }}>{cl.name}</div>
-                                                <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '4px' }}>{cl.nodes?.length || 0} Nodes Attached</div>
+                                                <div style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '1rem' }}>{cl.name}</div>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginTop: '6px' }}>{cl.nodes?.length || 0} Nodes Attached</div>
                                             </div>
-                                            <button onClick={() => handleDeleteCluster(cl.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                                            <button onClick={() => handleDeleteCluster(cl.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
                                         </div>
                                     ))}
                                 </div>
@@ -485,8 +478,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
 
                     </div>
                 ) : activeAssembly && (
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: '3px dashed #ccc' }}>
-                        <div style={{ color: '#999', fontWeight: 'bold', fontSize: '1.2rem' }}>Please upload a 3D CAD model in Tab 1 to manage nodes.</div>
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: '1px dashed var(--line)' }}>
+                        <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.4rem' }}>Please upload a 3D CAD model to manage nodes.</div>
                     </div>
                 )}
             </div>
