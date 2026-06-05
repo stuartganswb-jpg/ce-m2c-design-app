@@ -7,7 +7,7 @@ import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } fro
 
 const globalTextureCache = {};
 
-// 🚀 Searchable Customer Dropdown Component
+// Searchable Customer Dropdown Component
 const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, style }) => {
     const [search, setSearch] = useState('');
     const [isOpen, setIsOpen] = useState(false);
@@ -670,15 +670,15 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (job.engineeringNotes) {
           const notes = job.engineeringNotes;
           mathSection = `
-              <div style="background: #faf8f4; border: 1px dashed rgba(28,26,22,.14); padding: 20px;">
-                  <h4 style="margin:0 0 15px 0; color: #1c1a16; font-family: Georgia, serif; text-transform: uppercase;">Engineering Dimensions</h4>
+              <div style="background: var(--paper-2); border: 1px dashed rgba(28,26,22,.14); padding: 20px;">
+                  <h4 style="margin:0 0 15px 0; color: var(--ink); font-family: Georgia, serif; text-transform: uppercase;">Engineering Dimensions</h4>
                   <table style="width: 100%; border-collapse: collapse; font-size: 14px; font-family: sans-serif;">
                       <tr>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">System O2O (Outside-to-Outside):</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">System O2O:</td>
                           <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.systemO2O ? notes.systemO2O.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       <tr>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">System C2C (Center-to-Center):</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">System C2C:</td>
                           <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.systemC2C ? notes.systemC2C.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       ${notes.shape === 'MITERED' ? `
