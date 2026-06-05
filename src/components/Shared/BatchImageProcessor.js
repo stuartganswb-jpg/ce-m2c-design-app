@@ -3,6 +3,8 @@ import { db, storage } from '../../firebase';
 import { collection, doc, setDoc, serverTimestamp, onSnapshot } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
+const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
+
 const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const [queue, setQueue] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
@@ -14,7 +16,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const [globalFinishes, setGlobalFinishes] = useState([]);
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);
     const [inhouseFinishes, setInhouseFinishes] = useState([]);
-    const [collectionsData, setCollectionsData] = useState([]); // 🚀 Hooked up to new Collection DB
+    const [collectionsData, setCollectionsData] = useState([]); 
 
     const [patternId, setPatternId] = useState("");
     const [finishId, setFinishId] = useState(""); 
@@ -262,18 +264,19 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     );
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', backgroundColor: theme.paper, minHeight: '100vh', fontFamily: theme.sans }}>
             
-            <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+            {/* Header Area */}
+            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px 30px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                 <div>
-                    <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.6rem', color: '#17a2b8' }}>Batch Asset Processor</h2>
-                    <span style={{ fontSize: '0.8rem', color: '#666', fontWeight: 'bold' }}>CONVEYOR BELT IMAGE UPLOADER</span>
+                    <h2 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.6rem', fontWeight: 500, color: theme.ink }}>Batch Asset Processor</h2>
+                    <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.18em', textTransform: 'uppercase' }}>CONVEYOR BELT IMAGE UPLOADER</span>
                 </div>
                 <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: remaining > 0 ? '#d9534f' : '#28a745' }}>
+                    <div style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', fontWeight: 500, color: remaining > 0 ? theme.brass : theme.inkSoft }}>
                         {remaining} IMAGES REMAINING
                     </div>
-                    <label style={{ background: '#000', color: '#fff', padding: '10px 20px', fontWeight: 'bold', cursor: 'pointer', border: '2px solid #000' }}>
+                    <label style={{ background: theme.ink, color: '#fff', padding: '10px 20px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', border: 'none', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
                         + SELECT BATCH
                         <input type="file" multiple accept="image/png, image/jpeg" onChange={handleFileSelect} style={{ display: 'none' }} />
                     </label>
@@ -281,27 +284,28 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             </div>
 
             {safeQueue.length === 0 ? (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: '2px dashed #ccc', color: '#888', fontWeight: 'bold', fontSize: '1.2rem' }}>
-                    DRAG & DROP OR SELECT A BATCH OF IMAGES TO BEGIN
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px dashed ${theme.brass}`, color: theme.inkSoft, fontFamily: theme.serif, fontSize: '1.4rem' }}>
+                    Drag & Drop or Select a Batch of Images to Begin
                 </div>
             ) : isDone ? (
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#eafaf1', border: '2px solid #28a745', color: '#28a745' }}>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: theme.paper2, border: `1px solid ${theme.line}`, color: theme.ink }}>
                     <div style={{ fontSize: '3rem' }}>✅</div>
-                    <h2 style={{ margin: '10px 0 0 0' }}>BATCH COMPLETE</h2>
-                    <p style={{ fontWeight: 'bold' }}>Processed {safeQueue.length} images.</p>
-                    <button onClick={() => { setQueue([]); setCurrentIndex(0); setPatternId(''); setFinishId(''); setCustomerId(''); setClientSku(''); setAssociatedParts([]); setAssociatedFinishes([]); }} style={{ marginTop: '20px', padding: '10px 20px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>START NEW BATCH</button>
+                    <h2 style={{ margin: '15px 0 10px 0', fontFamily: theme.serif, fontWeight: 500 }}>Batch Complete</h2>
+                    <p style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.inkSoft }}>Processed {safeQueue.length} images.</p>
+                    <button onClick={() => { setQueue([]); setCurrentIndex(0); setPatternId(''); setFinishId(''); setCustomerId(''); setClientSku(''); setAssociatedParts([]); setAssociatedFinishes([]); }} style={{ marginTop: '20px', padding: '12px 24px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.18em', textTransform: 'uppercase', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>START NEW BATCH</button>
                 </div>
             ) : (
                 <div style={{ display: 'flex', gap: '20px', flex: 1 }}>
                     
-                    <div style={{ width: '250px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)', overflowY: 'auto', maxHeight: '75vh' }}>
-                        <div style={{ padding: '10px', background: '#333', color: '#fff', fontWeight: 'bold', textAlign: 'center', position: 'sticky', top: 0, zIndex: 10 }}>UPCOMING PIPELINE</div>
-                        <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    {/* Sidebar Queue */}
+                    <div style={{ width: '250px', background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto', maxHeight: '75vh' }}>
+                        <div style={{ padding: '15px', background: theme.paper, color: theme.ink, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textAlign: 'center', position: 'sticky', top: 0, zIndex: 10, borderBottom: `1px solid ${theme.line}` }}>UPCOMING PIPELINE</div>
+                        <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             {visibleQueue.map((file, localIdx) => {
                                 const idx = currentIndex + localIdx;
                                 const isCurrent = idx === currentIndex;
                                 return (
-                                    <div key={idx} style={{ padding: '8px', fontSize: '0.7rem', background: isCurrent ? '#d1ecf1' : '#f8f9fa', border: isCurrent ? '2px solid #17a2b8' : '1px solid #ccc', color: isCurrent ? '#0c5460' : '#666', fontWeight: isCurrent ? 'bold' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    <div key={idx} style={{ padding: '8px', fontFamily: theme.mono, fontSize: '10px', background: isCurrent ? theme.paper2 : '#fff', border: isCurrent ? `1px solid ${theme.brass}` : `1px solid ${theme.line}`, color: isCurrent ? theme.ink : theme.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                         {idx + 1}. {String(file?.name || 'Unknown')}
                                     </div>
                                 )
@@ -309,20 +313,22 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                         </div>
                     </div>
 
-                    <div style={{ flex: 2, background: '#e5e5e5', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #ccc', overflow: 'hidden', position: 'relative' }}>
-                        {imagePreview && <img src={imagePreview} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }} />}
+                    {/* Image Preview Window */}
+                    <div style={{ flex: 2, background: theme.paper, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${theme.line}`, overflow: 'hidden', position: 'relative' }}>
+                        {imagePreview && <img src={imagePreview} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 4px 24px rgba(0,0,0,0.05)' }} />}
                         
-                        <div style={{ position: 'absolute', bottom: '20px', right: '20px', background: 'rgba(0,0,0,0.7)', color: '#fff', padding: '5px 10px', fontSize: '0.8rem', fontWeight: 'bold', borderRadius: '4px' }}>
+                        <div style={{ position: 'absolute', bottom: '20px', right: '20px', background: 'rgba(255,255,255,0.9)', border: `1px solid ${theme.line}`, color: theme.ink, padding: '6px 12px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em' }}>
                             FILE: {String(safeQueue[currentIndex]?.name || "Unknown")}
                         </div>
                     </div>
 
-                    <div style={{ flex: 1.2, background: '#fff', border: '2px solid #000', padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', boxShadow: '5px 5px 0 #000', overflowY: 'auto' }}>
-                        <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#17a2b8', borderBottom: '2px solid #17a2b8', paddingBottom: '10px' }}>METADATA INJECTION</div>
+                    {/* Metadata Form Panel */}
+                    <div style={{ flex: 1.2, background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto' }}>
+                        <div style={{ fontFamily: theme.serif, fontSize: '1.4rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>Metadata Injection</div>
 
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#d9534f' }}>PATTERN / ITEM ID</label>
+                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>PATTERN / ITEM ID</label>
                                 <input 
                                     ref={idInputRef}
                                     type="text" 
@@ -330,57 +336,57 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                     onChange={e => setPatternId(e.target.value)} 
                                     onKeyDown={handleKeyDown}
                                     placeholder="e.g. H1-75BS" 
-                                    style={{ width: '100%', padding: '15px', border: '3px solid #d9534f', fontSize: '1.2rem', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px' }} 
+                                    style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px', outline: 'none' }} 
                                 />
                                 {isLibraryMatch && (
-                                    <div style={{ fontSize: '0.7rem', color: '#28a745', fontWeight: 'bold', marginTop: '5px' }}>✓ Matches Master Library Part</div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginTop: '5px', letterSpacing: '.05em' }}>✓ Matches Master Library Part</div>
                                 )}
                             </div>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#d9534f' }}>FINISH ID</label>
+                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>FINISH ID</label>
                                 <input 
                                     type="text" 
                                     value={finishId} 
                                     onChange={e => setFinishId(e.target.value)} 
                                     onKeyDown={handleKeyDown}
                                     placeholder="e.g. EP01" 
-                                    style={{ width: '100%', padding: '15px', border: '3px solid #d9534f', fontSize: '1.2rem', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px' }} 
+                                    style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px', outline: 'none' }} 
                                 />
                             </div>
                         </div>
 
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CUSTOMER</label>
-                                <select value={customerId} onChange={e => setCustomerId(e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #28a745', fontWeight: 'bold', marginTop: '5px', boxSizing: 'border-box' }}>
+                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>CUSTOMER</label>
+                                <select value={customerId} onChange={e => setCustomerId(e.target.value)} style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', marginTop: '5px', boxSizing: 'border-box', outline: 'none' }}>
                                     <option value="">Select...</option>
                                     {globalLists.customers.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                             </div>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CLIENT SKU / PART #</label>
+                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>CLIENT SKU / PART #</label>
                                 <input 
                                     type="text" 
                                     value={clientSku} 
                                     onChange={e => setClientSku(e.target.value)} 
                                     onKeyDown={handleKeyDown}
                                     placeholder="e.g. CUST-999" 
-                                    style={{ width: '100%', padding: '12px', border: '2px solid #28a745', fontWeight: 'bold', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px' }} 
+                                    style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px', outline: 'none' }} 
                                 />
                             </div>
                         </div>
 
                         <div style={{ display: 'flex', gap: '15px' }}>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>COLLECTION</label>
-                                <select value={collectionName} onChange={e => setCollectionName(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid #ccc', fontWeight: 'bold', marginTop: '5px', boxSizing: 'border-box' }}>
+                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>COLLECTION</label>
+                                <select value={collectionName} onChange={e => setCollectionName(e.target.value)} style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', marginTop: '5px', boxSizing: 'border-box', outline: 'none' }}>
                                     <option value="">Select...</option>
                                     {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                 </select>
                             </div>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666' }}>PRODUCT TYPE</label>
-                                <select value={productType} onChange={e => setProductType(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid #ccc', fontWeight: 'bold', marginTop: '5px', boxSizing: 'border-box' }}>
+                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>PRODUCT TYPE</label>
+                                <select value={productType} onChange={e => setProductType(e.target.value)} style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', marginTop: '5px', boxSizing: 'border-box', outline: 'none' }}>
                                     <option value="">Select...</option>
                                     {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
@@ -388,12 +394,12 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                         </div>
 
                         <div>
-                            <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#666' }}>SEARCHABLE OPEN NOTES</label>
+                            <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>SEARCHABLE OPEN NOTES</label>
                             <textarea 
                                 value={notes} 
                                 onChange={e => setNotes(e.target.value)} 
                                 placeholder="Any keywords you want to search by later..." 
-                                style={{ width: '100%', padding: '12px', border: '1px solid #ccc', minHeight: '80px', fontFamily: 'monospace', boxSizing: 'border-box', marginTop: '5px', resize: 'vertical' }} 
+                                style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', minHeight: '80px', boxSizing: 'border-box', marginTop: '5px', resize: 'vertical', outline: 'none' }} 
                             />
                         </div>
 
@@ -404,7 +410,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                     setAssociatedParts(prev => [...prev, e.target.value]);
                                 }
                             }} 
-                            style={{ padding: '10px', border: '2px solid #007bff', fontWeight: 'bold', width: '100%', boxSizing: 'border-box' }}
+                            style={{ padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', width: '100%', boxSizing: 'border-box', outline: 'none' }}
                         >
                             <option value="">+ Link to Master Library Part...</option>
                             {safeHqParts.slice(0, 200).map(p => <option key={p.id} value={p.id}>{String(p.itemName || p.id)}</option>)}
@@ -412,9 +418,9 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                         {associatedParts.length > 0 && (
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
                                 {associatedParts.map(partId => (
-                                    <span key={partId} style={{ background: '#007bff', color: '#fff', padding: '4px 8px', fontSize: '0.7rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                    <span key={partId} style={{ background: theme.paper2, color: theme.ink, border: `1px solid ${theme.line}`, padding: '4px 8px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', display: 'flex', alignItems: 'center', gap: '5px' }}>
                                         {String(safeHqParts.find(p => p.id === partId)?.itemName || partId)}
-                                        <span onClick={() => setAssociatedParts(prev => prev.filter(id => id !== partId))} style={{ cursor: 'pointer', fontWeight: 'bold' }}>×</span>
+                                        <span onClick={() => setAssociatedParts(prev => prev.filter(id => id !== partId))} style={{ cursor: 'pointer', color: theme.inkSoft }}>×</span>
                                     </span>
                                 ))}
                             </div>
@@ -427,7 +433,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                     setAssociatedFinishes(prev => [...prev, e.target.value]);
                                 }
                             }} 
-                            style={{ padding: '10px', border: '2px solid #6f42c1', fontWeight: 'bold', width: '100%', boxSizing: 'border-box' }}
+                            style={{ padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', width: '100%', boxSizing: 'border-box', outline: 'none' }}
                         >
                             <option value="">+ Link to Master Finish...</option>
                             <optgroup label="In-House & Global Finishes">
@@ -441,34 +447,37 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                         {associatedFinishes.length > 0 && (
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
                                 {associatedFinishes.map(finId => (
-                                    <span key={finId} style={{ background: '#6f42c1', color: '#fff', padding: '4px 8px', fontSize: '0.7rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                    <span key={finId} style={{ background: theme.paper2, color: theme.ink, border: `1px solid ${theme.line}`, padding: '4px 8px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', display: 'flex', alignItems: 'center', gap: '5px' }}>
                                         {String(allFinishes.find(f => f.id === finId)?.name || finId)}
-                                        <span onClick={() => setAssociatedFinishes(prev => prev.filter(id => id !== finId))} style={{ cursor: 'pointer', fontWeight: 'bold' }}>×</span>
+                                        <span onClick={() => setAssociatedFinishes(prev => prev.filter(id => id !== finId))} style={{ cursor: 'pointer', color: theme.inkSoft }}>×</span>
                                     </span>
                                 ))}
                             </div>
                         )}
 
                         <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            <div style={{ fontSize: '0.75rem', color: '#888', textAlign: 'center', fontStyle: 'italic' }}>Tip: Press Enter to submit instantly</div>
+                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textAlign: 'center', letterSpacing: '.1em', textTransform: 'uppercase' }}>Tip: Press Enter to submit instantly</div>
                             <button 
                                 onClick={handleProcessAndNext} 
                                 disabled={isProcessing || !patternId}
                                 style={{ 
-                                    padding: '20px', 
-                                    background: (isProcessing || !patternId) ? '#ccc' : '#17a2b8', 
-                                    color: '#fff', 
-                                    fontWeight: 'bold', 
-                                    fontSize: '1.2rem', 
-                                    border: '2px solid #000', 
+                                    padding: '15px', 
+                                    background: (isProcessing || !patternId) ? theme.paper2 : theme.ink, 
+                                    color: (isProcessing || !patternId) ? theme.inkSoft : '#fff', 
+                                    fontFamily: theme.mono, 
+                                    fontSize: '11px', 
+                                    letterSpacing: '.18em', 
+                                    textTransform: 'uppercase', 
+                                    border: (isProcessing || !patternId) ? `1px solid ${theme.line}` : 'none', 
                                     cursor: (isProcessing || !patternId) ? 'not-allowed' : 'pointer', 
-                                    boxShadow: (isProcessing || !patternId) ? 'none' : '4px 4px 0 #000',
-                                    transition: '0.1s'
+                                    transition: 'background 0.2s'
                                 }}
+                                onMouseOver={(e) => { if(!isProcessing && patternId) e.currentTarget.style.background = theme.brass; }} 
+                                onMouseOut={(e) => { if(!isProcessing && patternId) e.currentTarget.style.background = theme.ink; }}
                             >
-                                {isProcessing ? "📸 GENERATING THUMB & UPLOADING..." : "⏭️ PROCESS & NEXT"}
+                                {isProcessing ? "GENERATING & UPLOADING..." : "PROCESS & NEXT"}
                             </button>
-                            <button onClick={() => { setNotes(""); setClientSku(""); setCurrentIndex(prev => prev + 1); }} disabled={isProcessing} style={{ padding: '10px', background: 'transparent', color: '#d9534f', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>
+                            <button onClick={() => { setNotes(""); setClientSku(""); setCurrentIndex(prev => prev + 1); }} disabled={isProcessing} style={{ padding: '10px', background: 'transparent', color: theme.inkSoft, border: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textDecoration: 'underline', cursor: 'pointer' }}>
                                 SKIP THIS IMAGE
                             </button>
                         </div>
