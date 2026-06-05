@@ -285,38 +285,41 @@ const ShopFloor = () => {
     const renderModal = () => {
         if (!activeModal) return null;
         return (
-            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <div style={{ background: '#fff', padding: '30px', borderRadius: '12px', width: activeModal === 'specs' ? '800px' : '600px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ background: '#fff', padding: '40px', borderRadius: '2px', width: activeModal === 'specs' ? '800px' : '600px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)' }}>
                     
                     {activeModal === 'specs' && (
                         <div>
-                            <h2 style={{ color: '#0056b3', marginTop: 0, borderBottom: '2px solid #ccc', paddingBottom: '10px' }}>JOB SPECIFICATIONS: {modalData.woNum}</h2>
-                            <div style={{ display: 'flex', gap: '20px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
+                                <h2 style={{ fontFamily: 'var(--serif)', margin: 0, color: 'var(--ink)', fontSize: '1.8rem', fontWeight: 500 }}>Job Specifications: {modalData.woNum}</h2>
+                                <button onClick={() => setActiveModal(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+                            </div>
+                            <div style={{ display: 'flex', gap: '30px' }}>
                                 {modalData.imageUrl && (
-                                    <div style={{ flex: 1 }}>
-                                        <img src={modalData.imageUrl} alt="Part" style={{ width: '100%', border: '2px solid #ccc', borderRadius: '8px' }}/>
+                                    <div style={{ flex: 1, border: '1px solid var(--line)', padding: '16px', background: 'var(--paper)' }}>
+                                        <img src={modalData.imageUrl} alt="Part" style={{ width: '100%', objectFit: 'contain' }}/>
                                     </div>
                                 )}
-                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                                    <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
-                                        <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>CLIENT</div>
-                                        <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#000' }}>{modalData.clientName || 'N/A'}</div>
+                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                    <div style={{ background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px', letterSpacing: '.1em' }}>Client</div>
+                                        <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{modalData.clientName || 'N/A'}</div>
                                     </div>
                                     {modalData.note && (
-                                        <div style={{ background: '#fffdf5', padding: '15px', borderRadius: '8px', border: '1px solid #f39c12' }}>
-                                            <div style={{ fontSize: '12px', color: '#f39c12', fontWeight: 'bold' }}>CLIENT / RFI NOTES</div>
-                                            <div style={{ fontSize: '14px', whiteSpace: 'pre-wrap' }}>{modalData.note}</div>
+                                        <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', borderLeft: '4px solid var(--brass)' }}>
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--brass)', marginBottom: '8px', letterSpacing: '.1em' }}>Client / RFI Notes</div>
+                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', whiteSpace: 'pre-wrap', color: 'var(--ink)', lineHeight: '1.5' }}>{modalData.note}</div>
                                         </div>
                                     )}
                                     {modalData.cpqSpecs && Object.keys(modalData.cpqSpecs).length > 0 && (
-                                        <div style={{ background: '#eef5ff', padding: '15px', borderRadius: '8px', border: '1px solid #0056b3' }}>
-                                            <div style={{ fontSize: '12px', color: '#0056b3', fontWeight: 'bold', marginBottom: '5px' }}>CPQ BUILD SPECS</div>
+                                        <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '16px', borderBottom: '1px solid var(--line)', paddingBottom: '8px', letterSpacing: '.1em' }}>CPQ Build Specs</div>
                                             {Object.entries(modalData.cpqSpecs).map(([k, v]) => {
                                                 const part = hqParts.find(p => p.id === v);
                                                 const displayVal = part ? part.itemName : v;
                                                 return (
-                                                    <div key={k} style={{ fontSize: '13px', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #cce0ff', padding: '6px 0' }}>
-                                                        <span style={{ color: '#555' }}>{k}:</span><span style={{ fontWeight: 'bold' }}>{displayVal}</span>
+                                                    <div key={k} style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', padding: '8px 0' }}>
+                                                        <span style={{ color: 'var(--ink-soft)' }}>{k}:</span><span style={{ fontWeight: 500, color: 'var(--ink)' }}>{displayVal}</span>
                                                     </div>
                                                 );
                                             })}
@@ -324,34 +327,54 @@ const ShopFloor = () => {
                                     )}
                                 </div>
                             </div>
-                            <button onClick={() => setActiveModal(null)} style={{ width: '100%', background: '#888', border: 'none', padding: '15px', color: '#fff', fontWeight: 'bold', cursor: 'pointer', marginTop: '20px', borderRadius: '6px' }}>CLOSE VIEW</button>
                         </div>
                     )}
 
                     {activeModal === 'start' && (
                         <div>
-                            <h2 style={{ color: '#0056b3', marginTop: 0 }}>First Part Verification</h2>
-                            <div style={{ background: '#fffdf5', padding: '15px', borderLeft: '5px solid #f39c12', whiteSpace: 'pre-wrap', marginBottom: '20px' }}><b>Instructions:</b><br/>{modalData.prog.steps || 'None provided'}</div>
-                            <div style={{ display: 'flex', gap: '10px' }}><button onClick={() => { updateJobStatus(modalData.taskId, 'Running'); setActiveModal(null); }} style={{ flex: 1, background: '#28a745', color: '#fff', border: 'none', padding: '15px', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px' }}>VERIFIED (Start Run)</button><button onClick={() => setActiveModal(null)} style={{ flex: 1, background: '#dc3545', color: '#fff', border: 'none', padding: '15px', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px' }}>CANCEL</button></div>
+                            <h2 style={{ fontFamily: 'var(--serif)', margin: '0 0 20px 0', color: 'var(--ink)', fontSize: '1.8rem', fontWeight: 500 }}>First Part Verification</h2>
+                            <div style={{ background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)', borderLeft: '4px solid var(--brass)', whiteSpace: 'pre-wrap', marginBottom: '30px', fontFamily: 'var(--sans)', fontSize: '0.95rem', lineHeight: '1.6', color: 'var(--ink)' }}>
+                                <strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Instructions</strong>
+                                {modalData.prog.steps || 'None provided'}
+                            </div>
+                            <div style={{ display: 'flex', gap: '16px' }}>
+                                <button onClick={() => { updateJobStatus(modalData.taskId, 'Running'); setActiveModal(null); }} style={{ flex: 1, background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Verified (Start Run)</button>
+                                <button onClick={() => setActiveModal(null)} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Cancel</button>
+                            </div>
                         </div>
                     )}
                     {activeModal === 'shiftLog' && (
                         <div>
-                            <h2 style={{ color: '#f39c12', marginTop: 0 }}>Log Intermediate Shift Progress</h2>
-                            <div style={{ background: '#f8f9fa', padding: '15px', border: '1px solid #ccc', borderRadius: '8px', textAlign: 'center', marginBottom: '20px' }}><label style={{ color: '#333', fontWeight: 'bold' }}>GOOD PIECES COMPLETED THIS SHIFT</label><input type="number" value={shiftLogQty} onChange={e => setShiftLogQty(e.target.value)} style={{ fontSize: '24px', textAlign: 'center', width: '100%', marginTop: '10px', padding: '10px' }} /></div>
-                            <div style={{ display: 'flex', gap: '10px' }}><button onClick={submitShiftLog} style={{ flex: 1, background: '#0056b3', color: '#fff', border: 'none', padding: '15px', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px' }}>LOG PARTS</button><button onClick={() => setActiveModal(null)} style={{ flex: 1, background: '#888', color: '#fff', border: 'none', padding: '15px', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px' }}>CANCEL</button></div>
+                            <h2 style={{ fontFamily: 'var(--serif)', margin: '0 0 20px 0', color: 'var(--ink)', fontSize: '1.8rem', fontWeight: 500 }}>Log Intermediate Shift Progress</h2>
+                            <div style={{ background: 'var(--paper-2)', padding: '30px', border: '1px solid var(--line)', textAlign: 'center', marginBottom: '30px' }}>
+                                <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Good Pieces Completed This Shift</label>
+                                <input type="number" value={shiftLogQty} onChange={e => setShiftLogQty(e.target.value)} style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', textAlign: 'center', width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', color: 'var(--ink)' }} />
+                            </div>
+                            <div style={{ display: 'flex', gap: '16px' }}>
+                                <button onClick={submitShiftLog} style={{ flex: 1, background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Log Parts</button>
+                                <button onClick={() => setActiveModal(null)} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Cancel</button>
+                            </div>
                         </div>
                     )}
                     {activeModal === 'qc' && (
                         <div>
-                            <h2 style={{ color: '#0056b3', marginTop: 0 }}>Final QC & Operation Completion</h2>
-                            {modalData.task?.partialGoodQty > 0 && <div style={{ background: '#fffdf5', padding: '10px', border: '1px solid #f39c12', borderRadius: '6px', marginBottom: '15px', fontWeight: 'bold', color: '#f39c12', textAlign: 'center' }}>⚠️ Previous shifts logged {modalData.task.partialGoodQty} completed parts.</div>}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
-                                <div style={{ background: '#eafaf1', padding: '15px', border: '1px solid #28a745', borderRadius: '8px', textAlign: 'center' }}><label style={{ color: '#28a745', fontWeight: 'bold' }}>GOOD PIECES (YOUR SHIFT)</label><input type="number" value={qcForm.good} onChange={e => setQcForm({...qcForm, good: e.target.value})} style={{ fontSize: '24px', textAlign: 'center', width: '100%', marginTop: '10px' }} /></div>
-                                <div style={{ background: '#fff0f0', padding: '15px', border: '1px solid #dc3545', borderRadius: '8px', textAlign: 'center' }}><label style={{ color: '#dc3545', fontWeight: 'bold' }}>SCRAP PIECES</label><input type="number" value={qcForm.scrap} onChange={e => setQcForm({...qcForm, scrap: e.target.value})} style={{ fontSize: '24px', textAlign: 'center', width: '100%', marginTop: '10px' }} /></div>
+                            <h2 style={{ fontFamily: 'var(--serif)', margin: '0 0 20px 0', color: 'var(--ink)', fontSize: '1.8rem', fontWeight: 500 }}>Final QC & Operation Completion</h2>
+                            {modalData.task?.partialGoodQty > 0 && <div style={{ background: 'var(--paper)', padding: '16px', border: '1px solid var(--line)', borderLeft: '4px solid var(--brass)', marginBottom: '24px', fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)' }}>Previous shifts logged <strong style={{color: 'var(--ink)'}}>{modalData.task.partialGoodQty}</strong> completed parts.</div>}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '30px' }}>
+                                <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', textAlign: 'center' }}>
+                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Good Pieces (Your Shift)</label>
+                                    <input type="number" value={qcForm.good} onChange={e => setQcForm({...qcForm, good: e.target.value})} style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', textAlign: 'center', width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', color: 'var(--ink)' }} />
+                                </div>
+                                <div style={{ background: '#fdf2f2', padding: '24px', border: '1px solid #d9534f', textAlign: 'center' }}>
+                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', display: 'block', marginBottom: '12px' }}>Scrap Pieces</label>
+                                    <input type="number" value={qcForm.scrap} onChange={e => setQcForm({...qcForm, scrap: e.target.value})} style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', textAlign: 'center', width: '100%', padding: '12px', border: '1px solid #d9534f', outline: 'none', color: '#d9534f', background: '#fff' }} />
+                                </div>
                             </div>
-                            <div style={{ display: 'flex', gap: '10px' }}><button onClick={() => finishRun('GOOD')} style={{ flex: 1, background: '#28a745', color: '#fff', border: 'none', padding: '15px', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px' }}>GOOD (Log & Complete OP)</button><button onClick={() => finishRun('BAD')} style={{ flex: 1, background: '#dc3545', color: '#fff', border: 'none', padding: '15px', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px' }}>BAD (Submit Failure)</button></div>
-                            <button onClick={() => setActiveModal(null)} style={{ width: '100%', background: 'none', border: 'none', padding: '15px', color: '#888', cursor: 'pointer', marginTop: '10px' }}>Cancel</button>
+                            <div style={{ display: 'flex', gap: '16px' }}>
+                                <button onClick={() => finishRun('GOOD')} style={{ flex: 1, background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Good (Log & Complete OP)</button>
+                                <button onClick={() => finishRun('BAD')} style={{ flex: 1, background: '#d9534f', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Bad (Submit Failure)</button>
+                            </div>
+                            <button onClick={() => setActiveModal(null)} style={{ width: '100%', background: 'none', border: 'none', padding: '16px', color: 'var(--ink-soft)', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Cancel</button>
                         </div>
                     )}
                 </div>
@@ -363,26 +386,26 @@ const ShopFloor = () => {
         const activeJobs = schedule.filter(s => ['Running', 'Setup', 'Paused'].includes(s.status));
         return (
             <div>
-                <h2 style={{ color: '#0056b3' }}>Active Machine Floor</h2>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+                <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: '0 0 24px 0' }}>Active Machine Floor</h2>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '24px' }}>
                     {machines.map(m => {
                         const mJobs = activeJobs.filter(j => j.mach === m.name);
                         const isSetup = mJobs.some(j => j.status === 'Setup');
                         return (
-                            <div key={m.id} style={{ background: '#fff', border: mJobs.length > 0 ? (isSetup ? '2px solid #0056b3' : '2px solid #f39c12') : '1px solid #ccc', borderRadius: '8px', padding: '20px', textAlign: 'center', cursor: 'pointer', transition: '0.2s' }} onClick={() => setActiveTab('scheduler')}>
-                                <h3 style={{ margin: '0 0 10px 0', fontSize: '22px' }}>{m.name}</h3>
+                            <div key={m.id} style={{ background: '#fff', border: mJobs.length > 0 ? (isSetup ? '1px solid var(--brass)' : '1px solid var(--ink)') : '1px solid var(--line)', borderRadius: '2px', padding: '24px', cursor: 'pointer', transition: 'all 0.2s', boxShadow: mJobs.length > 0 ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }} onClick={() => setActiveTab('scheduler')}>
+                                <h3 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>{m.name}</h3>
                                 {mJobs.length > 0 ? (
-                                    <div style={{ background: isSetup ? '#eef5ff' : '#fffdf5', padding: '10px', borderRadius: '6px', textAlign: 'left' }}>
-                                        <div style={{ color: isSetup ? '#0056b3' : '#f39c12', fontWeight: 'bold', marginBottom: '10px' }}>⚡ ACTIVE: {mJobs.length}</div>
+                                    <div style={{ background: isSetup ? 'var(--paper)' : 'var(--paper-2)', padding: '16px', border: '1px solid var(--line)' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: isSetup ? 'var(--brass)' : 'var(--ink)', marginBottom: '12px', fontWeight: 500 }}>⚡ Active: {mJobs.length}</div>
                                         {mJobs.map(j => (
-                                            <div key={j.id} style={{ fontSize: '14px', borderTop: '1px solid #ccc', paddingTop: '10px', marginTop: '5px' }}>
-                                                <b>{j.woNum}</b> - <span style={{ color: j.status === 'Setup' ? '#0056b3' : '#f39c12', fontWeight: 'bold' }}>{j.status}</span><br/>
-                                                <span style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>OP {j.currentOpIndex+1}/{routingsMap[j.routingId]?.ops?.length||1}: {programsMap[j.prog]?.name || j.prog}</span>
-                                                <br/><span style={{ fontSize: '12px', color: '#888' }}>Part: {j.routingId} | Op: {j.op}</span>
+                                            <div key={j.id} style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', borderTop: '1px solid var(--line)', paddingTop: '12px', marginTop: '8px' }}>
+                                                <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{j.woNum}</strong> - <span style={{ color: j.status === 'Setup' ? 'var(--brass)' : 'var(--ink-soft)' }}>{j.status}</span><br/>
+                                                <span style={{ fontSize: '0.85rem', color: 'var(--ink)', display: 'block', marginTop: '4px' }}>OP {j.currentOpIndex+1}/{routingsMap[j.routingId]?.ops?.length||1}: {programsMap[j.prog]?.name || j.prog}</span>
+                                                <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '4px' }}>Part: {j.routingId} | Op: {j.op}</span>
                                             </div>
                                         ))}
                                     </div>
-                                ) : <div style={{ color: '#888', fontWeight: 'bold', marginTop: '20px' }}>IDLE / READY</div>}
+                                ) : <div style={{ color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '24px' }}>Idle / Ready</div>}
                             </div>
                         )
                     })}
@@ -395,14 +418,14 @@ const ShopFloor = () => {
         const activeTracker = schedule.filter(s => !['Completed', 'Failed'].includes(s.status)).sort((a, b) => b.t?.toMillis() - a.t?.toMillis());
         return (
             <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                    <h2 style={{ color: '#0056b3', margin: 0 }}>Active Production Tracker</h2>
-                    {['admin', 'programmer'].includes(safeUserRole) && <button onClick={aiOptimizeSchedule} style={{ background: '#f39c12', color: '#000', border: 'none', padding: '8px 15px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>✨ AI OPTIMIZE SCHEDULE</button>}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                    <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: 0 }}>Active Production Tracker</h2>
+                    {['admin', 'programmer'].includes(safeUserRole) && <button onClick={aiOptimizeSchedule} style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>✨ AI Optimize Schedule</button>}
                 </div>
                 {['admin', 'programmer'].includes(safeUserRole) && (
-                    <div style={{ background: '#fff', border: '1px solid #0056b3', padding: '20px', borderRadius: '10px', marginBottom: '25px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px' }}>
-                            <select value={dispatchForm.op} onChange={e => setDispatchForm({...dispatchForm, op: e.target.value})} style={{ padding: '10px' }}><option value="">Operator (For OP 1)...</option>{users.filter(u => !u.hidden && ['operator', 'programmer'].includes(u.role?.toLowerCase())).map(u => <option key={u.id} value={u.name}>{u.name}</option>)}</select>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', borderRadius: '2px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px' }}>
+                            <select value={dispatchForm.op} onChange={e => setDispatchForm({...dispatchForm, op: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="">Operator (For OP 1)...</option>{users.filter(u => !u.hidden && ['operator', 'programmer'].includes(u.role?.toLowerCase())).map(u => <option key={u.id} value={u.name}>{u.name}</option>)}</select>
                             <select value={dispatchForm.routingId} onChange={e => { 
                                 const rId = e.target.value; const routing = routingsMap[rId]; 
                                 if(routing && routing.ops.length > 0) {
@@ -410,45 +433,70 @@ const ShopFloor = () => {
                                     const est = p && dispatchForm.targetQty ? (((parseFloat(p.setupTime)||0)+((parseFloat(p.timePerPiece)||0)*dispatchForm.targetQty))/60).toFixed(2) : '';
                                     setDispatchForm({...dispatchForm, routingId: rId, estHrs: est});
                                 } else { setDispatchForm({...dispatchForm, routingId: rId, estHrs: ''}); }
-                            }} style={{ padding: '10px', gridColumn: 'span 2' }}>
+                            }} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', gridColumn: 'span 2' }}>
                                 <option value="">Select HQ Part (Routing)...</option>{routings.map(r => <option key={r.id} value={r.partId}>{r.partId} ({r.ops.length} Ops)</option>)}
                             </select>
-                            <input type="text" placeholder="WO #" value={dispatchForm.woNum} onChange={e => setDispatchForm({...dispatchForm, woNum: e.target.value})} style={{ padding: '10px' }} />
+                            <input type="text" placeholder="WO #" value={dispatchForm.woNum} onChange={e => setDispatchForm({...dispatchForm, woNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 2fr 1fr', gap: '10px', marginTop: '10px' }}>
-                            <input type="number" placeholder="Qty" value={dispatchForm.targetQty} onChange={e => setDispatchForm({...dispatchForm, targetQty: e.target.value})} style={{ padding: '10px' }} /><input type="date" value={dispatchForm.estStart} onChange={e => setDispatchForm({...dispatchForm, estStart: e.target.value})} style={{ padding: '10px' }} /><input type="date" value={dispatchForm.estFinish} onChange={e => setDispatchForm({...dispatchForm, estFinish: e.target.value})} style={{ padding: '10px' }} /><input type="number" placeholder="Est Hrs (OP 1)" step="0.1" value={dispatchForm.estHrs} onChange={e => setDispatchForm({...dispatchForm, estHrs: e.target.value})} style={{ padding: '10px' }} /><input type="text" placeholder="Notes" value={dispatchForm.notes} onChange={e => setDispatchForm({...dispatchForm, notes: e.target.value})} style={{ padding: '10px' }} /><select value={dispatchForm.phosphate} onChange={e => setDispatchForm({...dispatchForm, phosphate: e.target.value})} style={{ padding: '10px' }}><option value="No">Phos: No</option><option value="Yes">Phos: Yes</option></select>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 2fr 1fr', gap: '16px', marginTop: '16px' }}>
+                            <input type="number" placeholder="Qty" value={dispatchForm.targetQty} onChange={e => setDispatchForm({...dispatchForm, targetQty: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+                            <input type="date" value={dispatchForm.estStart} onChange={e => setDispatchForm({...dispatchForm, estStart: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+                            <input type="date" value={dispatchForm.estFinish} onChange={e => setDispatchForm({...dispatchForm, estFinish: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+                            <input type="number" placeholder="Est Hrs (OP 1)" step="0.1" value={dispatchForm.estHrs} onChange={e => setDispatchForm({...dispatchForm, estHrs: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+                            <input type="text" placeholder="Notes" value={dispatchForm.notes} onChange={e => setDispatchForm({...dispatchForm, notes: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+                            <select value={dispatchForm.phosphate} onChange={e => setDispatchForm({...dispatchForm, phosphate: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="No">Phos: No</option><option value="Yes">Phos: Yes</option></select>
                         </div>
-                        <button onClick={handleDispatch} style={{ background: '#0056b3', color: '#fff', border: 'none', padding: '12px', width: '100%', fontWeight: 'bold', borderRadius: '6px', marginTop: '15px', cursor: 'pointer' }}>DISPATCH WO TO FLOOR</button>
+                        <button onClick={handleDispatch} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', marginTop: '24px', transition: 'all 0.2s' }}>Dispatch WO to Floor</button>
                     </div>
                 )}
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', background: '#fff', borderRadius: '8px', borderCollapse: 'collapse', fontSize: '14px' }}>
-                        <thead style={{ background: '#e9ecef', borderBottom: '2px solid #0056b3' }}>
-                            <tr><th style={{ padding: '12px', textAlign: 'left' }}>Part & Sequence</th><th style={{ padding: '12px', textAlign: 'left' }}>WO #</th><th style={{ padding: '12px', textAlign: 'left' }}>Machine</th><th style={{ padding: '12px', textAlign: 'left' }}>Operator</th><th style={{ padding: '12px', textAlign: 'center' }}>Target</th><th style={{ padding: '12px', textAlign: 'center' }}>Status</th><th style={{ padding: '12px', textAlign: 'right' }}>Actions</th></tr>
+                <div style={{ overflowX: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                        <thead style={{ background: 'var(--paper-2)' }}>
+                            <tr>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>Part & Sequence</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>WO #</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>Machine</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>Operator</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>Target</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>Status</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>Actions</th>
+                            </tr>
                         </thead>
                         <tbody>
-                            {activeTracker.length === 0 && <tr><td colSpan="7" style={{ padding: '20px', textAlign: 'center', color: '#888' }}>Tracker is empty.</td></tr>}
+                            {activeTracker.length === 0 && <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>Tracker is empty.</td></tr>}
                             {activeTracker.map(t => {
                                 const canRun = t.op === user.name || safeUserRole === 'admin';
-                                const rowColor = t.status === 'Running' ? '#eef5ff' : (t.status === 'Paused' ? '#fff0f0' : (t.status === 'Setup' ? '#fffdf5' : '#fff'));
+                                const rowColor = t.status === 'Running' ? 'var(--paper-2)' : (t.status === 'Paused' ? '#fdf2f2' : (t.status === 'Setup' ? 'var(--paper)' : '#fff'));
                                 return (
-                                <tr key={t.id} style={{ borderBottom: '1px solid #eee', background: rowColor }}>
-                                    <td style={{ padding: '12px' }}><b style={{ color: '#0056b3', fontSize: '16px' }}>{t.routingId}</b> {t.phosphate && <span style={{ background: '#f39c12', padding: '2px 4px', fontSize: '10px', borderRadius: '4px' }}>PHOS</span>}<br/><span style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>OP {t.currentOpIndex+1}/{routingsMap[t.routingId]?.ops?.length||1}: {programsMap[t.prog]?.name || t.prog}</span></td>
-                                    <td style={{ padding: '12px', color: '#dc3545', fontWeight: 'bold' }}>{t.woNum}</td><td style={{ padding: '12px' }}>{t.mach}</td><td style={{ padding: '12px' }}>{t.op || <span style={{ color: '#f39c12', fontWeight: 'bold' }}>Unassigned</span>}</td>
-                                    <td style={{ padding: '12px', textAlign: 'center' }}>{t.targetQty || '-'} {t.partialGoodQty > 0 && <span style={{ color: '#28a745', fontSize: '11px', display: 'block' }}>(Logged: {t.partialGoodQty})</span>}</td>
-                                    <td style={{ padding: '12px', textAlign: 'center' }}><span style={{ background: t.status === 'Running' ? '#0056b3' : (t.status === 'Paused' ? '#dc3545' : (t.status === 'Setup' ? '#f39c12' : '#888')), color: t.status === 'Setup' ? '#000' : '#fff', padding: '4px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>{t.status.toUpperCase()}</span></td>
-                                    <td style={{ padding: '12px', textAlign: 'right' }}>
-                                        {canRun && t.status === 'Pending' && <button onClick={() => updateJobStatus(t.id, 'Setup')} style={{ background: '#0056b3', color: '#fff', border: 'none', padding: '6px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>BEGIN SETUP</button>}
-                                        {canRun && t.status === 'Setup' && <button onClick={() => triggerStartModal(t.id, t.prog)} style={{ background: '#f39c12', color: '#000', border: 'none', padding: '6px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>VERIFY & RUN</button>}
+                                <tr key={t.id} style={{ borderBottom: '1px solid var(--line)', background: rowColor }}>
+                                    <td style={{ padding: '16px' }}>
+                                        <div style={{ fontWeight: 500, color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>{t.routingId} {t.phosphate && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px' }}>Phos</span>}</div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px' }}>OP {t.currentOpIndex+1}/{routingsMap[t.routingId]?.ops?.length||1}: {programsMap[t.prog]?.name || t.prog}</div>
+                                    </td>
+                                    <td style={{ padding: '16px', color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500 }}>{t.woNum}</td>
+                                    <td style={{ padding: '16px', color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>{t.mach}</td>
+                                    <td style={{ padding: '16px', color: t.op ? 'var(--ink)' : 'var(--ink-soft)', fontFamily: 'var(--sans)', fontSize: '0.95rem', fontStyle: t.op ? 'normal' : 'italic' }}>{t.op || 'Unassigned'}</td>
+                                    <td style={{ padding: '16px', textAlign: 'center', color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>
+                                        {t.targetQty || '-'} 
+                                        {t.partialGoodQty > 0 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', display: 'block', marginTop: '4px', textTransform: 'uppercase' }}>(Logged: {t.partialGoodQty})</span>}
+                                    </td>
+                                    <td style={{ padding: '16px', textAlign: 'center' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '4px 8px', border: '1px solid var(--line)', color: 'var(--ink)', background: t.status === 'Running' ? 'var(--paper)' : 'transparent' }}>
+                                            {t.status}
+                                        </span>
+                                    </td>
+                                    <td style={{ padding: '16px', textAlign: 'right' }}>
+                                        {canRun && t.status === 'Pending' && <button onClick={() => updateJobStatus(t.id, 'Setup')} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Begin Setup</button>}
+                                        {canRun && t.status === 'Setup' && <button onClick={() => triggerStartModal(t.id, t.prog)} style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '8px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Verify & Run</button>}
                                         {canRun && t.status === 'Running' && (
-                                            <>
-                                                <button onClick={() => updateJobStatus(t.id, 'Paused')} style={{ background: '#888', color: '#fff', border: 'none', padding: '6px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold', marginRight: '5px' }}>PAUSE</button>
-                                                <button onClick={() => triggerShiftLog(t.id)} style={{ background: '#17a2b8', color: '#fff', border: 'none', padding: '6px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold', marginRight: '5px' }}>SHIFT LOG</button>
-                                                <button onClick={() => triggerQcModal(t.id, t.prog)} style={{ background: '#28a745', color: '#fff', border: 'none', padding: '6px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>FINISH OP</button>
-                                            </>
+                                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                                                <button onClick={() => updateJobStatus(t.id, 'Paused')} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Pause</button>
+                                                <button onClick={() => triggerShiftLog(t.id)} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Shift Log</button>
+                                                <button onClick={() => triggerQcModal(t.id, t.prog)} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '8px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Finish Op</button>
+                                            </div>
                                         )}
-                                        {canRun && t.status === 'Paused' && <button onClick={() => updateJobStatus(t.id, 'Resume')} style={{ background: '#0056b3', color: '#fff', border: 'none', padding: '6px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>RESUME</button>}
-                                        {['admin', 'programmer'].includes(safeUserRole) && <button onClick={() => handleDelete('schedule', t.id)} style={{ background: '#fff0f0', color: '#dc3545', border: '1px solid #ffcccc', padding: '6px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold', marginLeft: '5px' }}>DEL</button>}
+                                        {canRun && t.status === 'Paused' && <button onClick={() => updateJobStatus(t.id, 'Resume')} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '8px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume</button>}
+                                        {['admin', 'programmer'].includes(safeUserRole) && <button onClick={() => handleDelete('schedule', t.id)} style={{ background: 'transparent', color: '#d9534f', border: 'none', padding: '8px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', marginLeft: '8px' }}>Del</button>}
                                     </td>
                                 </tr>
                             )})}
@@ -463,41 +511,43 @@ const ShopFloor = () => {
         const grouped = { 'Uncategorized': [] }; categories.forEach(c => grouped[c.name] = []); milling.forEach(m => { const cat = machineCategoryMap[m.mach] || 'Uncategorized'; if(!grouped[cat]) grouped[cat] = []; grouped[cat].push(m); });
         return (
             <div>
-                <h2 style={{ color: '#0056b3' }}>Production Backlog</h2>
-                <div style={{ background: '#fff', border: '1px solid #0056b3', padding: '20px', borderRadius: '10px', marginBottom: '25px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '10px' }}><input type="text" placeholder="Internal Description (Optional)" value={millForm.item} onChange={e => setMillForm({...millForm, item: e.target.value})} style={{ padding: '10px', border: '1px solid #ccc', borderRadius: '4px' }} /><input type="number" placeholder="Target Qty" value={millForm.qty} onChange={e => setMillForm({...millForm, qty: e.target.value})} style={{ padding: '10px', border: '1px solid #ccc', borderRadius: '4px' }} /></div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginTop: '10px' }}>
-                        <div style={{ position: 'relative' }}>
-                            <select value={millForm.partNum} onChange={e => setMillForm({...millForm, partNum: e.target.value})} style={{ padding: '10px', width: '100%', boxSizing: 'border-box', border: '2px solid #0056b3', borderRadius: '4px', fontWeight: 'bold' }}>
-                                <option value="">Select Engineered HQ Part...</option>{routings.map(r => <option key={r.id} value={r.partId}>{r.partId}</option>)}
-                            </select>
-                        </div>
-                        <input type="text" placeholder="WO #" value={millForm.woNum} onChange={e => setMillForm({...millForm, woNum: e.target.value})} style={{ padding: '10px', border: '2px solid #dc3545', borderRadius: '4px' }} /><input type="text" placeholder="SO #" value={millForm.soNum} onChange={e => setMillForm({...millForm, soNum: e.target.value})} style={{ padding: '10px', border: '1px solid #ccc', borderRadius: '4px' }} />
+                <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: '0 0 24px 0' }}>Production Backlog</h2>
+                <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px', marginBottom: '40px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '16px' }}>
+                        <input type="text" placeholder="Internal Description (Optional)" value={millForm.item} onChange={e => setMillForm({...millForm, item: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+                        <input type="number" placeholder="Target Qty" value={millForm.qty} onChange={e => setMillForm({...millForm, qty: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginTop: '10px', alignItems: 'end' }}>
-                        <div><small style={{ fontWeight: 'bold' }}>Req Date:</small><input type="date" value={millForm.reqDate} onChange={e => setMillForm({...millForm, reqDate: e.target.value})} style={{ padding: '10px', width: '100%', boxSizing: 'border-box', borderRadius: '4px' }} /></div>
-                        <div><small style={{ fontWeight: 'bold' }}>Print (Opt):</small><input type="file" onChange={e => setMillForm({...millForm, file: e.target.files[0]})} style={{ padding: '10px', width: '100%', boxSizing: 'border-box' }} /></div>
-                        <div><small style={{ color: '#f39c12', fontWeight: 'bold' }}>Phosphate?</small><select value={millForm.phosphate} onChange={e => setMillForm({...millForm, phosphate: e.target.value})} style={{ padding: '10px', width: '100%', boxSizing: 'border-box', borderRadius: '4px' }}><option value="No">No</option><option value="Yes">Yes</option></select></div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px' }}>
+                        <select value={millForm.partNum} onChange={e => setMillForm({...millForm, partNum: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper)' }}>
+                            <option value="">Select Engineered HQ Part...</option>{routings.map(r => <option key={r.id} value={r.partId}>{r.partId}</option>)}
+                        </select>
+                        <input type="text" placeholder="WO #" value={millForm.woNum} onChange={e => setMillForm({...millForm, woNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+                        <input type="text" placeholder="SO #" value={millForm.soNum} onChange={e => setMillForm({...millForm, soNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
                     </div>
-                    <button onClick={handleAddMilling} style={{ background: '#0056b3', color: '#fff', border: 'none', padding: '12px', width: '100%', marginTop: '15px', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold' }}>ADD TO BACKLOG</button>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px', alignItems: 'end' }}>
+                        <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Req Date</label><input type="date" value={millForm.reqDate} onChange={e => setMillForm({...millForm, reqDate: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} /></div>
+                        <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Print (Opt)</label><input type="file" onChange={e => setMillForm({...millForm, file: e.target.files[0]})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} /></div>
+                        <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Phosphate?</label><select value={millForm.phosphate} onChange={e => setMillForm({...millForm, phosphate: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="No">No</option><option value="Yes">Yes</option></select></div>
+                    </div>
+                    <button onClick={handleAddMilling} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', marginTop: '24px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Add to Backlog</button>
                 </div>
                 {Object.keys(grouped).map(cat => {
                     const groupItems = grouped[cat].sort((a, b) => a.priority - b.priority);
                     if (groupItems.length === 0 && cat === 'Uncategorized') return null;
                     return (
-                        <div key={cat} style={{ background: '#fff', border: '1px solid #ccc', borderRadius: '8px', padding: '20px', marginBottom: '20px' }}>
-                            <h3 style={{ margin: '0 0 15px 0', color: '#0056b3', borderBottom: '2px solid #0056b3', paddingBottom: '5px' }}>{cat} Queue</h3>
-                            {groupItems.length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No pending jobs.</div> : (
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '15px' }}>
+                        <div key={cat} style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', padding: '30px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                            <h3 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>{cat} Queue</h3>
+                            {groupItems.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>No pending jobs.</div> : (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px' }}>
                                     {groupItems.map(m => {
                                         return (
-                                        <div key={m.id} style={{ background: '#f8f9fa', padding: '15px', border: '1px solid #ccc', borderRadius: '8px', position: 'relative' }}>
-                                            {['admin', 'programmer'].includes(safeUserRole) && <button onClick={() => handleDelete('milling', m.id)} style={{ position: 'absolute', top: '10px', right: '10px', background: '#fff0f0', border: '1px solid #ffcccc', color: '#dc3545', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' }}>Del</button>}
-                                            <h4 style={{ margin: '0 0 5px 0', color: '#0056b3', fontSize: '16px' }}>{m.partNum} {m.phosphate && <span style={{ background: '#f39c12', padding: '2px 4px', fontSize: '10px', borderRadius: '4px' }}>PHOS</span>}</h4>
-                                            <div style={{ fontSize: '12px', marginBottom: '5px' }}><b>WO:</b> <span style={{ color: '#dc3545', fontWeight: 'bold' }}>{m.woNum}</span> {m.soNum && `| SO: ${m.soNum}`}</div>
-                                            <div style={{ fontSize: '12px', display: 'flex', gap: '10px', marginBottom: '5px' }}><span><b>Target:</b> {m.qty}</span></div>
-                                            {m.reqDate && <div style={{ fontSize: '12px', color: '#dc3545', fontWeight: 'bold' }}>Req By: {m.reqDate}</div>}
-                                            {['admin', 'programmer'].includes(safeUserRole) && <button onClick={() => pushToTracker(m)} style={{ background: '#0056b3', color: '#fff', border: 'none', padding: '8px', width: '100%', marginTop: '10px', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold', fontSize: '11px' }}>PUSH TO TRACKER</button>}
+                                        <div key={m.id} style={{ background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)', position: 'relative' }}>
+                                            {['admin', 'programmer'].includes(safeUserRole) && <button onClick={() => handleDelete('milling', m.id)} style={{ position: 'absolute', top: '16px', right: '16px', background: 'transparent', border: 'none', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Del</button>}
+                                            <h4 style={{ margin: '0 0 12px 0', color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500 }}>{m.partNum} {m.phosphate && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px' }}>Phos</span>}</h4>
+                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink-soft)', marginBottom: '8px' }}>WO: <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{m.woNum}</span> {m.soNum && `| SO: ${m.soNum}`}</div>
+                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink-soft)', marginBottom: '8px' }}>Target: <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{m.qty}</span></div>
+                                            {m.reqDate && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '12px' }}>Req By: {m.reqDate}</div>}
+                                            {['admin', 'programmer'].includes(safeUserRole) && <button onClick={() => pushToTracker(m)} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px', width: '100%', marginTop: '20px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Push to Tracker</button>}
                                         </div>
                                     )})}
                                 </div>
@@ -515,7 +565,6 @@ const ShopFloor = () => {
         const fabs = activeOrders.filter(o => o.category === 'Custom Fabrication');
 
         const CustomCard = ({ order }) => {
-            // Generates raw ZPL for a standard 2x4 Zebra label
             const printZebraLabel = (order) => {
                 const zpl = `
                     ^XA
@@ -529,14 +578,12 @@ const ShopFloor = () => {
                     ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.woNum}^FS
                     ^XZ
                 `;
-                // Route this via PrintNode API or raw socket to your Wilmington floor printers
                 console.log("Sending ZPL to Zebra Printer:", zpl);
                 alert(`🖨️ Zebra Label Spooled for ${order.woNum}`);
             };
 
             const handleStartProcess = async () => {
                 await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process' });
-                // Alert Finishing Floor Setup Queue
                 await addDoc(collection(db, "global_messages"), { 
                     sender: 'System', sourceApp: 'SHOP', target: 'FINISHING', 
                     msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true 
@@ -561,7 +608,6 @@ const ShopFloor = () => {
                         msg: `🚚 OUTSOURCE DISPATCH: Custom parts for ${order.woNum} sent to plating/finishing vendor.`, t: serverTimestamp(), isSystem: true 
                     });
                 } else {
-                    // Ping Pick/Pack App that custom staging is ready
                     await addDoc(collection(db, "global_messages"), { 
                         sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', 
                         msg: `STAGING ALERT: Custom parts for ${order.woNum} are arriving at staging.`, t: serverTimestamp(), isSystem: true 
@@ -577,35 +623,35 @@ const ShopFloor = () => {
             const isRunning = order.status === 'In Process';
 
             return (
-                <div style={{ background: '#fff', border: '1px solid #ccc', borderLeft: isRunning ? '6px solid #28a745' : (order.category === 'Cut to Size Rods' ? '6px solid #0056b3' : '6px solid #f39c12'), borderRadius: '8px', padding: '15px', marginBottom: '15px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <h4 style={{ margin: '0 0 5px 0', fontSize: '16px', color: '#333' }}>{order.item || order.partNum}</h4>
-                        <div>
-                            <span style={{ background: isRunning ? '#28a745' : '#e9ecef', color: isRunning ? '#fff' : '#000', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' }}>
-                                {isRunning ? 'IN PROCESS' : `WO: ${order.woNum}`}
+                <div style={{ background: '#fff', border: '1px solid var(--line)', borderLeft: isRunning ? '4px solid var(--brass)' : '1px solid var(--line)', padding: '24px', marginBottom: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                        <h4 style={{ margin: 0, fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.item || order.partNum}</h4>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: isRunning ? 'var(--paper)' : 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '4px 8px' }}>
+                                {isRunning ? 'In Process' : `WO: ${order.woNum}`}
                             </span>
                             {order.isOutsourced && (
-                                <span style={{ marginLeft: '10px', background: '#17a2b8', color: '#fff', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' }}>
-                                    🚚 OUTSOURCED FINISH
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', padding: '4px 8px' }}>
+                                    Outsourced Finish
                                 </span>
                             )}
                         </div>
                     </div>
-                    <div style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>SO: {order.soNum}</div>
-                    <div style={{ display: 'flex', gap: '15px', marginBottom: '10px', background: '#f8f9fa', padding: '10px', borderRadius: '6px' }}>
-                        <div><small style={{ display: 'block', color: '#888', fontWeight: 'bold' }}>REQ QTY</small><span style={{ fontSize: '16px', fontWeight: 'bold', color: '#28a745' }}>{order.qty}</span></div>
-                        {order.cutLength && <div><small style={{ display: 'block', color: '#888', fontWeight: 'bold' }}>CUT TO</small><span style={{ fontSize: '16px', fontWeight: 'bold', color: '#0056b3' }}>{order.cutLength}"</span></div>}
-                        <div><small style={{ display: 'block', color: '#888', fontWeight: 'bold' }}>DEADLINE</small><span style={{ fontSize: '14px', fontWeight: 'bold', color: '#dc3545' }}>{order.reqDate || 'ASAP'}</span></div>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '16px' }}>SO: {order.soNum}</div>
+                    <div style={{ display: 'flex', gap: '24px', marginBottom: '20px', background: 'var(--paper)', padding: '16px', border: '1px solid var(--line)' }}>
+                        <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.qty}</span></div>
+                        {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
+                        <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Deadline</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1rem', color: 'var(--ink)' }}>{order.reqDate || 'ASAP'}</span></div>
                     </div>
                     
-                    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                        <button onClick={() => { setModalData(order); setActiveModal('specs'); }} style={{ flex: 1, background: '#17a2b8', color: '#fff', border: 'none', padding: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>🖼️ SPECS</button>
+                    <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
+                        <button onClick={() => { setModalData(order); setActiveModal('specs'); }} style={{ flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Specs</button>
                         
                         {!isRunning ? (
-                            <button onClick={handleStartProcess} style={{ flex: 1.5, background: '#007bff', color: '#fff', border: 'none', padding: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>▶️ START PROCESS</button>
+                            <button onClick={handleStartProcess} style={{ flex: 1.5, background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Start Process</button>
                         ) : (
-                            <button onClick={handleCompleteWithLabel} style={{ flex: 1.5, background: order.isOutsourced ? '#17a2b8' : '#28a745', color: '#fff', border: 'none', padding: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>
-                                {order.isOutsourced ? '✅ SEND TO PLATING' : '✅ COMPLETE & LABEL'}
+                            <button onClick={handleCompleteWithLabel} style={{ flex: 1.5, background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
+                                {order.isOutsourced ? 'Send to Plating' : 'Complete & Label'}
                             </button>
                         )}
                     </div>
@@ -615,10 +661,22 @@ const ShopFloor = () => {
 
         return (
             <div>
-                <h2 style={{ color: '#0056b3', marginBottom: '5px' }}>Custom Orders Inbox</h2>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginTop: '20px' }}>
-                    <div style={{ background: '#f8f9fa', padding: '20px', borderRadius: '10px', border: '1px solid #dee2e6' }}><h3 style={{ margin: '0 0 15px 0', color: '#0056b3', display: 'flex', alignItems: 'center', gap: '10px' }}>📏 Cut-to-Size Rods<span style={{ background: '#0056b3', color: '#fff', padding: '2px 8px', borderRadius: '12px', fontSize: '12px' }}>{rods.length}</span></h3>{rods.length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No pending rod orders.</div> : rods.map(o => <CustomCard key={o.id} order={o} />)}</div>
-                    <div style={{ background: '#f8f9fa', padding: '20px', borderRadius: '10px', border: '1px solid #dee2e6' }}><h3 style={{ margin: '0 0 15px 0', color: '#f39c12', display: 'flex', alignItems: 'center', gap: '10px' }}>🛠️ Custom Fabrication<span style={{ background: '#f39c12', color: '#000', padding: '2px 8px', borderRadius: '12px', fontSize: '12px' }}>{fabs.length}</span></h3>{fabs.length === 0 ? <div style={{ color: '#888', fontStyle: 'italic' }}>No pending custom fab orders.</div> : fabs.map(o => <CustomCard key={o.id} order={o} />)}</div>
+                <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '24px' }}>Custom Orders Inbox</h2>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
+                    <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <h3 style={{ margin: '0 0 24px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>
+                            Cut-to-Size Rods
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{rods.length} Pending</span>
+                        </h3>
+                        {rods.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No pending rod orders.</div> : rods.map(o => <CustomCard key={o.id} order={o} />)}
+                    </div>
+                    <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <h3 style={{ margin: '0 0 24px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>
+                            Custom Fabrication
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{fabs.length} Pending</span>
+                        </h3>
+                        {fabs.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No pending custom fab orders.</div> : fabs.map(o => <CustomCard key={o.id} order={o} />)}
+                    </div>
                 </div>
             </div>
         );
@@ -633,22 +691,27 @@ const ShopFloor = () => {
 
         return (
             <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                    <h2 style={{ color: '#0056b3', margin: 0 }}>ERP Export Batch (Final Ops Only)</h2>
-                    {['admin', 'purchasing', 'csr'].includes(safeUserRole) && <button onClick={handleExportBatch} style={{ background: '#0056b3', color: '#fff', border: 'none', padding: '10px 20px', fontWeight: 'bold', borderRadius: '6px', cursor: 'pointer' }}>MARK BATCH EXPORTED</button>}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
+                    <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: 0 }}>ERP Export Batch (Final Ops Only)</h2>
+                    {['admin', 'purchasing', 'csr'].includes(safeUserRole) && <button onClick={handleExportBatch} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px 24px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Batch Exported</button>}
                 </div>
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', background: '#fff', borderRadius: '8px', borderCollapse: 'collapse', fontSize: '14px' }}>
-                        <thead style={{ background: '#e9ecef', borderBottom: '2px solid #0056b3' }}>
-                            <tr><th style={{ padding: '12px', textAlign: 'left' }}>WO #</th><th style={{ padding: '12px', textAlign: 'left' }}>SO #</th><th style={{ padding: '12px', textAlign: 'left' }}>Part #</th><th style={{ padding: '12px', textAlign: 'center' }}>Good Qty Completed</th></tr>
+                <div style={{ overflowX: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontFamily: 'var(--sans)' }}>
+                        <thead style={{ background: 'var(--paper)' }}>
+                            <tr>
+                                <th style={{ padding: '16px 24px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>WO #</th>
+                                <th style={{ padding: '16px 24px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>SO #</th>
+                                <th style={{ padding: '16px 24px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Part #</th>
+                                <th style={{ padding: '16px 24px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Good Qty Completed</th>
+                            </tr>
                         </thead>
                         <tbody>
-                            {unexported.length === 0 ? <tr><td colSpan="4" style={{ padding: '20px', textAlign: 'center', color: '#888' }}>No unexported completed jobs.</td></tr> : unexported.map(h => (
-                                <tr key={h.id} style={{ borderBottom: '1px solid #eee' }}>
-                                    <td style={{ padding: '12px', color: '#dc3545', fontWeight: 'bold', fontSize: '16px' }}>{h.woNum}</td>
-                                    <td style={{ padding: '12px' }}>{h.notes?.includes("SO:") ? h.notes.split("SO:")[1].split("|")[0].trim() : '-'}</td>
-                                    <td style={{ padding: '12px', fontWeight: 'bold' }}>{h.routingId}</td>
-                                    <td style={{ padding: '12px', textAlign: 'center', fontSize: '16px', fontWeight: 'bold', color: '#28a745' }}>{h.goodQty}</td>
+                            {unexported.length === 0 ? <tr><td colSpan="4" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>No unexported completed jobs.</td></tr> : unexported.map(h => (
+                                <tr key={h.id} style={{ borderBottom: '1px solid var(--line)' }}>
+                                    <td style={{ padding: '16px 24px', color: 'var(--ink)', fontWeight: 500, fontSize: '1.05rem' }}>{h.woNum}</td>
+                                    <td style={{ padding: '16px 24px', color: 'var(--ink-soft)' }}>{h.notes?.includes("SO:") ? h.notes.split("SO:")[1].split("|")[0].trim() : '-'}</td>
+                                    <td style={{ padding: '16px 24px', color: 'var(--ink)', fontWeight: 500 }}>{h.routingId}</td>
+                                    <td style={{ padding: '16px 24px', textAlign: 'center', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{h.goodQty}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -662,27 +725,38 @@ const ShopFloor = () => {
         const history = schedule.filter(s => ['Completed', 'Failed'].includes(s.status)).sort((a,b) => b.actualFinish?.toMillis() - a.actualFinish?.toMillis());
         return (
             <div>
-                <h2 style={{ color: '#0056b3' }}>Historical Job Logs</h2>
-                <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', background: '#fff', borderRadius: '8px', borderCollapse: 'collapse', fontSize: '14px' }}>
-                        <thead style={{ background: '#e9ecef', borderBottom: '2px solid #0056b3' }}>
-                            <tr><th style={{ padding: '12px', textAlign: 'left' }}>Date</th><th style={{ padding: '12px', textAlign: 'left' }}>Routing / OP</th><th style={{ padding: '12px', textAlign: 'left' }}>WO #</th><th style={{ padding: '12px', textAlign: 'left' }}>Operator</th><th style={{ padding: '12px', textAlign: 'center' }}>Yield (G/S)</th><th style={{ padding: '12px', textAlign: 'center' }}>Scrap Rate</th><th style={{ padding: '12px', textAlign: 'center' }}>Act Hrs</th><th style={{ padding: '12px', textAlign: 'center' }}>Status</th>{['admin'].includes(safeUserRole) && <th>Admin</th>}</tr>
+                <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: '0 0 24px 0' }}>Historical Job Logs</h2>
+                <div style={{ overflowX: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontFamily: 'var(--sans)' }}>
+                        <thead style={{ background: 'var(--paper)' }}>
+                            <tr>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Date</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Routing / OP</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>WO #</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Operator</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Yield (G/S)</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Scrap Rate</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Act Hrs</th>
+                                <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Status</th>
+                                {['admin'].includes(safeUserRole) && <th style={{ borderBottom: '1px solid var(--line)' }}></th>}
+                            </tr>
                         </thead>
                         <tbody>
+                            {history.length === 0 && <tr><td colSpan="9" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>No historical logs found.</td></tr>}
                             {history.map(h => {
                                 const good = h.goodQty||0, scrap = h.scrapQty||0, total = good+scrap, rate = total>0 ? Math.round((scrap/total)*100) : 0;
                                 const dateStr = h.actualFinish?.toDate ? h.actualFinish.toDate().toLocaleDateString() : '-';
                                 return (
-                                <tr key={h.id} style={{ borderBottom: '1px solid #eee' }}>
-                                    <td style={{ padding: '12px' }}>{dateStr}</td>
-                                    <td style={{ padding: '12px', fontWeight: 'bold' }}>{h.routingId} (OP {h.currentOpIndex+1})</td>
-                                    <td style={{ padding: '12px', color: '#dc3545', fontWeight: 'bold' }}>{h.woNum}</td>
-                                    <td style={{ padding: '12px' }}>{h.op}</td>
-                                    <td style={{ padding: '12px', textAlign: 'center' }}><span style={{ color: '#28a745', fontWeight: 'bold' }}>{good}</span> / <span style={{ color: '#dc3545', fontWeight: 'bold' }}>{scrap}</span></td>
-                                    <td style={{ padding: '12px', textAlign: 'center', color: rate>0 ? '#dc3545' : '#28a745', fontWeight: 'bold' }}>{rate}%</td>
-                                    <td style={{ padding: '12px', textAlign: 'center' }}>{h.actualWork?.toFixed(2) || '-'}</td>
-                                    <td style={{ padding: '12px', textAlign: 'center', fontWeight: 'bold', color: h.status === 'Completed' ? '#28a745' : '#dc3545' }}>{h.status.toUpperCase()}</td>
-                                    {['admin'].includes(safeUserRole) && <td style={{ padding: '12px', textAlign: 'center' }}><button onClick={() => handleDelete('schedule', h.id)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer' }}>✖</button></td>}
+                                <tr key={h.id} style={{ borderBottom: '1px solid var(--line)' }}>
+                                    <td style={{ padding: '16px', color: 'var(--ink-soft)', fontSize: '0.9rem' }}>{dateStr}</td>
+                                    <td style={{ padding: '16px', color: 'var(--ink)', fontWeight: 500 }}>{h.routingId} <span style={{fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)'}}>(OP {h.currentOpIndex+1})</span></td>
+                                    <td style={{ padding: '16px', color: 'var(--ink)', fontWeight: 500 }}>{h.woNum}</td>
+                                    <td style={{ padding: '16px', color: 'var(--ink-soft)' }}>{h.op}</td>
+                                    <td style={{ padding: '16px', textAlign: 'center' }}><span style={{ color: 'var(--ink)', fontWeight: 500 }}>{good}</span> / <span style={{ color: '#d9534f' }}>{scrap}</span></td>
+                                    <td style={{ padding: '16px', textAlign: 'center', color: rate>0 ? '#d9534f' : 'var(--ink-soft)', fontWeight: 500 }}>{rate}%</td>
+                                    <td style={{ padding: '16px', textAlign: 'center', color: 'var(--ink-soft)' }}>{h.actualWork?.toFixed(2) || '-'}</td>
+                                    <td style={{ padding: '16px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: h.status === 'Completed' ? 'var(--ink)' : '#d9534f' }}>{h.status}</td>
+                                    {['admin'].includes(safeUserRole) && <td style={{ padding: '16px', textAlign: 'center' }}><button onClick={() => handleDelete('schedule', h.id)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1rem' }}>×</button></td>}
                                 </tr>
                             )})}
                         </tbody>
@@ -694,14 +768,15 @@ const ShopFloor = () => {
 
     const renderReportsTab = () => (
         <div>
-            <h2 style={{ color: '#0056b3' }}>Visual Failure Reports</h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: '0 0 24px 0' }}>Visual Failure Reports</h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                {failures.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No failure reports.</div>}
                 {failures.map(f => (
-                    <div key={f.id} style={{ background: '#fff', borderLeft: '5px solid #dc3545', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
-                        {['admin'].includes(safeUserRole) && <button onClick={() => handleDelete('shop_failures', f.id)} style={{ float: 'right', background: '#fff0f0', border: '1px solid #ffcccc', color: '#dc3545', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>Resolve</button>}
-                        <div style={{ color: '#dc3545', fontWeight: 'bold', fontSize: '16px' }}>{f.machine} - {f.reason}</div>
-                        <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>Op: {f.operator} | Prog: {f.program} | Date: {f.timestamp?.toDate ? f.timestamp.toDate().toLocaleString() : '-'}</div>
-                        <div style={{ background: '#f8f9fa', padding: '10px', borderRadius: '6px', marginTop: '10px', fontStyle: 'italic' }}>"{f.notes}"</div>
+                    <div key={f.id} style={{ background: '#fff', border: '1px solid var(--line)', borderLeft: '4px solid #d9534f', padding: '24px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        {['admin'].includes(safeUserRole) && <button onClick={() => handleDelete('shop_failures', f.id)} style={{ float: 'right', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Resolve</button>}
+                        <div style={{ color: '#d9534f', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, marginBottom: '8px' }}>{f.machine} - {f.reason}</div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '16px' }}>Op: {f.operator} | Prog: {f.program} | Date: {f.timestamp?.toDate ? f.timestamp.toDate().toLocaleString() : '-'}</div>
+                        <div style={{ background: 'var(--paper)', padding: '16px', border: '1px solid var(--line)', fontStyle: 'italic', color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>"{f.notes}"</div>
                     </div>
                 ))}
             </div>
@@ -710,23 +785,26 @@ const ShopFloor = () => {
 
     const renderLivioTab = () => (
         <div>
-            <h2 style={{ color: '#0056b3' }}>Handyman Tasks (Livio)</h2>
-            <div style={{ background: '#fff', border: '1px solid #ccc', padding: '20px', borderRadius: '10px', marginBottom: '25px' }}>
-                <input type="text" placeholder="Job Description" value={livioForm.desc} onChange={e => setLivioForm({...livioForm, desc: e.target.value})} style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: '1px solid #ccc', borderRadius: '4px' }} />
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>
-                    <div><small>Req By:</small><input type="date" value={livioForm.reqDate} onChange={e => setLivioForm({...livioForm, reqDate: e.target.value})} style={{ width: '100%', boxSizing: 'border-box', padding: '8px' }} /></div>
-                    <div><small>Photo (Opt):</small><input type="file" onChange={e => setLivioForm({...livioForm, file: e.target.files[0]})} style={{ width: '100%', boxSizing: 'border-box', padding: '8px' }} /></div>
+            <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: '0 0 24px 0' }}>Handyman Tasks (Livio)</h2>
+            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px', marginBottom: '40px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <input type="text" placeholder="Job Description" value={livioForm.desc} onChange={e => setLivioForm({...livioForm, desc: e.target.value})} style={{ width: '100%', boxSizing: 'border-box', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '20px' }}>
+                    <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Req By</label><input type="date" value={livioForm.reqDate} onChange={e => setLivioForm({...livioForm, reqDate: e.target.value})} style={{ width: '100%', boxSizing: 'border-box', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', outline: 'none' }} /></div>
+                    <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Photo (Opt)</label><input type="file" onChange={e => setLivioForm({...livioForm, file: e.target.files[0]})} style={{ width: '100%', boxSizing: 'border-box', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} /></div>
                 </div>
-                <button onClick={async () => { if(!livioForm.desc) return; let fileUrl = null; if(livioForm.file) { const fRef = ref(storage, `livio/${Date.now()}_${livioForm.file.name}`); await uploadBytesResumable(fRef, livioForm.file); fileUrl = await getDownloadURL(fRef); } await addDoc(shopDb.collection("livio"), { desc: livioForm.desc, reqDate: livioForm.reqDate, fileUrl, t: serverTimestamp() }); setLivioForm({ desc: '', reqDate: '', file: null }); writeLog('Added Handyman task', 'livio'); }} style={{ background: '#0056b3', color: '#fff', border: 'none', padding: '12px', width: '100%', marginTop: '15px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>SUBMIT TICKET</button>
+                <button onClick={async () => { if(!livioForm.desc) return; let fileUrl = null; if(livioForm.file) { const fRef = ref(storage, `livio/${Date.now()}_${livioForm.file.name}`); await uploadBytesResumable(fRef, livioForm.file); fileUrl = await getDownloadURL(fRef); } await addDoc(shopDb.collection("livio"), { desc: livioForm.desc, reqDate: livioForm.reqDate, fileUrl, t: serverTimestamp() }); setLivioForm({ desc: '', reqDate: '', file: null }); writeLog('Added Handyman task', 'livio'); }} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', marginTop: '24px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Submit Ticket</button>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '15px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '24px' }}>
+                {livio.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No active tasks.</div>}
                 {livio.map(l => (
-                    <div key={l.id} style={{ background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
-                        <button onClick={() => handleDelete('livio', l.id)} style={{ float: 'right', background: '#eafaf1', color: '#28a745', border: '1px solid #28a745', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>Complete</button>
-                        <h4 style={{ margin: '0 0 5px 0', color: '#0056b3' }}>Handyman Task</h4>
-                        <div style={{ fontSize: '14px', marginBottom: '10px' }}>{l.desc}</div>
-                        {l.reqDate && <div style={{ fontSize: '12px', color: '#dc3545', fontWeight: 'bold' }}>Req By: {l.reqDate}</div>}
-                        {l.fileUrl && <button onClick={() => window.open(l.fileUrl)} style={{ background: '#f39c12', border: 'none', color: '#000', padding: '4px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer', marginTop: '10px', fontWeight: 'bold' }}>VIEW PHOTO</button>}
+                    <div key={l.id} style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', display: 'flex', flexDirection: 'column' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
+                            <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)', fontWeight: 500 }}>Handyman Task</h4>
+                            <button onClick={() => handleDelete('livio', l.id)} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Complete</button>
+                        </div>
+                        <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink)', marginBottom: '16px', lineHeight: '1.5', flex: 1 }}>{l.desc}</div>
+                        {l.reqDate && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '16px' }}>Req By: {l.reqDate}</div>}
+                        {l.fileUrl && <button onClick={() => window.open(l.fileUrl)} style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', width: '100%' }}>View Photo</button>}
                     </div>
                 ))}
             </div>
@@ -735,72 +813,70 @@ const ShopFloor = () => {
 
     if (!user) {
         return (
-            <div style={{ position: 'fixed', inset: 0, background: '#e5e5e5', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace' }}>
-                <div style={{ background: '#fff', padding: '40px', border: '2px solid #000', boxShadow: '15px 15px 0 #000', width: '350px', textAlign: 'center' }}>
-                    <h2 style={{ color: '#0056b3', margin: '0 0 20px 0', fontSize: '2rem', textTransform: 'uppercase' }}>SHOP COMMAND</h2>
+            <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--paper)', fontFamily: 'var(--sans)' }}>
+                <div style={{ background: '#fff', padding: '50px 40px', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.02)', width: '400px', textAlign: 'center', borderRadius: '2px' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--brass)', display: 'block', marginBottom: '1rem' }}>
+                        Authorization Required
+                    </span>
+                    <h2 style={{ margin: '0 0 30px 0', color: 'var(--ink)', fontSize: '2.2rem', fontFamily: 'var(--serif)', fontWeight: 500 }}>Shop Command</h2>
                     <form onSubmit={attemptLogin}>
-                        <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{ textAlign: 'center', fontSize: '24px', width: '100%', padding: '15px', margin: '8px 0 20px 0', border: '2px solid #000', boxSizing: 'border-box', fontFamily: 'monospace', fontWeight: 'bold' }} />
-                        <button type="submit" style={{ background: '#0056b3', color: '#fff', border: '2px solid #000', padding: '15px', width: '100%', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.2rem', boxShadow: '4px 4px 0 #000' }}>LOGIN</button>
+                        <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{width: '100%', padding: '15px', textAlign: 'center', fontSize: '1.5rem', marginBottom: '20px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--mono)', letterSpacing: '10px', outline: 'none'}} />
+                        <button type="submit" style={{ width: '100%', padding: '15px', background: 'var(--ink)', color: '#fff', fontSize: '10px', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }}>Authenticate</button>
                     </form>
-                    <button onClick={() => navigate('/')} style={{ marginTop: '20px', background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem', textDecoration: 'underline' }}>← BACK TO HUB</button>
+                    <button onClick={() => navigate('/')} style={{ marginTop: '30px', background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid var(--brass)', paddingBottom: '2px' }}>Return to Hub</button>
                 </div>
             </div>
         );
     }
 
     return (
-        <div style={{ background: '#f8f9fa', color: '#333', minHeight: '100vh', fontFamily: 'monospace' }}>
+        <div style={{ minHeight: '100vh', backgroundColor: 'var(--paper)', display: 'flex', flexDirection: 'column', fontFamily: 'var(--sans)' }}>
             
-            {/* 🚀 NAV BAR: Reduced font-weight from 900 to bold, and border from 4px to 2px */}
-            <nav style={{ background: '#fff', padding: '20px 30px', borderBottom: '2px solid #000', display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
-                <div style={{ fontWeight: 'bold', color: '#0056b3', fontSize: '1.8rem', textTransform: 'uppercase', letterSpacing: '1px', textShadow: '2px 2px 0px rgba(0,0,0,0.1)' }}>FAB-OS</div>
-                
-                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', flex: 1 }}>
-                    {TABS.filter(t => myTabs.includes(t)).map(tab => (
-                        <button key={tab} onClick={() => setActiveTab(tab)} style={{ 
-                            background: activeTab === tab ? '#0056b3' : '#fff', 
-                            color: activeTab === tab ? '#fff' : '#000', 
-                            border: '1px solid #000', 
-                            padding: '10px 20px', 
-                            fontWeight: 'bold', 
-                            fontSize: '0.9rem', 
-                            cursor: 'pointer', 
-                            textTransform: 'uppercase',
-                            boxShadow: activeTab === tab ? 'inset 3px 3px 0 rgba(0,0,0,0.2)' : '2px 2px 0 #000',
-                            transition: '0.1s'
-                        }}>
-                            {tab}
-                        </button>
-                    ))}
+            <header style={{ backgroundColor: '#fff', color: 'var(--ink)', padding: '18px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '4px solid var(--ink)', borderBottom: '1px solid var(--line)' }}>
+                <div>
+                    <h1 style={{ margin: 0, fontSize: '1.6rem', fontFamily: 'var(--serif)', fontWeight: 500, letterSpacing: '0.05em' }}>Fabrication O.S.</h1>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', letterSpacing: '.18em', textTransform: 'uppercase' }}>Shop Floor Execution</span>
                 </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+                  <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Operator: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{user.name}</strong></span>
+                  <button onClick={() => navigate('/')} style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Return to Hub</button>
+                </div>
+            </header>
 
-                <button onClick={() => navigate('/')} style={{ color: '#d9534f', background: '#fff', border: '1px solid #d9534f', padding: '10px 20px', cursor: 'pointer', fontWeight: 'bold', boxShadow: '2px 2px 0 #d9534f', fontSize: '0.9rem', textTransform: 'uppercase', transition: '0.1s' }}>🏠 HUB / LOGOUT</button>
+            <nav style={{ display: 'flex', backgroundColor: 'var(--paper)', borderBottom: '1px solid var(--line)', overflowX: 'auto', padding: '0 20px' }}>
+                {TABS.filter(t => myTabs.includes(t)).map(tab => (
+                    <button key={tab} onClick={() => setActiveTab(tab)} style={{ whiteSpace: 'nowrap', padding: '16px 20px', cursor: 'pointer', border: 'none', borderBottom: activeTab === tab ? `2px solid var(--brass)` : '2px solid transparent', background: 'transparent', color: activeTab === tab ? 'var(--ink)' : 'var(--ink-soft)', fontWeight: 400, fontFamily: 'var(--mono)', textTransform: 'uppercase', fontSize: '11px', letterSpacing: '.1em', transition: 'all 0.2s', opacity: activeTab === tab ? 1 : 0.7 }}>
+                        {tab}
+                    </button>
+                ))}
             </nav>
 
-            <main style={{ padding: '30px', maxWidth: '1400px', margin: 'auto' }}>
-                {ENG_TABS.includes(activeTab) ? (
-                    <ShopEngineering 
-                        activeTab={activeTab} user={user} hqParts={hqParts} routings={routings} programs={programs} 
-                        programsMap={programsMap} machines={machines} categories={categories} setupCodes={setupCodes} 
-                        tooling={tooling} materials={materials} users={users} perms={perms} setPerms={setPerms} 
-                        writeLog={writeLog} handleDelete={handleDelete} safeUserRole={safeUserRole} TABS={TABS} 
-                    />
-                ) : (
-                    <>
-                        {activeTab === 'floor' && renderFloorTab()}
-                        {activeTab === 'scheduler' && renderSchedulerTab()}
-                        {activeTab === 'milling' && renderMillingTab()}
-                        {activeTab === 'custom' && renderCustomTab()}
-                        {activeTab === 'export' && renderExportTab()}
-                        {activeTab === 'logs' && renderLogsTab()}
-                        {activeTab === 'livio' && renderLivioTab()}
-                        {activeTab === 'reports' && renderReportsTab()}
-                        
-                        {/* 🚀 SHARED APPS */}
-                        {activeTab === 'assets' && <AssetGalleryTab currentUser={user.name} activeBrand={null} />}
-                        {activeTab === 'messaging' && <SharedMessaging currentUser={user.name} currentApp="SHOP" writeLog={writeLog} />}
-                    </>
-                )}
+            <main style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+                <div style={{ backgroundColor: '#fff', border: '1px solid var(--line)', flex: 1, boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto', borderRadius: '2px', padding: '30px' }}>
+                    {ENG_TABS.includes(activeTab) ? (
+                        <ShopEngineering 
+                            activeTab={activeTab} user={user} hqParts={hqParts} routings={routings} programs={programs} 
+                            programsMap={programsMap} machines={machines} categories={categories} setupCodes={setupCodes} 
+                            tooling={tooling} materials={materials} users={users} perms={perms} setPerms={setPerms} 
+                            writeLog={writeLog} handleDelete={handleDelete} safeUserRole={safeUserRole} TABS={TABS} 
+                        />
+                    ) : (
+                        <>
+                            {activeTab === 'floor' && renderFloorTab()}
+                            {activeTab === 'scheduler' && renderSchedulerTab()}
+                            {activeTab === 'milling' && renderMillingTab()}
+                            {activeTab === 'custom' && renderCustomTab()}
+                            {activeTab === 'export' && renderExportTab()}
+                            {activeTab === 'logs' && renderLogsTab()}
+                            {activeTab === 'livio' && renderLivioTab()}
+                            {activeTab === 'reports' && renderReportsTab()}
+                            
+                            {/* 🚀 SHARED APPS */}
+                            {activeTab === 'assets' && <AssetGalleryTab currentUser={user.name} activeBrand={null} />}
+                            {activeTab === 'messaging' && <SharedMessaging currentUser={user.name} currentApp="SHOP" writeLog={writeLog} />}
+                        </>
+                    )}
+                </div>
             </main>
 
             {renderModal()}
