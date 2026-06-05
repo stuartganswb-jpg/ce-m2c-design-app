@@ -79,7 +79,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const [imageMode, setImageMode] = useState("UPLOAD"); 
   const [selectedExistingImage, setSelectedExistingImage] = useState("");
   
-  // Interaction Modes
   const [isAddingCallout, setIsAddingCallout] = useState(false);
   const [isEditingPins, setIsEditingPins] = useState(false);
   
@@ -90,7 +89,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const [reactSvgPanZoomRef, setReactSvgPanZoomRef] = useState(null);
   
   const [isCanvasMaximized, setIsCanvasMaximized] = useState(false);
-  const [isCanvasLocked, setIsCanvasLocked] = useState(true); 
   const [isCapturing, setIsCapturing] = useState(false); 
 
   const viewerContainerRef = useRef(null);
@@ -155,7 +153,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       } else {
           setActiveRevisionId(null);
       }
-      setIsCanvasLocked(true); 
   }, [activeAssembly, activeRevisionId]);
 
   useEffect(() => {
@@ -423,7 +420,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       setIsAddingCallout(false);
       setIsEditingPins(false);
       setActiveTool(TOOL_PAN);
-      setIsCanvasLocked(false);
       setActiveCalloutId(null);
   };
 
@@ -431,7 +427,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       setIsAddingCallout(true);
       setIsEditingPins(false);
       setActiveTool(TOOL_NONE);
-      setIsCanvasLocked(false);
       setActiveCalloutId(null);
   };
 
@@ -439,7 +434,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       setIsAddingCallout(false);
       setIsEditingPins(true);
       setActiveTool(TOOL_NONE);
-      setIsCanvasLocked(false);
   };
 
   const handleMouseMove = (e) => {
@@ -588,8 +582,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       border: '1px solid var(--line)', background: 'var(--paper)', display: 'flex', flexDirection: 'column', flex: 1, minHeight: '600px', overflow: 'hidden', position: 'relative'
   };
 
-  const showLockOverlay = isCanvasLocked && !isCanvasMaximized;
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
@@ -696,8 +688,8 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                         
                         {!isCurrent3D && (
                             <>
-                                <button onClick={() => { setIsAddingCallout(false); setIsEditingPins(false); setActiveTool(TOOL_ZOOM_IN); setIsCanvasLocked(false); }} style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>Zoom In</button>
-                                <button onClick={() => { setIsAddingCallout(false); setIsEditingPins(false); setActiveTool(TOOL_ZOOM_OUT); setIsCanvasLocked(false); }} style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>Zoom Out</button>
+                                <button onClick={() => { setIsAddingCallout(false); setIsEditingPins(false); setActiveTool(TOOL_ZOOM_IN); }} style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>Zoom In</button>
+                                <button onClick={() => { setIsAddingCallout(false); setIsEditingPins(false); setActiveTool(TOOL_ZOOM_OUT); }} style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>Zoom Out</button>
                             </>
                         )}
                         <button onClick={() => { setIsCanvasMaximized(false); activatePanMode(); }} style={{ padding: '8px 24px', background: 'var(--brass)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px', marginLeft: '8px' }}>Done</button>
@@ -732,8 +724,8 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
 
                                     {!isCurrent3D && (
                                         <>
-                                            <button onClick={() => { activatePanMode(); setActiveTool(TOOL_ZOOM_IN); setIsCanvasLocked(false); }} style={{ padding: '8px 12px', background: activeTool === TOOL_ZOOM_IN && (!isAddingCallout && !isEditingPins) ? 'var(--paper-2)' : '#fff', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>In</button>
-                                            <button onClick={() => { activatePanMode(); setActiveTool(TOOL_ZOOM_OUT); setIsCanvasLocked(false); }} style={{ padding: '8px 12px', background: activeTool === TOOL_ZOOM_OUT && (!isAddingCallout && !isEditingPins) ? 'var(--paper-2)' : '#fff', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>Out</button>
+                                            <button onClick={() => { activatePanMode(); setActiveTool(TOOL_ZOOM_IN); }} style={{ padding: '8px 12px', background: activeTool === TOOL_ZOOM_IN && (!isAddingCallout && !isEditingPins) ? 'var(--paper-2)' : '#fff', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>In</button>
+                                            <button onClick={() => { activatePanMode(); setActiveTool(TOOL_ZOOM_OUT); }} style={{ padding: '8px 12px', background: activeTool === TOOL_ZOOM_OUT && (!isAddingCallout && !isEditingPins) ? 'var(--paper-2)' : '#fff', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>Out</button>
                                         </>
                                     )}
                                 </div>
@@ -750,7 +742,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                 </button>
                             )}
 
-                            <button onClick={() => { setIsCanvasMaximized(true); setIsCanvasLocked(false); }} style={{ padding: '8px 16px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>Max</button>
+                            <button onClick={() => setIsCanvasMaximized(true)} style={{ padding: '8px 16px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>Max</button>
                         </div>
                      </div>
                  )}
@@ -770,22 +762,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
 
                     <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: isAddingCallout ? 'crosshair' : (isEditingPins ? 'default' : 'grab') }}>
                         
-                        {showLockOverlay && (
-                            <div onClick={() => setIsCanvasLocked(false)} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 100, background: 'rgba(250,248,244,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                                <div style={{ background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', padding: '16px 32px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 8px 24px rgba(0,0,0,0.05)', pointerEvents: 'none' }}>
-                                    Click to Interact
-                                </div>
-                            </div>
-                        )}
-
-                        {!isCanvasLocked && !isCanvasMaximized && (
-                            <div style={{ position: 'absolute', bottom: '24px', left: '50%', transform: 'translateX(-50%)', zIndex: 100 }}>
-                                <button onClick={() => setIsCanvasLocked(true)} style={{ background: 'var(--ink)', color: '#fff', padding: '12px 24px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
-                                    Lock Canvas
-                                </button>
-                            </div>
-                        )}
-
                         {!currentRevisionObj?.url ? (
                             <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem', padding: '60px', textAlign: 'center' }}>Upload an initial sketch or revision image using the "Upload Revision" button to start spatial notes.</div>
                         ) : isCurrent3D ? (
@@ -795,8 +771,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                     <Canvas id="r3f-canvas-tab1" gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, 5, 5], fov: 50 }}>
                                         <ambientLight intensity={0.5} />
                                         <directionalLight position={[10, 10, 5]} intensity={1} />
-                                        {/* Disabled Orbit when Locked, Adding a Pin, or specifically Editing Pins */}
-                                        <OrbitControls makeDefault enabled={!isCanvasLocked && !isAddingCallout && !isEditingPins} />
+                                        <OrbitControls makeDefault enabled={!isAddingCallout && !isEditingPins} />
                                         <Bounds fit clip margin={1.2}>
                                             <ReviewModel url={currentRevisionObj.url} isAddingCallout={isAddingCallout} onMeshClick={handle3DViewerClick} />
                                         </Bounds>
