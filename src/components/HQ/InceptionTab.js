@@ -787,16 +787,19 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                 <Html key={callout.id} position={[callout.x, callout.y, callout.z]} zIndexRange={[100, 0]}>
                                                     <div style={{ position: 'relative' }}>
                                                         <div 
-                                                            onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} 
+                                                            onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); }} 
                                                             style={{ width: '12px', height: '12px', background: isActive ? 'var(--brass)' : '#fff', border: isActive ? '1px solid var(--ink)' : '1px solid var(--brass)', borderRadius: '50%', cursor: 'pointer', transform: 'translate(-50%, -50%)', position: 'absolute', zIndex: 2 }} 
                                                         />
                                                         <svg style={{ position: 'absolute', top: '-110px', left: '0px', width: '130px', height: '110px', pointerEvents: 'none', zIndex: 1, overflow: 'visible' }}>
                                                             <line x1="0" y1="110" x2="130" y2="0" stroke={isActive ? 'var(--brass)' : 'var(--line)'} strokeWidth="1" />
                                                         </svg>
                                                         <div onPointerDown={stopPropagation} onWheel={stopPropagation} style={{ position: 'absolute', top: '-110px', left: '130px', width: '220px', background: '#fff', border: isActive ? '1px solid var(--brass)' : '1px solid var(--line)', padding: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column', zIndex: 3, transform: 'translateY(-50%)' }}>
-                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                                 <span>{callout.user}</span>
-                                                                {isActive && <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0, fontSize: '0.9rem' }}>×</button>}
+                                                                <div style={{ display: 'flex', gap: '10px' }}>
+                                                                    {!isActive && <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); }} style={{ background: 'none', border: 'none', color: 'var(--brass)', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>EDIT</button>}
+                                                                    <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>REMOVE</button>
+                                                                </div>
                                                             </div>
                                                             {isActive ? (
                                                                 <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -804,7 +807,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                                     <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); }} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', marginTop: '8px' }}>Finalize</button>
                                                                 </div>
                                                             ) : (
-                                                                <div onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', color: 'var(--ink)', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px', cursor: 'pointer' }}>{callout.text || <span style={{color:'var(--ink-soft)', fontStyle: 'italic'}}>Empty Note</span>}</div>
+                                                                <div onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); }} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', color: 'var(--ink)', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px', cursor: 'text' }}>{callout.text || <span style={{color:'var(--ink-soft)', fontStyle: 'italic'}}>Empty Note</span>}</div>
                                                             )}
                                                         </div>
                                                     </div>
@@ -850,9 +853,12 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                         onPointerDown={stopPropagation} onMouseDown={stopPropagation} onWheel={stopPropagation}
                                                         style={{ background: '#fff', border: isActive ? '1px solid var(--brass)' : '1px solid var(--line)', padding: '12px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
                                                     >
-                                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+                                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                             <span>{callout.user}</span>
-                                                            {isActive && <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0, fontSize: '0.9rem' }}>×</button>}
+                                                            <div style={{ display: 'flex', gap: '10px' }}>
+                                                                {!isActive && <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); }} style={{ background: 'none', border: 'none', color: 'var(--brass)', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>EDIT</button>}
+                                                                <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>REMOVE</button>
+                                                            </div>
                                                         </div>
                                                         {isActive ? (
                                                             <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -862,12 +868,12 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                                     onKeyDown={stopPropagation} onKeyUp={stopPropagation} onKeyPress={stopPropagation}
                                                                     style={{ width: '100%', fontSize: '0.85rem', fontFamily: 'var(--sans)', border: 'none', outline: 'none', resize: 'none', minHeight: '60px' }} 
                                                                 />
-                                                                <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); }} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', marginTop: '8px' }}>
+                                                                <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); }} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', marginTop: '8px' }}>
                                                                     Finalize
                                                                 </button>
                                                             </div>
                                                         ) : (
-                                                            <div onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); setIsCanvasMaximized(true); setIsCanvasLocked(false); }} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', color: 'var(--ink)', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px' }}>
+                                                            <div onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); }} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', color: 'var(--ink)', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px', cursor: 'text' }}>
                                                                 {callout.text || <span style={{color:'var(--ink-soft)', fontStyle:'italic'}}>Empty Note</span>}
                                                             </div>
                                                         )}
