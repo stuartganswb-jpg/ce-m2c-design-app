@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where, updateDoc } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { UncontrolledReactSVGPanZoom, TOOL_PAN, TOOL_ZOOM_IN, TOOL_ZOOM_OUT, TOOL_NONE } from 'react-svg-pan-zoom'; 
 
@@ -70,9 +70,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const [imageFile, setImageFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  const [coopModalOpen, setCoopModalOpen] = useState(false);
-  const [coopFormData, setCoopFormData] = useState({ target: 'CUSTOMER', entityId: CUSTOMERS[0], note: '' });
-
   const [isAddingNewCollection, setIsAddingNewCollection] = useState(false);
   const [newCollectionName, setNewCollectionName] = useState("");
   const [isAddingNewProductType, setIsAddingNewProductType] = useState(false);
@@ -82,7 +79,10 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const [imageMode, setImageMode] = useState("UPLOAD"); 
   const [selectedExistingImage, setSelectedExistingImage] = useState("");
   
+  // Interaction Modes
   const [isAddingCallout, setIsAddingCallout] = useState(false);
+  const [isEditingPins, setIsEditingPins] = useState(false);
+  
   const [activeCalloutId, setActiveCalloutId] = useState(null);
   const [activeRevisionId, setActiveRevisionId] = useState(null);
   
@@ -392,8 +392,11 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       const updatedCallouts = [...(activeAssembly.spatialCallouts || []), newCallout];
       setActiveAssembly(prev => ({ ...prev, spatialCallouts: updatedCallouts }));
       setActiveCalloutId(newCallout.id);
+      
+      // Automatically transition to 'Edit' mode so user can type text smoothly
       setIsAddingCallout(false);
-      if(!is3D) setActiveTool(TOOL_PAN);   
+      setIsEditingPins(true);
+      if(!is3D) setActiveTool(TOOL_NONE);   
 
       try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: updatedCallouts }); } 
       catch (err) { console.error(err); }
@@ -417,8 +420,10 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       catch (err) { console.error(err); }
   };
 
+  // --- Interaction Mode Handlers ---
   const activatePanMode = () => {
       setIsAddingCallout(false);
+      setIsEditingPins(false);
       setActiveTool(TOOL_PAN);
       setIsCanvasLocked(false);
       setActiveCalloutId(null);
@@ -426,9 +431,19 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
 
   const activatePinMode = () => {
       setIsAddingCallout(true);
+      setIsEditingPins(false);
+      setActiveTool(TOOL_NONE);
+      setIsCanvasLocked(false);
+      setActiveCalloutId(null);
+  };
+
+  const activateEditMode = () => {
+      setIsAddingCallout(false);
+      setIsEditingPins(true);
       setActiveTool(TOOL_NONE);
       setIsCanvasLocked(false);
   };
+  // ---------------------------------
 
   const handleMouseMove = (e) => {
       if (!isAddingCallout || !viewerContainerRef.current) return;
@@ -672,20 +687,23 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                  {isCanvasMaximized && (
                      <div style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 10000, background: '#fff', border: '1px solid var(--line)', borderRadius: '4px', padding: '8px', display: 'flex', gap: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
                         <button onClick={activatePinMode} style={{ padding: '8px 16px', background: isAddingCallout ? 'var(--ink)' : 'transparent', color: isAddingCallout ? '#fff' : 'var(--ink)', border: isAddingCallout ? 'none' : '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>
-                            {isAddingCallout ? 'Targeting...' : 'Pin Note'}
+                            {isAddingCallout ? 'Targeting...' : 'Drop Pin'}
                         </button>
-                        <button onClick={activatePanMode} style={{ padding: '8px 16px', background: !isAddingCallout ? 'var(--ink)' : 'transparent', color: !isAddingCallout ? '#fff' : 'var(--ink)', border: !isAddingCallout ? 'none' : '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>
-                            {isCurrent3D ? 'Navigate' : 'Pan View'}
+                        <button onClick={activateEditMode} style={{ padding: '8px 16px', background: isEditingPins ? 'var(--ink)' : 'transparent', color: isEditingPins ? '#fff' : 'var(--ink)', border: isEditingPins ? 'none' : '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>
+                            Edit Pins
+                        </button>
+                        <button onClick={activatePanMode} style={{ padding: '8px 16px', background: (!isAddingCallout && !isEditingPins) ? 'var(--ink)' : 'transparent', color: (!isAddingCallout && !isEditingPins) ? '#fff' : 'var(--ink)', border: (!isAddingCallout && !isEditingPins) ? 'none' : '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>
+                            {isCurrent3D ? 'Orbit' : 'Pan View'}
                         </button>
                         <div style={{ width: '1px', background: 'var(--line)', margin: '0 8px' }}></div>
                         
                         {!isCurrent3D && (
                             <>
-                                <button onClick={() => { setIsAddingCallout(false); setActiveTool(TOOL_ZOOM_IN); setIsCanvasLocked(false); }} style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>Zoom In</button>
-                                <button onClick={() => { setIsAddingCallout(false); setActiveTool(TOOL_ZOOM_OUT); setIsCanvasLocked(false); }} style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>Zoom Out</button>
+                                <button onClick={() => { setIsAddingCallout(false); setIsEditingPins(false); setActiveTool(TOOL_ZOOM_IN); setIsCanvasLocked(false); }} style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>Zoom In</button>
+                                <button onClick={() => { setIsAddingCallout(false); setIsEditingPins(false); setActiveTool(TOOL_ZOOM_OUT); setIsCanvasLocked(false); }} style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px' }}>Zoom Out</button>
                             </>
                         )}
-                        <button onClick={() => { setIsCanvasMaximized(false); setIsAddingCallout(false); }} style={{ padding: '8px 24px', background: 'var(--brass)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px', marginLeft: '8px' }}>Done</button>
+                        <button onClick={() => { setIsCanvasMaximized(false); activatePanMode(); }} style={{ padding: '8px 24px', background: 'var(--brass)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', borderRadius: '2px', marginLeft: '8px' }}>Done</button>
                      </div>
                  )}
 
@@ -704,17 +722,21 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                             {currentRevisionObj?.url && (
                                 <div style={{ display: 'flex', gap: '8px', paddingRight: '20px', borderRight: '1px solid var(--line)' }}>
                                     <button onClick={activatePinMode} style={{ padding: '8px 16px', background: isAddingCallout ? 'var(--ink)' : '#fff', color: isAddingCallout ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
-                                        {isAddingCallout ? 'Targeting...' : 'Pin Note'}
+                                        {isAddingCallout ? 'Targeting...' : 'Drop Pin'}
                                     </button>
                                     
-                                    <button onClick={activatePanMode} style={{ padding: '8px 16px', background: !isAddingCallout ? 'var(--ink)' : '#fff', color: !isAddingCallout ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
-                                        {isCurrent3D ? 'Navigate' : 'Pan View'}
+                                    <button onClick={activateEditMode} style={{ padding: '8px 16px', background: isEditingPins ? 'var(--ink)' : '#fff', color: isEditingPins ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
+                                        Edit Pins
+                                    </button>
+
+                                    <button onClick={activatePanMode} style={{ padding: '8px 16px', background: (!isAddingCallout && !isEditingPins) ? 'var(--ink)' : '#fff', color: (!isAddingCallout && !isEditingPins) ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
+                                        {isCurrent3D ? 'Orbit' : 'Pan View'}
                                     </button>
 
                                     {!isCurrent3D && (
                                         <>
-                                            <button onClick={() => { setIsAddingCallout(false); setActiveTool(TOOL_ZOOM_IN); setIsCanvasLocked(false); }} style={{ padding: '8px 12px', background: activeTool === TOOL_ZOOM_IN && !isAddingCallout ? 'var(--paper-2)' : '#fff', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>In</button>
-                                            <button onClick={() => { setIsAddingCallout(false); setActiveTool(TOOL_ZOOM_OUT); setIsCanvasLocked(false); }} style={{ padding: '8px 12px', background: activeTool === TOOL_ZOOM_OUT && !isAddingCallout ? 'var(--paper-2)' : '#fff', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>Out</button>
+                                            <button onClick={() => { activatePanMode(); setActiveTool(TOOL_ZOOM_IN); setIsCanvasLocked(false); }} style={{ padding: '8px 12px', background: activeTool === TOOL_ZOOM_IN && (!isAddingCallout && !isEditingPins) ? 'var(--paper-2)' : '#fff', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>In</button>
+                                            <button onClick={() => { activatePanMode(); setActiveTool(TOOL_ZOOM_OUT); setIsCanvasLocked(false); }} style={{ padding: '8px 12px', background: activeTool === TOOL_ZOOM_OUT && (!isAddingCallout && !isEditingPins) ? 'var(--paper-2)' : '#fff', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>Out</button>
                                         </>
                                     )}
                                 </div>
@@ -749,7 +771,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                         </div>
                     </div>
 
-                    <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: isAddingCallout ? 'crosshair' : 'grab' }}>
+                    <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: isAddingCallout ? 'crosshair' : (isEditingPins ? 'default' : 'grab') }}>
                         
                         {showLockOverlay && (
                             <div onClick={() => setIsCanvasLocked(false)} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 100, background: 'rgba(250,248,244,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -776,38 +798,44 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                     <Canvas id="r3f-canvas-tab1" gl={{ preserveDrawingBuffer: true }} camera={{ position: [5, 5, 5], fov: 50 }}>
                                         <ambientLight intensity={0.5} />
                                         <directionalLight position={[10, 10, 5]} intensity={1} />
-                                        <OrbitControls makeDefault enabled={!isCanvasLocked && !isAddingCallout} />
+                                        {/* Disabled Orbit when Locked, Adding a Pin, or specifically Editing Pins */}
+                                        <OrbitControls makeDefault enabled={!isCanvasLocked && !isAddingCallout && !isEditingPins} />
                                         <Bounds fit clip margin={1.2}>
                                             <ReviewModel url={currentRevisionObj.url} isAddingCallout={isAddingCallout} onMeshClick={handle3DViewerClick} />
                                         </Bounds>
                                         {filteredCallouts.map(callout => {
                                             if (!callout.is3D) return null;
                                             const isActive = activeCalloutId === callout.id;
+                                            const isMyPin = callout.user === (currentUser || 'UNKNOWN');
+                                            
                                             return (
                                                 <Html key={callout.id} position={[callout.x, callout.y, callout.z]} zIndexRange={[100, 0]}>
                                                     <div style={{ position: 'relative' }}>
                                                         <div 
-                                                            onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); }} 
+                                                            onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); activateEditMode(); }} 
                                                             style={{ width: '12px', height: '12px', background: isActive ? 'var(--brass)' : '#fff', border: isActive ? '1px solid var(--ink)' : '1px solid var(--brass)', borderRadius: '50%', cursor: 'pointer', transform: 'translate(-50%, -50%)', position: 'absolute', zIndex: 2 }} 
                                                         />
                                                         <svg style={{ position: 'absolute', top: '-110px', left: '0px', width: '130px', height: '110px', pointerEvents: 'none', zIndex: 1, overflow: 'visible' }}>
                                                             <line x1="0" y1="110" x2="130" y2="0" stroke={isActive ? 'var(--brass)' : 'var(--line)'} strokeWidth="1" />
                                                         </svg>
                                                         <div onPointerDown={stopPropagation} onWheel={stopPropagation} style={{ position: 'absolute', top: '-110px', left: '130px', width: '220px', background: '#fff', border: isActive ? '1px solid var(--brass)' : '1px solid var(--line)', padding: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column', zIndex: 3, transform: 'translateY(-50%)' }}>
+                                                            
                                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                                 <span>{callout.user}</span>
                                                                 <div style={{ display: 'flex', gap: '10px' }}>
-                                                                    {!isActive && <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); }} style={{ background: 'none', border: 'none', color: 'var(--brass)', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>EDIT</button>}
-                                                                    <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>REMOVE</button>
+                                                                    {!isActive && isMyPin && <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); activateEditMode(); }} style={{ background: 'none', border: 'none', color: 'var(--brass)', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>EDIT</button>}
+                                                                    {isMyPin && <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>REMOVE</button>}
+                                                                    {isActive && !isMyPin && <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); }} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>CLOSE</button>}
                                                                 </div>
                                                             </div>
-                                                            {isActive ? (
+                                                            
+                                                            {isActive && isMyPin ? (
                                                                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                                                                     <textarea autoFocus value={callout.text || ''} onChange={(e) => handleLocalTextChange(callout.id, e.target.value)} onKeyDown={stopPropagation} style={{ width: '100%', fontSize: '0.85rem', fontFamily: 'var(--sans)', border: 'none', outline: 'none', resize: 'none', minHeight: '60px' }} />
-                                                                    <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); }} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', marginTop: '8px' }}>Finalize</button>
+                                                                    <button onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); activatePanMode(); }} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', marginTop: '8px' }}>Finalize</button>
                                                                 </div>
                                                             ) : (
-                                                                <div onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); }} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', color: 'var(--ink)', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px', cursor: 'text' }}>{callout.text || <span style={{color:'var(--ink-soft)', fontStyle: 'italic'}}>Empty Note</span>}</div>
+                                                                <div onPointerDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); activateEditMode(); }} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', color: 'var(--ink)', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px', cursor: isMyPin ? 'text' : 'pointer' }}>{callout.text || <span style={{color:'var(--ink-soft)', fontStyle: 'italic'}}>Empty Note</span>}</div>
                                                             )}
                                                         </div>
                                                     </div>
@@ -834,6 +862,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                     {filteredCallouts.map(callout => {
                                         if (callout.is3D) return null; 
                                         const isActive = activeCalloutId === callout.id;
+                                        const isMyPin = callout.user === (currentUser || 'UNKNOWN');
                                         
                                         const isLeftHalf = callout.x < 500; 
                                         const boxWidth = 220;
@@ -856,11 +885,13 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                             <span>{callout.user}</span>
                                                             <div style={{ display: 'flex', gap: '10px' }}>
-                                                                {!isActive && <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); }} style={{ background: 'none', border: 'none', color: 'var(--brass)', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>EDIT</button>}
-                                                                <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>REMOVE</button>
+                                                                {!isActive && isMyPin && <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); activateEditMode(); }} style={{ background: 'none', border: 'none', color: 'var(--brass)', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>EDIT</button>}
+                                                                {isMyPin && <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>REMOVE</button>}
+                                                                {isActive && !isMyPin && <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); }} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>CLOSE</button>}
                                                             </div>
                                                         </div>
-                                                        {isActive ? (
+                                                        
+                                                        {isActive && isMyPin ? (
                                                             <div style={{ display: 'flex', flexDirection: 'column' }}>
                                                                 <textarea 
                                                                     autoFocus value={callout.text || ''} 
@@ -868,12 +899,12 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                                                     onKeyDown={stopPropagation} onKeyUp={stopPropagation} onKeyPress={stopPropagation}
                                                                     style={{ width: '100%', fontSize: '0.85rem', fontFamily: 'var(--sans)', border: 'none', outline: 'none', resize: 'none', minHeight: '60px' }} 
                                                                 />
-                                                                <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); }} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', marginTop: '8px' }}>
+                                                                <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(null); saveCalloutTextToFirebase(); activatePanMode(); }} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', marginTop: '8px' }}>
                                                                     Finalize
                                                                 </button>
                                                             </div>
                                                         ) : (
-                                                            <div onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); }} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', color: 'var(--ink)', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px', cursor: 'text' }}>
+                                                            <div onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); activateEditMode(); }} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', color: 'var(--ink)', wordWrap: 'break-word', whiteSpace: 'pre-wrap', minHeight: '20px', cursor: isMyPin ? 'text' : 'pointer' }}>
                                                                 {callout.text || <span style={{color:'var(--ink-soft)', fontStyle:'italic'}}>Empty Note</span>}
                                                             </div>
                                                         )}
