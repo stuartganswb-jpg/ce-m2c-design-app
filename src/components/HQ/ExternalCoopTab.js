@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { db } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc, setDoc } from "firebase/firestore";
+import React, { useState, useEffect } from 'react';
+import { db, storage } from '../../firebase';
+import { collection, onSnapshot, query, where, doc, updateDoc, setDoc } from "firebase/firestore";
+import { ref, deleteObject } from "firebase/storage";
 
 const printStyles = `
   @media print {
@@ -218,7 +219,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       return { active, pending, complete };
   };
 
-  // 🚀 REBUILT: Multi-Page Render Logic
   const renderDocument = () => {
       if (!activeDocJob) return null;
 
@@ -229,31 +229,31 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       if (activeDocJob.engineeringNotes) {
           const notes = activeDocJob.engineeringNotes;
           mathSection = `
-              <div style="background: #fff3cd; border: 2px dashed #ffc107; padding: 15px; margin-bottom: 20px;">
-                  <h4 style="margin:0 0 10px 0; color: #1e7e34; text-transform: uppercase;">ENGINEERING DIMENSIONS</h4>
-                  <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <div style="background: var(--paper-2); border: 1px solid var(--line); padding: 20px; margin-bottom: 20px;">
+                  <h4 style="margin:0 0 15px 0; color: var(--ink); font-family: var(--serif); font-weight: 500; font-size: 1.2rem;">Engineering Dimensions</h4>
+                  <table style="width: 100%; border-collapse: collapse; font-size: 13px; font-family: var(--sans);">
                       <tr>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; color: #1e7e34;">System O2O (Outside-to-Outside):</td>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.systemO2O ? notes.systemO2O.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid var(--line); color: var(--ink-soft);">System O2O:</td>
+                          <td style="padding: 8px; border-bottom: 1px solid var(--line); font-weight: 500;">${notes.systemO2O ? notes.systemO2O.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       <tr>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; color: #007bff;">System C2C (Center-to-Center):</td>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.systemC2C ? notes.systemC2C.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid var(--line); color: var(--ink-soft);">System C2C:</td>
+                          <td style="padding: 8px; border-bottom: 1px solid var(--line); font-weight: 500;">${notes.systemC2C ? notes.systemC2C.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       ${notes.shape === 'MITERED' ? `
                       <tr>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee;">Left Wall C2C:</td>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole1 ? notes.pole1.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid var(--line); color: var(--ink-soft);">Left Wall C2C:</td>
+                          <td style="padding: 8px; border-bottom: 1px solid var(--line); font-weight: 500;">${notes.pole1 ? notes.pole1.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       ` : ''}
                       <tr>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee;">${notes.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</td>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole2 ? notes.pole2.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid var(--line); color: var(--ink-soft);">${notes.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid var(--line); font-weight: 500;">${notes.pole2 ? notes.pole2.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       ${notes.shape === 'MITERED' ? `
                       <tr>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee;">Right Wall C2C:</td>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole3 ? notes.pole3.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid var(--line); color: var(--ink-soft);">Right Wall C2C:</td>
+                          <td style="padding: 8px; border-bottom: 1px solid var(--line); font-weight: 500;">${notes.pole3 ? notes.pole3.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       ` : ''}
                   </table>
@@ -268,113 +268,113 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       const renderRouter = isFullPacket || activeDocType === 'FACTORY_ROUTER';
 
       return (
-          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.9)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 9999, overflowY: 'auto', padding: '40px 0' }}>
+          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 9999, overflowY: 'auto', padding: '40px 0' }}>
               <div style={{ position: 'relative' }}>
-                  <div className="no-print" style={{ position: 'absolute', top: 0, right: '-120px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      <button onClick={() => window.print()} style={{ padding: '15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', boxShadow: '4px 4px 0 #000' }}>🖨️ PRINT PDF</button>
-                      <button onClick={() => setActiveDocJob(null)} style={{ padding: '15px', background: '#d9534f', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', boxShadow: '4px 4px 0 #000' }}>❌ CLOSE</button>
+                  <div className="no-print" style={{ position: 'absolute', top: 0, right: '-160px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <button onClick={() => window.print()} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>Print PDF</button>
+                      <button onClick={() => setActiveDocJob(null)} style={{ padding: '16px 24px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>Close</button>
                   </div>
 
                   <div id="printable-document" style={{ width: '8.5in', display: 'flex', flexDirection: 'column', gap: '30px' }}>
                       
                       {/* PAGE 1: QUOTE */}
                       {renderQuote && (
-                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.5in', boxSizing: 'border-box', fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: '#000', boxShadow: '0 0 20px rgba(0,0,0,0.5)', position: 'relative' }}>
-                              <div style={{ borderBottom: '4px solid #000', paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.6in', boxSizing: 'border-box', fontFamily: 'var(--sans)', color: 'var(--ink)', boxShadow: '0 12px 48px rgba(0,0,0,0.05)', position: 'relative' }}>
+                              <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '20px', marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
                                   {logoUrl ? (
                                       <img src={logoUrl} alt={activeBrand} style={{ height: '60px', objectFit: 'contain' }} />
                                   ) : (
-                                      <div style={{ fontSize: '32px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px', lineHeight: 1 }}>{activeBrand}</div>
+                                      <div style={{ fontFamily: 'var(--serif)', fontSize: '28px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1 }}>{activeBrand}</div>
                                   )}
-                                  <div style={{ fontSize: '20px', color: '#fff', background: '#000', padding: '6px 15px', textTransform: 'uppercase', fontWeight: 'bold' }}>OFFICIAL QUOTE</div>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', letterSpacing: '.15em', textTransform: 'uppercase' }}>Official Quote</div>
                               </div>
 
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '30px', background: '#f8f9fa', padding: '20px', border: '2px solid #000' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginBottom: '40px' }}>
                                   <div>
-                                      <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Prepared For:</div>
-                                      <div style={{ fontSize: '16px', fontWeight: 'bold', marginTop: '3px' }}>{activeDocJob.customer?.name || activeDocJob.clientName || 'N/A'}</div>
-                                      {activeCrmRecord?.billingAddress && <div style={{ fontSize: '12px', marginTop: '5px', whiteSpace: 'pre-wrap' }}>{activeCrmRecord.billingAddress}</div>}
+                                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Prepared For</div>
+                                      <div style={{ fontSize: '15px', fontWeight: 500, marginTop: '6px' }}>{activeDocJob.customer?.name || activeDocJob.clientName || 'N/A'}</div>
+                                      {activeCrmRecord?.billingAddress && <div style={{ fontSize: '13px', marginTop: '6px', whiteSpace: 'pre-wrap', color: 'var(--ink-soft)' }}>{activeCrmRecord.billingAddress}</div>}
                                   </div>
                                   <div>
-                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                           <div>
-                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Document ID:</div>
-                                              <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.jobId || activeDocJob.id}</div>
+                                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Document ID</div>
+                                              <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px' }}>{activeDocJob.jobId || activeDocJob.id}</div>
                                           </div>
                                           <div>
-                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Date:</div>
-                                              <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.dateSaved || new Date().toLocaleDateString()}</div>
+                                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Date</div>
+                                              <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px' }}>{activeDocJob.dateSaved || new Date().toLocaleDateString()}</div>
                                           </div>
                                           <div style={{ gridColumn: 'span 2' }}>
-                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Project / Sidemark:</div>
-                                              <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#007bff' }}>{activeDocJob.sidemark || activeDocJob.note || 'N/A'}</div>
+                                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Project / Sidemark</div>
+                                              <div style={{ fontSize: '15px', fontWeight: 500, color: 'var(--ink)', marginTop: '4px' }}>{activeDocJob.sidemark || activeDocJob.note || 'N/A'}</div>
                                           </div>
                                       </div>
                                   </div>
                               </div>
 
-                              {template.header && <div style={{ marginBottom: '20px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>{template.header}</div>}
+                              {template.header && <div style={{ marginBottom: '30px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>{template.header}</div>}
 
-                              <div style={{ border: '2px solid #000', marginBottom: '30px' }}>
-                                  <div style={{ background: '#000', color: '#fff', padding: '10px 15px', fontWeight: 'bold', textTransform: 'uppercase', fontSize: '14px' }}>CONFIGURATION DETAILS</div>
+                              <div style={{ border: '1px solid var(--line)', marginBottom: '40px', padding: '24px' }}>
+                                  <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Configuration Details</div>
                                   {activeDocJob.cpqData?.breakdown ? (
                                       activeDocJob.cpqData.breakdown.map((item, i) => (
-                                          <div key={i} style={{ display: 'flex', padding: '12px 15px', borderBottom: '1px solid #eee', background: i % 2 === 0 ? '#fff' : '#f8f9fa', fontSize: '14px' }}>
+                                          <div key={i} style={{ display: 'flex', padding: '12px 0', borderBottom: '1px solid rgba(28,26,22,.08)', fontSize: '13px' }}>
                                               <span style={{ flex: 3 }}>{item.name}</span>
-                                              <span style={{ flex: 1, textAlign: 'center' }}>QTY: {item.qty}</span>
-                                              <span style={{ flex: 1, textAlign: 'right', fontWeight: 'bold' }}>${item.total.toFixed(2)}</span>
+                                              <span style={{ flex: 1, textAlign: 'center', color: 'var(--ink-soft)' }}>Qty: {item.qty}</span>
+                                              <span style={{ flex: 1, textAlign: 'right' }}>${item.total.toFixed(2)}</span>
                                           </div>
                                       ))
                                   ) : (
-                                      <div style={{ padding: '20px', fontStyle: 'italic', color: '#666', textAlign: 'center' }}>No line items configured.</div>
+                                      <div style={{ padding: '20px', fontStyle: 'italic', color: 'var(--ink-soft)', textAlign: 'center' }}>No line items configured.</div>
                                   )}
                                   {activeDocJob.cpqData?.totalPrice && (
-                                      <div style={{ display: 'flex', padding: '15px', background: '#eafaf1', borderTop: '2px solid #000', fontSize: '18px', fontWeight: 'bold' }}>
-                                          <span style={{ flex: 4, textAlign: 'right', paddingRight: '20px' }}>TOTAL AMOUNT:</span>
-                                          <span style={{ flex: 1, textAlign: 'right', color: '#1e7e34' }}>${activeDocJob.cpqData.totalPrice.toFixed(2)}</span>
+                                      <div style={{ display: 'flex', paddingTop: '20px', marginTop: '10px', borderTop: '1px solid var(--line)', fontSize: '16px', fontWeight: 500 }}>
+                                          <span style={{ flex: 4, textAlign: 'right', paddingRight: '30px', fontFamily: 'var(--serif)' }}>Total Estimate</span>
+                                          <span style={{ flex: 1, textAlign: 'right' }}>${activeDocJob.cpqData.totalPrice.toFixed(2)}</span>
                                       </div>
                                   )}
                               </div>
 
-                              {template.footer && <div style={{ marginBottom: '20px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.5', borderTop: '1px solid #ccc', paddingTop: '15px' }}>{template.footer}</div>}
-                              {template.terms && <div style={{ marginTop: '40px', fontSize: '9px', color: '#666', whiteSpace: 'pre-wrap', lineHeight: '1.4', borderTop: '1px solid #eee', paddingTop: '15px' }}>{template.terms}</div>}
+                              {template.footer && <div style={{ marginBottom: '20px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.6', borderTop: '1px solid var(--line)', paddingTop: '20px' }}>{template.footer}</div>}
+                              {template.terms && <div style={{ marginTop: '40px', fontSize: '10px', color: 'var(--ink-soft)', whiteSpace: 'pre-wrap', lineHeight: '1.5', borderTop: '1px solid var(--line)', paddingTop: '20px' }}>{template.terms}</div>}
 
-                              <div style={{ marginTop: '50px', display: 'flex', justifyContent: 'space-between', gap: '30px' }}>
-                                  <div style={{ flex: 1, borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>CLIENT APPROVAL SIGNATURE</div>
-                                  <div style={{ width: '200px', borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>DATE</div>
+                              <div style={{ marginTop: '60px', display: 'flex', justifyContent: 'space-between', gap: '40px' }}>
+                                  <div style={{ flex: 1, borderTop: '1px solid var(--line)', paddingTop: '8px', fontSize: '10px', fontFamily: 'var(--mono)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Client Approval Signature</div>
+                                  <div style={{ width: '200px', borderTop: '1px solid var(--line)', paddingTop: '8px', fontSize: '10px', fontFamily: 'var(--mono)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Date</div>
                               </div>
                           </div>
                       )}
 
                       {/* PAGE 2: FACTORY ROUTER (Internal BOM/Math) */}
                       {renderRouter && (
-                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.5in', boxSizing: 'border-box', fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: '#000', boxShadow: '0 0 20px rgba(0,0,0,0.5)', position: 'relative' }}>
-                              <div style={{ borderBottom: '4px solid #000', paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.6in', boxSizing: 'border-box', fontFamily: 'var(--sans)', color: 'var(--ink)', boxShadow: '0 12px 48px rgba(0,0,0,0.05)', position: 'relative' }}>
+                              <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '20px', marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
                                   <div>
-                                      <div style={{ fontSize: '32px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px', lineHeight: 1 }}>{activeBrand}</div>
-                                      <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>Manufacturing Division</div>
+                                      <div style={{ fontFamily: 'var(--serif)', fontSize: '28px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1 }}>{activeBrand}</div>
+                                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '8px', letterSpacing: '.1em', textTransform: 'uppercase' }}>Manufacturing Division</div>
                                   </div>
-                                  <div style={{ fontSize: '24px', color: '#fff', background: '#d9534f', padding: '8px 20px', fontWeight: 'bold', textTransform: 'uppercase' }}>FACTORY ROUTER</div>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', letterSpacing: '.15em', textTransform: 'uppercase' }}>Factory Router</div>
                               </div>
 
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '30px', background: '#f8f9fa', padding: '20px', border: '2px solid #000' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginBottom: '40px' }}>
                                   <div>
-                                      <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Prepared For:</div>
-                                      <div style={{ fontSize: '16px', fontWeight: 'bold', marginTop: '3px' }}>{activeDocJob.customer?.name || activeDocJob.clientName || 'N/A'}</div>
+                                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Prepared For</div>
+                                      <div style={{ fontSize: '15px', fontWeight: 500, marginTop: '6px' }}>{activeDocJob.customer?.name || activeDocJob.clientName || 'N/A'}</div>
                                   </div>
                                   <div>
-                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                           <div>
-                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Document ID:</div>
-                                              <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.jobId || activeDocJob.id}</div>
+                                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Work Order ID</div>
+                                              <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px' }}>{activeDocJob.jobId || activeDocJob.id}</div>
                                           </div>
                                           <div>
-                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Date:</div>
-                                              <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.dateSaved || new Date().toLocaleDateString()}</div>
+                                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Date Engineered</div>
+                                              <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px' }}>{activeDocJob.dateSaved || new Date().toLocaleDateString()}</div>
                                           </div>
                                           <div style={{ gridColumn: 'span 2' }}>
-                                              <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Project / Sidemark:</div>
-                                              <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#007bff' }}>{activeDocJob.sidemark || activeDocJob.note || 'N/A'}</div>
+                                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Project / Sidemark</div>
+                                              <div style={{ fontSize: '15px', fontWeight: 500, color: 'var(--ink)', marginTop: '4px' }}>{activeDocJob.sidemark || activeDocJob.note || 'N/A'}</div>
                                           </div>
                                       </div>
                                   </div>
@@ -382,61 +382,61 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
                               {activeDocJob.engineeringNotes && <div dangerouslySetInnerHTML={{ __html: mathSection }} />}
 
-                              <div style={{ border: '2px solid #000', marginBottom: '30px' }}>
-                                  <div style={{ background: '#000', color: '#fff', padding: '10px 15px', fontWeight: 'bold', textTransform: 'uppercase', fontSize: '14px' }}>BILL OF MATERIALS (BOM)</div>
-                                  <div style={{ display: 'flex', padding: '10px 15px', background: '#eee', fontWeight: 'bold', fontSize: '12px', borderBottom: '1px solid #ccc' }}>
-                                      <span style={{ flex: 3 }}>COMPONENT / MATERIAL</span>
-                                      <span style={{ flex: 1, textAlign: 'center' }}>REQ. QTY</span>
+                              <div style={{ border: '1px solid var(--line)', marginBottom: '40px', padding: '24px' }}>
+                                  <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Bill of Materials</div>
+                                  <div style={{ display: 'flex', paddingBottom: '12px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>
+                                      <span style={{ flex: 3 }}>Component / Material</span>
+                                      <span style={{ flex: 1, textAlign: 'right' }}>Req. Qty</span>
                                   </div>
 
                                   {activeDocJob.cpqData?.breakdown ? (
                                       activeDocJob.cpqData.breakdown.map((item, i) => (
-                                          <div key={i} style={{ display: 'flex', padding: '12px 15px', borderBottom: '1px solid #eee', background: i % 2 === 0 ? '#fff' : '#f8f9fa', fontSize: '14px' }}>
-                                              <span style={{ flex: 3, fontWeight: 'bold' }}>{item.name}</span>
-                                              <span style={{ flex: 1, textAlign: 'center', fontWeight: 'bold', fontSize: '16px' }}>{item.qty}</span>
+                                          <div key={i} style={{ display: 'flex', padding: '12px 0', borderBottom: '1px solid rgba(28,26,22,.08)', fontSize: '13px' }}>
+                                              <span style={{ flex: 3, fontWeight: 500 }}>{item.name}</span>
+                                              <span style={{ flex: 1, textAlign: 'right', fontSize: '14px', fontWeight: 500 }}>{item.qty}</span>
                                           </div>
                                       ))
                                   ) : (
-                                      <div style={{ padding: '20px', fontStyle: 'italic', color: '#666', textAlign: 'center' }}>No line items configured.</div>
+                                      <div style={{ padding: '20px', fontStyle: 'italic', color: 'var(--ink-soft)', textAlign: 'center' }}>No line items configured.</div>
                                   )}
                               </div>
 
                               {!activeDocJob.engineeringNotes && (
-                                  <div style={{ padding: '20px', textAlign: 'center', color: '#d9534f', fontWeight: 'bold', border: '2px dashed #d9534f', marginBottom: '20px', background: '#fff0f0' }}>
-                                      ⚠️ NO ENGINEERING DIMENSIONS ATTACHED TO THIS CONFIGURATION
+                                  <div style={{ padding: '20px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontStyle: 'italic', border: '1px solid var(--line)', marginBottom: '20px', background: 'var(--paper)' }}>
+                                      No engineering dimensions attached to this configuration.
                                   </div>
                               )}
 
-                              <div style={{ marginTop: '50px', display: 'flex', justifyContent: 'space-between', gap: '30px' }}>
-                                  <div style={{ flex: 1, borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>FABRICATION SIGN-OFF</div>
-                                  <div style={{ width: '200px', borderTop: '2px solid #000', paddingTop: '5px', fontSize: '12px', fontWeight: 'bold', color: '#666', textAlign: 'center' }}>DATE</div>
+                              <div style={{ marginTop: '60px', display: 'flex', justifyContent: 'space-between', gap: '40px' }}>
+                                  <div style={{ flex: 1, borderTop: '1px solid var(--line)', paddingTop: '8px', fontSize: '10px', fontFamily: 'var(--mono)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Fabrication Sign-Off</div>
+                                  <div style={{ width: '200px', borderTop: '1px solid var(--line)', paddingTop: '8px', fontSize: '10px', fontFamily: 'var(--mono)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Date</div>
                               </div>
                           </div>
                       )}
 
-                      {/* PAGE 3: DRAWING (If applicable & full packet) */}
+                      {/* PAGE 3: DRAWING */}
                       {isFullPacket && linkedDrawing && (
-                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.5in', boxSizing: 'border-box', fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: '#000', boxShadow: '0 0 20px rgba(0,0,0,0.5)', position: 'relative' }}>
-                              <div style={{ borderBottom: '4px solid #000', paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.6in', boxSizing: 'border-box', fontFamily: 'var(--sans)', color: 'var(--ink)', boxShadow: '0 12px 48px rgba(0,0,0,0.05)', position: 'relative' }}>
+                              <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '20px', marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
                                   <div>
-                                      <div style={{ fontSize: '32px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '1px', lineHeight: 1 }}>{activeBrand}</div>
-                                      <div style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>Engineering Drawing</div>
+                                      <div style={{ fontFamily: 'var(--serif)', fontSize: '28px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1 }}>{activeBrand}</div>
+                                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '8px', letterSpacing: '.1em', textTransform: 'uppercase' }}>Engineering Drawing</div>
                                   </div>
-                                  <div style={{ fontSize: '24px', color: '#fff', background: '#007bff', padding: '8px 20px', fontWeight: 'bold', textTransform: 'uppercase' }}>SHOP DRAWING</div>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', letterSpacing: '.15em', textTransform: 'uppercase' }}>Shop Drawing</div>
                               </div>
 
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '30px', background: '#f8f9fa', padding: '20px', border: '2px solid #000' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '40px' }}>
                                   <div>
-                                      <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Document ID:</div>
-                                      <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{activeDocJob.jobId || activeDocJob.id}</div>
+                                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Document ID</div>
+                                      <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px' }}>{activeDocJob.jobId || activeDocJob.id}</div>
                                   </div>
                                   <div>
-                                      <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#666', textTransform: 'uppercase' }}>Project / Sidemark:</div>
-                                      <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#007bff' }}>{activeDocJob.sidemark || activeDocJob.note || 'N/A'}</div>
+                                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Project / Sidemark</div>
+                                      <div style={{ fontSize: '15px', fontWeight: 500, color: 'var(--ink)', marginTop: '4px' }}>{activeDocJob.sidemark || activeDocJob.note || 'N/A'}</div>
                                   </div>
                               </div>
 
-                              <div style={{ border: '4px solid #000', padding: '10px' }}>
+                              <div style={{ border: '1px solid var(--line)', padding: '20px', background: '#fff' }}>
                                   <div dangerouslySetInnerHTML={{ __html: linkedDrawing.svgData }} style={{ width: '100%' }} />
                               </div>
                           </div>
@@ -452,182 +452,181 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const counts = getActiveTabCounts();
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
-      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div>
-            <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>10. EXTERNAL COOP & CRM</h2>
-            <span style={{ fontSize: '0.7rem', color: '#666' }}>CUSTOMER RELATIONSHIP & PIPELINE MANAGEMENT</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Customer Relationship & Pipeline</span>
+            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>External Co-op</h2>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'stretch' }}>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch' }}>
           
-          <div style={{ width: '250px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000', flexShrink: 0 }}>
-              <button onClick={() => { setActiveSubTab('CUSTOMERS'); setActiveCrmRecord(null); }} style={{ padding: '15px', textAlign: 'left', background: activeSubTab === 'CUSTOMERS' ? '#e6f2ff' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSubTab === 'CUSTOMERS' ? '4px solid #007bff' : '4px solid transparent' }}>👥 CUSTOMER CRM</button>
-              <button onClick={() => { setActiveSubTab('VENDORS'); setActiveCrmRecord(null); }} style={{ padding: '15px', textAlign: 'left', background: activeSubTab === 'VENDORS' ? '#fff0f0' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSubTab === 'VENDORS' ? '4px solid #dc3545' : '4px solid transparent' }}>🏭 VENDOR / COOP CRM</button>
-              <button onClick={() => { setActiveSubTab('PIPELINE'); setActiveCrmRecord(null); }} style={{ padding: '15px', textAlign: 'left', background: activeSubTab === 'PIPELINE' ? '#eafaf1' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSubTab === 'PIPELINE' ? '4px solid #28a745' : '4px solid transparent' }}>📊 GLOBAL PIPELINE</button>
+          <div style={{ width: '250px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', flexShrink: 0, borderRadius: '2px', overflow: 'hidden' }}>
+              <button onClick={() => { setActiveSubTab('CUSTOMERS'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'CUSTOMERS' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'CUSTOMERS' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'CUSTOMERS' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Customer CRM</button>
+              <button onClick={() => { setActiveSubTab('VENDORS'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'VENDORS' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'VENDORS' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'VENDORS' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Vendor / Co-op CRM</button>
+              <button onClick={() => { setActiveSubTab('PIPELINE'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'PIPELINE' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'PIPELINE' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'PIPELINE' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Global Pipeline</button>
           </div>
 
-          <div style={{ flex: 1, background: '#fff', border: '2px solid #000', minHeight: '600px', boxShadow: '10px 10px 0 #000' }}>
+          <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', minHeight: '600px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
               
               {['CUSTOMERS', 'VENDORS'].includes(activeSubTab) && (
                   <div style={{ display: 'flex', height: '100%' }}>
                       
-                      <div style={{ width: '300px', borderRight: '2px solid #000', display: 'flex', flexDirection: 'column', background: '#f8f9fa' }}>
-                          <div style={{ padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <span>{activeSubTab}</span>
-                              <button onClick={() => setShowNewCrmModal(true)} style={{ background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', padding: '4px 8px', cursor: 'pointer', fontSize: '0.7rem' }}>+ NEW</button>
+                      <div style={{ width: '320px', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
+                          <div style={{ padding: '20px 24px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                              <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>{activeSubTab === 'CUSTOMERS' ? 'Customers' : 'Vendors'}</span>
+                              <button onClick={() => setShowNewCrmModal(true)} style={{ background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '6px 12px', cursor: 'pointer' }}>Add New</button>
                           </div>
-                          <div style={{ padding: '10px' }}>
+                          <div style={{ padding: '16px' }}>
                               <input 
                                   type="text" 
                                   value={crmSearchQuery} 
                                   onChange={e => setCrmSearchQuery(e.target.value)} 
-                                  placeholder="Search Name, ID, or Email..." 
-                                  style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} 
+                                  placeholder="Search by name, ID..." 
+                                  style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} 
                               />
                           </div>
                           <div style={{ flex: 1, overflowY: 'auto' }}>
                               {getFilteredCrmRecords(activeSubTab === 'CUSTOMERS').length === 0 ? (
-                                  <div style={{ padding: '20px', color: '#999', fontStyle: 'italic', textAlign: 'center', fontSize: '0.8rem' }}>No records found.</div>
+                                  <div style={{ padding: '24px', color: 'var(--ink-soft)', fontStyle: 'italic', textAlign: 'center', fontSize: '0.9rem', fontFamily: 'var(--serif)' }}>No records found.</div>
                               ) : (
                                   getFilteredCrmRecords(activeSubTab === 'CUSTOMERS').map(record => (
                                       <div 
                                           key={record.id} 
                                           onClick={() => setActiveCrmRecord(record)}
                                           style={{ 
-                                              padding: '15px', 
-                                              borderBottom: '1px solid #eee', 
+                                              padding: '16px 20px', 
+                                              borderBottom: '1px solid var(--line)', 
                                               cursor: 'pointer', 
-                                              background: activeCrmRecord?.id === record.id ? '#e6f2ff' : '#fff',
-                                              borderLeft: activeCrmRecord?.id === record.id ? '4px solid #007bff' : '4px solid transparent'
+                                              background: activeCrmRecord?.id === record.id ? '#fff' : 'transparent',
+                                              borderLeft: activeCrmRecord?.id === record.id ? '2px solid var(--brass)' : '2px solid transparent',
+                                              transition: 'all 0.2s ease'
                                           }}
                                       >
-                                          <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#000' }}>{record.name}</div>
-                                          <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '3px' }}>ID: {record.id}</div>
-                                          <div style={{ fontSize: '0.7rem', color: '#666' }}>{record.email || 'No email'}</div>
+                                          <div style={{ fontWeight: 500, fontSize: '1rem', color: 'var(--ink)' }}>{record.name}</div>
+                                          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px' }}>ID: {record.id}</div>
                                       </div>
                                   ))
                               )}
                           </div>
                       </div>
 
-                      <div style={{ flex: 1, padding: '20px', overflowY: 'auto' }}>
+                      <div style={{ flex: 1, padding: '30px', overflowY: 'auto', background: '#fff' }}>
                           {!activeCrmRecord ? (
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#999', fontWeight: 'bold', fontSize: '1.2rem' }}>
-                                  SELECT A {activeSubTab === 'CUSTOMERS' ? 'CUSTOMER' : 'VENDOR'} TO VIEW PROFILE
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>
+                                  Select a {activeSubTab === 'CUSTOMERS' ? 'customer' : 'vendor'} to view profile
                               </div>
                           ) : (
-                              <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+                              <div style={{ display: 'flex', gap: '30px', alignItems: 'flex-start' }}>
                                   
                                   {/* Left Panel: Profile & Financials */}
-                                  <div style={{ flex: 1.5, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                  <div style={{ flex: 1.5, display: 'flex', flexDirection: 'column', gap: '24px' }}>
                                       
-                                      <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '15px' }}>
+                                      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px' }}>
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
                                               <div>
-                                                  <h3 style={{ margin: 0, fontSize: '1.5rem', color: '#000' }}>{activeCrmRecord.name}</h3>
-                                                  <span style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginTop: '5px' }}>{activeCrmRecord.type} ID: {activeCrmRecord.id}</span>
+                                                  <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>{activeCrmRecord.name}</h3>
+                                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>{activeCrmRecord.type} ID: {activeCrmRecord.id}</span>
                                               </div>
                                           </div>
 
                                           {/* Mini Dashboard for Financials */}
-                                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px', marginBottom: '20px', background: '#f8f9fa', padding: '15px', border: '1px solid #ccc' }}>
-                                              <div style={{ textAlign: 'center', borderRight: '1px solid #ccc' }}>
-                                                  <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>OPEN ORDERS</div>
-                                                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#17a2b8' }}>{activeCrmRecord.openOrders || 0}</div>
+                                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', marginBottom: '30px', background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
+                                              <div style={{ textAlign: 'center', borderRight: '1px solid var(--line)' }}>
+                                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Open Orders</div>
+                                                  <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)' }}>{activeCrmRecord.openOrders || 0}</div>
                                               </div>
-                                              <div style={{ textAlign: 'center', borderRight: '1px solid #ccc' }}>
-                                                  <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>MTD VOLUME</div>
-                                                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>${(activeCrmRecord.mtd || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                                              <div style={{ textAlign: 'center', borderRight: '1px solid var(--line)' }}>
+                                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>MTD Volume</div>
+                                                  <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)' }}>${(activeCrmRecord.mtd || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
                                               </div>
                                               <div style={{ textAlign: 'center' }}>
-                                                  <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>YTD VOLUME</div>
-                                                  <div style={{ fontSize: '2rem', fontWeight: 'bold', color: '#28a745' }}>${(activeCrmRecord.ytd || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>YTD Volume</div>
+                                                  <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)' }}>${(activeCrmRecord.ytd || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
                                               </div>
                                           </div>
 
-                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                                               
-                                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                                   <div>
-                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>PRIMARY CONTACT:</label>
-                                                      <input value={activeCrmRecord.contact || ''} onChange={e => handleUpdateActiveCrmField('contact', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
+                                                      <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Primary Contact</label>
+                                                      <input value={activeCrmRecord.contact || ''} onChange={e => handleUpdateActiveCrmField('contact', e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                                   </div>
                                                   <div>
-                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>EMAIL:</label>
-                                                      <input value={activeCrmRecord.email || ''} onChange={e => handleUpdateActiveCrmField('email', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
+                                                      <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Email</label>
+                                                      <input value={activeCrmRecord.email || ''} onChange={e => handleUpdateActiveCrmField('email', e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                                   </div>
                                                   <div>
-                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>PHONE:</label>
-                                                      <input value={activeCrmRecord.phone || ''} onChange={e => handleUpdateActiveCrmField('phone', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', fontSize: '0.8rem' }} />
+                                                      <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Phone</label>
+                                                      <input value={activeCrmRecord.phone || ''} onChange={e => handleUpdateActiveCrmField('phone', e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                                   </div>
                                               </div>
 
-                                              <div style={{ borderTop: '2px dashed #ccc', paddingTop: '15px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                              <div style={{ borderTop: '1px solid var(--line)', paddingTop: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                                   <div>
-                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#17a2b8', display: 'block', marginBottom: '5px' }}>SALES REP:</label>
-                                                      <select value={activeCrmRecord.salesRep || ''} onChange={e => handleUpdateActiveCrmField('salesRep', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                                      <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Sales Rep</label>
+                                                      <select value={activeCrmRecord.salesRep || ''} onChange={e => handleUpdateActiveCrmField('salesRep', e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                                                           <option value="">-- Unassigned --</option>
                                                           {(globalLists.salesReps || []).map(r => <option key={r} value={r}>{r}</option>)}
                                                       </select>
                                                   </div>
                                                   <div>
-                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#17a2b8', display: 'block', marginBottom: '5px' }}>PAYMENT TERMS:</label>
-                                                      <select value={activeCrmRecord.terms || ''} onChange={e => handleUpdateActiveCrmField('terms', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                                      <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Payment Terms</label>
+                                                      <select value={activeCrmRecord.terms || ''} onChange={e => handleUpdateActiveCrmField('terms', e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                                                           <option value="">-- Select Terms --</option>
                                                           {(globalLists.paymentTerms || []).map(t => <option key={t} value={t}>{t}</option>)}
                                                       </select>
                                                   </div>
                                                   <div>
-                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#17a2b8', display: 'block', marginBottom: '5px' }}>CREDIT LIMIT ($):</label>
-                                                      <input type="number" value={activeCrmRecord.creditLimit || ''} onChange={e => handleUpdateActiveCrmField('creditLimit', parseFloat(e.target.value)||0)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }} />
+                                                      <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Credit Limit ($)</label>
+                                                      <input type="number" value={activeCrmRecord.creditLimit || ''} onChange={e => handleUpdateActiveCrmField('creditLimit', parseFloat(e.target.value)||0)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                                   </div>
                                                   <div>
-                                                      <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#17a2b8', display: 'block', marginBottom: '5px' }}>DISCOUNT TIER:</label>
-                                                      <select value={activeCrmRecord.discountCode || ''} onChange={e => handleUpdateActiveCrmField('discountCode', e.target.value)} style={{ flex: 1, padding: '6px', border: '1px solid #17a2b8', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                                      <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Discount Tier</label>
+                                                      <select value={activeCrmRecord.discountCode || ''} onChange={e => handleUpdateActiveCrmField('discountCode', e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                                                           <option value="">-- No Discount --</option>
                                                           {crmDiscounts.map(d => <option key={d.code} value={d.code}>{d.code} (-{d.percent}%)</option>)}
                                                       </select>
                                                   </div>
                                               </div>
 
-                                              <div style={{ borderTop: '2px dashed #ccc', paddingTop: '15px' }}>
-                                                  <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>BILLING ADDRESS:</label>
-                                                  <textarea value={activeCrmRecord.billingAddress || ''} onChange={e => handleUpdateActiveCrmField('billingAddress', e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', resize: 'vertical', minHeight: '60px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                              <div style={{ borderTop: '1px solid var(--line)', paddingTop: '20px' }}>
+                                                  <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Billing Address</label>
+                                                  <textarea value={activeCrmRecord.billingAddress || ''} onChange={e => handleUpdateActiveCrmField('billingAddress', e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', resize: 'vertical', minHeight: '80px', outline: 'none', fontFamily: 'var(--sans)' }} />
                                               </div>
                                               
-                                              <div style={{ marginTop: '15px', borderTop: '2px dashed #ccc', paddingTop: '15px' }}>
-                                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                                                      <h4 style={{ margin: '0', color: '#007bff', fontSize: '0.9rem' }}>📍 SAVED SHIPPING ADDRESSES</h4>
+                                              <div style={{ marginTop: '10px', borderTop: '1px solid var(--line)', paddingTop: '20px' }}>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                                      <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Saved Shipping Addresses</h4>
                                                   </div>
                                                   
                                                   {(activeCrmRecord.shippingAddresses || []).length === 0 ? (
-                                                      <span style={{ fontSize: '0.75rem', color: '#999', fontStyle: 'italic' }}>No shipping addresses synced.</span>
+                                                      <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No shipping addresses synced.</span>
                                                   ) : (
-                                                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '10px', maxHeight: '300px', overflowY: 'auto', paddingRight: '5px' }}>
+                                                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '16px', maxHeight: '300px', overflowY: 'auto' }}>
                                                           {activeCrmRecord.shippingAddresses.map((addr, idx) => (
                                                               <div key={idx} style={{ 
-                                                                  padding: '10px', 
-                                                                  background: addr.isDefault ? '#eafaf1' : '#f8f9fa', 
-                                                                  border: '1px solid #ccc', 
-                                                                  borderLeft: addr.isDefault ? '4px solid #28a745' : '4px solid #ccc',
-                                                                  boxShadow: '2px 2px 0 rgba(0,0,0,0.05)'
+                                                                  padding: '16px', 
+                                                                  background: addr.isDefault ? 'var(--paper-2)' : '#fff', 
+                                                                  border: '1px solid var(--line)', 
+                                                                  borderLeft: addr.isDefault ? '2px solid var(--brass)' : '1px solid var(--line)'
                                                               }}>
-                                                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', borderBottom: '1px solid #ddd', paddingBottom: '5px', marginBottom: '5px' }}>
-                                                                      <span style={{ color: '#000', fontSize: '0.85rem' }}>{addr.label || 'Address'}</span>
-                                                                      {addr.isDefault && <span style={{ color: '#28a745', fontSize: '0.65rem', padding: '2px 6px', background: '#fff', border: '1px solid #28a745', borderRadius: '4px' }}>DEFAULT</span>}
+                                                                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '8px', marginBottom: '12px' }}>
+                                                                      <span style={{ color: 'var(--ink)', fontSize: '0.9rem', fontWeight: 500 }}>{addr.label || 'Address'}</span>
+                                                                      {addr.isDefault && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Default</span>}
                                                                   </div>
                                                                   
-                                                                  <div style={{ fontSize: '0.8rem', color: '#333', lineHeight: '1.4' }}>
-                                                                      {addr.addressee && <div style={{ fontWeight: 'bold' }}>{addr.addressee}</div>}
+                                                                  <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', lineHeight: '1.5' }}>
+                                                                      {addr.addressee && <div style={{ color: 'var(--ink)' }}>{addr.addressee}</div>}
                                                                       <div>{addr.addr1} {addr.addr2}</div>
                                                                       <div>{addr.city ? `${addr.city}, ` : ''}{addr.state} {addr.zip}</div>
                                                                   </div>
                                                                   
-                                                                  <div style={{ fontSize: '0.65rem', color: '#999', marginTop: '8px' }}>
-                                                                      {addr.addressBookId ? `NetSuite Address Book ID: ${addr.addressBookId}` : 'Manual Entry'}
+                                                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '12px', textTransform: 'uppercase' }}>
+                                                                      {addr.addressBookId ? `NS ID: ${addr.addressBookId}` : 'Manual Entry'}
                                                                   </div>
                                                               </div>
                                                           ))}
@@ -637,48 +636,47 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                           </div>
                                       </div>
 
-                                      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', flex: 1, display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                                          <h4 style={{ margin: '0 0 10px 0', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>RELATIONSHIP NOTES</h4>
+                                      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                          <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Relationship Notes</h4>
                                           <textarea 
                                               value={activeCrmRecord.notes || ''}
                                               onChange={(e) => handleUpdateActiveCrmField('notes', e.target.value)}
-                                              style={{ flex: 1, padding: '10px', border: '1px solid #ccc', outline: 'none', resize: 'none', fontFamily: 'monospace', fontSize: '0.85rem' }}
+                                              style={{ flex: 1, padding: '16px', border: '1px solid var(--line)', outline: 'none', resize: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem', background: 'var(--paper)' }}
                                               placeholder="Add strategic notes, preferences, or warnings here..."
                                           />
                                       </div>
                                   </div>
 
                                   {/* Right Panel: Active & Archived Pipeline with Collapsibles */}
-                                  <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)', flex: 1 }}>
+                                  <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', flex: 1 }}>
                                       
                                       {/* --- ACTIVE PIPELINE COLLAPSIBLE --- */}
                                       <div 
                                           onClick={() => setExpandedSections(prev => ({ ...prev, active: !prev.active }))}
-                                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '5px', marginBottom: '10px', cursor: 'pointer' }}
+                                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px', cursor: 'pointer' }}
                                       >
-                                          <h4 style={{ margin: 0, color: '#007bff' }}>ACTIVE PIPELINE (PENDING)</h4>
-                                          <span style={{ fontWeight: 'bold' }}>{expandedSections.active ? '▼' : '▶'}</span>
+                                          <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Active Pipeline</h4>
+                                          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{expandedSections.active ? '▼ HIDE' : '▶ SHOW'}</span>
                                       </div>
                                       
                                       {expandedSections.active && (
-                                          <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px', paddingRight: '5px' }}>
-                                              {getCrmActivePipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No active configurations pending.</div>}
+                                          <div style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '24px' }}>
+                                              {getCrmActivePipeline(activeCrmRecord.id).length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', padding: '10px' }}>No active configurations pending.</div>}
                                               {getCrmActivePipeline(activeCrmRecord.id).map(job => (
-                                                  <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: `4px solid ${job.status === 'CONFIGURED' ? '#17a2b8' : '#28a745'}`, padding: '10px', background: '#f4f4f4' }}>
-                                                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
-                                                          <span>{job.jobId || job.id}</span>
-                                                          <span style={{ color: job.status === 'CONFIGURED' ? '#17a2b8' : '#28a745' }}>{job.status}</span>
+                                                  <div key={job.id} style={{ border: '1px solid var(--line)', padding: '16px', background: 'var(--paper)' }}>
+                                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                          <span style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)' }}>{job.jobId || job.id}</span>
+                                                          <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '4px 8px', border: '1px solid var(--line)', background: '#fff' }}>{job.status.replace(/_/g, ' ')}</span>
                                                       </div>
-                                                      <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || job.note || 'No description'}</div>
-                                                      {job.cpqData?.totalPrice && <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '5px', color: '#28a745' }}>Value: ${job.cpqData.totalPrice.toFixed(2)}</div>}
+                                                      <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '8px' }}>{job.sidemark || job.note || 'No description'}</div>
+                                                      {job.cpqData?.totalPrice && <div style={{ fontSize: '0.9rem', fontWeight: 500, marginTop: '8px', color: 'var(--ink)' }}>Est: ${job.cpqData.totalPrice.toFixed(2)}</div>}
                                                       
-                                                      {/* 🚀 NEW CRM PIPELINE ACTION BUTTONS */}
-                                                      <div style={{ display: 'flex', gap: '5px', marginTop: '10px', flexWrap: 'wrap' }}>
+                                                      <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
                                                           {job.status === 'CONFIGURED' && (
-                                                              <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#28a745', color: '#fff', border: 'none', cursor: 'pointer' }}>✅ APPROVE</button>
+                                                              <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>Approve</button>
                                                           )}
-                                                          <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${job.jobId || job.id} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #17a2b8', color: '#17a2b8', cursor: 'pointer' }}>📧 EMAIL</button>
-                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '6px', fontSize: '0.65rem', fontWeight: 'bold', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', cursor: 'pointer' }}>📄 FULL PACKET</button>
+                                                          <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${job.jobId || job.id} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Email</button>
+                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
                                                       </div>
                                                   </div>
                                               ))}
@@ -688,27 +686,26 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                       {/* --- ARCHIVE PIPELINE COLLAPSIBLE --- */}
                                       <div 
                                           onClick={() => setExpandedSections(prev => ({ ...prev, archive: !prev.archive }))}
-                                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '5px', marginBottom: '10px', cursor: 'pointer', marginTop: expandedSections.active ? '10px' : '0' }}
+                                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px', cursor: 'pointer', marginTop: expandedSections.active ? '10px' : '0' }}
                                       >
-                                          <h4 style={{ margin: 0, color: '#6c757d' }}>ERP TRANSMITTED & ARCHIVED</h4>
-                                          <span style={{ fontWeight: 'bold' }}>{expandedSections.archive ? '▼' : '▶'}</span>
+                                          <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink-soft)' }}>Historical & Archived</h4>
+                                          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{expandedSections.archive ? '▼ HIDE' : '▶ SHOW'}</span>
                                       </div>
                                       
                                       {expandedSections.archive && (
-                                          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '5px', maxHeight: '350px' }}>
-                                              {getCrmArchivedPipeline(activeCrmRecord.id).length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', padding: '10px' }}>No historical or transmitted jobs found.</div>}
+                                          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px' }}>
+                                              {getCrmArchivedPipeline(activeCrmRecord.id).length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', padding: '10px' }}>No historical jobs found.</div>}
                                               {getCrmArchivedPipeline(activeCrmRecord.id).map(job => (
-                                                  <div key={job.id} style={{ border: '1px solid #ccc', borderLeft: `4px solid #6c757d`, padding: '10px', background: '#fff' }}>
-                                                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '0.85rem' }}>
-                                                          <span>{job.jobId || job.id}</span>
-                                                          <span style={{ color: '#6c757d' }}>{job.status}</span>
+                                                  <div key={job.id} style={{ border: '1px solid var(--line)', padding: '16px', background: '#fff', opacity: 0.8 }}>
+                                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                          <span style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--ink)' }}>{job.jobId || job.id}</span>
+                                                          <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{job.status.replace(/_/g, ' ')}</span>
                                                       </div>
-                                                      <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>{job.sidemark || job.note || 'No description'}</div>
-                                                      {job.cpqData?.totalPrice && <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginTop: '5px', color: '#000' }}>Value: ${job.cpqData.totalPrice.toFixed(2)}</div>}
-                                                      <div style={{ fontSize: '0.65rem', color: '#999', marginTop: '5px' }}>Saved: {new Date(job.createdAt?.seconds * 1000).toLocaleDateString()}</div>
+                                                      <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px' }}>{job.sidemark || job.note || 'No description'}</div>
+                                                      <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '8px' }}>Saved: {new Date(job.createdAt?.seconds * 1000).toLocaleDateString()}</div>
                                                       
-                                                      <div style={{ display: 'flex', gap: '5px', marginTop: '10px' }}>
-                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '5px', fontSize: '0.65rem', fontWeight: 'bold', background: '#f8f9fa', border: '1px solid #ccc', color: '#333', cursor: 'pointer' }}>📄 FULL PACKET</button>
+                                                      <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
                                                       </div>
                                                   </div>
                                               ))}
@@ -722,68 +719,69 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
               )}
 
               {activeSubTab === 'PIPELINE' && (
-                  <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', overflowY: 'auto', boxSizing: 'border-box' }}>
+                  <div style={{ padding: '30px', display: 'flex', flexDirection: 'column', gap: '30px', height: '100%', overflowY: 'auto', boxSizing: 'border-box' }}>
                       
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px', marginBottom: '10px' }}>
-                          <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '20px', textAlign: 'center' }}>
-                              <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#1e7e34' }}>ACTIVE CONFIGURATIONS</div>
-                              <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#28a745' }}>{counts.active}</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
+                          <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', textAlign: 'center' }}>
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Active Configurations</div>
+                              <div style={{ fontFamily: 'var(--serif)', fontSize: '3rem', color: 'var(--ink)', marginTop: '10px' }}>{counts.active}</div>
                           </div>
-                          <div style={{ background: '#fff3cd', border: '2px solid #ffc107', padding: '20px', textAlign: 'center' }}>
-                              <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#856404' }}>PENDING REVIEW</div>
-                              <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#ffc107' }}>{counts.pending}</div>
+                          <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '30px', textAlign: 'center' }}>
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Pending Review</div>
+                              <div style={{ fontFamily: 'var(--serif)', fontSize: '3rem', color: 'var(--ink)', marginTop: '10px' }}>{counts.pending}</div>
                           </div>
-                          <div style={{ background: '#f8f9fa', border: '2px solid #6c757d', padding: '20px', textAlign: 'center' }}>
-                              <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#495057' }}>COMPLETED / ARCHIVED</div>
-                              <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#6c757d' }}>{counts.complete}</div>
+                          <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '30px', textAlign: 'center' }}>
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Completed / Archived</div>
+                              <div style={{ fontFamily: 'var(--serif)', fontSize: '3rem', color: 'var(--ink-soft)', marginTop: '10px' }}>{counts.complete}</div>
                           </div>
                       </div>
 
-                      <div style={{ display: 'flex', gap: '15px', background: '#f8f9fa', padding: '15px', border: '1px solid #ccc' }}>
-                          <input type="text" placeholder="Search ID, Client, Sidemark..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ flex: 1, padding: '10px', fontSize: '1rem', border: '1px solid #ccc' }} />
-                          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ padding: '10px', border: '1px solid #ccc' }} />
-                          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ padding: '10px', border: '1px solid #ccc' }} />
-                          <button onClick={() => { setSearchQuery(''); setStartDate(''); setEndDate(''); }} style={{ padding: '10px 20px', background: '#6c757d', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>CLEAR</button>
+                      <div style={{ display: 'flex', gap: '15px', background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)' }}>
+                          <input type="text" placeholder="Search ID, Client, Sidemark..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ flex: 1, padding: '12px', fontSize: '0.95rem', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                          <button onClick={() => { setSearchQuery(''); setStartDate(''); setEndDate(''); }} style={{ padding: '0 24px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Clear</button>
                       </div>
 
-                      <div style={{ flex: 1, background: '#fff', border: '1px solid #ccc', overflowY: 'auto' }}>
-                          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
-                              <thead style={{ background: '#000', color: '#fff' }}>
+                      <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', overflowY: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontFamily: 'var(--sans)' }}>
+                              <thead style={{ background: 'var(--paper)' }}>
                                   <tr>
-                                      <th style={{ padding: '12px 15px' }}>JOB ID / REF</th>
-                                      <th style={{ padding: '12px 15px' }}>CUSTOMER / ENTITY</th>
-                                      <th style={{ padding: '12px 15px' }}>DATE SAVED</th>
-                                      <th style={{ padding: '12px 15px' }}>VALUE</th>
-                                      <th style={{ padding: '12px 15px' }}>STATUS</th>
-                                      <th style={{ padding: '12px 15px', textAlign: 'right' }}>ACTIONS</th>
+                                      <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Job ID / Ref</th>
+                                      <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Customer / Entity</th>
+                                      <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Date Saved</th>
+                                      <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Value</th>
+                                      <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Status</th>
+                                      <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'right' }}></th>
                                   </tr>
                               </thead>
                               <tbody>
                                   {filteredConfigured.length === 0 ? (
-                                      <tr><td colSpan="6" style={{ padding: '20px', textAlign: 'center', color: '#999', fontStyle: 'italic' }}>No pipeline jobs found.</td></tr>
+                                      <tr><td colSpan="6" style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No pipeline jobs found.</td></tr>
                                   ) : (
                                       filteredConfigured.map(job => (
-                                          <tr key={job.id} style={{ borderBottom: '1px solid #eee', background: job.status === 'APPROVED' ? '#eafaf1' : '#fff' }}>
-                                              <td style={{ padding: '12px 15px' }}>
-                                                  <div style={{ fontWeight: 'bold', color: '#007bff' }}>{job.jobId || job.id}</div>
-                                                  <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '3px' }}>{job.sidemark || job.note || 'No description'}</div>
+                                          <tr key={job.id} style={{ borderBottom: '1px solid var(--line)', background: job.status === 'APPROVED' ? 'var(--paper)' : '#fff' }}>
+                                              <td style={{ padding: '16px 20px' }}>
+                                                  <div style={{ fontWeight: 500, color: 'var(--ink)' }}>{job.jobId || job.id}</div>
+                                                  <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>{job.sidemark || job.note || 'No description'}</div>
                                               </td>
-                                              <td style={{ padding: '12px 15px', fontWeight: 'bold' }}>{job.customer?.name || job.clientName || 'N/A'}</td>
-                                              <td style={{ padding: '12px 15px', color: '#666' }}>{job.dateSaved || new Date(job.createdAt?.seconds * 1000).toLocaleDateString() || 'N/A'}</td>
-                                              <td style={{ padding: '12px 15px', fontWeight: 'bold', color: '#28a745' }}>{job.cpqData?.totalPrice ? `$${job.cpqData.totalPrice.toFixed(2)}` : 'N/A'}</td>
-                                              <td style={{ padding: '12px 15px' }}>
+                                              <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{job.customer?.name || job.clientName || 'N/A'}</td>
+                                              <td style={{ padding: '16px 20px', color: 'var(--ink-soft)', fontSize: '0.9rem' }}>{job.dateSaved || new Date(job.createdAt?.seconds * 1000).toLocaleDateString() || 'N/A'}</td>
+                                              <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{job.cpqData?.totalPrice ? `$${job.cpqData.totalPrice.toFixed(2)}` : 'N/A'}</td>
+                                              <td style={{ padding: '16px 20px' }}>
                                                   <span style={{ 
-                                                      background: job.status === 'APPROVED' ? '#28a745' : (job.status === 'CONFIGURED' ? '#17a2b8' : '#6c757d'), 
-                                                      color: '#fff', padding: '4px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 'bold' 
+                                                      background: job.status === 'APPROVED' ? 'transparent' : 'var(--paper-2)', 
+                                                      border: '1px solid var(--line)',
+                                                      color: 'var(--ink)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' 
                                                   }}>
-                                                      {job.status}
+                                                      {job.status.replace(/_/g, ' ')}
                                                   </span>
                                               </td>
-                                              <td style={{ padding: '12px 15px', textAlign: 'right' }}>
+                                              <td style={{ padding: '16px 20px', textAlign: 'right' }}>
                                                   {job.status === 'CONFIGURED' && (
-                                                      <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ padding: '6px 12px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '0.75rem', marginRight: '5px' }}>APPROVE</button>
+                                                      <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px' }}>Approve</button>
                                                   )}
-                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ padding: '6px 12px', background: '#fff', border: '1px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>📄 DOCS</button>
+                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Docs</button>
                                               </td>
                                           </tr>
                                       ))
@@ -797,29 +795,29 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       </div>
 
       {showNewCrmModal && (
-          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-              <div style={{ background: '#fff', border: '4px solid #000', width: '500px', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
-                  <div style={{ padding: '20px', background: '#000', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                      <h2 style={{ margin: 0, fontSize: '1.2rem', textTransform: 'uppercase' }}>ADD NEW {activeSubTab === 'CUSTOMERS' ? 'CUSTOMER' : 'VENDOR'}</h2>
-                      <button onClick={() => setShowNewCrmModal(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+              <div style={{ background: '#fff', border: '1px solid var(--line)', width: '500px', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', borderRadius: '2px' }}>
+                  <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                      <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Add New {activeSubTab === 'CUSTOMERS' ? 'Customer' : 'Vendor'}</h2>
+                      <button onClick={() => setShowNewCrmModal(false)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
                   </div>
-                  <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                  <div style={{ padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
                       <div>
-                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>Company / Entity Name *</label>
-                          <input value={newCrmForm.name} onChange={e => setNewCrmForm({...newCrmForm, name: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #007bff', boxSizing: 'border-box', fontSize: '1rem', fontWeight: 'bold' }} />
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Company / Entity Name *</label>
+                          <input value={newCrmForm.name} onChange={e => setNewCrmForm({...newCrmForm, name: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                       </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                           <div>
-                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>Primary Contact</label>
-                              <input value={newCrmForm.contact} onChange={e => setNewCrmForm({...newCrmForm, contact: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Primary Contact</label>
+                              <input value={newCrmForm.contact} onChange={e => setNewCrmForm({...newCrmForm, contact: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                           </div>
                           <div>
-                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>Email</label>
-                              <input value={newCrmForm.email} onChange={e => setNewCrmForm({...newCrmForm, email: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Email</label>
+                              <input value={newCrmForm.email} onChange={e => setNewCrmForm({...newCrmForm, email: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                           </div>
                       </div>
-                      <button onClick={handleCreateNewCrm} style={{ width: '100%', padding: '15px', background: '#28a745', color: '#fff', fontSize: '1.1rem', fontWeight: 'bold', border: 'none', cursor: 'pointer', marginTop: '10px' }}>
-                          💾 CREATE CRM PROFILE
+                      <button onClick={handleCreateNewCrm} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                          Create Profile
                       </button>
                   </div>
               </div>

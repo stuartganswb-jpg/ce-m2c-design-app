@@ -42,8 +42,8 @@ const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, sty
                 style={{ ...style, width: '100%', boxSizing: 'border-box' }}
             />
             {isOpen && (
-                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid #ccc', maxHeight: '250px', overflowY: 'auto', zIndex: 10000, boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}>
-                    {filtered.length === 0 && <div style={{ padding: '10px', color: '#999', fontStyle: 'italic' }}>No matches found...</div>}
+                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid var(--line)', maxHeight: '250px', overflowY: 'auto', zIndex: 10000, boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
+                    {filtered.length === 0 && <div style={{ padding: '12px', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>No matches found...</div>}
                     {filtered.map(c => (
                         <div 
                             key={c.id}
@@ -52,9 +52,9 @@ const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, sty
                                 setSearch(`${c.name} (${c.id})`);
                                 setIsOpen(false);
                             }}
-                            style={{ padding: '12px', borderBottom: '1px solid #eee', cursor: 'pointer', background: value === c.id ? '#eafaf1' : '#fff', color: '#000', fontSize: '0.9rem', fontWeight: 'bold' }}
+                            style={{ padding: '12px', borderBottom: '1px solid var(--line)', cursor: 'pointer', background: value === c.id ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', fontSize: '0.9rem', fontFamily: 'var(--sans)' }}
                         >
-                            {c.name} <span style={{color: '#666', fontSize: '0.75rem', fontWeight: 'normal'}}>({c.id})</span>
+                            {c.name} <span style={{color: 'var(--ink-soft)', fontSize: '0.75rem'}}>({c.id})</span>
                         </div>
                     ))}
                 </div>
@@ -64,7 +64,6 @@ const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, sty
 };
 
 const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
-    // This tells the app to download Google's official decoder to unzip the file
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
     
@@ -197,7 +196,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [pricing, setPricing] = useState({ base: 0, finalPrice: 0 });
   const [pricingBreakdown, setPricingBreakdown] = useState([]);
   
-  // 🚀 UPDATED: Added Shipping Fields to JobData State
   const [jobData, setJobData] = useState({ 
       customerId: '', 
       jobName: '', 
@@ -341,7 +339,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           if (!targetFlow) targetFlow = cpqFlows.find(f => f.name.includes("HARDWARE"));
       }
 
-      if (!targetFlow) return alert("Cannot resume draft: No matching CPQ flow setup for this category in Tab 10.");
+      if (!targetFlow) return alert("Cannot resume draft: No matching CPQ flow setup for this category.");
 
       setActiveFlowId(targetFlow.id);
       setActiveDraftId(draft.id);
@@ -376,7 +374,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       setCurrentStepIndex(0);
       
       if (draft.category === 'HARDWARE') {
-          alert("Hardware Draft Loaded!\n\nPlease reference the yellow Post-It note in the viewer to manually enter your quantities and fee components.");
+          alert("Hardware Draft Loaded!\n\nPlease reference the pinned Engineering Specs to manually enter quantities and fees.");
       } else {
           alert("Draft visual data translated and mapped to CPQ Flow!");
       }
@@ -384,11 +382,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
 
   const handleDeleteDraft = async (id) => {
       if (window.confirm("Permanently delete this draft from the system?")) {
-          try {
-              await deleteDoc(doc(db, "cpq_drafts", id));
-          } catch (err) {
-              console.error(err);
-          }
+          try { await deleteDoc(doc(db, "cpq_drafts", id)); } 
+          catch (err) { console.error(err); }
       }
   };
 
@@ -398,9 +393,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               const deletePromises = previousDrafts.map(d => deleteDoc(doc(db, "cpq_drafts", d.id)));
               await Promise.all(deletePromises);
               alert("✅ All drafts have been wiped from the system.");
-          } catch(err) {
-              console.error(err);
-          }
+          } catch(err) { console.error(err); }
       }
   };
 
@@ -600,9 +593,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (nextIndex < activeFlow.steps.length) setCurrentStepIndex(nextIndex);
   };
 
-  // 🚀 FIXED: Cleaned up duplicate code blocks in Finalize Quote Function
   const handleFinalizeQuote = async () => {
-      if (!jobData.customerId || !jobData.sidemark) return alert("❌ Please select a Customer and enter a Sidemark.");
+      if (!jobData.customerId || !jobData.sidemark) return alert("Please select a Customer and enter a Sidemark.");
       const jobId = `QUOTE-${Date.now()}`;
       const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
       
@@ -617,7 +609,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           linkedAssemblyId: activeAssemblyId || null,
           isProjectManaged: activeAssembly?.manufacturingSpecs?.isProjectManaged || false, 
           
-          // 🚀 Attach the shipping destination to the job document
           shippingMethod: jobData.shippingMethod || 'SAVED',
           shippingAddressId: jobData.shippingAddressId || null,
           customShippingAddress: jobData.shippingMethod === 'CUSTOM' ? jobData.customShippingAddress : null,
@@ -656,30 +647,15 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           await generateOrderDocuments(payload, activeDraftSvg);
 
           if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
-              alert(`✅ COMPLEX QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
+              alert(`✅ Quote Generated!\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
           } else {
-              alert(`✅ STANDARD QUOTE & FACTORY ROUTER GENERATED!\n\nRouted to Tab 10 (External Coop) for standard approval.`);
+              alert(`✅ Quote Generated!\nRouted to Tab 10 (External Coop) for standard approval.`);
           }
           
-          setActiveFlowId(""); 
-          setDynamicConfigParams({}); 
-          setStepQuantities({}); 
-          setDimensionInputs({}); 
-          setCurrentStepIndex(0); 
-          setActiveAssemblyId(""); 
-          setShowCheckoutModal(false); 
-          
-          // 🚀 Properly reset the jobData state including shipping fields
-          setJobData({ 
-              customerId: '', 
-              jobName: '', 
-              sidemark: '', 
-              shippingMethod: 'SAVED', 
-              shippingAddressId: '', 
-              customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } 
-          });
-          setActiveDraftId(null); 
-          setActiveDraftSvg(null);
+          setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); 
+          setCurrentStepIndex(0); setActiveAssemblyId(""); setShowCheckoutModal(false); 
+          setJobData({ customerId: '', jobName: '', sidemark: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
+          setActiveDraftId(null); setActiveDraftSvg(null);
 
       } catch (err) { 
           console.error(err); 
@@ -694,31 +670,31 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (job.engineeringNotes) {
           const notes = job.engineeringNotes;
           mathSection = `
-              <div class="math-block">
-                  <h4 style="margin:0 0 10px 0; color: #1e7e34; text-transform: uppercase;">ENGINEERING DIMENSIONS</h4>
-                  <table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 10px;">
+              <div style="background: #faf8f4; border: 1px dashed rgba(28,26,22,.14); padding: 20px;">
+                  <h4 style="margin:0 0 15px 0; color: #1c1a16; font-family: Georgia, serif; text-transform: uppercase;">Engineering Dimensions</h4>
+                  <table style="width: 100%; border-collapse: collapse; font-size: 14px; font-family: sans-serif;">
                       <tr>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; color: #1e7e34;">System O2O (Outside-to-Outside):</td>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.systemO2O ? notes.systemO2O.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">System O2O (Outside-to-Outside):</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.systemO2O ? notes.systemO2O.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       <tr>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; color: #007bff;">System C2C (Center-to-Center):</td>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.systemC2C ? notes.systemC2C.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">System C2C (Center-to-Center):</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.systemC2C ? notes.systemC2C.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       ${notes.shape === 'MITERED' ? `
                       <tr>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee;">Left Wall C2C:</td>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole1 ? notes.pole1.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">Left Wall C2C:</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.pole1 ? notes.pole1.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       ` : ''}
                       <tr>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee;">${notes.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</td>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole2 ? notes.pole2.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">${notes.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.pole2 ? notes.pole2.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       ${notes.shape === 'MITERED' ? `
                       <tr>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee;">Right Wall C2C:</td>
-                          <td style="padding: 6px; border-bottom: 1px solid #eee; font-weight: bold;">${notes.pole3 ? notes.pole3.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">Right Wall C2C:</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.pole3 ? notes.pole3.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       ` : ''}
                   </table>
@@ -731,34 +707,33 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           <head>
             <title>${job.jobId} - Documents</title>
             <style>
-              body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #000; margin: 0; padding: 0; background: #525659; }
-              .page { background: #fff; width: 8.5in; min-height: 11in; padding: 0.5in; margin: 0.25in auto; box-sizing: border-box; box-shadow: 0 0 10px rgba(0,0,0,0.5); position: relative; }
+              body { font-family: 'Inter', -apple-system, sans-serif; color: #1c1a16; margin: 0; padding: 0; background: #525659; }
+              .page { background: #faf8f4; width: 8.5in; min-height: 11in; padding: 0.5in; margin: 0.25in auto; box-sizing: border-box; box-shadow: 0 0 10px rgba(0,0,0,0.5); position: relative; }
               @media print {
                   body { background: #fff; }
                   .page { margin: 0; border: none; box-shadow: none; width: 100%; min-height: auto; page-break-after: always; padding: 0.25in; }
               }
-              .header { display: flex; justify-content: space-between; border-bottom: 4px solid #000; padding-bottom: 15px; margin-bottom: 20px; align-items: flex-end; }
-              .brand { font-size: 32px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; line-height: 1; }
-              .doc-type { font-size: 20px; color: #fff; background: #000; padding: 6px 15px; text-transform: uppercase; font-weight: bold; }
-              .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; background: #f8f9fa; padding: 15px; border: 2px solid #000; }
-              .label { font-size: 11px; font-weight: bold; color: #666; text-transform: uppercase; }
-              .val { font-size: 16px; font-weight: bold; }
+              .header { display: flex; justify-content: space-between; border-bottom: 1px solid rgba(28,26,22,.14); padding-bottom: 15px; margin-bottom: 30px; align-items: flex-end; }
+              .brand { font-size: 28px; font-weight: 500; font-family: 'Cormorant Garamond', Georgia, serif; text-transform: uppercase; letter-spacing: 0.05em; line-height: 1; }
+              .doc-type { font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: #524e46; letter-spacing: .15em; text-transform: uppercase; }
               
-              .split-layout { display: flex; gap: 20px; margin-bottom: 30px; align-items: flex-start; }
+              .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 40px; }
+              .label { font-size: 10px; font-family: 'IBM Plex Mono', monospace; color: #524e46; text-transform: uppercase; letter-spacing: .1em; }
+              .val { font-size: 14px; font-weight: 500; margin-top: 4px; display: block; }
+              
+              .split-layout { display: flex; gap: 30px; margin-bottom: 40px; align-items: flex-start; }
               .column-left { flex: 1.5; }
               .column-right { flex: 1; }
 
-              .section-box { border: 2px solid #000; margin-bottom: 20px; }
-              .section-header { background: #000; color: #fff; padding: 8px 12px; font-weight: bold; text-transform: uppercase; font-size: 14px; }
-              .row { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #ccc; font-size: 14px; }
+              .section-box { border: 1px solid rgba(28,26,22,.14); background: #fff; padding: 20px; margin-bottom: 20px; }
+              .section-header { font-family: 'Cormorant Garamond', Georgia, serif; font-size: 18px; margin-bottom: 15px; border-bottom: 1px solid rgba(28,26,22,.14); padding-bottom: 10px; }
+              
+              .row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid rgba(28,26,22,.08); font-size: 13px; }
               .row:last-child { border-bottom: none; }
-              .row.alt { background: #f4f4f4; }
-              .row.total { background: #eafaf1; font-weight: bold; font-size: 18px; border-top: 2px solid #000; border-bottom: none; }
+              .row.total { font-weight: 500; font-size: 16px; border-top: 1px solid rgba(28,26,22,.14); border-bottom: none; margin-top: 10px; padding-top: 15px; }
               
-              .math-block { background: #fff3cd; border: 2px dashed #ffc107; padding: 15px; }
-              
-              .signature-block { margin-top: 40px; display: flex; justify-content: space-between; gap: 20px; }
-              .sig-line { flex: 1; border-top: 2px solid #000; padding-top: 5px; font-size: 12px; font-weight: bold; color: #666; text-align: center; }
+              .signature-block { margin-top: 60px; display: flex; justify-content: space-between; gap: 30px; }
+              .sig-line { flex: 1; border-top: 1px solid rgba(28,26,22,.14); padding-top: 8px; font-size: 10px; font-family: 'IBM Plex Mono', monospace; color: #524e46; text-align: left; text-transform: uppercase; letter-spacing: .1em; }
             </style>
           </head>
           <body>
@@ -766,30 +741,30 @@ const CPQTab = ({ currentUser, activeBrand }) => {
             <div class="page">
                 <div class="header">
                   <div class="brand">${activeBrand}</div>
-                  <div class="doc-type">OFFICIAL QUOTATION</div>
+                  <div class="doc-type">Quotation</div>
                 </div>
                 
                 <div class="meta-grid">
-                  <div><span class="label">Project / Sidemark:</span><br/><span class="val">${job.sidemark}</span></div>
-                  <div><span class="label">Quote ID:</span><br/><span class="val">${job.jobId}</span></div>
-                  <div><span class="label">Prepared For:</span><br/><span class="val">${job.customer?.name}</span></div>
-                  <div><span class="label">Date:</span><br/><span class="val">${job.dateSaved}</span></div>
+                  <div><span class="label">Project / Sidemark</span><span class="val">${job.sidemark}</span></div>
+                  <div><span class="label">Quote ID</span><span class="val">${job.jobId}</span></div>
+                  <div><span class="label">Prepared For</span><span class="val">${job.customer?.name}</span></div>
+                  <div><span class="label">Date</span><span class="val">${job.dateSaved}</span></div>
                 </div>
 
                 <div class="split-layout">
                     <div class="column-left">
                         <div class="section-box">
-                            <div class="section-header">CONFIGURATION DETAILS</div>
-                            ${job.cpqData?.breakdown?.map((item, i) => `
-                                <div class="row ${i % 2 === 0 ? 'alt' : ''}">
+                            <div class="section-header">Configuration Details</div>
+                            ${job.cpqData?.breakdown?.map(item => `
+                                <div class="row">
                                     <span style="flex: 3;">${item.name}</span>
-                                    <span style="flex: 1; text-align: center;">QTY: ${item.qty}</span>
-                                    <span style="flex: 1; text-align: right; font-weight: bold;">$${item.total.toFixed(2)}</span>
+                                    <span style="flex: 1; text-align: center; color: #524e46;">Qty: ${item.qty}</span>
+                                    <span style="flex: 1; text-align: right;">$${item.total.toFixed(2)}</span>
                                 </div>
                             `).join('')}
                             <div class="row total">
-                                <span style="flex: 4; text-align: right; padding-right: 15px;">TOTAL CONFIGURED PRICE:</span>
-                                <span style="flex: 1; text-align: right; color: #1e7e34;">$${job.cpqData?.totalPrice?.toFixed(2)}</span>
+                                <span style="flex: 4; text-align: right; padding-right: 20px; font-family: 'Cormorant Garamond', serif;">Total Estimate</span>
+                                <span style="flex: 1; text-align: right;">$${job.cpqData?.totalPrice?.toFixed(2)}</span>
                             </div>
                         </div>
                     </div>
@@ -799,36 +774,34 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                 </div>
 
                 <div class="signature-block">
-                    <div class="sig-line">CLIENT APPROVAL SIGNATURE</div>
-                    <div class="sig-line" style="max-width: 200px;">DATE</div>
+                    <div class="sig-line">Client Approval</div>
+                    <div class="sig-line" style="max-width: 200px;">Date</div>
                 </div>
             </div>
 
             <div class="page">
                 <div class="header">
                   <div class="brand">${activeBrand}</div>
-                  <div class="doc-type" style="background:#d9534f;">FACTORY ROUTER</div>
+                  <div class="doc-type">Factory Router</div>
                 </div>
                 
                 <div class="meta-grid">
-                  <div><span class="label">Project / Sidemark:</span><br/><span class="val">${job.sidemark}</span></div>
-                  <div><span class="label">Work Order / Ref ID:</span><br/><span class="val">${job.jobId}</span></div>
-                  <div><span class="label">Customer:</span><br/><span class="val">${job.customer?.name}</span></div>
-                  <div><span class="label">Date Engineered:</span><br/><span class="val">${job.dateSaved}</span></div>
+                  <div><span class="label">Project / Sidemark</span><span class="val">${job.sidemark}</span></div>
+                  <div><span class="label">Work Order ID</span><span class="val">${job.jobId}</span></div>
                 </div>
 
                 <div class="split-layout">
                     <div class="column-left">
                         <div class="section-box">
-                            <div class="section-header" style="background:#d9534f;">BILL OF MATERIALS (BOM)</div>
-                            <div class="row" style="background:#eee; font-weight:bold;">
-                                <span style="flex: 3;">COMPONENT / MATERIAL</span>
-                                <span style="flex: 1; text-align: right;">REQ. QTY</span>
+                            <div class="section-header">Bill of Materials</div>
+                            <div class="row" style="color: #524e46; font-family: 'IBM Plex Mono', monospace; font-size: 10px; text-transform: uppercase;">
+                                <span style="flex: 3;">Component</span>
+                                <span style="flex: 1; text-align: right;">Req. Qty</span>
                             </div>
-                            ${job.cpqData?.breakdown?.map((item, i) => `
-                                <div class="row ${i % 2 === 0 ? 'alt' : ''}">
-                                    <span style="flex: 3; font-weight: bold;">${item.name}</span>
-                                    <span style="flex: 1; text-align: right; font-size: 16px; font-weight: bold;">${item.qty}</span>
+                            ${job.cpqData?.breakdown?.map(item => `
+                                <div class="row">
+                                    <span style="flex: 3; font-weight: 500;">${item.name}</span>
+                                    <span style="flex: 1; text-align: right; font-size: 14px; font-weight: 500;">${item.qty}</span>
                                 </div>
                             `).join('')}
                         </div>
@@ -837,28 +810,24 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                         ${mathSection}
                     </div>
                 </div>
-                <div style="text-align:center; color:#999; font-size: 12px; margin-top: 50px;">*** END OF ROUTER ***</div>
             </div>
             
             ${draftSvg ? `
             <div class="page">
                 <div class="header">
                   <div class="brand">${activeBrand}</div>
-                  <div class="doc-type" style="background:#007bff;">ENGINEERING DRAWING</div>
+                  <div class="doc-type">Engineering Drawing</div>
                 </div>
-                
                 <div class="meta-grid">
-                  <div><span class="label">Project / Sidemark:</span><br/><span class="val">${job.sidemark}</span></div>
-                  <div><span class="label">Work Order / Ref ID:</span><br/><span class="val">${job.jobId}</span></div>
+                  <div><span class="label">Sidemark</span><span class="val">${job.sidemark}</span></div>
+                  <div><span class="label">Quote ID</span><span class="val">${job.jobId}</span></div>
                 </div>
-
-                <div style="width: 100%; border: 4px solid #000; background: #fff; padding: 10px; margin-top: 20px; box-sizing: border-box;">
+                <div style="width: 100%; border: 1px solid rgba(28,26,22,.14); background: #fff; padding: 20px; margin-top: 20px; box-sizing: border-box;">
                     ${draftSvg}
                 </div>
-                
-                <div class="signature-block" style="margin-top: 60px;">
-                    <div class="sig-line">FABRICATION SIGN-OFF</div>
-                    <div class="sig-line" style="max-width: 200px;">DATE</div>
+                <div class="signature-block">
+                    <div class="sig-line">Fabrication Sign-Off</div>
+                    <div class="sig-line" style="max-width: 200px;">Date</div>
                 </div>
             </div>
             ` : ''}
@@ -900,7 +869,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           finalP = parseFloat(currentStep.priceOverride);
       }
 
-      if (finalP > 0) return ` ($${finalP.toFixed(2)})`;
+      if (finalP > 0) return ` (+$${finalP.toFixed(2)})`;
       return '';
   };
 
@@ -959,54 +928,55 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   }, [dynamicConfigParams, activeFlow]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
-      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+      {/* HEADER */}
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div>
-            <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>8. Configure, Price, Quote (CPQ)</h2>
-            <span style={{ fontSize: '0.7rem', color: '#666' }}>PARAMETRIC PRICING & VISUALIZATION</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Parametric Pricing & Visualization</span>
+            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Configure, Price, Quote (CPQ)</h2>
         </div>
-        <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-            <div style={{ fontSize: '1.2rem', fontWeight: 'bold', background: '#eafaf1', padding: '10px 20px', border: '2px solid #28a745', color: '#1e7e34', boxShadow: '3px 3px 0 #28a745' }}>
-                EST. MSRP: ${pricing.finalPrice.toFixed(2)}
+        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+            <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, background: 'var(--paper-2)', padding: '12px 24px', border: '1px solid var(--line)', color: 'var(--ink)' }}>
+                MSRP: ${pricing.finalPrice.toFixed(2)}
             </div>
-            <button onClick={() => setShowCloneModal(true)} style={{ padding: '12px 20px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', fontSize: '1rem', boxShadow: '3px 3px 0 rgba(0,0,0,0.3)' }}>📥 RESUME DRAFT / CLONE QUOTE</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); }} style={{ padding: '12px 20px', background: '#fff', color: '#d9534f', fontWeight: 'bold', border: '2px solid #d9534f', cursor: 'pointer', fontSize: '1rem' }}>🗑️ CLEAR</button>
+            <button onClick={() => setShowCloneModal(true)} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume Draft</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear</button>
         </div>
       </div>
 
-      <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', display: 'flex', alignItems: 'center', gap: '15px', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-          <div style={{ fontWeight: 'bold', color: '#007bff', fontSize: '1.1rem' }}>🤝 ACTIVE CUSTOMER:</div>
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', gap: '20px', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>Active Customer:</div>
           <select 
               value={jobData.customerId} 
               onChange={e => setJobData({...jobData, customerId: e.target.value})} 
-              style={{ flex: 1, padding: '10px', fontSize: '1rem', border: '2px solid #007bff', outline: 'none', fontWeight: 'bold' }}
+              style={{ flex: 1, padding: '12px', fontSize: '0.95rem', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: 'var(--paper)' }}
           >
               <option value="">-- Select Customer to Activate Live Client Pricing --</option>
               {combinedCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
           </select>
-          {!jobData.customerId && <span style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 'bold' }}>⚠️ Base MSRP will be shown until customer is selected.</span>}
+          {!jobData.customerId && <span style={{ fontSize: '0.85rem', color: 'var(--brass)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>Base MSRP will be shown until customer is selected.</span>}
       </div>
 
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'stretch' }}>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch' }}>
           
-          <div style={{ width: '450px', display: 'flex', flexDirection: 'column', gap: '20px', flexShrink: 0 }}>
+          <div style={{ width: '400px', display: 'flex', flexDirection: 'column', gap: '24px', flexShrink: 0 }}>
               
-              <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                 <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>STEP 1: SELECT PRODUCT CATEGORY / FLOW</div>
-                 <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                 <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', borderBottom: '1px solid var(--line)' }}>Step 1: Select Flow</div>
+                 <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     
                     {cpqFlows.length > 0 && (
-                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); setActiveDraftSvg(null); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem', background: '#e6f2ff' }}>
+                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); setActiveDraftSvg(null); }} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
                             <option value="">-- Launch Custom CPQ Flow --</option>
                             {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                         </select>
                     )}
 
                     {!activeFlowId && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
-                            <div style={{ width: '100%', fontSize: '0.7rem', fontWeight: 'bold', color: '#666' }}>OR SELECT STANDARD INVENTORY CATEGORY:</div>
-                            <select value={productType} onChange={(e) => {setProductType(e.target.value); setActiveAssemblyId('');}} style={{ width: '100%', padding: '12px', border: '2px solid #000', fontWeight: 'bold' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
+                            <div style={{ width: '100%', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Or Select Standard Category:</div>
+                            <select value={productType} onChange={(e) => {setProductType(e.target.value); setActiveAssemblyId('');}} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
                                 <option value="">-- Select Product Category --</option>
                                 {availableProductTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
                             </select>
@@ -1016,31 +986,31 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               </div>
 
               {activeFlow && currentStep && (
-                  <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #28a745', flex: 1 }}>
-                      <div style={{ padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '1.1rem', display: 'flex', justifyContent: 'space-between' }}>
-                          <span>STEP {currentStepIndex + 1} OF {activeFlow.steps.length}: {currentStep.title}</span>
+                  <div style={{ background: '#fff', border: '1px solid var(--brass)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', flex: 1 }}>
+                      <div style={{ padding: '20px 24px', background: 'var(--paper)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Step {currentStepIndex + 1} of {activeFlow.steps.length}: {currentStep.title}</span>
                           {(currentStep.basePrice !== undefined && currentStep.basePrice !== null && currentStep.basePrice !== '') && (
-                              <span style={{ background: '#1e7e34', padding: '2px 8px', borderRadius: '4px', fontSize: '0.85rem' }}>
-                                  BASE: ${parseFloat(currentStep.basePrice).toFixed(2)}
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '4px 8px' }}>
+                                  Base: ${parseFloat(currentStep.basePrice).toFixed(2)}
                               </span>
                           )}
                       </div>
                       
-                      <div style={{ padding: '20px', flex: 1, overflowY: 'auto', maxHeight: '400px' }}>
+                      <div style={{ padding: '24px', flex: 1, overflowY: 'auto', maxHeight: '400px' }}>
                           
                           {(currentStep.type === 'VISUAL_GRID' || currentStep.type === 'VISUAL_DIMENSIONS') && (
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                                   {getOptionsForStep(currentStep).map(opt => (
-                                      <div key={opt.id} onClick={() => handleParamChange(currentStep.id, opt.id)} style={{ border: `2px solid ${dynamicConfigParams[currentStep.id] === opt.id ? '#007bff' : '#ccc'}`, padding: '10px', textAlign: 'center', cursor: 'pointer', background: dynamicConfigParams[currentStep.id] === opt.id ? '#e6f2ff' : '#fff' }}>
-                                          <div style={{ width: '100%', height: '80px', background: opt.finalImageUrl ? `url(${opt.finalImageUrl}) center/cover` : '#eee', marginBottom: '10px' }} />
-                                          <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</div>
+                                      <div key={opt.id} onClick={() => handleParamChange(currentStep.id, opt.id)} style={{ border: `1px solid ${dynamicConfigParams[currentStep.id] === opt.id ? 'var(--brass)' : 'var(--line)'}`, padding: '12px', textAlign: 'center', cursor: 'pointer', background: dynamicConfigParams[currentStep.id] === opt.id ? 'var(--paper-2)' : '#fff', transition: 'all 0.2s' }}>
+                                          <div style={{ width: '100%', height: '80px', background: opt.finalImageUrl ? `url(${opt.finalImageUrl}) center/cover` : 'var(--paper-2)', marginBottom: '12px' }} />
+                                          <div style={{ fontSize: '0.85rem', color: 'var(--ink)' }}>{opt.itemName}<span style={{color: 'var(--ink-soft)'}}>{renderOptionPrice(opt, currentStep)}</span></div>
                                       </div>
                                   ))}
                               </div>
                           )}
 
                           {currentStep.type === 'DROPDOWN' && currentStep.dataSource && (
-                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '2px solid #000', fontSize: '1rem', marginBottom: '15px' }}>
+                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: '20px', outline: 'none' }}>
                                   <option value="">-- Select Option --</option>
                                   {getOptionsForStep(currentStep).map(opt => (
                                       <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</option>
@@ -1049,29 +1019,29 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           )}
 
                           {currentStep.type === 'STATIC_FEE' && (
-                              <div style={{ padding: '20px', background: '#fff3cd', border: '2px dashed #ffc107', textAlign: 'center', marginBottom: '15px' }}>
-                                  <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#d9534f' }}>
+                              <div style={{ padding: '24px', background: 'var(--paper)', border: '1px dashed var(--line)', textAlign: 'center', marginBottom: '20px' }}>
+                                  <div style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>
                                       {(currentStep.priceOverride || currentStep.basePrice) ? `+$${parseFloat(currentStep.priceOverride || currentStep.basePrice).toFixed(2)} ea` : 'Variable Fee'}
                                   </div>
-                                  <div style={{ fontSize: '0.85rem', color: '#856404', marginTop: '5px', fontWeight: 'bold' }}>
+                                  <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '8px' }}>
                                       Adjust step quantity below to calculate total fee.
                                   </div>
                               </div>
                           )}
 
                           {(currentStep.calculatorTemplate || currentStep.type === 'DIMENSIONS' || currentStep.type === 'VISUAL_DIMENSIONS') && (
-                              <div style={{ padding: '15px', background: '#eafaf1', borderTop: '2px solid #000', borderBottom: '2px solid #000' }}>
-                                  <h4 style={{ margin: '0 0 10px 0', color: '#1e7e34' }}>📐 DIMENSIONAL INPUT</h4>
+                              <div style={{ padding: '20px', background: 'var(--paper-2)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', marginBottom: '20px' }}>
+                                  <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Dimensional Input</h4>
                                   
                                   {(currentStep.calculatorTemplate === 'calc_french_return_1in' || currentStep.calculatorTemplate === 'calc_straight_pole' || currentStep.calculatorTemplate === 'calc_curved_bay') && (
-                                      <div style={{ display: 'flex', gap: '15px' }}>
+                                      <div style={{ display: 'flex', gap: '16px' }}>
                                           {currentStep.calculatorTemplate !== 'calc_straight_pole' && (
                                               <div style={{ flex: 1 }}>
-                                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>MEASUREMENT TYPE:</label>
+                                                  <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Measurement Type</label>
                                                   <select 
                                                       value={dimensionInputs[currentStep.id]?.type || 'O2O'} 
                                                       onChange={(e) => handleDimensionChange(currentStep.id, 'type', e.target.value, currentStep.calculatorTemplate)}
-                                                      style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold' }}
+                                                      style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}
                                                   >
                                                       <option value="O2O">A. Outside Edge to Outside Edge (O2O)</option>
                                                       <option value="C2C">B. Center to Center (C2C)</option>
@@ -1079,43 +1049,42 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                               </div>
                                           )}
                                           <div style={{ flex: 1 }}>
-                                              <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>FINISHED LENGTH (INCHES):</label>
+                                              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Finished Length (in)</label>
                                               <input 
                                                   type="number" min="0" placeholder="e.g. 84"
                                                   value={dimensionInputs[currentStep.id]?.length || ''} 
                                                   onChange={(e) => handleDimensionChange(currentStep.id, 'length', e.target.value, currentStep.calculatorTemplate)}
-                                                  style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontWeight: 'bold', boxSizing: 'border-box' }}
+                                                  style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', fontFamily: 'var(--sans)' }}
                                               />
                                           </div>
                                       </div>
                                   )}
 
                                   {currentStep.calculatorTemplate === 'calc_mitered_bay' && (
-                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                                           <div>
-                                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>WALL A (Left):</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallA || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallA', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                                              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Wall A (Left)</label>
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallA || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallA', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none' }} />
                                           </div>
                                           <div>
-                                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>WALL B (Center):</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallB || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallB', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                                              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Wall B (Center)</label>
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallB || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallB', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none' }} />
                                           </div>
                                           <div>
-                                              <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>WALL C (Right):</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallC || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallC', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                                              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Wall C (Right)</label>
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallC || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallC', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none' }} />
                                           </div>
                                       </div>
                                   )}
 
                                   {dimensionInputs[currentStep.id]?.length > 0 && currentStep.calculatorTemplate === 'calc_french_return_1in' && (
-                                      <div style={{ marginTop: '10px', fontSize: '0.75rem', color: '#1e7e34', background: '#fff', padding: '10px', border: '2px solid #28a745', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}>
-                                          <strong style={{display:'block', marginBottom:'5px', color:'#000'}}>MATH LOGIC (1" French Return):</strong> 
-                                          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'5px'}}>
-                                              <div style={{background:'#eee', padding:'5px', textAlign:'center'}}><strong>O2O:</strong> {dimensionInputs[currentStep.id].calc_o2o}"</div>
-                                              <div style={{background:'#eee', padding:'5px', textAlign:'center'}}><strong>C2C:</strong> {dimensionInputs[currentStep.id].calc_c2c}"</div>
-                                              <div style={{background:'#ffeeba', padding:'5px', textAlign:'center', color:'#856404', border:'1px solid #856404'}}><strong>CUT LENGTH:</strong> {dimensionInputs[currentStep.id].calc_cutLength}"</div>
+                                      <div style={{ marginTop: '16px', fontSize: '0.85rem', color: 'var(--ink-soft)', background: '#fff', padding: '16px', border: '1px solid var(--line)' }}>
+                                          <strong style={{display:'block', marginBottom:'8px', color:'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase'}}>Math Logic (1" French Return)</strong> 
+                                          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'12px', marginBottom:'12px'}}>
+                                              <div style={{background:'var(--paper)', padding:'8px', textAlign:'center', border: '1px solid var(--line)'}}>O2O: {dimensionInputs[currentStep.id].calc_o2o}"</div>
+                                              <div style={{background:'var(--paper)', padding:'8px', textAlign:'center', border: '1px solid var(--line)'}}>C2C: {dimensionInputs[currentStep.id].calc_c2c}"</div>
+                                              <div style={{background:'var(--paper)', padding:'8px', textAlign:'center', color:'var(--ink)', border:'1px solid var(--brass)'}}>CUT LENGTH: {dimensionInputs[currentStep.id].calc_cutLength}"</div>
                                           </div>
-                                          Required purchase length is +17" over O2O length. Sold per foot (rounded up). 
                                           Calculated Purchase Quantity: <strong>{stepQuantities[currentStep.id] || 1} Feet</strong>.
                                       </div>
                                   )}
@@ -1123,18 +1092,18 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           )}
                       </div>
 
-                      <div style={{ padding: '15px', background: '#f8f9fa', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <div style={{ fontSize: '0.8rem', color: '#666', lineHeight: '1.4', flex: 1, paddingRight: '15px' }}>
-                              <strong>STEP QUANTITY:</strong><br/>
-                              <span style={{ fontSize: '0.7rem' }}>{currentStep.qtyHelperText || 'Adjust to multiply option logic.'}</span>
+                      <div style={{ padding: '20px 24px', background: 'var(--paper)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ color: 'var(--ink-soft)', flex: 1, paddingRight: '20px' }}>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', display: 'block', marginBottom: '4px' }}>Step Quantity</span>
+                              <span style={{ fontSize: '0.85rem' }}>{currentStep.qtyHelperText || 'Adjust to multiply option logic.'}</span>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                               <button onClick={() => {
                                   let current = stepQuantities[currentStep.id];
                                   if (current === undefined || current === '') current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
                                   else current = parseInt(current);
                                   setStepQuantities({...stepQuantities, [currentStep.id]: Math.max(0, current - 1)});
-                              }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>-</button>
+                              }} style={{ width: '36px', height: '36px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontSize: '1.2rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>-</button>
                               
                               <input 
                                   type="number" 
@@ -1144,7 +1113,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                       const val = e.target.value;
                                       setStepQuantities({...stepQuantities, [currentStep.id]: val === '' ? '' : parseInt(val)});
                                   }} 
-                                  style={{ width: '50px', padding: '10px', border: '2px solid #000', textAlign: 'center', fontWeight: 'bold', fontSize: '1.1rem', outline: 'none' }} 
+                                  style={{ width: '60px', padding: '8px', border: '1px solid var(--line)', textAlign: 'center', fontSize: '1.1rem', fontFamily: 'var(--sans)', outline: 'none' }} 
                               />
                               
                               <button onClick={() => {
@@ -1152,69 +1121,69 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                   if (current === undefined || current === '') current = activeBomPins.find(p => p.partId === currentStep.linkedPinId)?.defaultQty || 1;
                                   else current = parseInt(current);
                                   setStepQuantities({...stepQuantities, [currentStep.id]: current + 1});
-                              }} style={{ padding: '8px 12px', background: '#000', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem' }}>+</button>
+                              }} style={{ width: '36px', height: '36px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontSize: '1.2rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
                           </div>
                       </div>
 
                       {engineFlags.warnings.length > 0 && (
-                           <div style={{ background: '#fff3cd', borderTop: '2px solid #ffc107', padding: '10px 15px' }}>
-                               {engineFlags.warnings.map((log, i) => <div key={i} style={{ fontSize: '0.75rem', color: '#856404', fontWeight: 'bold' }}>{log}</div>)}
+                           <div style={{ background: 'var(--paper-2)', borderTop: '1px solid var(--brass)', padding: '16px 24px' }}>
+                               {engineFlags.warnings.map((log, i) => <div key={i} style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>{log}</div>)}
                            </div>
                       )}
 
-                      <div style={{ padding: '15px', display: 'flex', justifyContent: 'space-between' }}>
-                          <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} disabled={currentStepIndex === 0} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStepIndex === 0 ? '#333' : '#fff', color: currentStepIndex === 0 ? '#fff' : '#000', fontWeight: 'bold', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer' }}>BACK</button>
+                      <div style={{ padding: '24px', display: 'flex', justifyContent: 'space-between', background: '#fff' }}>
+                          <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} disabled={currentStepIndex === 0} style={{ padding: '12px 24px', border: '1px solid var(--line)', background: 'transparent', color: currentStepIndex === 0 ? 'var(--line)' : 'var(--ink)', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Back</button>
                           
                           {currentStepIndex < activeFlow.steps.length - 1 ? (
-                              <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE'} style={{ padding: '10px 20px', border: '2px solid #000', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'not-allowed' : 'pointer' }}>NEXT STEP</button>
+                              <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE'} style={{ padding: '12px 24px', border: 'none', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'var(--line)' : 'var(--ink)', color: '#fff', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>Next Step</button>
                           ) : (
-                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE'} style={{ padding: '10px 20px', border: '2px solid #28a745', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'not-allowed' : 'pointer' }}>FINALIZE CART</button>
+                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE'} style={{ padding: '12px 24px', border: 'none', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'var(--line)' : 'var(--brass)', color: '#fff', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>Finalize Cart</button>
                           )}
                       </div>
                   </div>
               )}
 
               {!activeFlowId && productType && (
-                 <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                    <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>STEP 2: SELECT APPROVED DESIGN</div>
-                    <div style={{ padding: '15px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '10px', maxHeight: '200px', overflowY: 'auto' }}>
-                       {availableAssemblies.length === 0 ? <span style={{ fontSize: '0.8rem', color: '#999' }}>No approved assemblies found.</span> : (
+                 <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', borderBottom: '1px solid var(--line)' }}>Step 2: Select Approved Design</div>
+                    <div style={{ padding: '24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '16px', maxHeight: '300px', overflowY: 'auto' }}>
+                       {availableAssemblies.length === 0 ? <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No approved assemblies found.</span> : (
                            availableAssemblies.map(asm => (
-                              <button key={asm.id} onClick={() => setActiveAssemblyId(asm.id)} style={{ padding: '10px', background: activeAssemblyId === asm.id ? '#28a745' : '#fff', color: activeAssemblyId === asm.id ? '#fff' : '#333', border: `2px solid ${activeAssemblyId === asm.id ? '#1e7e34' : '#ccc'}`, fontWeight: 'bold', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px' }}>
-                                 <div style={{ fontSize: '0.7rem', opacity: 0.8 }}>{asm.legacyErpId !== "PENDING" ? asm.legacyErpId : asm.itemId}</div>
-                                 <div style={{ textAlign: 'center' }}>{asm.itemName}</div>
+                              <button key={asm.id} onClick={() => setActiveAssemblyId(asm.id)} style={{ padding: '16px', background: activeAssemblyId === asm.id ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', border: `1px solid ${activeAssemblyId === asm.id ? 'var(--brass)' : 'var(--line)'}`, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', transition: 'all 0.2s' }}>
+                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{asm.legacyErpId !== "PENDING" ? asm.legacyErpId : asm.itemId}</div>
+                                 <div style={{ textAlign: 'center', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>{asm.itemName}</div>
                               </button>
                            ))
                        )}
                     </div>
                     {activeAssemblyId && (
-                         <div style={{ padding: '15px', borderTop: '2px solid #eee' }}>
-                             <button onClick={() => setShowCheckoutModal(true)} style={{ width: '100%', padding: '10px 20px', border: '2px solid #28a745', background: '#28a745', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}>FINISH HARDWARE CONFIGURATION</button>
+                         <div style={{ padding: '20px 24px', borderTop: '1px solid var(--line)', background: '#fff' }}>
+                             <button onClick={() => setShowCheckoutModal(true)} style={{ width: '100%', padding: '16px', border: 'none', background: 'var(--brass)', color: '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Finish Hardware Configuration</button>
                          </div>
                     )}
                  </div>
               )}
           </div>
 
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px', minHeight: '800px' }}>
-              <div style={{ flex: 1, background: '#fff', border: '2px solid #000', boxShadow: '10px 10px 0 #000', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px', minHeight: '800px' }}>
+              <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
                   
-                  <div style={{ padding: '15px', background: '#f8f9fa', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 999, borderBottom: '2px solid #000' }}>
-                      <div style={{ color: '#000', fontSize: '1.2rem', fontWeight: 'bold' }}>
-                          LIVE {viewMode} ENGINE
+                  <div style={{ padding: '20px 24px', background: 'var(--paper)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 999, borderBottom: '1px solid var(--line)' }}>
+                      <div style={{ color: 'var(--ink)', fontSize: '1.2rem', fontFamily: 'var(--serif)', fontWeight: 500 }}>
+                          Live {viewMode} Engine
                       </div>
-                      <div style={{ display: 'flex', border: '2px solid #007bff', borderRadius: '4px', overflow: 'hidden' }}>
-                          <button onClick={() => setViewMode('2D')} style={{ padding: '5px 15px', background: viewMode === '2D' ? '#007bff' : 'transparent', color: viewMode === '2D' ? '#fff' : '#007bff', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '0.8rem' }}>🖼️ 2D</button>
-                          <button onClick={() => setViewMode('3D')} disabled={!activeAssembly?.manufacturingSpecs?.cadUrl} style={{ padding: '5px 15px', background: viewMode === '3D' ? '#007bff' : 'transparent', color: viewMode === '3D' ? '#fff' : '#007bff', fontWeight: 'bold', border: 'none', cursor: activeAssembly?.manufacturingSpecs?.cadUrl ? 'pointer' : 'not-allowed', opacity: activeAssembly?.manufacturingSpecs?.cadUrl ? 1 : 0.5, fontSize: '0.8rem' }}>🧊 3D</button>
+                      <div style={{ display: 'flex', border: '1px solid var(--line)', borderRadius: '2px', overflow: 'hidden', background: '#fff' }}>
+                          <button onClick={() => setViewMode('2D')} style={{ padding: '8px 16px', background: viewMode === '2D' ? 'var(--ink)' : 'transparent', color: viewMode === '2D' ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', transition: 'all 0.2s' }}>2D</button>
+                          <button onClick={() => setViewMode('3D')} disabled={!activeAssembly?.manufacturingSpecs?.cadUrl} style={{ padding: '8px 16px', background: viewMode === '3D' ? 'var(--ink)' : 'transparent', color: viewMode === '3D' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: activeAssembly?.manufacturingSpecs?.cadUrl ? 'pointer' : 'not-allowed', opacity: activeAssembly?.manufacturingSpecs?.cadUrl ? 1 : 0.5, fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', transition: 'all 0.2s' }}>3D</button>
                       </div>
                   </div>
                   
-                  <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--paper-2)' }}>
                       {!activeAssembly ? (
-                          <div style={{ color: '#666', textAlign: 'center', zIndex: 1 }}>
-                              <div style={{ fontSize: '3rem', marginBottom: '10px' }}>⚙️</div>
-                              <h3 style={{ margin: 0 }}>Visual Engine Ready</h3>
-                              <p style={{ fontSize: '0.8rem', maxWidth: '300px', margin: '10px auto' }}>Select a flow and assembly to begin configuration.</p>
+                          <div style={{ color: 'var(--ink-soft)', textAlign: 'center', zIndex: 1 }}>
+                              <div style={{ fontSize: '2rem', marginBottom: '16px', opacity: 0.5 }}>⚙️</div>
+                              <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontWeight: 500, fontSize: '1.4rem' }}>Visual Engine Ready</h3>
+                              <p style={{ fontSize: '0.9rem', maxWidth: '300px', margin: '12px auto' }}>Select a flow and assembly to begin configuration.</p>
                           </div>
                       ) : viewMode === '3D' ? (
                          <Canvas camera={{ position: [5, 5, 5], fov: 50 }} style={{ width: '100%', height: '100%' }}>
@@ -1232,13 +1201,13 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                               </Bounds>
                           </Canvas>
                       ) : (
-                          <div style={{ position: 'absolute', inset: '20px' }}>
+                          <div style={{ position: 'absolute', inset: '30px' }}>
                               {get2DRenderLayers().map((layer, idx) => (
                                   <div key={idx} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: layer.zIndex }}>
                                       {layer.textureUrl ? (
                                           <img src={layer.textureUrl} alt={layer.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                                       ) : (
-                                          <div style={{ width: '100%', height: '100%', border: '2px dashed #000', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#000', fontWeight: 'bold', fontSize: '0.8rem', textAlign: 'center' }}>
+                                          <div style={{ width: '100%', height: '100%', border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--sans)', fontSize: '0.85rem', textAlign: 'center' }}>
                                               {layer.name}<br/>(Missing Asset)
                                           </div>
                                       )}
@@ -1250,52 +1219,54 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                       {/* --- STATIC HARDWARE POST-IT OVERLAY --- */}
                       {activeDraftId && previousDrafts.find(d => d.id === activeDraftId)?.specs?.engineeringNotes && (
                           <div style={{
-                              position: 'absolute', top: '20px', left: '20px', width: '280px',
-                              background: '#ffeb3b', padding: '15px', boxShadow: '5px 5px 15px rgba(0,0,0,0.3)',
-                              transform: 'rotate(2deg)', border: '1px solid #d4b106', zIndex: 100,
-                              color: '#333', fontFamily: 'monospace'
+                              position: 'absolute', top: '24px', left: '24px', width: '280px',
+                              background: '#fdfbf7', padding: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+                              transform: 'rotate(1deg)', border: '1px solid var(--brass)', zIndex: 100,
+                              color: 'var(--ink)', fontFamily: 'var(--sans)'
                           }}>
-                              <div style={{ fontWeight: 'bold', borderBottom: '2px dashed #d4b106', paddingBottom: '5px', marginBottom: '10px', fontSize: '1rem', color: '#000', textAlign: 'center' }}>
-                                  📌 ENGINEERING SPECS
-                                  <div style={{fontSize: '0.65rem', fontWeight: 'normal', color: '#d9534f'}}>MANUAL ENTRY REQUIRED</div>
+                              <div style={{ fontFamily: 'var(--serif)', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '10px', marginBottom: '16px', fontSize: '1.2rem', textAlign: 'center' }}>
+                                  Engineering Specs
+                                  <div style={{fontSize: '9px', fontFamily: 'var(--mono)', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '6px'}}>Manual Entry Required</div>
                               </div>
                               {(() => {
                                   const draft = previousDrafts.find(d => d.id === activeDraftId);
                                   const notes = draft.specs.engineeringNotes;
                                   return (
                                       <div style={{ fontSize: '0.85rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                          {draft.jobName && <div><strong style={{color:'#666'}}>JOB:</strong> {draft.jobName}</div>}
-                                          {draft.sidemark && <div><strong style={{color:'#666'}}>MARK:</strong> {draft.sidemark}</div>}
+                                          {draft.jobName && <div><span style={{fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginRight: '6px'}}>JOB</span> {draft.jobName}</div>}
+                                          {draft.sidemark && <div><span style={{fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginRight: '6px'}}>MARK</span> {draft.sidemark}</div>}
                                           
-                                          <div style={{ background: '#fff9c4', padding: '8px', border: '1px solid #d4b106', marginTop: '5px' }}>
+                                          <div style={{ background: '#fff', padding: '12px', border: '1px solid var(--line)', marginTop: '8px' }}>
                                               
-                                              <div style={{ color: '#000', fontSize: '0.75rem', marginBottom: '8px', borderBottom: '1px dashed #d4b106', paddingBottom: '6px' }}>
-                                                  <div style={{ color: '#1e7e34', display: 'flex', justifyContent: 'space-between' }}><span>System O2O:</span> <strong>{notes.systemO2O?.toFixed(2)}"</strong></div>
-                                                  <div style={{ color: '#007bff', display: 'flex', justifyContent: 'space-between' }}><span>System C2C:</span> <strong>{notes.systemC2C?.toFixed(2)}"</strong></div>
+                                              <div style={{ color: 'var(--ink)', fontSize: '0.85rem', marginBottom: '12px', borderBottom: '1px dashed var(--line)', paddingBottom: '10px' }}>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>System O2O:</span> <span>{notes.systemO2O?.toFixed(2)}"</span></div>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>System C2C:</span> <span>{notes.systemC2C?.toFixed(2)}"</span></div>
                                                   
-                                                  {notes.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}><span>Left Wall C2C:</span> <strong>{notes.pole1?.toFixed(2)}"</strong></div>}
+                                                  {notes.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>Left Wall C2C:</span> <span>{notes.pole1?.toFixed(2)}"</span></div>}
                                                   
-                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: notes.shape !== 'MITERED' ? '4px' : '0' }}><span>{notes.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</span> <strong>{notes.pole2?.toFixed(2)}"</strong></div>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>{notes.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</span> <span>{notes.pole2?.toFixed(2)}"</span></div>
                                                   
-                                                  {notes.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Right Wall C2C:</span> <strong>{notes.pole3?.toFixed(2)}"</strong></div>}
+                                                  {notes.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{color: 'var(--ink-soft)'}}>Right Wall C2C:</span> <span>{notes.pole3?.toFixed(2)}"</span></div>}
                                               </div>
 
-                                              <div style={{ color: '#1e7e34', fontWeight: 'bold', marginBottom: '8px', fontSize: '0.8rem', textAlign: 'center' }}>
-                                                  POLE QTY (FT) TO ENTER: {notes.poleFeetQty}
+                                              <div style={{ color: 'var(--ink)', fontWeight: 500, marginBottom: '12px', fontSize: '0.9rem', textAlign: 'center' }}>
+                                                  Pole Qty (ft) to Enter: {notes.poleFeetQty}
                                               </div>
                                               
-                                              {notes.qtyBrackets > 0 && <div>BRACKETS: {notes.qtyBrackets}</div>}
-                                              {notes.recRings > 0 && <div>RINGS (Rec): {notes.recRings}</div>}
-                                              {notes.qtyFinials > 0 && <div>FINIALS: {notes.qtyFinials}</div>}
+                                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', color: 'var(--ink-soft)' }}>
+                                                {notes.qtyBrackets > 0 && <div>Brackets: {notes.qtyBrackets}</div>}
+                                                {notes.recRings > 0 && <div>Rings (Rec): {notes.recRings}</div>}
+                                                {notes.qtyFinials > 0 && <div>Finials: {notes.qtyFinials}</div>}
+                                              </div>
                                           </div>
 
                                           {(notes.qtySplices > 0 || notes.qtyBends > 0 || notes.qtyMiters > 0 || notes.qtyMiterReturns > 0) && (
-                                              <div style={{ background: '#ffcdd2', padding: '8px', border: '1px solid #d9534f' }}>
-                                                  <strong style={{ color: '#d9534f', display: 'block', marginBottom: '3px' }}>⚠️ FEES TO ADD:</strong>
-                                                  {notes.qtySplices > 0 && <div style={{fontWeight:'bold'}}>• SPLICE FEE: Qty {notes.qtySplices}</div>}
-                                                  {notes.qtyBends > 0 && <div style={{fontWeight:'bold'}}>• BENT RETURN FEE: Qty {notes.qtyBends}</div>}
-                                                  {notes.qtyMiters > 0 && <div style={{fontWeight:'bold'}}>• MITER CUT FEE: Qty {notes.qtyMiters}</div>}
-                                                  {notes.qtyMiterReturns > 0 && <div style={{fontWeight:'bold'}}>• MITER RETURN FEE: Qty {notes.qtyMiterReturns}</div>}
+                                              <div style={{ background: 'var(--paper-2)', padding: '12px', border: '1px solid var(--line)', marginTop: '8px' }}>
+                                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>Fees to Add</span>
+                                                  {notes.qtySplices > 0 && <div>• Splice Fee: x{notes.qtySplices}</div>}
+                                                  {notes.qtyBends > 0 && <div>• Bent Return Fee: x{notes.qtyBends}</div>}
+                                                  {notes.qtyMiters > 0 && <div>• Miter Cut Fee: x{notes.qtyMiters}</div>}
+                                                  {notes.qtyMiterReturns > 0 && <div>• Miter Return Fee: x{notes.qtyMiterReturns}</div>}
                                               </div>
                                           )}
                                       </div>
@@ -1307,23 +1278,23 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                   </div>
               </div>
 
-              <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '5px 5px 0 #d9534f' }}>
+              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                   <div>
-                      <div style={{ fontSize: '0.8rem', color: '#666', fontWeight: 'bold', marginBottom: '5px' }}>ESTIMATED UNIT PRICE</div>
-                      <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#d9534f' }}>${pricing.finalPrice.toFixed(2)}</div>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px' }}>Estimated Unit Price</div>
+                      <div style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', fontWeight: 500, color: 'var(--ink)' }}>${pricing.finalPrice.toFixed(2)}</div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', textAlign: 'right', fontSize: '0.75rem', maxWidth: '300px' }}>
-                      <div style={{ fontWeight: 'bold', borderBottom: '1px solid #ccc', paddingBottom: '3px', marginBottom: '3px', color: '#000' }}>PRICING BREAKDOWN</div>
-                      <div style={{ maxHeight: '60px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px', paddingRight: '5px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', textAlign: 'right', fontSize: '0.85rem', maxWidth: '350px' }}>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '6px', color: 'var(--ink)' }}>Pricing Breakdown</div>
+                      <div style={{ maxHeight: '80px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', paddingRight: '10px' }}>
                           {pricingBreakdown.map((item, i) => (
-                              <div key={i} style={{ display: 'flex', justifyContent: 'flex-end', gap: '15px' }}>
-                                  <span style={{ color: '#666', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' }}>{item.name} (x{item.qty}):</span>
-                                  <span style={{ fontWeight: 'bold', minWidth: '50px' }}>${item.total.toFixed(2)}</span>
+                              <div key={i} style={{ display: 'flex', justifyContent: 'flex-end', gap: '20px' }}>
+                                  <span style={{ color: 'var(--ink-soft)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '200px' }}>{item.name} (x{item.qty})</span>
+                                  <span style={{ color: 'var(--ink)', minWidth: '60px' }}>${item.total.toFixed(2)}</span>
                               </div>
                           ))}
                       </div>
-                      <div style={{ borderTop: '1px solid #000', marginTop: '2px', paddingTop: '2px', fontSize: '0.85rem' }}>
-                          Total Dynamic Sum: <span style={{ fontWeight: 'bold', color: '#d9534f' }}>${pricing.base.toFixed(2)}</span>
+                      <div style={{ borderTop: '1px solid var(--line)', marginTop: '6px', paddingTop: '8px', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>
+                          Total Dynamic Sum: <span style={{ color: 'var(--ink)', marginLeft: '8px' }}>${pricing.base.toFixed(2)}</span>
                       </div>
                   </div>
               </div>
@@ -1331,62 +1302,62 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       </div>
 
       {showCheckoutModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-            <div style={{ background: '#fff', border: '4px solid #000', width: '500px', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
-                <div style={{ padding: '20px', background: '#000', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                    <h2 style={{ margin: 0, fontSize: '1.2rem', textTransform: 'uppercase' }}>💾 FINALIZE & ASSIGN QUOTE</h2>
-                    <button onClick={() => setShowCheckoutModal(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+            <div style={{ background: '#fff', border: '1px solid var(--line)', width: '550px', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', borderRadius: '2px' }}>
+                <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Finalize & Assign Quote</h2>
+                    <button onClick={() => setShowCheckoutModal(false)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
                 </div>
                 
-                <div style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', gap: '15px', maxHeight: '80vh', overflowY: 'auto' }}>
+                <div style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column', gap: '24px', maxHeight: '80vh', overflowY: 'auto' }}>
                     
-                    <div style={{ padding: '15px', background: '#eafaf1', border: '1px solid #28a745', textAlign: 'center' }}>
-                        <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#28a745' }}>FINAL CONFIGURED PRICE</div>
-                        <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>${pricing.finalPrice.toFixed(2)}</div>
+                    <div style={{ padding: '24px', background: 'var(--paper)', border: '1px solid var(--line)', textAlign: 'center' }}>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px' }}>Final Configured Price</div>
+                        <div style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', fontWeight: 500, color: 'var(--ink)' }}>${pricing.finalPrice.toFixed(2)}</div>
                     </div>
 
                     <div>
-                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#d9534f', display: 'block', marginBottom: '5px' }}>* VERIFY CUSTOMER:</label>
-                        <select value={jobData.customerId} onChange={e => setJobData({...jobData, customerId: e.target.value})} style={{ width: '100%', padding: '10px', fontSize: '1rem', border: '2px solid #d9534f', outline: 'none', background: '#fff9fa' }}>
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>* Verify Customer</label>
+                        <select value={jobData.customerId} onChange={e => setJobData({...jobData, customerId: e.target.value})} style={{ width: '100%', padding: '12px', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', background: '#fff', fontFamily: 'var(--sans)' }}>
                             <option value="">-- Choose Customer --</option>
                             {combinedCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
                         </select>
                     </div>
 
                     {jobData.customerId && (
-                        <div style={{ marginTop: '5px', background: '#f8f9fa', padding: '15px', border: '1px solid #ccc', borderLeft: '4px solid #007bff' }}>
-                            <h4 style={{ margin: '0 0 10px 0', color: '#007bff', fontSize: '0.9rem' }}>🚚 SHIPPING DESTINATION</h4>
+                        <div style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)' }}>
+                            <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Shipping Destination</h4>
                             
-                            <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+                            <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
                                 <button 
                                     onClick={() => {
                                         const cust = combinedCustomers.find(c => c.id === jobData.customerId);
                                         const defaultId = cust?.shippingAddresses?.[0]?.addressBookId || '';
                                         setJobData({...jobData, shippingMethod: 'SAVED', shippingAddressId: defaultId});
                                     }} 
-                                    style={{ flex: 1, padding: '10px', background: jobData.shippingMethod === 'SAVED' ? '#007bff' : '#fff', color: jobData.shippingMethod === 'SAVED' ? '#fff' : '#000', border: '1px solid #007bff', fontWeight: 'bold', cursor: 'pointer' }}
+                                    style={{ flex: 1, padding: '12px', background: jobData.shippingMethod === 'SAVED' ? 'var(--ink)' : '#fff', color: jobData.shippingMethod === 'SAVED' ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}
                                 >
-                                    SAVED ADDRESSES
+                                    Saved Addresses
                                 </button>
                                 <button 
                                     onClick={() => setJobData({...jobData, shippingMethod: 'CUSTOM', shippingAddressId: ''})} 
-                                    style={{ flex: 1, padding: '10px', background: jobData.shippingMethod === 'CUSTOM' ? '#007bff' : '#fff', color: jobData.shippingMethod === 'CUSTOM' ? '#fff' : '#000', border: '1px solid #007bff', fontWeight: 'bold', cursor: 'pointer' }}
+                                    style={{ flex: 1, padding: '12px', background: jobData.shippingMethod === 'CUSTOM' ? 'var(--ink)' : '#fff', color: jobData.shippingMethod === 'CUSTOM' ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}
                                 >
-                                    CUSTOM DROP-SHIP
+                                    Custom Drop-Ship
                                 </button>
                             </div>
 
                             {jobData.shippingMethod === 'SAVED' ? (
                                 <div>
                                     {(!combinedCustomers.find(c => c.id === jobData.customerId)?.shippingAddresses?.length) ? (
-                                        <div style={{ color: '#d9534f', fontSize: '0.85rem', fontStyle: 'italic', padding: '10px', background: '#fff0f0', border: '1px dashed #d9534f' }}>
+                                        <div style={{ color: 'var(--ink-soft)', fontSize: '0.9rem', fontStyle: 'italic', padding: '16px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                                             No synced NetSuite addresses found for this customer. Please use Custom Drop-Ship.
                                         </div>
                                     ) : (
                                         <select 
                                             value={jobData.shippingAddressId} 
                                             onChange={e => setJobData({...jobData, shippingAddressId: e.target.value})}
-                                            style={{ width: '100%', padding: '10px', border: '1px solid #007bff', fontWeight: 'bold', fontSize: '0.85rem' }}
+                                            style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}
                                         >
                                             <option value="">-- Select Saved Address --</option>
                                             {combinedCustomers.find(c => c.id === jobData.customerId)?.shippingAddresses.map(addr => (
@@ -1398,25 +1369,25 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                     )}
                                 </div>
                             ) : (
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input placeholder="Attention / Contact Name" value={jobData.customShippingAddress.attention} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, attention: e.target.value}})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                        <input placeholder="Attention / Contact Name" value={jobData.customShippingAddress.attention} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, attention: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
                                     </div>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input placeholder="Addressee / Company Name" value={jobData.customShippingAddress.addressee} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addressee: e.target.value}})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                        <input placeholder="Addressee / Company Name" value={jobData.customShippingAddress.addressee} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addressee: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
                                     </div>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input placeholder="Street Address 1" value={jobData.customShippingAddress.addr1} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr1: e.target.value}})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                        <input placeholder="Street Address 1" value={jobData.customShippingAddress.addr1} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr1: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
                                     </div>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input placeholder="Street Address 2 (Suite, Unit, etc.)" value={jobData.customShippingAddress.addr2} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr2: e.target.value}})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                        <input placeholder="Street Address 2 (Suite, Unit, etc.)" value={jobData.customShippingAddress.addr2} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr2: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
                                     </div>
                                     <div>
-                                        <input placeholder="City" value={jobData.customShippingAddress.city} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, city: e.target.value}})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                        <input placeholder="City" value={jobData.customShippingAddress.city} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, city: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
                                     </div>
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <input placeholder="State (e.g. NC)" value={jobData.customShippingAddress.state} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, state: e.target.value}})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
-                                        <input placeholder="Zip" value={jobData.customShippingAddress.zip} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, zip: e.target.value}})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                        <input placeholder="State" value={jobData.customShippingAddress.state} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, state: e.target.value}})} style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
+                                        <input placeholder="Zip" value={jobData.customShippingAddress.zip} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, zip: e.target.value}})} style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
                                     </div>
                                 </div>
                             )}
@@ -1424,16 +1395,16 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                     )}
 
                     <div>
-                        <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '5px' }}>JOB NAME (Optional):</label>
-                        <input type="text" placeholder="e.g. Master Suite Reno" value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={{ width: '100%', padding: '10px', fontSize: '0.9rem', border: '1px solid #ccc', outline: 'none', boxSizing: 'border-box' }} />
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Job Name (Optional)</label>
+                        <input type="text" placeholder="e.g. Master Suite Reno" value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box' }} />
                     </div>
                     <div>
-                        <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#d9534f', display: 'block', marginBottom: '5px' }}>* SIDEMARK:</label>
-                        <input type="text" placeholder="e.g. Guest Bedroom 1" value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})} style={{ width: '100%', padding: '10px', fontSize: '0.9rem', border: '2px solid #d9534f', background: '#fff9fa', outline: 'none', boxSizing: 'border-box' }} />
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>* Sidemark</label>
+                        <input type="text" placeholder="e.g. Guest Bedroom 1" value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--brass)', outline: 'none', boxSizing: 'border-box' }} />
                     </div>
 
-                    <button onClick={handleFinalizeQuote} style={{ width: '100%', padding: '15px', background: '#28a745', color: '#fff', fontSize: '1.1rem', fontWeight: 'bold', border: '2px solid #1e7e34', cursor: 'pointer', marginTop: '10px' }}>
-                        ✅ SUBMIT QUOTE TO PIPELINE
+                    <button onClick={handleFinalizeQuote} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
+                        Submit Quote to Pipeline
                     </button>
                 </div>
             </div>
@@ -1441,33 +1412,33 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       )}
 
       {showCloneModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-            <div style={{ background: '#fff', border: '4px solid #000', width: '800px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '20px 20px 0 #000' }}>
-                <div style={{ padding: '20px', background: '#000', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                    <h2 style={{ margin: 0, fontSize: '1.5rem', textTransform: 'uppercase' }}>📥 RESUME DRAFT / CLONE QUOTE</h2>
-                    <button onClick={() => setShowCloneModal(false)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '2rem', cursor: 'pointer' }}>×</button>
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+            <div style={{ background: '#fff', border: '1px solid var(--line)', width: '800px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', borderRadius: '2px' }}>
+                <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Resume Draft / Clone Quote</h2>
+                    <button onClick={() => setShowCloneModal(false)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '2rem', cursor: 'pointer' }}>×</button>
                 </div>
                 
-                <div style={{ padding: '10px', background: '#f8f9fa', borderBottom: '2px solid #ccc', textAlign: 'right' }}>
-                    <button onClick={handleClearAllDrafts} style={{ padding: '8px 15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderRadius: '4px' }}>
-                        🗑️ WIPE ALL ABANDONED DRAFTS
+                <div style={{ padding: '16px 30px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', textAlign: 'right' }}>
+                    <button onClick={handleClearAllDrafts} style={{ padding: '10px 20px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
+                        Wipe All Abandoned Drafts
                     </button>
                 </div>
 
-                <div style={{ padding: '20px', flex: 1, overflowY: 'auto', background: '#f8f9fa' }}>
-                    {previousDrafts.length === 0 ? <div style={{ color: '#666', fontStyle: 'italic' }}>No drafts pushed from Vision Tab yet.</div> : (
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                <div style={{ padding: '30px', flex: 1, overflowY: 'auto' }}>
+                    {previousDrafts.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem', textAlign: 'center' }}>No drafts pushed from Vision Tab yet.</div> : (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                             {previousDrafts.map(draft => (
-                                <div key={draft.id} style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px', transition: '0.2s', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
+                                <div key={draft.id} style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', transition: 'all 0.2s', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                        <span style={{ fontWeight: 'bold', color: '#007bff' }}>DRAFT: {draft.category}</span>
-                                        <div style={{ display: 'flex', gap: '10px' }}>
-                                            <button onClick={() => handleDeleteDraft(draft.id)} style={{ background: '#fff', color: '#d9534f', border: '1px solid #d9534f', padding: '2px 6px', fontSize: '0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>🗑️ DEL</button>
-                                            <button onClick={() => handleResumeDraft(draft.id)} style={{ background: '#28a745', color: '#fff', border: 'none', padding: '2px 8px', fontSize: '0.8rem', cursor: 'pointer', fontWeight: 'bold' }}>RESUME ➔</button>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)' }}>Draft: {draft.category}</span>
+                                        <div style={{ display: 'flex', gap: '12px' }}>
+                                            <button onClick={() => handleDeleteDraft(draft.id)} style={{ background: 'none', color: '#d9534f', border: 'none', fontSize: '0.9rem', cursor: 'pointer' }}>🗑️</button>
+                                            <button onClick={() => handleResumeDraft(draft.id)} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer' }}>Resume</button>
                                         </div>
                                     </div>
-                                    <div style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Generated by: {draft.author}</div>
-                                    <div style={{ fontSize: '0.75rem', color: '#666' }}>{new Date(draft.createdAt?.seconds * 1000).toLocaleString()}</div>
+                                    <div style={{ fontSize: '0.95rem', color: 'var(--ink)' }}>Generated by: {draft.author}</div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{new Date(draft.createdAt?.seconds * 1000).toLocaleString()}</div>
                                 </div>
                             ))}
                         </div>

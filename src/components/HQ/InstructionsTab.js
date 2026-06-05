@@ -114,9 +114,8 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
   const [activeStepId, setActiveStepId] = useState(null);
   const [activeTagId, setActiveTagId] = useState(null);
   
-  // 🚀 MARKUP STUDIO STATE
-  const [activeTool, setActiveTool] = useState('ORBIT'); // ORBIT, BOM, CALLOUT, DRAW
-  const [isFrozen, setIsFrozen] = useState(false); // 🔥 NEW FREEZE MECHANIC
+  const [activeTool, setActiveTool] = useState('ORBIT'); 
+  const [isFrozen, setIsFrozen] = useState(false); 
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentLine, setCurrentLine] = useState(null);
   const svgRef = useRef(null);
@@ -184,9 +183,6 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
     return () => unsubscribe();
   }, [activeAssembly]);
 
-  // =====================================
-  // PAGE / STEP MANAGEMENT
-  // =====================================
   const handleCreateStep = async (assembly) => {
       const currentSteps = assembly.instructionSteps || [];
       const newStep = { id: `STEP-${Date.now()}`, title: `Page ${currentSteps.length + 1}`, tags: [], callouts: [], drawings: [] };
@@ -212,9 +208,6 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
       try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { instructionSteps: updatedSteps }); } catch (e) {}
   };
 
-  // =====================================
-  // 3D CLICK HANDLER (TAGS & CALLOUTS)
-  // =====================================
   const handleMeshClick = async (point3D) => {
       if (!activeAssembly || !activeStepId) return;
       
@@ -222,7 +215,6 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
       const activeStep = currentSteps.find(s => s.id === activeStepId);
       if (!activeStep) return;
 
-      // 📍 Unfrozen: Drop BOM Pins
       if (!isFrozen && activeTool === 'BOM') {
           const nextNumber = activeStep.tags?.length > 0 ? Math.max(...activeStep.tags.map(t => t.number)) + 1 : 1;
           const newTag = { id: Date.now().toString(), x: point3D.x, y: point3D.y, z: point3D.z, number: nextNumber, linkedPinId: null };
@@ -232,7 +224,6 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
           setActiveTool('ORBIT'); 
           try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { instructionSteps: updatedSteps }); } catch (err) {}
       } 
-      // 💬 Frozen: Drop Text Callouts
       else if (isFrozen && activeTool === 'CALLOUT') {
           const newCallout = { id: Date.now().toString(), x: point3D.x, y: point3D.y, z: point3D.z, text: "New Note..." };
           const updatedSteps = currentSteps.map(s => s.id === activeStepId ? { ...s, callouts: [...(s.callouts||[]), newCallout] } : s);
@@ -241,9 +232,6 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
       }
   };
 
-  // =====================================
-  // CALLOUT MANAGEMENT
-  // =====================================
   const updateCalloutText = async (calloutId, text) => {
       const updatedSteps = activeAssembly.instructionSteps.map(s => {
           if (s.id !== activeStepId) return s;
@@ -283,9 +271,6 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
       try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { instructionSteps: updatedSteps }); } catch (e) {}
   };
 
-  // =====================================
-  // 2D FINELINER SVG LOGIC
-  // =====================================
   const getSvgCoords = (e) => {
       const rect = svgRef.current.getBoundingClientRect();
       const x = ((e.clientX - rect.left) / rect.width) * 1000;
@@ -332,7 +317,6 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
       try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { instructionSteps: updatedSteps }); } catch (e) {}
   };
 
-  // 🔓 Handle Unfreezing Safely
   const handleUnfreeze = () => {
       const activeStepObj = (activeAssembly?.instructionSteps || []).find(s => s.id === activeStepId);
       if (activeStepObj?.drawings?.length > 0) {
@@ -347,9 +331,6 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
       }
   };
 
-  // =====================================
-  // SHOP FLOOR SOP SYNC
-  // =====================================
   const handleSyncSops = async () => {
       if (!window.confirm("Sync these instructions directly to the Factory Floor tablets?")) return;
       const batch = writeBatch(db);
@@ -376,15 +357,17 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
   };
 
   const getToolStyle = (toolName) => ({
-      padding: '8px 12px',
-      background: activeTool === toolName ? '#000' : '#fff',
-      color: activeTool === toolName ? '#fff' : '#000',
-      border: '2px solid #000',
+      padding: '8px 16px',
+      background: activeTool === toolName ? 'var(--ink)' : 'transparent',
+      color: activeTool === toolName ? '#fff' : 'var(--ink)',
+      border: activeTool === toolName ? '1px solid var(--ink)' : '1px solid var(--line)',
       cursor: 'pointer',
-      fontWeight: 'bold',
-      fontSize: '0.8rem',
-      borderRadius: '4px',
-      transition: '0.2s'
+      fontFamily: 'var(--mono)',
+      fontSize: '10px',
+      textTransform: 'uppercase',
+      letterSpacing: '.1em',
+      borderRadius: '2px',
+      transition: 'all 0.2s'
   });
 
   const activeStepObj = (activeAssembly?.instructionSteps || []).find(s => s.id === activeStepId);
@@ -394,33 +377,33 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
   const nodeClusters = activeAssembly?.nodeClusters || [];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
-      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div>
-          <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#fd7e14' }}>6. Interactive 3D Instructions</h2>
-          <span style={{ fontSize: '0.7rem', color: '#666' }}>EXPLODED VIEW & BOM MAPPING STUDIO</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Exploded View & BOM Mapping Studio</span>
+          <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Interactive 3D Instructions</h2>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
         
-        <div style={{ width: activeAssembly ? '300px' : '100%', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+        <div style={{ width: activeAssembly ? '320px' : '100%', display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {masterAssemblies.length === 0 && (
-              <div style={{ background: '#fff', padding: '30px', border: '2px dashed #fd7e14', textAlign: 'center', color: '#fd7e14', fontWeight: 'bold' }}>
-                  NO MASTER ASSEMBLIES FOUND. Classify an assembly as "CPQ Enabled" or "MASTER" in Tab 4/Tab 2 to begin.
+              <div style={{ background: 'var(--paper)', padding: '40px', border: '1px dashed var(--line)', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontStyle: 'italic' }}>
+                  No Master Assemblies found. Classify an assembly as "CPQ Enabled" or "MASTER" in Tab 4/Tab 2 to begin.
               </div>
           )}
           {masterAssemblies.map(asm => {
              const hasCAD = !!asm.manufacturingSpecs?.cadUrl;
              return (
-              <div key={asm.id} onClick={() => { setActiveAssembly(asm); setExplodeFactor(0); setMeshCount(0); setIsFrozen(false); setActiveTool('ORBIT'); }} style={{ background: activeAssembly?.id === asm.id ? '#fff9c4' : '#fff', border: activeAssembly?.id === asm.id ? '3px solid #000' : '2px solid #ccc', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', boxShadow: activeAssembly?.id === asm.id ? '5px 5px 0 #000' : 'none' }}>
-                <div style={{ padding: '5px 10px', background: hasCAD ? '#fd7e14' : '#666', color: '#fff', fontSize: '0.65rem', fontWeight: 'bold', textAlign: 'center', borderBottom: '1px solid #000' }}>
-                    <span>{hasCAD ? '⚙️ 3D CAD AVAILABLE' : '⚠️ NO CAD UPLOADED'}</span>
+              <div key={asm.id} onClick={() => { setActiveAssembly(asm); setExplodeFactor(0); setMeshCount(0); setIsFrozen(false); setActiveTool('ORBIT'); }} style={{ background: activeAssembly?.id === asm.id ? 'var(--paper-2)' : '#fff', border: activeAssembly?.id === asm.id ? '1px solid var(--brass)' : '1px solid var(--line)', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', boxShadow: activeAssembly?.id === asm.id ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}>
+                <div style={{ padding: '6px 12px', background: hasCAD ? 'var(--paper)' : 'var(--paper-2)', color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', borderBottom: '1px solid var(--line)' }}>
+                    <span>{hasCAD ? '3D CAD Available' : 'No CAD Uploaded'}</span>
                 </div>
-                <div style={{ padding: '15px' }}>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff' }}>{asm.legacyErpId !== "PENDING" && asm.legacyErpId !== "N/A" ? asm.legacyErpId : asm.itemId}</div>
-                  <div style={{ fontSize: '1rem', fontWeight: 'bold', marginTop: '5px' }}>{asm.itemName}</div>
+                <div style={{ padding: '16px' }}>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }}>{asm.legacyErpId !== "PENDING" && asm.legacyErpId !== "N/A" ? asm.legacyErpId : asm.itemId}</div>
+                  <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: 'var(--ink)', marginTop: '8px' }}>{asm.itemName}</div>
                 </div>
               </div>
              )
@@ -428,70 +411,69 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
         </div>
 
         {activeAssembly && (
-          <div style={{ flex: 1, background: '#fff', border: '3px solid #000', boxShadow: '10px 10px 0 #000', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column', borderRadius: '2px', overflow: 'hidden' }}>
             
-            <div style={{ padding: '15px 20px', background: '#000', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0, fontSize: '1.4rem', color: '#fd7e14' }}>{activeAssembly.itemName} - MANUAL BUILDER</h3>
-              <button onClick={() => setActiveAssembly(null)} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+            <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+              <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>{activeAssembly.itemName} - Builder</h3>
+              <button onClick={() => setActiveAssembly(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
             </div>
 
-            <div style={{ padding: '20px', display: 'flex', gap: '20px', flex: 1 }}>
+            <div style={{ padding: '30px', display: 'flex', gap: '30px', flex: 1 }}>
               
-              <div style={{ border: isFrozen ? '4px solid #d9534f' : '2px solid #000', background: '#e5e5e5', display: 'flex', flexDirection: 'column', flex: 1.5, minHeight: '600px', position: 'relative', transition: '0.2s' }}>
+              <div style={{ border: isFrozen ? '2px solid var(--brass)' : '1px solid var(--line)', background: 'var(--paper)', display: 'flex', flexDirection: 'column', flex: 1.5, minHeight: '600px', position: 'relative', transition: 'all 0.2s', borderRadius: '2px' }}>
                  
-                 <div style={{ padding: '15px', background: '#fff', borderBottom: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '15px', zIndex: 100 }}>
+                 <div style={{ padding: '20px', background: '#fff', borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '20px', zIndex: 100 }}>
                      
-                     {/* 🚀 UPGRADED: DYNAMIC FREEZE TOOLBAR */}
-                     <div style={{ display: 'flex', gap: '10px', background: isFrozen ? '#fff0f0' : '#f8f9fa', padding: '10px', border: isFrozen ? '1px solid #d9534f' : '1px solid #ccc', borderRadius: '4px' }}>
-                         
+                     {/* TOOLBAR */}
+                     <div style={{ display: 'flex', gap: '12px', background: isFrozen ? 'var(--paper-2)' : '#fff', padding: '16px', border: '1px solid var(--line)', borderRadius: '2px' }}>
                          {!isFrozen ? (
                              <>
-                                 <button onClick={() => setActiveTool('ORBIT')} style={getToolStyle('ORBIT')}>🖐️ ORBIT</button>
-                                 <button onClick={() => setActiveTool('BOM')} style={getToolStyle('BOM')}>📍 BOM TAG</button>
-                                 <button onClick={() => { setIsFrozen(true); setActiveTool('CALLOUT'); }} style={{ ...getToolStyle('FREEZE'), marginLeft: 'auto', background: '#007bff', color: '#fff', boxShadow: '2px 2px 0 #004085' }}>
-                                     📸 FREEZE FOR MARKUP
+                                 <button onClick={() => setActiveTool('ORBIT')} style={getToolStyle('ORBIT')}>Orbit</button>
+                                 <button onClick={() => setActiveTool('BOM')} style={getToolStyle('BOM')}>BOM Tag</button>
+                                 <button onClick={() => { setIsFrozen(true); setActiveTool('CALLOUT'); }} style={{ ...getToolStyle('FREEZE'), marginLeft: 'auto', background: 'var(--ink)', color: '#fff', border: 'none' }}>
+                                     Freeze for Markup
                                  </button>
                              </>
                          ) : (
                              <>
-                                 <button onClick={() => setActiveTool('CALLOUT')} style={getToolStyle('CALLOUT')}>💬 TEXT NOTE</button>
-                                 <button onClick={() => setActiveTool('DRAW')} style={getToolStyle('DRAW')}>🖍️ FINELINER</button>
-                                 <button onClick={handleUnfreeze} style={{ ...getToolStyle('UNFREEZE'), marginLeft: 'auto', background: '#d9534f', color: '#fff', boxShadow: '2px 2px 0 #851c19' }}>
-                                     🔓 UNFREEZE VIEW
+                                 <button onClick={() => setActiveTool('CALLOUT')} style={getToolStyle('CALLOUT')}>Text Note</button>
+                                 <button onClick={() => setActiveTool('DRAW')} style={getToolStyle('DRAW')}>Fineliner</button>
+                                 <button onClick={handleUnfreeze} style={{ ...getToolStyle('UNFREEZE'), marginLeft: 'auto', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--ink)' }}>
+                                     Unfreeze View
                                  </button>
                                  {activeTool === 'DRAW' && (
-                                     <button onClick={() => clearDrawings()} style={{ background: '#888', color: '#fff', border: 'none', padding: '8px 12px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer', fontSize: '0.7rem' }}>🧹 CLEAR LINES</button>
+                                     <button onClick={() => clearDrawings()} style={{ background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', padding: '8px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer' }}>Clear Lines</button>
                                  )}
                              </>
                          )}
                      </div>
 
-                     <div style={{ display: 'flex', gap: '15px', alignItems: 'center', justifyContent: 'space-between' }}>
-                         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                             <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: isFrozen ? '#aaa' : '#000' }}>EXPLODE BEHAVIOR:</label>
-                             <div style={{ display: 'flex', border: isFrozen ? '2px solid #aaa' : '2px solid #000', borderRadius: '4px', overflow: 'hidden' }}>
-                                 <button disabled={isFrozen} onClick={() => setExplodeMode('INDIVIDUAL')} style={{ padding: '8px 12px', background: explodeMode === 'INDIVIDUAL' ? (isFrozen ? '#aaa' : '#000') : '#fff', color: explodeMode === 'INDIVIDUAL' ? '#fff' : (isFrozen ? '#aaa' : '#000'), border: 'none', cursor: isFrozen ? 'not-allowed' : 'pointer', fontWeight: 'bold', fontSize: '0.7rem' }}>INDIVIDUAL PARTS</button>
-                                 <button disabled={isFrozen} onClick={() => setExplodeMode('GROUPED')} style={{ padding: '8px 12px', background: explodeMode === 'GROUPED' ? (isFrozen ? '#aaa' : '#000') : '#fff', color: explodeMode === 'GROUPED' ? '#fff' : (isFrozen ? '#aaa' : '#000'), border: 'none', cursor: isFrozen ? 'not-allowed' : 'pointer', fontWeight: 'bold', fontSize: '0.7rem' }}>SUB-ASSEMBLIES</button>
+                     <div style={{ display: 'flex', gap: '20px', alignItems: 'center', justifyContent: 'space-between' }}>
+                         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                             <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: isFrozen ? 'var(--ink-soft)' : 'var(--ink)' }}>Explode Behavior:</label>
+                             <div style={{ display: 'flex', border: '1px solid var(--line)', borderRadius: '2px', overflow: 'hidden', background: '#fff' }}>
+                                 <button disabled={isFrozen} onClick={() => setExplodeMode('INDIVIDUAL')} style={{ padding: '8px 16px', background: explodeMode === 'INDIVIDUAL' ? (isFrozen ? 'var(--paper)' : 'var(--ink)') : 'transparent', color: explodeMode === 'INDIVIDUAL' ? '#fff' : (isFrozen ? 'var(--ink-soft)' : 'var(--ink)'), border: 'none', cursor: isFrozen ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Individual Parts</button>
+                                 <button disabled={isFrozen} onClick={() => setExplodeMode('GROUPED')} style={{ padding: '8px 16px', background: explodeMode === 'GROUPED' ? (isFrozen ? 'var(--paper)' : 'var(--ink)') : 'transparent', color: explodeMode === 'GROUPED' ? '#fff' : (isFrozen ? 'var(--ink-soft)' : 'var(--ink)'), border: 'none', cursor: isFrozen ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Sub-Assemblies</button>
                              </div>
                          </div>
-                         <div style={{ display: 'flex', gap: '5px' }}>
-                             <button disabled={isFrozen} onClick={() => triggerZoom('IN')} style={{ padding: '8px 15px', background: isFrozen ? '#aaa' : '#007bff', color: '#fff', border: '2px solid #000', fontWeight: 'bold', cursor: isFrozen ? 'not-allowed' : 'pointer' }}>🔍 +</button>
-                             <button disabled={isFrozen} onClick={() => triggerZoom('OUT')} style={{ padding: '8px 15px', background: isFrozen ? '#aaa' : '#007bff', color: '#fff', border: '2px solid #000', fontWeight: 'bold', cursor: isFrozen ? 'not-allowed' : 'pointer' }}>🔍 -</button>
+                         <div style={{ display: 'flex', gap: '8px' }}>
+                             <button disabled={isFrozen} onClick={() => triggerZoom('IN')} style={{ padding: '8px 16px', background: isFrozen ? 'var(--paper-2)' : 'var(--ink)', color: isFrozen ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: isFrozen ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px' }}>Zoom +</button>
+                             <button disabled={isFrozen} onClick={() => triggerZoom('OUT')} style={{ padding: '8px 16px', background: isFrozen ? 'var(--paper-2)' : 'var(--ink)', color: isFrozen ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: isFrozen ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px' }}>Zoom -</button>
                          </div>
                      </div>
 
-                     <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: isFrozen ? '#aaa' : '#000' }}>SLIDER:</label>
+                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: isFrozen ? 'var(--ink-soft)' : 'var(--ink)' }}>Explode Amount:</label>
                         <input type="range" min="0" max="100" value={explodeFactor} onChange={(e) => setExplodeFactor(e.target.value)} disabled={!activeAssembly.manufacturingSpecs?.cadUrl || meshCount <= 1 || isFrozen} style={{ flex: 1, cursor: isFrozen ? 'not-allowed' : 'pointer' }} />
                      </div>
                  </div>
                  
                  <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
                     {!activeAssembly.manufacturingSpecs?.cadUrl ? (
-                        <div style={{ color: '#666', padding: '40px', textAlign: 'center', fontSize: '0.9rem', fontWeight: 'bold', marginTop: '100px' }}>A 3D CAD model (.glb) is required. Upload one in Tab 3.</div>
+                        <div style={{ color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: '1.2rem', padding: '60px', textAlign: 'center' }}>A 3D CAD model (.glb) is required. Upload one in Tab 3.</div>
                     ) : (
                         <>
-                            {/* 🚀 SVG FINELINER OVERLAY */}
+                            {/* SVG FINELINER OVERLAY */}
                             <svg
                                 ref={svgRef}
                                 viewBox="0 0 1000 1000"
@@ -503,10 +485,10 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
                                 onPointerLeave={endDraw}
                             >
                                 {activeDrawings.map(line => (
-                                    <polyline key={line.id} points={line.points.map(p => `${p.x},${p.y}`).join(' ')} stroke="#d9534f" strokeWidth="3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                                    <polyline key={line.id} points={line.points.map(p => `${p.x},${p.y}`).join(' ')} stroke="var(--brass)" strokeWidth="3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
                                 ))}
                                 {currentLine && currentLine.points && (
-                                    <polyline points={currentLine.points.map(p => `${p.x},${p.y}`).join(' ')} stroke="#d9534f" strokeWidth="3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                                    <polyline points={currentLine.points.map(p => `${p.x},${p.y}`).join(' ')} stroke="var(--brass)" strokeWidth="3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
                                 )}
                             </svg>
 
@@ -514,11 +496,9 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
                                 <ambientLight intensity={0.5} />
                                 <directionalLight position={[10, 10, 5]} intensity={1} />
                                 
-                                {/* 🚀 FIX: Auto-disables Orbit Controls when Frozen */}
                                 <OrbitControls makeDefault enabled={!isFrozen && activeTool !== 'DRAW'} />
                                 <CameraController zoomTrigger={zoomTrigger} />
                                 
-                                {/* 🚀 FIX: Removed the 'observe' tag so bounds doesn't auto-snap when tools change */}
                                 <Bounds fit clip margin={1.2}>
                                     <ExplodableModel 
                                         url={activeAssembly.manufacturingSpecs.cadUrl} 
@@ -537,40 +517,40 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
                                     const isActive = activeTagId === tag.id;
                                     return (
                                         <Html key={tag.id} position={[tag.x, tag.y, tag.z]} zIndexRange={[100, 0]}>
-                                            <div onClick={(e) => { e.stopPropagation(); setActiveTagId(tag.id); }} style={{ width: '30px', height: '30px', background: isActive ? '#007bff' : '#fff', color: isActive ? '#fff' : '#000', border: '3px solid #000', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', cursor: 'pointer', transform: 'translate(-50%, -50%)', boxShadow: '2px 2px 5px rgba(0,0,0,0.3)' }}>{tag.number}</div>
+                                            <div onClick={(e) => { e.stopPropagation(); setActiveTagId(tag.id); }} style={{ width: '24px', height: '24px', background: isActive ? 'var(--ink)' : '#fff', color: isActive ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--mono)', fontSize: '10px', cursor: 'pointer', transform: 'translate(-50%, -50%)', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>{tag.number}</div>
                                             {isActive && (
-                                                <div style={{ position: 'absolute', top: '15px', left: '15px', width: '200px', background: '#fff', border: '2px solid #000', padding: '10px', boxShadow: '4px 4px 0 rgba(0,0,0,0.2)' }}>
-                                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>ASSIGN BOM COMPONENT:</label>
-                                                    <select value={tag.linkedPinId || ''} onChange={(e) => updateTagAssignment(tag.id, e.target.value)} style={{ width: '100%', padding: '5px', fontSize: '0.75rem', border: '1px solid #ccc', marginBottom: '10px' }}>
+                                                <div style={{ position: 'absolute', top: '15px', left: '15px', width: '220px', background: '#fff', border: '1px solid var(--line)', padding: '16px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
+                                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Assign BOM Component</label>
+                                                    <select value={tag.linkedPinId || ''} onChange={(e) => updateTagAssignment(tag.id, e.target.value)} style={{ width: '100%', padding: '8px', fontSize: '0.85rem', fontFamily: 'var(--sans)', border: '1px solid var(--line)', marginBottom: '12px', outline: 'none' }}>
                                                         <option value="">-- SELECT PART --</option>
                                                         {bomParts.map(p => ( <option key={p.id} value={p.id}>{p.partName}</option> ))}
                                                     </select>
-                                                    <button onClick={() => removeTag(tag.id)} style={{ width: '100%', padding: '5px', background: '#d9534f', color: '#fff', border: 'none', fontSize: '0.65rem', fontWeight: 'bold', cursor: 'pointer' }}>REMOVE TAG</button>
+                                                    <button onClick={() => removeTag(tag.id)} style={{ width: '100%', padding: '8px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>Remove Tag</button>
                                                 </div>
                                             )}
                                         </Html>
                                     )
                                 })}
 
-                                {/* 🚀 BRAND NEW: RENDER ARCHITECTURAL TEXT CALLOUTS */}
+                                {/* RENDER TEXT CALLOUTS */}
                                 {activeCallouts.map(c => (
                                     <Html key={c.id} position={[c.x, c.y, c.z]} zIndexRange={[100, 0]}>
                                         <div style={{ position: 'relative' }}>
-                                            <div style={{ width: '8px', height: '8px', background: '#d9534f', borderRadius: '50%', transform: 'translate(-50%, -50%)' }}></div>
+                                            <div style={{ width: '8px', height: '8px', background: 'var(--brass)', borderRadius: '50%', transform: 'translate(-50%, -50%)' }}></div>
                                             
-                                            <div style={{ position: 'absolute', top: '-40px', left: '30px', width: '220px', background: 'rgba(255, 255, 255, 0.95)', border: '2px solid #000', padding: '8px', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                                                <div style={{ position: 'absolute', top: '40px', left: '-30px', width: '30px', height: '2px', background: '#000' }}></div>
+                                            <div style={{ position: 'absolute', top: '-40px', left: '30px', width: '220px', background: 'rgba(255, 255, 255, 0.95)', border: '1px solid var(--line)', padding: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
+                                                <div style={{ position: 'absolute', top: '40px', left: '-30px', width: '30px', height: '1px', background: 'var(--line)' }}></div>
                                                 
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px', borderBottom: '1px solid #ccc', paddingBottom: '3px' }}>
-                                                    <span style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d9534f' }}>CALLOUT NOTE</span>
-                                                    <button onClick={(e) => { e.stopPropagation(); removeCallout(c.id); }} style={{ background: 'none', border: 'none', color: '#000', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>✖</button>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '6px' }}>
+                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Note</span>
+                                                    <button onClick={(e) => { e.stopPropagation(); removeCallout(c.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1rem', padding: 0 }}>×</button>
                                                 </div>
                                                 
                                                 <textarea 
                                                     value={c.text} 
                                                     onChange={(e) => updateCalloutText(c.id, e.target.value)} 
                                                     onPointerDown={(e) => e.stopPropagation()} 
-                                                    style={{ width: '100%', minHeight: '60px', border: 'none', background: 'transparent', outline: 'none', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical' }}
+                                                    style={{ width: '100%', minHeight: '60px', border: 'none', background: 'transparent', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem', resize: 'vertical', color: 'var(--ink)' }}
                                                 />
                                             </div>
                                         </div>
@@ -582,58 +562,58 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
                  </div>
               </div>
 
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '15px' }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
                  
-                 <div style={{ display: 'flex', gap: '10px', background: '#e9ecef', padding: '10px', border: '2px solid #000' }}>
-                     <button onClick={() => setRightPanelTab('PAGES')} style={{ padding: '8px 15px', background: rightPanelTab === 'PAGES' ? '#000' : 'transparent', color: rightPanelTab === 'PAGES' ? '#fff' : '#000', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '0.8rem' }}>📑 INSTRUCTION PAGES</button>
-                     <button onClick={() => setRightPanelTab('SOPS')} style={{ padding: '8px 15px', background: rightPanelTab === 'SOPS' ? '#000' : 'transparent', color: rightPanelTab === 'SOPS' ? '#fff' : '#000', fontWeight: 'bold', border: 'none', cursor: 'pointer', fontSize: '0.8rem' }}>🏭 SHOP FLOOR SOPs</button>
+                 <div style={{ display: 'flex', gap: '12px', background: 'var(--paper)', padding: '16px', border: '1px solid var(--line)' }}>
+                     <button onClick={() => setRightPanelTab('PAGES')} style={{ padding: '10px 20px', background: rightPanelTab === 'PAGES' ? 'var(--ink)' : 'transparent', color: rightPanelTab === 'PAGES' ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: rightPanelTab === 'PAGES' ? 'none' : '1px solid var(--line)', cursor: 'pointer', transition: 'all 0.2s' }}>Instruction Pages</button>
+                     <button onClick={() => setRightPanelTab('SOPS')} style={{ padding: '10px 20px', background: rightPanelTab === 'SOPS' ? 'var(--ink)' : 'transparent', color: rightPanelTab === 'SOPS' ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: rightPanelTab === 'SOPS' ? 'none' : '1px solid var(--line)', cursor: 'pointer', transition: 'all 0.2s' }}>Shop Floor SOPs</button>
                  </div>
 
                  {rightPanelTab === 'PAGES' && (
                      <>
-                        <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                            <div style={{ padding: '12px 15px', background: '#28a745', color: '#fff', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                                <span>PAGES & VIEWS</span>
-                                <button onClick={() => handleCreateStep(activeAssembly)} style={{ background: '#fff', color: '#28a745', border: 'none', padding: '4px 8px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>+ NEW PAGE</button>
+                        <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                            <div style={{ padding: '16px 20px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                                <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Pages & Views</span>
+                                <button onClick={() => handleCreateStep(activeAssembly)} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>+ New Page</button>
                             </div>
-                            <div style={{ display: 'flex', flexDirection: 'column', maxHeight: '200px', overflowY: 'auto' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', maxHeight: '250px', overflowY: 'auto' }}>
                                 {(activeAssembly.instructionSteps || []).map((step, idx) => (
-                                    <div key={step.id} onClick={() => { setActiveStepId(step.id); setIsFrozen(false); setActiveTool('ORBIT'); }} style={{ display: 'flex', alignItems: 'center', padding: '10px 15px', background: activeStepId === step.id ? '#eafaf1' : '#fff', borderBottom: '1px solid #ccc', cursor: 'pointer', borderLeft: activeStepId === step.id ? '6px solid #28a745' : '6px solid transparent' }}>
-                                        <div style={{ fontWeight: 'bold', color: '#333', marginRight: '10px' }}>{idx + 1}.</div>
-                                        <input value={step.title} onChange={(e) => updateStepTitle(step.id, e.target.value)} onClick={e => e.stopPropagation()} style={{ flex: 1, padding: '5px', border: activeStepId === step.id ? '1px solid #28a745' : '1px solid transparent', background: 'transparent', fontWeight: 'bold', color: activeStepId === step.id ? '#1e7e34' : '#666', outline: 'none' }} />
-                                        <span style={{ fontSize: '0.7rem', color: '#007bff', fontWeight: 'bold', margin: '0 10px' }}>{step.tags?.length || 0} Pins</span>
-                                        <button onClick={(e) => { e.stopPropagation(); handleDeleteStep(step.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1rem' }}>🗑️</button>
+                                    <div key={step.id} onClick={() => { setActiveStepId(step.id); setIsFrozen(false); setActiveTool('ORBIT'); }} style={{ display: 'flex', alignItems: 'center', padding: '12px 20px', background: activeStepId === step.id ? 'var(--paper-2)' : '#fff', borderBottom: '1px solid var(--line)', cursor: 'pointer', borderLeft: activeStepId === step.id ? '4px solid var(--brass)' : '4px solid transparent' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginRight: '12px' }}>{idx + 1}.</div>
+                                        <input value={step.title} onChange={(e) => updateStepTitle(step.id, e.target.value)} onClick={e => e.stopPropagation()} style={{ flex: 1, padding: '8px', border: activeStepId === step.id ? '1px solid var(--line)' : '1px solid transparent', background: activeStepId === step.id ? '#fff' : 'transparent', fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink)', outline: 'none' }} />
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', margin: '0 16px' }}>{step.tags?.length || 0} Pins</span>
+                                        <button onClick={(e) => { e.stopPropagation(); handleDeleteStep(step.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1.1rem' }}>×</button>
                                     </div>
                                 ))}
                             </div>
                         </div>
 
-                        <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                            <div style={{ padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '1rem', borderBottom: '2px solid #000' }}>
-                                PARTS FOR: {activeStepObj?.title?.toUpperCase() || 'CURRENT PAGE'}
+                        <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                            <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid var(--line)' }}>
+                                Parts for: {activeStepObj?.title || 'Current Page'}
                             </div>
-                            <div style={{ padding: '15px', flex: 1, overflowY: 'auto', background: '#f8f9fa' }}>
+                            <div style={{ padding: '20px', flex: 1, overflowY: 'auto' }}>
                                 {activeTags.length === 0 ? (
-                                    <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.8rem', textAlign: 'center', marginTop: '20px' }}>Click directly on the 3D model to attach parts to this page.</div>
+                                    <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.1rem', textAlign: 'center', marginTop: '30px' }}>Click directly on the 3D model to attach parts to this page.</div>
                                 ) : (
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>
                                         <thead>
-                                            <tr style={{ background: '#eee', borderBottom: '2px solid #000' }}>
-                                                <th style={{ padding: '10px', textAlign: 'center', width: '40px' }}>ITEM</th>
-                                                <th style={{ padding: '10px', textAlign: 'center', width: '40px' }}>QTY</th>
-                                                <th style={{ padding: '10px', textAlign: 'left' }}>DESCRIPTION</th>
+                                            <tr style={{ background: 'var(--paper)', borderBottom: '1px solid var(--line)' }}>
+                                                <th style={{ padding: '12px', textAlign: 'center', width: '60px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Item</th>
+                                                <th style={{ padding: '12px', textAlign: 'center', width: '60px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Qty</th>
+                                                <th style={{ padding: '12px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Description</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             {activeTags.sort((a,b) => a.number - b.number).map(tag => {
                                                 const bomPart = bomParts.find(p => p.id === tag.linkedPinId);
                                                 return (
-                                                    <tr key={tag.id} onClick={() => setActiveTagId(tag.id)} style={{ borderBottom: '1px solid #ccc', background: activeTagId === tag.id ? '#e6f2ff' : '#fff', cursor: 'pointer' }}>
-                                                        <td style={{ padding: '10px', textAlign: 'center', fontWeight: 'bold' }}>{tag.number}</td>
-                                                        <td style={{ padding: '10px', textAlign: 'center' }}>{bomPart ? (bomPart.defaultQty || 1) : '-'}</td>
-                                                        <td style={{ padding: '10px', fontWeight: bomPart ? 'bold' : 'normal', color: bomPart ? '#000' : '#d9534f' }}>
-                                                            {bomPart ? bomPart.partName : "UNASSIGNED PART"}
-                                                            {bomPart && bomPart.legacyErpId !== "PENDING" && <div style={{ fontSize: '0.65rem', color: '#007bff', marginTop: '2px' }}>{bomPart.legacyErpId}</div>}
+                                                    <tr key={tag.id} onClick={() => setActiveTagId(tag.id)} style={{ borderBottom: '1px solid var(--line)', background: activeTagId === tag.id ? 'var(--paper-2)' : '#fff', cursor: 'pointer' }}>
+                                                        <td style={{ padding: '12px', textAlign: 'center', fontFamily: 'var(--mono)' }}>{tag.number}</td>
+                                                        <td style={{ padding: '12px', textAlign: 'center' }}>{bomPart ? (bomPart.defaultQty || 1) : '-'}</td>
+                                                        <td style={{ padding: '12px', color: bomPart ? 'var(--ink)' : '#d9534f' }}>
+                                                            <div style={{ fontWeight: bomPart ? 500 : 400 }}>{bomPart ? bomPart.partName : "Unassigned Part"}</div>
+                                                            {bomPart && bomPart.legacyErpId !== "PENDING" && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px' }}>{bomPart.legacyErpId}</div>}
                                                         </td>
                                                     </tr>
                                                 )
@@ -647,40 +627,40 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
                  )}
 
                  {rightPanelTab === 'SOPS' && (
-                     <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #0056b3' }}>
-                         <div style={{ padding: '15px', background: '#0056b3', color: '#fff', fontWeight: 'bold', fontSize: '1rem', borderBottom: '2px solid #000' }}>
-                             FACTORY FLOOR ROUTING & SOPs
+                     <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                         <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>
+                             Factory Floor Routing & SOPs
                          </div>
-                         <div style={{ padding: '20px', flex: 1, overflowY: 'auto', background: '#f8f9fa' }}>
+                         <div style={{ padding: '30px', flex: 1, overflowY: 'auto' }}>
                              {!activeAssembly.manufacturingSpecs?.shopRoutings || activeAssembly.manufacturingSpecs.shopRoutings.length === 0 ? (
-                                 <div style={{ color: '#d9534f', textAlign: 'center', fontWeight: 'bold', marginTop: '20px', border: '2px dashed #d9534f', padding: '20px', borderRadius: '8px' }}>
-                                     No Factory Floor Programs are linked to this Master Assembly.<br/><br/>
-                                     <span style={{ fontSize: '0.8rem', color: '#666' }}>A Shop Floor Engineer must build the routing on their tablet and sync it to the HQ Master Library.</span>
+                                 <div style={{ color: 'var(--ink-soft)', textAlign: 'center', marginTop: '40px', border: '1px dashed var(--line)', padding: '40px', background: 'var(--paper)' }}>
+                                     <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', marginBottom: '10px' }}>No Factory Floor Programs are linked to this Master Assembly.</div>
+                                     <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>A Shop Floor Engineer must build the routing on their tablet and sync it to the HQ Master Library.</div>
                                  </div>
                              ) : (
-                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
                                      {activeAssembly.manufacturingSpecs.shopRoutings.map((op, idx) => (
-                                         <div key={idx} style={{ background: '#fff', border: '1px solid #ccc', borderLeft: '6px solid #0056b3', borderRadius: '4px', padding: '15px', boxShadow: '0 2px 5px rgba(0,0,0,0.05)' }}>
-                                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-                                                 <span style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#0056b3' }}>OP {idx + 1}: {op.machine}</span>
-                                                 <span style={{ background: '#eef5ff', color: '#0056b3', padding: '2px 8px', fontSize: '0.8rem', fontWeight: 'bold', border: '1px solid #0056b3', borderRadius: '4px' }}>
+                                         <div key={idx} style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px' }}>
+                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>
+                                                 <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>OP {idx + 1}: {op.machine}</span>
+                                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px' }}>
                                                      {op.progName}
                                                  </span>
                                              </div>
-                                             <div style={{ fontSize: '0.8rem', color: '#666', marginBottom: '10px' }}>
+                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '16px' }}>
                                                  Setup Time: {op.setupTime}m | Run Time: {op.timePerPiece}m
                                              </div>
-                                             <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#333' }}>OPERATOR INSTRUCTIONS / SOP:</label>
+                                             <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Operator Instructions / SOP</label>
                                              <textarea 
                                                 value={sopEdits[op.progId] !== undefined ? sopEdits[op.progId] : op.steps}
                                                 onChange={(e) => setSopEdits({...sopEdits, [op.progId]: e.target.value})}
-                                                style={{ width: '100%', minHeight: '100px', padding: '10px', boxSizing: 'border-box', marginTop: '5px', border: '1px solid #ccc', borderRadius: '4px', fontFamily: 'monospace', fontSize: '0.85rem' }}
+                                                style={{ width: '100%', minHeight: '120px', padding: '16px', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', resize: 'vertical' }}
                                              />
                                          </div>
                                      ))}
                                      
-                                     <button onClick={handleSyncSops} style={{ padding: '15px', background: '#28a745', color: '#fff', fontSize: '1.1rem', fontWeight: 'bold', border: '2px solid #1e7e34', cursor: 'pointer', boxShadow: '4px 4px 0 #1e7e34' }}>
-                                         💾 SYNC SOPs TO SHOP FLOOR TABLETS
+                                     <button onClick={handleSyncSops} style={{ padding: '16px', background: 'var(--ink)', color: '#fff', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }}>
+                                         Sync SOPs to Shop Floor Tablets
                                      </button>
                                  </div>
                              )}
