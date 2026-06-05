@@ -4,6 +4,7 @@ import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import SharedMessaging from '../Shared/SharedMessaging';
+import AssetGalleryTab from '../Shared/AssetGalleryTab';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -25,13 +26,11 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         if (!pinInput) return;
         
         try {
-            // Updated secure cloud function handshake
             const authenticatePin = httpsCallable(functions, 'authenticatePin');
             const result = await authenticatePin({ pin: pinInput });
             
             const { token, user: userData } = result.data;
 
-            // Sign into the auth context
             await signInWithCustomToken(auth, token);
 
             setOperator(userData);
@@ -177,9 +176,9 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    {['QUEUE', 'PACKING', 'MESSAGING'].map(tab => (
+                    {['QUEUE', 'PACKING', 'GALLERY', 'MESSAGING'].map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '10px 16px', background: 'transparent', color: activeTab === tab ? theme.ink : theme.inkSoft, borderBottom: activeTab === tab ? `2px solid ${theme.brass}` : '2px solid transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
-                            {tab.replace('QUEUE', 'PICK QUEUE').replace('PACKING', 'PACKAGING PREP')}
+                            {tab.replace('QUEUE', 'PICK QUEUE').replace('PACKING', 'PACKAGING PREP').replace('GALLERY', 'ASSET GALLERY')}
                         </button>
                     ))}
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
@@ -189,6 +188,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
             <main style={{ flex: 1, padding: '30px', overflowY: 'auto' }}>
                 
+                {/* 📦 TAB: PICK QUEUE */}
                 {activeTab === 'QUEUE' && (
                     <div style={{ display: 'flex', gap: '30px', height: '100%' }}>
                         <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
@@ -233,6 +233,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                     </div>
                 )}
 
+                {/* 🏷️ TAB: PACKAGING PREP */}
                 {activeTab === 'PACKING' && (
                     <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                         <h2 style={{ borderBottom: `1px solid ${theme.line}`, paddingBottom: '15px', color: theme.ink, fontFamily: theme.serif, fontWeight: 500, margin: '0 0 30px 0' }}>Packaging Prep Queue</h2>
@@ -251,6 +252,14 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                     </div>
                 )}
 
+                {/* 🖼️ TAB: ASSET GALLERY */}
+                {activeTab === 'GALLERY' && (
+                    <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '10px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                        <AssetGalleryTab currentUser={operator?.name || 'Unknown'} activeBrand={activeBrand} />
+                    </div>
+                )}
+
+                {/* 💬 TAB: MESSAGING */}
                 {activeTab === 'MESSAGING' && (
                     <div style={{ background: '#fff', border: `1px solid ${theme.line}`, height: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                         <SharedMessaging currentUser={operator?.name || 'Unknown'} currentApp="PICK_PACK" writeLog={() => {}} />
