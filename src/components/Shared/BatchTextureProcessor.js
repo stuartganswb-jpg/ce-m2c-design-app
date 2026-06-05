@@ -236,21 +236,30 @@ const BatchTextureProcessor = ({ currentUser }) => {
                                         style={{ maxHeight: '55vh', maxWidth: '100%', objectFit: 'contain', display: 'block' }} 
                                     />
                                     {imgDims.w > 0 && (
-                                        <div style={{ 
-                                            position: 'absolute',
-                                            top: `${topPx}px`, left: `${leftPx}px`,
-                                            width: `${boxPx}px`, height: `${boxPx}px`,
-                                            border: `2px dashed ${theme.brass}`,
-                                            background: 'rgba(255,255,255,0.1)', pointerEvents: 'none',
-                                            boxShadow: '0 0 0 9999px rgba(28,26,22,0.6)'
-                                        }}>
-                                            <div style={{ position: 'absolute', top: '-25px', left: '-2px', color: '#fff', fontFamily: theme.mono, fontSize: '10px', background: theme.brass, padding: '4px 8px' }}>
-                                                1024x1024 EXTRACTION ZONE
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
+    <div style={{ 
+        position: 'absolute',
+        top: `${topPx}px`, left: `${leftPx}px`,
+        width: `${boxPx}px`, height: `${boxPx}px`,
+        border: `2px dashed ${theme.brass}`,
+        background: 'rgba(255,255,255,0.1)', pointerEvents: 'none',
+        boxShadow: '0 0 0 9999px rgba(28,26,22,0.6)'
+    }}>
+        <div style={{ 
+            position: 'absolute', 
+            bottom: '100%', 
+            left: '-2px', 
+            marginBottom: '4px',
+            color: '#fff', 
+            fontFamily: theme.mono, 
+            fontSize: '10px', 
+            background: theme.brass, 
+            padding: '4px 8px',
+            whiteSpace: 'nowrap'
+        }}>
+            1024x1024 EXTRACTION ZONE
+        </div>
+    </div>
+)}
 
                             {/* Slider Controls */}
                             {imgDims.w > 0 && (
