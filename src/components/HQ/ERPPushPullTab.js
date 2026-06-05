@@ -157,13 +157,20 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           if (job.shippingMethod === 'SAVED' && job.shippingAddressId) {
               shippingPayload.shipaddresslist = { id: job.shippingAddressId };
           } else if (job.shippingMethod === 'CUSTOM' && job.customShippingAddress) {
+              
+              // Clean the state code (NetSuite expects strict 2-letter uppercase without periods, e.g., "FL" not "fl.")
+              let cleanState = job.customShippingAddress.state || '';
+              if (cleanState) {
+                  cleanState = cleanState.toUpperCase().replace(/\./g, '').trim();
+              }
+
               shippingPayload.shippingaddress = {
                   attention: job.customShippingAddress.attention || '',
                   addressee: job.customShippingAddress.addressee || '',
                   addr1: job.customShippingAddress.addr1 || '',
                   addr2: job.customShippingAddress.addr2 || '',
                   city: job.customShippingAddress.city || '',
-                  state: job.customShippingAddress.state || '',
+                  state: cleanState,
                   zip: job.customShippingAddress.zip || '',
                   country: { id: job.customShippingAddress.country || 'US' }
               };
