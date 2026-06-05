@@ -51,7 +51,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [collectionsData, setCollectionsData] = useState([]); 
   
-  // 🚀 BRAND NEW: Live Vendors State
   const [liveVendors, setLiveVendors] = useState([]); 
   
   const [globalLists, setGlobalLists] = useState({ 
@@ -72,10 +71,15 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [showCollectionForm, setShowCollectionForm] = useState(false); 
 
   const [newFieldConfig, setNewFieldConfig] = useState({ key: '', label: '', type: 'text', options: '' });
-  const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '' });
-  const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '' });
   const [newCollection, setNewCollection] = useState({ name: '', allowedCustomers: [], allowedFinishes: [] }); 
   const [newCustomWindow, setNewCustomWindow] = useState({ name: '', brands: [activeBrand], hasImage: true, hasCode: true, hasVendor: false, hasMultiplier: true });
+  
+  // 🚀 BRAND NEW: Finish Editing States & Client Mappings
+  const [editingGlobalFinish, setEditingGlobalFinish] = useState(null);
+  const [editingOutsourceFinish, setEditingOutsourceFinish] = useState(null);
+  const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '', clientMapping: [] });
+  const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] });
+  const [newFinishClientMapping, setNewFinishClientMapping] = useState({ customerId: '', clientFinishName: '' });
   
   const [finishUploadProgress, setFinishUploadProgress] = useState(0);
   const [inlineTextureProgress, setInlineTextureProgress] = useState({});
@@ -89,7 +93,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, clientPricing: [], collections: [] }); 
   const [isSaving, setIsSaving] = useState(false);
   
-  const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '' }); 
+  // 🚀 BRAND NEW: Added clientSalesPrice to pricing tier
+  const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' }); 
 
   const [pdfFile, setPdfFile] = useState(null);
   const [cadFile, setCadFile] = useState(null);
@@ -130,8 +135,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); 
-    
-    // 🚀 BRAND NEW: Listen to CRM database for Vendors specifically
     const unsubVendors = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "VENDOR")), snap => setLiveVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))));
 
     const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
@@ -157,7 +160,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       if (docSnap.exists()) setWindowConfig({ system: { ...DEFAULT_SYSTEM_WINDOWS, ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
     });
 
-    // 🚀 FIXED: Added unsubVendors to cleanup
     return () => { unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubCollections(); unsubLists(); unsubRecipes(); unsubWindowConfig(); unsubVendors(); };
   }, []);
 
@@ -295,7 +297,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
           ...prev,
           clientPricing: [...(prev.clientPricing || []), { ...newClientPricing }]
       }));
-      setNewClientPricing({ customerId: '', clientSku: '', price: '' });
+      setNewClientPricing({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' });
   };
 
   const handleRemoveClientPricing = (idx) => {
@@ -483,26 +485,64 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       let currentFinishes = [...globalFinishes]; let addedCount = 0;
       floorRecipeData.forEach(recipe => {
           if (!currentFinishes.find(f => f.name.toUpperCase() === recipe.id.toUpperCase() || (f.code && f.code.toUpperCase() === recipe.id.toUpperCase()))) {
-              currentFinishes.push({ id: `FIN-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`, name: recipe.id.toUpperCase(), code: recipe.id.substring(0, 5).toUpperCase(), type: 'MIXED', textureUrl: '', status: 'Production Ready' });
+              currentFinishes.push({ id: `FIN-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`, name: recipe.id.toUpperCase(), code: recipe.id.substring(0, 5).toUpperCase(), type: 'MIXED', textureUrl: '', status: 'Production Ready', clientMapping: [] });
               addedCount++;
           }
       });
       if (addedCount > 0) { await setDoc(doc(db, "system", "master_finishes"), { finishes: currentFinishes }, { merge: true }); alert(`Successfully synced ${addedCount} recipes!`); } else alert("HQ is in sync with floor database!");
   };
 
+  // 🚀 BRAND NEW: Add / Edit Global Finish Logic
   const handleAddGlobalFinish = async () => {
       if (!newFinishConfig.name) return alert("Finish name required.");
-      const newFinish = { id: `FIN-${Date.now()}`, name: newFinishConfig.name.toUpperCase(), code: newFinishConfig.code.toUpperCase(), type: newFinishConfig.type.toUpperCase(), textureUrl: newFinishConfig.textureUrl, status: 'Working' };
-      await setDoc(doc(db, "system", "master_finishes"), { finishes: [...globalFinishes, newFinish] }, { merge: true });
-      setNewFinishConfig({ name: '', code: '', type: '', textureUrl: '' }); setShowFinishForm(false);
+      let updatedFinishes;
+      
+      if (editingGlobalFinish) {
+          updatedFinishes = globalFinishes.map(f => f.id === editingGlobalFinish ? { 
+              ...f, 
+              name: newFinishConfig.name.toUpperCase(), 
+              code: newFinishConfig.code.toUpperCase(), 
+              type: newFinishConfig.type.toUpperCase(), 
+              textureUrl: newFinishConfig.textureUrl,
+              clientMapping: newFinishConfig.clientMapping || [] 
+          } : f);
+      } else {
+          const newFinish = { id: `FIN-${Date.now()}`, name: newFinishConfig.name.toUpperCase(), code: newFinishConfig.code.toUpperCase(), type: newFinishConfig.type.toUpperCase(), textureUrl: newFinishConfig.textureUrl, status: 'Working', clientMapping: newFinishConfig.clientMapping || [] };
+          updatedFinishes = [...globalFinishes, newFinish];
+      }
+
+      await setDoc(doc(db, "system", "master_finishes"), { finishes: updatedFinishes }, { merge: true });
+      setNewFinishConfig({ name: '', code: '', type: '', textureUrl: '', clientMapping: [] }); 
+      setShowFinishForm(false);
+      setEditingGlobalFinish(null);
+  };
+
+  const handleEditGlobalFinish = (finish) => {
+      setNewFinishConfig({
+          name: finish.name,
+          code: finish.code || '',
+          type: finish.type || '',
+          textureUrl: finish.textureUrl || '',
+          clientMapping: finish.clientMapping || []
+      });
+      setEditingGlobalFinish(finish.id);
+      setShowFinishForm(true);
   };
   
-  const handleFinishTextureUpload = async (file) => {
+  const handleFinishTextureUpload = async (file, isOutsource = false) => {
       if (!file) return;
       const storageRef = ref(storage, `system_textures/TEX_${Date.now()}_${file.name}`);
       const uploadTask = uploadBytesResumable(storageRef, file);
       uploadTask.on("state_changed", (snap) => setFinishUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)), (err) => console.error(err),
-          async () => { const url = await getDownloadURL(uploadTask.snapshot.ref); setNewFinishConfig({ ...newFinishConfig, textureUrl: url }); setFinishUploadProgress(0); }
+          async () => { 
+              const url = await getDownloadURL(uploadTask.snapshot.ref); 
+              if (isOutsource) {
+                  setNewOutsourceFinishConfig({ ...newOutsourceFinishConfig, textureUrl: url }); 
+              } else {
+                  setNewFinishConfig({ ...newFinishConfig, textureUrl: url }); 
+              }
+              setFinishUploadProgress(0); 
+          }
       );
   };
 
@@ -532,9 +572,10 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       await setDoc(doc(db, "system", "master_finishes"), { finishes: globalFinishes.filter(f => f.id !== idToRemove) }, { merge: true });
   };
 
+  // 🚀 BRAND NEW: Add / Edit Outsource Finish Logic
   const handleAddOutsourceFinish = async () => {
       if (!newOutsourceFinishConfig.name) return alert("Finish name required.");
-      const safeId = `FIN-${newOutsourceFinishConfig.name.toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
+      const safeId = editingOutsourceFinish || `FIN-${newOutsourceFinishConfig.name.toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
       await setDoc(doc(db, "hq_outsource_finishes", safeId), { 
           id: safeId, 
           legacyErpId: "PENDING", 
@@ -542,10 +583,26 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
           description: newOutsourceFinishConfig.description || "", 
           multiplier: parseFloat(newOutsourceFinishConfig.multiplier) || 1.0, 
           vendor: newOutsourceFinishConfig.vendor || "",
-          textureUrl: newOutsourceFinishConfig.textureUrl || ""
-      });
-      setNewOutsourceFinishConfig({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '' }); 
+          textureUrl: newOutsourceFinishConfig.textureUrl || "",
+          clientMapping: newOutsourceFinishConfig.clientMapping || []
+      }, { merge: true });
+
+      setNewOutsourceFinishConfig({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] }); 
       setShowOutsourceFinishForm(false);
+      setEditingOutsourceFinish(null);
+  };
+
+  const handleEditOutsourceFinish = (finish) => {
+      setNewOutsourceFinishConfig({
+          name: finish.name,
+          description: finish.description || '',
+          multiplier: finish.multiplier || 1.0,
+          vendor: finish.vendor || '',
+          textureUrl: finish.textureUrl || '',
+          clientMapping: finish.clientMapping || []
+      });
+      setEditingOutsourceFinish(finish.id);
+      setShowOutsourceFinishForm(true);
   };
   
   const handleRemoveOutsourceFinish = async (id) => { if (!window.confirm("Delete this Outsourced Finish?")) return; await deleteDoc(doc(db, "hq_outsource_finishes", id)); };
@@ -815,20 +872,24 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                     <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
                     
                     <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '15px' }}>
-                        <div style={{ flex: 2 }}>
+                        <div style={{ flex: 1.5 }}>
                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOMER (NAME - ID):</label>
                             <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
                                 <option value="">Select Customer...</option>
                                 {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
-                        <div style={{ flex: 2 }}>
+                        <div style={{ flex: 1.5 }}>
                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CLIENT SKU / PART #:</label>
                             <input value={newClientPricing.clientSku} onChange={e => setNewClientPricing({...newClientPricing, clientSku: e.target.value})} placeholder="e.g. Brimar-8483" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
                         </div>
                         <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOM PRICE ($):</label>
+                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CLIENT COST ($):</label>
                             <input type="number" step="0.01" value={newClientPricing.price} onChange={e => setNewClientPricing({...newClientPricing, price: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#28a745' }}>CLIENT SALES PRICE ($):</label>
+                            <input type="number" step="0.01" value={newClientPricing.clientSalesPrice} onChange={e => setNewClientPricing({...newClientPricing, clientSalesPrice: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid #28a745', fontWeight: 'bold' }} />
                         </div>
                         <button onClick={handleAddClientPricing} style={{ padding: '9px 15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ ADD</button>
                     </div>
@@ -840,7 +901,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                 <div style={{ display: 'flex', gap: '20px', fontSize: '0.8rem', width: '100%', alignItems: 'center' }}>
                                     <span style={{ fontWeight: 'bold', color: '#007bff', flex: 1 }}>{cp.customerId}</span>
                                     <span style={{ flex: 1 }}><strong style={{ color: '#666' }}>SKU:</strong> {cp.clientSku || 'N/A'}</span>
-                                    <span style={{ color: '#28a745', fontWeight: 'bold', width: '80px', textAlign: 'right' }}>${parseFloat(cp.price || 0).toFixed(2)}</span>
+                                    <span style={{ color: '#333', fontWeight: 'bold', width: '100px', textAlign: 'right' }}>COST: ${parseFloat(cp.price || 0).toFixed(2)}</span>
+                                    <span style={{ color: '#28a745', fontWeight: 'bold', width: '120px', textAlign: 'right' }}>SALES: ${parseFloat(cp.clientSalesPrice || 0).toFixed(2)}</span>
                                 </div>
                                 <button onClick={() => handleRemoveClientPricing(idx)} style={{ background: 'none', border: 'none', color: '#d9534f', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.2rem', marginLeft: '10px' }}>×</button>
                             </div>
@@ -1153,12 +1215,15 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                     <span>🎨 IN-HOUSE MASTER FINISHES (CPQ LIBRARY)</span>
                                     <div style={{ display: 'flex', gap: '10px' }}>
                                         <button onClick={handleSyncFloorRecipes} style={{ background: '#ffc107', color: '#000', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>🔄 SYNC FLOOR RECIPES</button>
-                                        <button onClick={() => setShowFinishForm(!showFinishForm)} style={{ background: '#fff', color: 'darkslategrey', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>{showFinishForm ? 'CLOSE' : '+ ADD FINISH'}</button>
+                                        <button onClick={() => { setShowFinishForm(!showFinishForm); setEditingGlobalFinish(null); setNewFinishConfig({name: '', code: '', type: '', textureUrl: '', clientMapping: []}); }} style={{ background: '#fff', color: 'darkslategrey', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>{showFinishForm && !editingGlobalFinish ? 'CLOSE' : '+ ADD FINISH'}</button>
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                                     {showFinishForm && (
                                         <div style={{ padding: '20px', background: '#f3e8ff', borderBottom: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                            <div style={{ fontWeight: 'bold', color: 'darkslategrey', borderBottom: '2px solid darkslategrey', paddingBottom: '5px', marginBottom: '5px' }}>
+                                                {editingGlobalFinish ? `✏️ EDITING: ${newFinishConfig.name}` : '✨ NEW IN-HOUSE FINISH'}
+                                            </div>
                                             <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>FINISH NAME:</label><input value={newFinishConfig.name} onChange={(e) => setNewFinishConfig({...newFinishConfig, name: e.target.value})} placeholder="e.g. Matte Brass" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
                                             <div style={{ display: 'flex', gap: '10px' }}>
                                                 <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>CODE:</label><input value={newFinishConfig.code} onChange={(e) => setNewFinishConfig({...newFinishConfig, code: e.target.value})} placeholder="MB" style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
@@ -1170,7 +1235,35 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                                 <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0])} style={{ fontSize: '0.75rem', width: '100%', cursor: 'pointer' }} />
                                                 {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
                                             </div>
-                                            <button onClick={handleAddGlobalFinish} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '10px' }}>SAVE NEW FINISH</button>
+
+                                            {/* 🚀 BRAND NEW: Client mapping for global finishes */}
+                                            <div style={{ background: '#fff', border: '2px solid #007bff', padding: '10px', marginTop: '10px' }}>
+                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#007bff', display: 'block', marginBottom: '8px' }}>🤝 CLIENT-SPECIFIC FINISH NAMES (CPQ MAPPING):</label>
+                                                <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                                                    <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                                        <option value="">Select Customer...</option>
+                                                        {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                                    </select>
+                                                    <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={{ flex: 1, padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                                    <button onClick={() => {
+                                                        if(!newFinishClientMapping.customerId || !newFinishClientMapping.clientFinishName) return alert("Select customer and enter finish name.");
+                                                        setNewFinishConfig(prev => ({...prev, clientMapping: [...(prev.clientMapping || []), newFinishClientMapping]}));
+                                                        setNewFinishClientMapping({customerId: '', clientFinishName: ''});
+                                                    }} style={{ padding: '8px 15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ MAP</button>
+                                                </div>
+                                                <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                                    {(newFinishConfig.clientMapping || []).map((mapping, idx) => (
+                                                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: '#f4f4f4', padding: '5px 10px', border: '1px solid #ccc', fontSize: '0.8rem' }}>
+                                                            <span><strong style={{ color: '#007bff' }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
+                                                            <span style={{ color: '#d9534f', cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setNewFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <button onClick={handleAddGlobalFinish} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '10px' }}>
+                                                {editingGlobalFinish ? 'SAVE CHANGES' : 'SAVE NEW FINISH'}
+                                            </button>
                                         </div>
                                     )}
                                     <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto', background: '#f8f9fa' }}>
@@ -1184,6 +1277,9 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                                         <div>
                                                             <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#000' }}>{finish.name} {finish.code && `(${finish.code})`}</div>
                                                             <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold', marginTop: '3px' }}>STATUS: {hasRecipe ? 'PRODUCTION READY' : 'WORKING / R&D'}</div>
+                                                            {finish.clientMapping && finish.clientMapping.length > 0 && (
+                                                                <div style={{ fontSize: '0.65rem', color: '#007bff', fontWeight: 'bold', marginTop: '3px' }}>{finish.clientMapping.length} CLIENT MAP(S) ACTIVE</div>
+                                                            )}
                                                             <div style={{ marginTop: '5px' }}>
                                                                 <label style={{ fontSize: '0.65rem', cursor: 'pointer', color: '#007bff', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
                                                                     {inlineTextureProgress[finish.id] > 0 ? `UPLOADING ${inlineTextureProgress[finish.id]}%` : (finish.textureUrl ? '🔄 REPLACE TEXTURE MAP' : '⬆️ UPLOAD TEXTURE MAP')}
@@ -1192,7 +1288,10 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                                             </div>
                                                         </div>
                                                     </div>
-                                                    <button onClick={() => handleRemoveFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                                        <button onClick={() => handleEditGlobalFinish(finish)} style={{ background: 'none', border: 'none', color: '#007bff', fontSize: '1.2rem', cursor: 'pointer' }} title="Edit Finish">✏️</button>
+                                                        <button onClick={() => handleRemoveFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }} title="Delete Finish">🗑️</button>
+                                                    </div>
                                                 </div>
                                             )
                                         })}
@@ -1269,11 +1368,14 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                             <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 #17a2b8' }}>
                                 <div style={{ padding: '15px', background: '#17a2b8', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
                                     <span>🚚 OUTSOURCED MASTER FINISHES (CPQ LIBRARY)</span>
-                                    <button onClick={() => setShowOutsourceFinishForm(!showOutsourceFinishForm)} style={{ background: '#fff', color: '#17a2b8', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>{showOutsourceFinishForm ? 'CLOSE' : '+ ADD FINISH'}</button>
+                                    <button onClick={() => { setShowOutsourceFinishForm(!showOutsourceFinishForm); setEditingOutsourceFinish(null); setNewOutsourceFinishConfig({name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: []}); }} style={{ background: '#fff', color: '#17a2b8', border: '2px solid #000', fontWeight: 'bold', padding: '5px 15px', cursor: 'pointer', boxShadow: '2px 2px 0 #000' }}>{showOutsourceFinishForm && !editingOutsourceFinish ? 'CLOSE' : '+ ADD FINISH'}</button>
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                                     {showOutsourceFinishForm && (
                                         <div style={{ padding: '20px', background: '#e0f7fa', borderBottom: '2px solid #000', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                            <div style={{ fontWeight: 'bold', color: '#17a2b8', borderBottom: '2px solid #17a2b8', paddingBottom: '5px', marginBottom: '5px' }}>
+                                                {editingOutsourceFinish ? `✏️ EDITING: ${newOutsourceFinishConfig.name}` : '✨ NEW OUTSOURCED FINISH'}
+                                            </div>
                                             <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>FINISH NAME:</label><input value={newOutsourceFinishConfig.name} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, name: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
                                             <div style={{ display: 'flex', gap: '10px' }}>
                                                 <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>APPROVED VENDOR:</label><select value={newOutsourceFinishConfig.vendor} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, vendor: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box' }}><option value="">Select...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
@@ -1286,8 +1388,35 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                                 <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0], true)} style={{ fontSize: '0.75rem', width: '100%', cursor: 'pointer' }} />
                                                 {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
                                             </div>
+
+                                            {/* 🚀 BRAND NEW: Client mapping for outsource finishes */}
+                                            <div style={{ background: '#fff', border: '2px solid #007bff', padding: '10px', marginTop: '10px' }}>
+                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#007bff', display: 'block', marginBottom: '8px' }}>🤝 CLIENT-SPECIFIC FINISH NAMES (CPQ MAPPING):</label>
+                                                <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                                                    <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                                        <option value="">Select Customer...</option>
+                                                        {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                                    </select>
+                                                    <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={{ flex: 1, padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                                    <button onClick={() => {
+                                                        if(!newFinishClientMapping.customerId || !newFinishClientMapping.clientFinishName) return alert("Select customer and enter finish name.");
+                                                        setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: [...(prev.clientMapping || []), newFinishClientMapping]}));
+                                                        setNewFinishClientMapping({customerId: '', clientFinishName: ''});
+                                                    }} style={{ padding: '8px 15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ MAP</button>
+                                                </div>
+                                                <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                                    {(newOutsourceFinishConfig.clientMapping || []).map((mapping, idx) => (
+                                                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: '#f4f4f4', padding: '5px 10px', border: '1px solid #ccc', fontSize: '0.8rem' }}>
+                                                            <span><strong style={{ color: '#007bff' }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
+                                                            <span style={{ color: '#d9534f', cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
                                             
-                                            <button onClick={handleAddOutsourceFinish} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '10px' }}>SAVE OUTSOURCED FINISH</button>
+                                            <button onClick={handleAddOutsourceFinish} style={{ padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', marginTop: '10px' }}>
+                                                {editingOutsourceFinish ? 'SAVE CHANGES' : 'SAVE OUTSOURCED FINISH'}
+                                            </button>
                                         </div>
                                     )}
                                     <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '300px', overflowY: 'auto', background: '#f8f9fa' }}>
@@ -1299,6 +1428,9 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                                     <div>
                                                         <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#000' }}>{finish.name}</div>
                                                         <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold', marginTop: '3px' }}>VENDOR: {finish.vendor || 'UNASSIGNED'} | MULT: x{finish.multiplier}</div>
+                                                        {finish.clientMapping && finish.clientMapping.length > 0 && (
+                                                            <div style={{ fontSize: '0.65rem', color: '#007bff', fontWeight: 'bold', marginTop: '3px' }}>{finish.clientMapping.length} CLIENT MAP(S) ACTIVE</div>
+                                                        )}
                                                         <div style={{ marginTop: '5px' }}>
                                                             <label style={{ fontSize: '0.65rem', cursor: 'pointer', color: '#007bff', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
                                                                 {inlineTextureProgress[finish.id] > 0 ? `UPLOADING ${inlineTextureProgress[finish.id]}%` : (finish.textureUrl ? '🔄 REPLACE TEXTURE MAP' : '⬆️ UPLOAD TEXTURE MAP')}
@@ -1307,7 +1439,10 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <button onClick={() => handleRemoveOutsourceFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                                                <div style={{ display: 'flex', gap: '10px' }}>
+                                                    <button onClick={() => handleEditOutsourceFinish(finish)} style={{ background: 'none', border: 'none', color: '#007bff', fontSize: '1.2rem', cursor: 'pointer' }} title="Edit Finish">✏️</button>
+                                                    <button onClick={() => handleRemoveOutsourceFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }} title="Delete Finish">🗑️</button>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
