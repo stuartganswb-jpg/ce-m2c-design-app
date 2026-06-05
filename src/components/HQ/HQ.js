@@ -24,6 +24,7 @@ const RTGDispatchTab = lazy(() => import('./RTGDispatchTab'));
 
 const AssetGalleryTab = lazy(() => import('../Shared/AssetGalleryTab'));
 const BatchImageProcessor = lazy(() => import('../Shared/BatchImageProcessor'));
+const BatchTextureProcessor = lazy(() => import('../Shared/BatchTextureProcessor'));
 
 const SharedMessaging = lazy(() => import('../Shared/SharedMessaging'));
 
@@ -38,7 +39,7 @@ const TABS = [
   '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library',
   '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
   '9. Client Vision', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
-  '14. Asset Gallery', '14.5 Batch Processor', 'ERP_WRITE_BACK'
+  '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', 'ERP_WRITE_BACK'
 ];
 
 // Reusable Theme Dictionary based on prototype.html
@@ -283,6 +284,7 @@ function HQ() {
             {activeTab === TABS[16] && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[17] && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[18] && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[19] && <BatchTextureProcessor currentUser={user.name} />}
           </Suspense>
 
         </div>
