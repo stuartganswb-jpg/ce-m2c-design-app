@@ -52,6 +52,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [collectionsData, setCollectionsData] = useState([]); 
   
   const [liveVendors, setLiveVendors] = useState([]); 
+  const [liveCustomers, setLiveCustomers] = useState([]); 
   
   const [globalLists, setGlobalLists] = useState({ 
       uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [],
@@ -136,6 +137,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); 
     const unsubVendors = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "VENDOR")), snap => setLiveVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+    const unsubCustomers = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "CUSTOMER")), snap => setLiveCustomers(snap.docs.map(d => ({id: d.id, ...d.data()}))));
 
     const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
       if (docSnap.exists()) {
@@ -160,7 +162,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       if (docSnap.exists()) setWindowConfig({ system: { ...DEFAULT_SYSTEM_WINDOWS, ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
     });
 
-    return () => { unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubCollections(); unsubLists(); unsubRecipes(); unsubWindowConfig(); unsubVendors(); };
+    return () => { unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubCollections(); unsubLists(); unsubRecipes(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); };
   }, []);
 
   useEffect(() => {
@@ -874,9 +876,9 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                     <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '15px' }}>
                         <div style={{ flex: 1.5 }}>
                             <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOMER (NAME - ID):</label>
-                            <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                           <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
                                 <option value="">Select Customer...</option>
-                                {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                {liveCustomers.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                             </select>
                         </div>
                         <div style={{ flex: 1.5 }}>
@@ -1242,7 +1244,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                                 <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
                                                     <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
                                                         <option value="">Select Customer...</option>
-                                                        {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                                        {liveCustomers.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                                     </select>
                                                     <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={{ flex: 1, padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
                                                     <button onClick={() => {
@@ -1315,11 +1317,11 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                                         
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                                             <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', maxHeight: '250px', overflowY: 'auto' }}>
-                                                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#007bff' }}>RESTRICT TO CUSTOMERS (Optional):</label>
-                                                {globalLists.customers.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No customers in database.</span>}
-                                                {globalLists.customers.map(c => (
-                                                    <label key={c} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
-                                                        <input type="checkbox" checked={newCollection.allowedCustomers.includes(c)} onChange={() => toggleCollectionCustomer(c)} /> {c}
+                                               <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#007bff' }}>RESTRICT TO CUSTOMERS (Optional):</label>
+                                                {liveCustomers.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No customers in database.</span>}
+                                                {liveCustomers.map(c => (
+                                                    <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', marginBottom: '5px', cursor: 'pointer' }}>
+                                                        <input type="checkbox" checked={newCollection.allowedCustomers.includes(c.name)} onChange={() => toggleCollectionCustomer(c.name)} /> {c.name}
                                                     </label>
                                                 ))}
                                             </div>
