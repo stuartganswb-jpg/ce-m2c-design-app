@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { finishingDb as db } from '../../firebase'; 
 import { doc, updateDoc } from "firebase/firestore";
 
-const cardStyle = { background: '#fff', padding: '15px', border: '1px solid #ccc', borderRadius: 0, boxShadow: '4px 4px 0 rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' };
-const btnStyle = { padding: '10px 15px', border: 'none', borderRadius: 0, cursor: 'pointer', fontWeight: 'bold', textTransform: 'uppercase' };
-const inputStyle = { padding: '8px', border: '2px solid #ccc', borderRadius: 0, width: '100%', boxSizing: 'border-box' };
+const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
+const btnStyle = { padding: '12px 16px', border: 'none', borderRadius: '2px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' };
+const inputStyle = { padding: '10px', border: '1px solid var(--line)', borderRadius: '2px', width: '100%', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' };
 
 // --- NATIVE SCADA SIMULATOR ---
 const DigitalTwinSCADA = ({ machineState, setMachineState, redWO, blueWO, activeWOs }) => {
@@ -30,54 +30,54 @@ const DigitalTwinSCADA = ({ machineState, setMachineState, redWO, blueWO, active
     };
 
     return (
-        <div style={{ background: '#222', padding: '20px', border: '4px solid #000', marginBottom: '20px', fontFamily: 'Avenir, sans-serif' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #444', paddingBottom: '10px', marginBottom: '15px' }}>
-                <h3 style={{ margin: 0, color: '#fff', fontSize: '1rem' }}>LIVE DIGITAL TWIN: TRACK & OVEN</h3>
+        <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', marginBottom: '30px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '24px' }}>
+                <h3 style={{ margin: 0, color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Live Digital Twin: Track & Oven</h3>
                 
-                <div style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ display: 'flex', gap: '12px' }}>
                     <button 
                         onClick={() => handleMoveOven('POLES')} 
                         disabled={machineState.isOvenRunning || machineState.ovenPos === 'POLES'} 
-                        style={{ padding: '6px 12px', background: machineState.ovenPos === 'POLES' ? '#CC6600' : '#444', color: '#fff', border: '1px solid #fff', cursor: machineState.isOvenRunning ? 'not-allowed' : 'pointer', fontSize: '0.75rem', fontWeight: 'bold' }}>
-                        ◀ MOVE OVEN TO POLES
+                        style={{ padding: '8px 16px', background: machineState.ovenPos === 'POLES' ? 'var(--brass)' : 'var(--paper-2)', color: machineState.ovenPos === 'POLES' ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: machineState.isOvenRunning ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                        ◀ Move Oven to Poles
                     </button>
                     <button 
                         onClick={() => handleMoveOven('SPINDLE')} 
                         disabled={machineState.isOvenRunning || machineState.ovenPos === 'SPINDLE'} 
-                        style={{ padding: '6px 12px', background: machineState.ovenPos === 'SPINDLE' ? '#CC6600' : '#444', color: '#fff', border: '1px solid #fff', cursor: machineState.isOvenRunning ? 'not-allowed' : 'pointer', fontSize: '0.75rem', fontWeight: 'bold' }}>
-                        MOVE OVEN TO STATION 2 ▶
+                        style={{ padding: '8px 16px', background: machineState.ovenPos === 'SPINDLE' ? 'var(--brass)' : 'var(--paper-2)', color: machineState.ovenPos === 'SPINDLE' ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: machineState.isOvenRunning ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                        Move Oven to Station 2 ▶
                     </button>
                 </div>
             </div>
             
-            <div style={{ position: 'relative', height: '140px', background: '#333', border: '2px solid #555', display: 'flex', alignItems: 'center' }}>
+            <div style={{ position: 'relative', height: '140px', background: 'var(--paper)', border: '1px solid var(--line)', display: 'flex', alignItems: 'center' }}>
                 {/* POLE RACK */}
-                <div style={{ position: 'absolute', left: '2%', width: '15%', height: '100px', border: '2px solid #777', display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly', padding: '5px' }}>
-                    <div style={{ height: '4px', background: '#777', width: '100%' }}></div>
-                    <div style={{ height: '4px', background: '#777', width: '100%' }}></div>
-                    <span style={{ color: '#aaa', fontSize: '0.6rem', textAlign: 'center', marginTop: '5px', fontWeight: 'bold' }}>POLE RACK</span>
+                <div style={{ position: 'absolute', left: '2%', width: '15%', height: '100px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly', padding: '5px', background: '#fff' }}>
+                    <div style={{ height: '2px', background: 'var(--line)', width: '100%' }}></div>
+                    <div style={{ height: '2px', background: 'var(--line)', width: '100%' }}></div>
+                    <span style={{ color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', marginTop: '5px' }}>Pole Rack</span>
                 </div>
 
-                <div style={{ position: 'absolute', left: '25%', right: '5%', height: '40px', border: '2px dashed #666', background: '#2a2a2a' }}></div>
+                <div style={{ position: 'absolute', left: '25%', right: '5%', height: '40px', border: '1px dashed var(--line)', background: 'var(--paper-2)' }}></div>
                 
-                <div style={{ position: 'absolute', left: '27%', bottom: '15px', color: '#aaa', fontSize: '0.6rem', fontWeight: 'bold' }}>STATION 2 (SETUP / DRY)</div>
-                <div style={{ position: 'absolute', right: '5%', bottom: '15px', color: '#aaa', fontSize: '0.6rem', fontWeight: 'bold' }}>STATION 1 (SETUP / SPRAY)</div>
+                <div style={{ position: 'absolute', left: '27%', bottom: '15px', color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Station 2 (Setup / Dry)</div>
+                <div style={{ position: 'absolute', right: '5%', bottom: '15px', color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Station 1 (Setup / Spray)</div>
 
                 {/* Sled Rendering based on Track Position */}
-                <div style={{ position: 'absolute', top: '30px', left: machineState.redSledAt === 'LEFT' ? '30%' : '80%', width: '60px', height: '80px', background: '#d9534f', border: '2px solid #fff', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem', zIndex: 10 }}>RED</div>
-                <div style={{ position: 'absolute', top: '30px', left: machineState.blueSledAt === 'LEFT' ? '30%' : '80%', width: '60px', height: '80px', background: '#007bff', border: '2px solid #fff', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '0.7rem', zIndex: 10 }}>BLUE</div>
+                <div style={{ position: 'absolute', top: '30px', left: machineState.redSledAt === 'LEFT' ? '30%' : '80%', width: '60px', height: '80px', background: '#fff', border: '2px solid var(--ink)', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>RED</div>
+                <div style={{ position: 'absolute', top: '30px', left: machineState.blueSledAt === 'LEFT' ? '30%' : '80%', width: '60px', height: '80px', background: '#fff', border: '2px solid var(--brass)', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--brass)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>BLUE</div>
 
                 {/* Mobile Oven Rendering */}
-                <div style={{ position: 'absolute', top: '10px', left: machineState.ovenPos === 'POLES' ? '1%' : '23%', width: '22%', height: '120px', background: machineState.isOvenRunning ? 'rgba(204, 102, 0, 0.4)' : 'rgba(204, 102, 0, 0.1)', border: '4px solid #CC6600', boxShadow: machineState.isOvenRunning ? 'inset 0 0 40px #CC6600' : 'inset 0 0 10px #CC6600', transition: 'left 2s ease-in-out', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: '10px', zIndex: 20 }}>
-                    <span style={{ color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', background: '#CC6600', padding: '2px 8px' }}>CURING OVEN</span>
+                <div style={{ position: 'absolute', top: '10px', left: machineState.ovenPos === 'POLES' ? '1%' : '23%', width: '22%', height: '120px', background: machineState.isOvenRunning ? 'var(--paper-2)' : 'rgba(250,248,244,0.5)', border: '2px solid var(--brass)', boxShadow: machineState.isOvenRunning ? 'inset 0 0 20px rgba(176,141,87,0.3)' : 'none', transition: 'left 2s ease-in-out', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: '10px', zIndex: 20 }}>
+                    <span style={{ color: '#fff', background: 'var(--brass)', padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Curing Oven</span>
                 </div>
             </div>
 
             <button 
                 onClick={handleCycleTrack} 
                 disabled={isAnyStationRunning}
-                style={{ width: '100%', padding: '12px', marginTop: '15px', background: isAnyStationRunning ? '#555' : '#28a745', color: isAnyStationRunning ? '#888' : '#fff', border: 'none', fontWeight: 'bold', cursor: isAnyStationRunning ? 'not-allowed' : 'pointer', fontSize: '0.85rem' }}>
-                {isAnyStationRunning ? "TRACK LOCKED (TASKS RUNNING)" : "🔄 CYCLE TRACK (SWAP STATIONS)"}
+                style={{ width: '100%', padding: '16px', marginTop: '24px', background: isAnyStationRunning ? 'var(--paper)' : 'var(--ink)', color: isAnyStationRunning ? 'var(--ink-soft)' : '#fff', border: isAnyStationRunning ? '1px solid var(--line)' : 'none', cursor: isAnyStationRunning ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                {isAnyStationRunning ? "Track Locked (Tasks Running)" : "Cycle Track (Swap Stations)"}
             </button>
         </div>
     );
@@ -98,39 +98,32 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   };
 
   // --- DIGITAL TWIN MACHINE STATE ---
-  // In production, this syncs with a Firestore document (e.g. fin_floor/machine_state)
   const [machineState, setMachineState] = useState({
-      redSledAt: 'RIGHT',  // Station 1
-      blueSledAt: 'LEFT',  // Station 2
-      ovenPos: 'SPINDLE',  // 'SPINDLE' or 'POLES'
+      redSledAt: 'RIGHT',  
+      blueSledAt: 'LEFT',  
+      ovenPos: 'SPINDLE',  
       isOvenRunning: false
   });
 
   // --- SLED ASSIGNMENT ENGINE ---
-  // A spinning order claims a sled until BOTH Setup and Bake are complete for the current step.
   const spinningWOs = [...activeWOs].filter(w => w.tasks?.spinSetup && w.tasks.spinBake?.status !== 'Complete').sort((a,b) => a.id.localeCompare(b.id));
   
-  // To avoid mutating Firebase during this demo, we read assignment if it exists, otherwise we assign.
   const redWO = activeWOs.find(w => w.machineAssigned === 'RED') || (spinningWOs.find(w => !w.machineAssigned) || null);
   const blueWO = activeWOs.find(w => w.machineAssigned === 'BLUE') || (spinningWOs.find(w => !w.machineAssigned && w.id !== redWO?.id) || null);
 
-  // Auto-assign to DB if not assigned (mocked for UI consistency here)
   if (redWO && !redWO.machineAssigned) updateDoc(doc(db,"fin_workorders", redWO.id), { machineAssigned: 'RED' });
   if (blueWO && !blueWO.machineAssigned) updateDoc(doc(db,"fin_workorders", blueWO.id), { machineAssigned: 'BLUE' });
 
-  // Update global oven status based on active tasks
   const isAnyOvenRunning = activeWOs.some(w => w.tasks?.spinBake?.status === 'Running' || w.tasks?.poleBake?.status === 'Running');
   if (machineState.isOvenRunning !== isAnyOvenRunning) setMachineState({...machineState, isOvenRunning: isAnyOvenRunning});
 
   const getSledLocation = (sledColor) => sledColor === 'RED' ? machineState.redSledAt : machineState.blueSledAt;
 
-  // The Master Unload & Advance Logic (Checks if Mixed Orders are fully complete)
   const handleCompleteRecipeStep = async (wo) => {
       const updates = {};
       updates.currentStepIndex = wo.currentStepIndex + 1;
       updates.lastCoatTime = Date.now();
       
-      // Reset all tasks for the next recipe step
       updates["tasks.spinSetup.status"] = "Pending";
       updates["tasks.spinSpray.status"] = "Pending";
       updates["tasks.spinBake.status"] = "Pending";
@@ -177,74 +170,78 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   };
 
   return (
-    <div style={{ padding: '30px', display: 'grid', gridTemplateColumns: '3fr 1.2fr', gap: '30px', height: '100%', fontFamily: 'Avenir, sans-serif' }}>
+    <div style={{ padding: '30px', display: 'grid', gridTemplateColumns: '3fr 1.2fr', gap: '30px', minHeight: '100vh', fontFamily: 'var(--sans)' }}>
       
       {/* LEFT: PIPELINE */}
       <div>
         <DigitalTwinSCADA machineState={machineState} setMachineState={setMachineState} redWO={redWO} blueWO={blueWO} activeWOs={activeWOs} />
 
         {redlineWOs.length > 0 && (
-            <div style={{ background: '#d9534f', color: '#fff', padding: '15px', border: '4px solid #333', marginBottom: '20px', fontWeight: 'bold', fontSize: '1.1rem', textTransform: 'uppercase' }}>
-                🚨 SUPERVISOR ACTION REQUIRED: 
-                <ul style={{ margin: '5px 0 0 20px', fontSize: '0.9rem' }}>
+            <div style={{ background: '#fdf2f2', border: '1px solid #d9534f', padding: '24px', marginBottom: '30px', borderRadius: '2px' }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', fontWeight: 500 }}>
+                    Supervisor Action Required
+                </div>
+                <ul style={{ margin: '12px 0 0 20px', fontSize: '0.95rem', color: 'var(--ink)' }}>
                     {redlineWOs.map(w => <li key={w.id}>{w.redlineAlert}</li>)}
                 </ul>
             </div>
         )}
 
-        {Object.keys(colorGroups).length === 0 && <div style={{ padding: '20px', background: '#fff', border: '1px dashed #ccc', color: '#666', marginBottom: '20px' }}>No batches actively painting.</div>}
+        {Object.keys(colorGroups).length === 0 && <div style={{ padding: '40px', background: 'var(--paper)', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic', textAlign: 'center', fontFamily: 'var(--serif)', fontSize: '1.2rem', marginBottom: '30px' }}>No batches actively painting.</div>}
 
         {Object.keys(colorGroups).map(color => {
             let potRemMins = null;
-            let potBg = '#28a745'; let potColor = '#fff';
+            let potBg = 'var(--ink)'; let potColor = '#fff';
             if (activePots[color]) {
                 potRemMins = getRemainingMins(activePots[color], cfg.potLifeMins);
                 if (potRemMins <= 5) { potBg = '#d9534f'; potColor = '#fff'; }
-                else if (potRemMins <= 15) { potBg = '#CC6600'; potColor = '#fff'; }
+                else if (potRemMins <= 15) { potBg = 'var(--brass)'; potColor = '#fff'; }
             }
 
             return (
-                <div key={color} style={{ background: '#fff', border: '2px solid #333', marginBottom: '20px', padding: '15px' }}>
-                    <h3 style={{ margin: '0 0 15px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ color: '#CC6600' }}>BATCH: {color}</span>
+                <div key={color} style={{ background: '#fff', border: '1px solid var(--line)', marginBottom: '30px', padding: '30px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', borderBottom: '1px solid var(--line)', paddingBottom: '16px' }}>
+                        <div>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Active Batch</span>
+                            <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>{color}</h3>
+                        </div>
                         {activePots[color] ? (
-                            <span style={{ background: potBg, color: potColor, padding: '5px 10px', fontSize: '0.9rem', fontWeight: 'bold' }}>POT LIFE: {potRemMins} MINS LEFT</span>
+                            <span style={{ background: potBg, color: potColor, padding: '8px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Pot Life: {potRemMins} mins left</span>
                         ) : (
-                            <button onClick={() => setMixModal(color)} style={{ padding: '8px 15px', background: '#007bff', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>
-                                START {cfg.mixMins} MIN MIX
+                            <button onClick={() => setMixModal(color)} style={{ padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                                Start {cfg.mixMins} Min Mix
                             </button>
                         )}
-                    </h3>
+                    </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '15px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px' }}>
                         
                         {/* --- STATION 1 (RIGHT): SETUP & SPRAY --- */}
-                        <div style={{ background: '#f8f9fa', border: '2px solid #000', padding: '10px' }}>
-                            <div style={{ fontWeight: '900', fontSize: '0.85rem', textAlign: 'center', background: '#333', color: '#fff', padding: '8px', marginBottom: '10px' }}>STATION 1 (RIGHT) - SPRAY</div>
+                        <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '20px', borderRadius: '2px' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', color: 'var(--ink-soft)', marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Station 1 (Right) - Spray</div>
                             {colorGroups[color]?.map(item => {
                                 if (item.step.app !== 'Sprayed' || !item.wo.machineAssigned) return null; 
                                 const location = getSledLocation(item.wo.machineAssigned);
-                                if (location !== 'RIGHT') return null; // Only show WO if its sled is currently on the right
+                                if (location !== 'RIGHT') return null; 
 
                                 const isSetupComplete = item.wo.tasks?.spinSetup?.status === 'Complete';
                                 const isSprayComplete = item.wo.tasks?.spinSpray?.status === 'Complete';
 
-                                // Validation: Cannot spray if Station 2 is actively baking
                                 const blockSpray = machineState.ovenPos === 'SPINDLE' && machineState.isOvenRunning;
 
                                 if (!isSetupComplete) {
-                                    return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. SETUP PARTS" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} />
+                                    return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} />
                                 } else if (!isSprayComplete) {
-                                    return <TaskCard key={item.wo.id+"spinSpray"} titleOverride="2. SPRAY COAT" wo={item.wo} type="spinSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={cfg.spinPaintMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinSpray')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSpray ? "WAITING ON STATION 2 OVEN" : null} />
+                                    return <TaskCard key={item.wo.id+"spinSpray"} titleOverride="2. Spray Coat" wo={item.wo} type="spinSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={cfg.spinPaintMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinSpray')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSpray ? "Waiting on Station 2 Oven" : null} />
                                 } else {
-                                    return <div key={item.wo.id} style={{ ...cardStyle, background: '#eafaf1', borderLeft: '5px solid #28a745', textAlign: 'center', fontSize: '0.8rem', fontWeight: 'bold', color: '#28a745' }}>✅ READY FOR TRACK CYCLE</div>
+                                    return <div key={item.wo.id} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center', fontSize: '0.9rem', color: 'var(--ink)', fontFamily: 'var(--sans)' }}>Ready for track cycle</div>
                                 }
                             })}
                         </div>
 
                         {/* --- STATION 2 (LEFT): SETUP & BAKE --- */}
-                        <div style={{ background: '#f8f9fa', border: '2px solid #000', padding: '10px' }}>
-                            <div style={{ fontWeight: '900', fontSize: '0.85rem', textAlign: 'center', background: '#333', color: '#fff', padding: '8px', marginBottom: '10px' }}>STATION 2 (LEFT) - OVEN</div>
+                        <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '20px', borderRadius: '2px' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', color: 'var(--ink-soft)', marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Station 2 (Left) - Oven</div>
                             {colorGroups[color]?.map(item => {
                                 if (item.step.app !== 'Sprayed' || !item.wo.machineAssigned) return null; 
                                 const location = getSledLocation(item.wo.machineAssigned);
@@ -253,24 +250,22 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 const isSetupComplete = item.wo.tasks?.spinSetup?.status === 'Complete';
                                 const isBakeComplete = item.wo.tasks?.spinBake?.status === 'Complete';
 
-                                // Validation: Cannot setup if Oven is physically covering Station 2
                                 const blockSetup = machineState.ovenPos === 'SPINDLE';
-                                // Validation: Cannot bake if Oven is currently over the poles
                                 const blockBake = machineState.ovenPos === 'POLES';
 
                                 if (!isSetupComplete) {
-                                    return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. SETUP PARTS" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSetup ? "OVEN IS BLOCKING STATION" : null} />
+                                    return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSetup ? "Oven is blocking station" : null} />
                                 } else if (!isBakeComplete) {
-                                    return <TaskCard key={item.wo.id+"spinBake"} titleOverride="2. BAKE CYCLE" wo={item.wo} type="spinBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinBake')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockBake ? "OVEN IS AT POLE RACK" : null} />
+                                    return <TaskCard key={item.wo.id+"spinBake"} titleOverride="2. Bake Cycle" wo={item.wo} type="spinBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinBake')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockBake ? "Oven is at pole rack" : null} />
                                 } else {
                                     return (
-                                        <div key={item.wo.id} style={{ ...cardStyle, background: '#eafaf1', borderLeft: '5px solid #28a745', textAlign: 'center' }}>
-                                            <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#28a745', marginBottom: '10px' }}>✅ BAKING COMPLETE</div>
+                                        <div key={item.wo.id} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '16px' }}>Baking Complete</div>
                                             <button onClick={() => {
                                                 const polesDone = !item.wo.tasks?.poleSpray || item.wo.tasks.poleBake?.status === 'Complete';
                                                 if (polesDone) handleCompleteRecipeStep(item.wo);
                                                 else alert("Waiting on Poles to finish before advancing recipe.");
-                                            }} style={{ width: '100%', padding: '8px', background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>UNLOAD PARTS (CHECK RECIPE)</button>
+                                            }} style={{ width: '100%', padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Unload Parts</button>
                                         </div>
                                     )
                                 }
@@ -278,8 +273,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                         </div>
 
                         {/* --- POLE RACK / CUSTOM --- */}
-                        <div style={{ background: '#f8f9fa', border: '1px solid #ccc', padding: '10px' }}>
-                            <div style={{ fontWeight: '900', fontSize: '0.8rem', textAlign: 'center', borderBottom: '2px solid #333', paddingBottom: '10px', marginBottom: '10px', color: '#333' }}>POLE RACK</div>
+                        <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px', borderRadius: '2px' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', color: 'var(--ink-soft)', marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Pole Rack</div>
                             {colorGroups[color]?.map(item => {
                                 if (item.step.app !== 'Sprayed' || item.wo.tasks?.poleSpray?.status === 'Complete' && item.wo.tasks?.poleBake?.status === 'Complete') return null;
                                 
@@ -287,17 +282,17 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 const blockBake = machineState.ovenPos === 'SPINDLE';
 
                                 if (!isSprayComplete) {
-                                    return <TaskCard key={item.wo.id+"poleSpray"} titleOverride="SPRAY POLES" wo={item.wo} type="poleSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={(item.wo.totalParts || 0) * cfg.poleMins} activePots={activePots} now={now} aiRec={getAiRecommendation('poleSpray')} users={users} activeWOs={activeWOs} cfg={cfg} />
+                                    return <TaskCard key={item.wo.id+"poleSpray"} titleOverride="Spray Poles" wo={item.wo} type="poleSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={(item.wo.totalParts || 0) * cfg.poleMins} activePots={activePots} now={now} aiRec={getAiRecommendation('poleSpray')} users={users} activeWOs={activeWOs} cfg={cfg} />
                                 } else {
-                                    return <TaskCard key={item.wo.id+"poleBake"} titleOverride="BAKE POLES" wo={item.wo} type="poleBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} now={now} aiRec={getAiRecommendation('poleBake')} users={users} activeWOs={activeWOs} cfg={cfg} blockReason={blockBake ? "OVEN IS AT SPINDLE TRACK" : null} />
+                                    return <TaskCard key={item.wo.id+"poleBake"} titleOverride="Bake Poles" wo={item.wo} type="poleBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} now={now} aiRec={getAiRecommendation('poleBake')} users={users} activeWOs={activeWOs} cfg={cfg} blockReason={blockBake ? "Oven is at spindle track" : null} />
                                 }
                             })}
                         </div>
 
                         {/* --- HAND FINISH OFF-RAMP --- */}
-                        <div style={{ background: '#f8f9fa', border: '1px solid #ccc', padding: '10px', gridColumn: '1 / -1' }}>
-                            <div style={{ fontWeight: '900', fontSize: '0.8rem', textAlign: 'center', borderBottom: '2px solid #333', paddingBottom: '10px', marginBottom: '10px', color: '#333' }}>HAND FINISH STATION (OFF-TRACK)</div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                        <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px', gridColumn: '1 / -1', borderRadius: '2px' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', color: 'var(--ink-soft)', marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Hand Finish Station (Off-Track)</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                 {colorGroups[color]?.map(item => item.step.app === 'Hand Applied' && item.wo.tasks?.hand?.status !== 'Complete' && (
                                     <TaskCard key={item.wo.id+"hand"} wo={item.wo} type="hand" step={item.step} user={user} setQcModal={setQcModal} estTime={item.wo.type === 'Poles' ? ((item.wo.totalParts || 0) * cfg.handPoleMins) : ((item.wo.totalParts || 0) * cfg.handSmallMins)} activePots={activePots} now={now} aiRec={getAiRecommendation('hand')} users={users} activeWOs={activeWOs} cfg={cfg} />
                                 ))}
@@ -311,18 +306,17 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       </div>
 
       {/* RIGHT: LIVE ASSIGNMENTS */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <div style={{ background: '#f8f9fa', padding: '20px', borderLeft: '4px solid #CC6600', border: '2px solid #333' }}>
-              <h3 style={{ marginTop: 0, color: '#333', borderBottom: '1px solid #ccc', paddingBottom: '10px' }}>LIVE OPERATOR STATUS</h3>
-              {floorOps.length === 0 ? <p style={{color: '#666'}}>No floor operators in directory.</p> : (
-                  floorOps.map(op => {
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
+          <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+              <h3 style={{ margin: '0 0 20px 0', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '15px' }}>Live Operator Status</h3>
+              {floorOps.length === 0 ? <p style={{color: 'var(--ink-soft)', fontSize: '0.9rem'}}>No floor operators in directory.</p> : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {floorOps.map(op => {
                       let activeOpJob = activeJobs.find(j => Object.values(j.tasks).some(t => t.status === 'Running' && t.assignedTo === op.name));
                       let isBusy = !!activeOpJob;
                       let statusText = 'IDLE';
-                      let statusColor = '#28a745';
 
                       if (isBusy) {
-                          statusColor = '#d9534f';
                           let runningTaskEntry = Object.entries(activeOpJob.tasks).find(([k, t]) => t.status === 'Running' && t.assignedTo === op.name);
                           let tType = runningTaskEntry[0];
                           let taskData = runningTaskEntry[1];
@@ -344,97 +338,45 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                       }
 
                       return (
-                          <div key={op.name} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px dashed #ccc' }}>
-                              <span style={{ fontWeight: 'bold', color: '#333' }}>{op.name} <span style={{fontSize:'0.6rem', color:'#666'}}>({op.role.replace(/_/g, ' ')})</span></span>
-                              <span style={{ fontWeight: 'bold', color: statusColor, fontSize: '0.8rem' }}>{statusText}</span>
+                          <div key={op.name} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
+                              <div>
+                                  <div style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>{op.name}</div>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>{op.role.replace(/_/g, ' ')}</div>
+                              </div>
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: isBusy ? '#d9534f' : 'var(--ink-soft)' }}>
+                                  {statusText}
+                              </div>
                           </div>
                       );
-                  })
+                  })}
+                  </div>
               )}
           </div>
 
-          <div style={{ background: '#fff', padding: '20px', border: '2px solid #333' }}>
-              <h3 style={{ marginTop: 0, color: '#333', borderBottom: '1px solid #ccc', paddingBottom: '10px' }}>PIPELINE OVERVIEW</h3>
-              {activeWOs.length === 0 ? <p style={{color: '#666', fontSize: '0.8rem'}}>No active jobs in pipeline.</p> : (
-                  activeWOs.map(wo => {
+          <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+              <h3 style={{ margin: '0 0 20px 0', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '15px' }}>Pipeline Overview</h3>
+              {activeWOs.length === 0 ? <p style={{color: 'var(--ink-soft)', fontSize: '0.9rem'}}>No active jobs in pipeline.</p> : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {activeWOs.map(wo => {
                       let recoatWarning = null;
                       if (wo.lastCoatTime) {
                           const recoatMinsLeft = Math.max(0, Math.floor(((cfg.recoatMins * 60000) - (now - wo.lastCoatTime)) / 60000));
-                          if (recoatMinsLeft < 30) recoatWarning = `⚠️ RECOAT DANGER: ${recoatMinsLeft}m LEFT!`;
+                          if (recoatMinsLeft < 30) recoatWarning = `Recoat Danger: ${recoatMinsLeft}m left`;
                       }
                       return (
-                          <div key={wo.id} style={{ border: '1px solid #eee', padding: '10px', marginBottom: '10px', borderLeft: recoatWarning ? '4px solid #d9534f' : '4px solid #333' }}>
-                              <div style={{ fontWeight: 'bold', color: '#333', display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
-                                  <span>WO: {wo.id}</span>
-                                  <span style={{ color: '#CC6600' }}>{wo.recipe}</span>
+                          <div key={wo.id} style={{ border: '1px solid var(--line)', padding: '16px', background: 'var(--paper)', borderLeft: recoatWarning ? '2px solid #d9534f' : '2px solid var(--brass)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>WO: {wo.id}</span>
+                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{wo.recipe}</span>
                               </div>
-                              {recoatWarning && <div style={{ color: '#d9534f', fontSize: '0.75rem', fontWeight: 'bold', marginTop: '3px' }}>{recoatWarning}</div>}
+                              {recoatWarning && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: '#d9534f', marginTop: '8px' }}>{recoatWarning}</div>}
                           </div>
                       );
-                  })
+                  })}
+                  </div>
               )}
           </div>
       </div>
-
-      {/* --- PINNED ORDER NOTES OVERLAY --- */}
-      <div style={{ position: 'fixed', bottom: '20px', right: '20px', width: '340px', maxHeight: '500px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 1000 }}>
-          {activeWOs.map(wo => {
-              const smallParts = (wo.partsList || []).filter(p => p.name.toUpperCase().includes('RING') || p.name.toUpperCase().includes('FINIAL') || p.name.toUpperCase().includes('BRACKET'));
-              const customParts = (wo.partsList || []).filter(p => p.name.toUpperCase().includes('POLE') || p.name.toUpperCase().includes('TRACK') || p.name.toUpperCase().includes('SPLICE'));
-
-              const customPartsStatus = wo.customPartsStatus || 'Pending Shop';
-              const isCustomRunning = customPartsStatus === 'In Process';
-
-              return (
-                  <div key={`note-${wo.id}`} style={{ background: '#f4f4f4', border: isCustomRunning ? '3px solid #28a745' : '2px solid #333', padding: '15px', boxShadow: '-6px 6px 0px rgba(0,0,0,0.1)' }}>
-                      <div style={{ fontWeight: 'bold', borderBottom: '2px solid #333', paddingBottom: '8px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <div style={{ display: 'flex', flexDirection: 'column' }}>
-                              <span style={{ fontSize: '0.9rem', color: '#007bff' }}>WO: {wo.id}</span>
-                              <span style={{ fontSize: '0.75rem', color: '#555' }}>SO: {wo.soId || 'NO-SO'}</span>
-                          </div>
-                          <span style={{ color: '#fff', background: '#CC6600', padding: '3px 8px', fontSize: '0.75rem', fontWeight: 'bold' }}>{wo.recipe}</span>
-                      </div>
-                      
-                      {/* Custom Fab Status Indicator */}
-                      <div style={{ padding: '8px', background: isCustomRunning ? '#eafaf1' : '#eee', border: isCustomRunning ? '1px solid #28a745' : '1px solid #ccc', marginBottom: '10px', fontSize: '0.8rem', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span>CUSTOM FAB STATUS:</span>
-                          <span style={{ color: isCustomRunning ? '#28a745' : '#666' }}>{isCustomRunning ? '🟢 IN PROCESS' : '⚪ IN QUEUE'}</span>
-                      </div>
-
-                      {/* Dispatch Button */}
-                      {isCustomRunning && !wo.sentToPickPack && (
-                          <button 
-                              onClick={async () => {
-                                  await updateDoc(doc(db, "fin_workorders", wo.id), { sentToPickPack: true, pickStatus: 'Pending' });
-                                  alert(`Small parts for ${wo.id} dispatched to Pick/Pack App.`);
-                              }}
-                              style={{ width: '100%', padding: '10px', background: '#007bff', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', marginBottom: '10px', fontSize: '0.75rem' }}>
-                              📤 DISPATCH SMALL PARTS TO PICK
-                          </button>
-                      )}
-
-                      <div style={{ fontSize: '0.7rem', color: '#333', marginBottom: '5px', fontWeight: 'bold', textTransform: 'uppercase', background: '#e3f2fd', padding: '4px', border: '1px solid #007bff' }}>
-                          MACHINE LOADOUT: {smallParts.reduce((acc, p) => acc + p.qty, 0)} PARTS
-                      </div>
-                      <ul style={{ margin: '0 0 10px 0', paddingLeft: '15px', fontSize: '0.75rem', color: '#555' }}>
-                          {smallParts.length > 0 ? smallParts.map((p, i) => (
-                              <li key={`sm-${i}`} style={{ marginBottom: '4px' }}><b>{p.qty}x</b> {p.name}</li>
-                          )) : <li style={{ fontStyle: 'italic', color: '#888' }}>No small parts.</li>}
-                      </ul>
-
-                      <div style={{ fontSize: '0.7rem', color: '#333', marginBottom: '5px', fontWeight: 'bold', textTransform: 'uppercase', background: '#eafaf1', padding: '4px', border: '1px solid #28a745' }}>
-                          POLES / CUSTOM LOADOUT: {customParts.reduce((acc, p) => acc + p.qty, 0)} PARTS
-                      </div>
-                      <ul style={{ margin: 0, paddingLeft: '15px', fontSize: '0.75rem', color: '#555' }}>
-                          {customParts.length > 0 ? customParts.map((p, i) => (
-                              <li key={`cu-${i}`} style={{ marginBottom: '4px' }}><b>{p.qty}x</b> {p.name}</li>
-                          )) : <li style={{ fontStyle: 'italic', color: '#888' }}>No poles or tracks.</li>}
-                      </ul>
-                  </div>
-              )
-          })}
-      </div>
-
     </div>
   );
 };
@@ -473,54 +415,54 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
     let recoatWarning = null;
     if (wo.lastCoatTime) {
         const recoatMinsLeft = Math.max(0, Math.floor(((cfg.recoatMins * 60000) - (now - wo.lastCoatTime)) / 60000));
-        if (recoatMinsLeft < 30) recoatWarning = `⚠️ RECOAT: ${recoatMinsLeft}m LEFT!`;
-        else recoatWarning = `Recoat Window: ${recoatMinsLeft}m`;
+        if (recoatMinsLeft < 30) recoatWarning = `Recoat: ${recoatMinsLeft}m left`;
+        else recoatWarning = `Recoat window: ${recoatMinsLeft}m`;
     }
 
     const isPaintReady = !!activePots[step.color];
     const disabledStart = !loggedInUserHasAccess || !isPaintReady || !currentOp || isSelectedOpBusy || blockReason;
     
-    let btnText = 'START TASK';
-    if (!loggedInUserHasAccess) btnText = 'ROLE RESTRICTED';
-    else if (!isPaintReady) btnText = 'AWAITING PAINT MIX';
-    else if (!currentOp) btnText = 'NO OP AVAILABLE';
-    else if (isSelectedOpBusy) btnText = `${currentOp.toUpperCase()} IS BUSY`;
+    let btnText = 'Start Task';
+    if (!loggedInUserHasAccess) btnText = 'Role Restricted';
+    else if (!isPaintReady) btnText = 'Awaiting Paint Mix';
+    else if (!currentOp) btnText = 'No Op Available';
+    else if (isSelectedOpBusy) btnText = `${currentOp} is Busy`;
     else if (blockReason) btnText = blockReason;
 
     // --- BAKING COUNTDOWN UI ---
     if (isRunning && type.includes('Bake')) {
         const rem = Math.max(0, Math.floor(((estTime * 60000) - (now - task.startTime)) / 60000));
         return (
-            <div style={{ ...cardStyle, borderLeft: '5px solid #d9534f', textAlign: 'center' }}>
-                <b style={{color: '#333'}}>{wo.id}</b>
-                {sled && <div style={{ fontSize: '0.7rem', color: sled === 'RED' ? '#d9534f' : '#007bff', fontWeight: 'bold', marginTop: '5px' }}>{sled} STATION (OVEN)</div>}
-                <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#d9534f', margin: '10px 0' }}>{rem} MINS LEFT</div>
-                <button onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' })} style={{ width: '100%', padding: '6px', background: '#f4f4f4', color: '#d9534f', border: '1px solid #d9534f', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>MARK DRY EARLY</button>
+            <div style={{ ...cardStyle, borderLeft: '2px solid var(--brass)', textAlign: 'center', background: '#fff' }}>
+                <div style={{ color: 'var(--ink)', fontWeight: 500, fontSize: '0.95rem' }}>{wo.id}</div>
+                {sled && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{sled} Station (Oven)</div>}
+                <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)', margin: '16px 0' }}>{rem} mins</div>
+                <button onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' })} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
             </div>
         );
     }
 
     return (
-        <div style={{ ...cardStyle, borderLeft: isRunning ? '5px solid #007bff' : '5px solid #333', position: 'relative' }}>
+        <div style={{ ...cardStyle, border: isRunning ? '1px solid var(--ink)' : '1px solid var(--line)', position: 'relative', background: '#fff' }}>
             
-            {titleOverride && <div style={{ fontSize: '0.7rem', color: '#fff', background: '#333', padding: '4px', textAlign: 'center', fontWeight: 'bold', marginBottom: '10px' }}>{titleOverride}</div>}
+            {titleOverride && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px', marginBottom: '16px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{titleOverride}</div>}
 
             {type.includes('spin') && sled && (
-                <div style={{ background: sled === 'RED' ? '#d9534f' : '#007bff', color: '#fff', padding: '6px', textAlign: 'center', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '10px', textTransform: 'uppercase', border: '1px solid #000' }}>
-                    {sled} STATION
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '12px' }}>
+                    {sled} Sled
                 </div>
             )}
 
-            <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#333' }}>WO: {wo.id}</div>
-            <div style={{ fontSize: '0.7rem', color: '#666', margin: '5px 0' }}>Step {step.step}: {step.color}</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '4px' }}>WO: {wo.id}</div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>Step {step.step}: {step.color}</div>
             
             {isRunning ? (
-                <div style={{ fontSize: '0.75rem', background: '#e3f2fd', color: '#007bff', padding: '4px', marginBottom: '5px', fontWeight: 'bold' }}>Active: {task.assignedTo}</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', background: 'var(--paper-2)', padding: '8px', marginBottom: '16px', border: '1px solid var(--line)' }}>Active: {task.assignedTo}</div>
             ) : (
-                <div style={{ marginBottom: '10px' }}>
-                    <label style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#CC6600' }}>ASSIGN OPERATOR</label>
-                    <select value={currentOp} onChange={(e) => setManualOp(e.target.value)} style={{ ...inputStyle, padding: '4px', fontSize: '0.75rem', borderColor: '#CC6600' }}>
-                        {aiRec !== "NO OP AVAILABLE" && <option value={aiRec}>🤖 AI REC: {aiRec}</option>}
+                <div style={{ marginBottom: '20px' }}>
+                    <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Assign Operator</label>
+                    <select value={currentOp} onChange={(e) => setManualOp(e.target.value)} style={{ ...inputStyle, padding: '10px' }}>
+                        {aiRec !== "NO OP AVAILABLE" && <option value={aiRec}>AI Rec: {aiRec}</option>}
                         {eligibleUsers.map(u => {
                             if (u.name === aiRec) return null; 
                             return <option key={u.name} value={u.name}>{u.name} ({u.role.replace(/_/g, ' ')})</option>;
@@ -529,13 +471,13 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                 </div>
             )}
             
-            {recoatWarning && <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: recoatWarning.includes('⚠️') ? '#d9534f' : '#007bff', marginBottom: '5px' }}>{recoatWarning}</div>}
-            <div style={{ fontSize: '0.7rem', color: '#333', marginBottom: '10px', fontWeight: 'bold' }}>⏱️ Est: {Math.ceil(estTime)} mins</div>
+            {recoatWarning && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: recoatWarning.includes('Danger') ? '#d9534f' : 'var(--ink-soft)', marginBottom: '12px' }}>{recoatWarning}</div>}
+            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '20px' }}>Est Time: {Math.ceil(estTime)} mins</div>
             
             {!isRunning ? (
-                <button disabled={disabledStart} onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Running', [`tasks.${type}.assignedTo`]: currentOp, [`tasks.${type}.startTime`]: Date.now() })} style={{ width: '100%', padding: '8px', background: disabledStart ? '#ccc' : blockReason ? '#ffc107' : '#333', color: disabledStart ? '#666' : blockReason ? '#000' : '#fff', border: 'none', fontWeight: 'bold', cursor: disabledStart ? 'not-allowed' : 'pointer', fontSize: '0.75rem' }}>{btnText}</button>
+                <button disabled={disabledStart} onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Running', [`tasks.${type}.assignedTo`]: currentOp, [`tasks.${type}.startTime`]: Date.now() })} style={{ width: '100%', padding: '12px', background: disabledStart ? 'var(--paper-2)' : 'var(--ink)', color: disabledStart ? 'var(--ink-soft)' : '#fff', border: disabledStart ? '1px solid var(--line)' : 'none', cursor: disabledStart ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>{btnText}</button>
             ) : (
-                <button onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' })} style={{ width: '100%', padding: '8px', background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>COMPLETE TASK</button>
+                <button onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' })} style={{ width: '100%', padding: '12px', background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper)'}>Complete Task</button>
             )}
         </div>
     )

@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { doc, updateDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, onSnapshot } from "firebase/firestore";
-import { btnStyle, inputStyle, labelStyle } from './finishingStyles';
-
-const cardStyle = { background: '#fff', padding: '15px', border: '1px solid #ccc', boxShadow: '4px 4px 0 rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' };
+import { btnStyle, inputStyle, labelStyle, sectionHeaderStyle, cardStyle } from './finishingStyles';
 
 const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
   const getThreeWeeksOut = () => {
@@ -27,15 +25,11 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
   const [reqDate, setReqDate] = useState(getThreeWeeksOut());
   const [aiOptimized, setAiOptimized] = useState(false);
 
-  // NEW: State for Cross-App Alerts from Shop Floor
   const [alerts, setAlerts] = useState([]);
-  
-  // 🚀 NEW: State for Golden Payload Modal
   const [activeSpecs, setActiveSpecs] = useState(null);
 
   useEffect(() => { setReqDate(getThreeWeeksOut()); }, [orderType]);
 
-  // NEW: Listener for Shop Floor Completion Alerts
   useEffect(() => {
       const q = query(collection(db, "shop_finishing_alerts"), where("read", "==", false));
       const unsub = onSnapshot(q, snap => {
@@ -116,7 +110,6 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
       });
   }
 
-  // --- DIAGNOSTIC ERROR CATCHERS ---
   const startSetup = async (wo) => {
     try {
         await updateDoc(doc(db, "fin_workorders", wo.id), { stepStatus: "Running" });
@@ -137,7 +130,6 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
     }
   };
 
-  // --- THE NUKE BUTTON FUNCTION ---
   const nukeQueue = async () => {
       const confirm = window.confirm("☢️ WARNING: This will permanently delete ALL jobs currently visible in this queue from the database. Proceed?");
       if (confirm) {
@@ -150,43 +142,43 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
   };
 
   return (
-    <div style={{ padding: '30px' }}>
+    <div style={{ padding: '30px', fontFamily: 'var(--sans)' }}>
       
       {/* CROSS-APP ALERTS BANNER */}
       {alerts.length > 0 && (
-          <div style={{ background: '#fff3cd', border: '2px solid #ffecb5', padding: '15px', marginBottom: '20px', borderRadius: '6px', boxShadow: '4px 4px 0 rgba(0,0,0,0.05)' }}>
-              <h3 style={{ margin: '0 0 10px 0', color: '#856404', display: 'flex', alignItems: 'center', gap: '10px' }}>🚨 INCOMING PARTS FROM SHOP FLOOR</h3>
+          <div style={{ background: 'var(--paper-2)', border: '1px solid var(--brass)', padding: '24px', marginBottom: '24px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+              <h3 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: '10px' }}>Incoming Parts from Shop Floor</h3>
               {alerts.map(a => (
-                  <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', padding: '10px', marginBottom: '5px', borderRadius: '4px', border: '1px solid #ffeeba' }}>
-                      <span style={{ fontWeight: 'bold', color: '#856404' }}>{a.msg}</span>
-                      <button onClick={() => handleClearAlert(a.id)} style={{ background: '#28a745', color: '#fff', border: 'none', padding: '6px 12px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}>ACKNOWLEDGE & CLEAR</button>
+                  <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', padding: '16px', marginBottom: '8px', border: '1px solid var(--line)' }}>
+                      <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>{a.msg}</span>
+                      <button onClick={() => handleClearAlert(a.id)} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '8px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Acknowledge & Clear</button>
                   </div>
               ))}
           </div>
       )}
 
-      <div style={{ background: '#fff', border: '2px solid #333', padding: '20px', marginBottom: '30px', boxShadow: '6px 6px 0 rgba(0,0,0,0.05)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '2px solid #333', paddingBottom: '10px', marginBottom: '15px' }}>
-              <h3 style={{ margin: 0 }}>DIRECT ORDER INTAKE</h3>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                  <button onClick={() => setOrderType('sales')} style={{ ...btnStyle, background: orderType === 'sales' ? '#333' : '#f4f4f4', color: orderType === 'sales' ? '#fff' : '#333' }}>SALES ORDER</button>
-                  <button onClick={() => setOrderType('stock')} style={{ ...btnStyle, background: orderType === 'stock' ? '#333' : '#f4f4f4', color: orderType === 'stock' ? '#fff' : '#333' }}>STOCK ORDER</button>
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', borderRadius: '2px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
+              <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Direct Order Intake</h3>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                  <button onClick={() => setOrderType('sales')} style={{ ...btnStyle, background: orderType === 'sales' ? 'var(--ink)' : 'var(--paper-2)', color: orderType === 'sales' ? '#fff' : 'var(--ink)' }}>Sales Order</button>
+                  <button onClick={() => setOrderType('stock')} style={{ ...btnStyle, background: orderType === 'stock' ? 'var(--ink)' : 'var(--paper-2)', color: orderType === 'stock' ? '#fff' : 'var(--ink)' }}>Stock Order</button>
               </div>
           </div>
           
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '15px', alignItems: 'end' }}>
-              <div><label style={labelStyle}>WORK ORDER #</label><input value={woId} onChange={e=>setWoId(e.target.value)} style={inputStyle} /></div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '20px', alignItems: 'end' }}>
+              <div><label style={labelStyle}>Work Order #</label><input value={woId} onChange={e=>setWoId(e.target.value)} style={inputStyle} /></div>
               
               {orderType === 'sales' && (
                   <>
-                      <div><label style={labelStyle}>SALES ORDER #</label><input value={soId} onChange={e=>setSoId(e.target.value)} style={inputStyle} /></div>
-                      <div><label style={labelStyle}>CUSTOMER</label><input value={customer} onChange={e=>setCustomer(e.target.value)} style={inputStyle} /></div>
+                      <div><label style={labelStyle}>Sales Order #</label><input value={soId} onChange={e=>setSoId(e.target.value)} style={inputStyle} /></div>
+                      <div><label style={labelStyle}>Customer</label><input value={customer} onChange={e=>setCustomer(e.target.value)} style={inputStyle} /></div>
                   </>
               )}
               
               <div>
-                  <label style={labelStyle}>FINISH RECIPE</label>
-                  <select value={recipe} onChange={e=>setRecipe(e.target.value)} style={inputStyle}>
+                  <label style={labelStyle}>Finish Recipe</label>
+                  <select value={recipe} onChange={e=>setRecipe(e.target.value)} style={{...inputStyle, background: '#fff'}}>
                       <option value="">Select Finish...</option>
                       {recipes && Object.keys(recipes).map(rCode => (
                           <option key={rCode} value={rCode}>{rCode}</option>
@@ -195,68 +187,67 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
               </div>
 
               {orderType === 'stock' ? (
-                  <div><label style={labelStyle}>TOTAL PARTS</label><input type="number" value={qty} onChange={e=>setQty(e.target.value)} style={inputStyle} /></div>
+                  <div><label style={labelStyle}>Total Parts</label><input type="number" value={qty} onChange={e=>setQty(e.target.value)} style={inputStyle} /></div>
               ) : (
                   <>
-                      <div><label style={labelStyle}>POLES</label><input type="number" value={poles} onChange={e=>setPoles(e.target.value)} style={inputStyle} /></div>
-                      <div><label style={labelStyle}>FINIALS</label><input type="number" value={finials} onChange={e=>setFinials(e.target.value)} style={inputStyle} /></div>
-                      <div><label style={labelStyle}>RINGS</label><input type="number" value={rings} onChange={e=>setRings(e.target.value)} style={inputStyle} /></div>
-                      <div><label style={labelStyle}>BRACKETS</label><input type="number" value={brackets} onChange={e=>setBrackets(e.target.value)} style={inputStyle} /></div>
+                      <div><label style={labelStyle}>Poles</label><input type="number" value={poles} onChange={e=>setPoles(e.target.value)} style={inputStyle} /></div>
+                      <div><label style={labelStyle}>Finials</label><input type="number" value={finials} onChange={e=>setFinials(e.target.value)} style={inputStyle} /></div>
+                      <div><label style={labelStyle}>Rings</label><input type="number" value={rings} onChange={e=>setRings(e.target.value)} style={inputStyle} /></div>
+                      <div><label style={labelStyle}>Brackets</label><input type="number" value={brackets} onChange={e=>setBrackets(e.target.value)} style={inputStyle} /></div>
                   </>
               )}
 
-              <div><label style={labelStyle}>REQUIRED DATE</label><input type="date" value={reqDate} onChange={e=>setReqDate(e.target.value)} style={inputStyle} /></div>
+              <div><label style={labelStyle}>Required Date</label><input type="date" value={reqDate} onChange={e=>setReqDate(e.target.value)} style={inputStyle} /></div>
           </div>
-          <button onClick={handleCreateOrder} style={{ ...btnStyle, marginTop: '20px', width: '100%', background: '#007bff', color: '#fff' }}>+ INGEST TO QUEUE</button>
+          <button onClick={handleCreateOrder} style={{ ...btnStyle, marginTop: '24px', width: '100%', background: 'var(--brass)', color: '#fff' }}>Ingest to Queue</button>
       </div>
 
-      <div style={{ background: '#e9ecef', padding: '15px', border: '2px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', boxShadow: '6px 6px 0 rgba(0,0,0,0.05)' }}>
-        <h2 style={{ margin: 0, fontSize: '1.5rem', color: '#333' }}>WORK ORDER QUEUE</h2>
-        <div style={{ display: 'flex', gap: '10px' }}>
-            <button onClick={nukeQueue} style={{ padding: '12px 24px', background: '#dc3545', color: '#fff', border: '2px solid #333', cursor: 'pointer', fontWeight: 'bold' }}>☢️ NUKE QUEUE</button>
-            <button onClick={() => setAiOptimized(!aiOptimized)} style={{ padding: '12px 24px', background: aiOptimized ? '#6f42c1' : '#fff', color: aiOptimized ? '#fff' : '#333', border: '2px solid #333', cursor: 'pointer', fontWeight: 'bold', boxShadow: '4px 4px 0 rgba(0,0,0,0.2)', transition: 'all 0.2s' }}>
-                {aiOptimized ? '✨ AI BATCHING: ACTIVE' : '🤖 ACTIVATE AI BATCHING'}
+      <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', borderRadius: '2px' }}>
+        <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Work Order Queue</h2>
+        <div style={{ display: 'flex', gap: '12px' }}>
+            <button onClick={nukeQueue} style={{ padding: '12px 24px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Nuke Queue</button>
+            <button onClick={() => setAiOptimized(!aiOptimized)} style={{ padding: '12px 24px', background: aiOptimized ? 'var(--ink)' : '#fff', color: aiOptimized ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                {aiOptimized ? 'AI Batching: Active' : 'Activate AI Batching'}
             </button>
         </div>
       </div>
       
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '15px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '24px' }}>
         {pendingOrders.length === 0 ? (
-          <div style={{ padding: '30px', textAlign: 'center', color: '#999', fontStyle: 'italic', gridColumn: '1/-1' }}>Queue is empty.</div>
+          <div style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', gridColumn: '1/-1', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>Queue is empty.</div>
         ) : (
           pendingOrders.map(wo => (
-            <div key={wo.id} style={{...cardStyle, borderLeft: aiOptimized ? '5px solid #6f42c1' : '5px solid #333'}}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #eee', paddingBottom: '5px', marginBottom: '10px' }}>
-                    <strong style={{ fontSize: '1.2rem', color: '#007bff' }}>
+            <div key={wo.id} style={{...cardStyle, borderLeft: aiOptimized ? '4px solid var(--brass)' : '4px solid var(--ink)'}}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
+                    <strong style={{ fontSize: '1.1rem', color: 'var(--ink)', fontWeight: 500 }}>
                         WO: {wo.woNum || wo.displayId || wo.id}
-                        {(wo.type === 'sales' || wo.soNum) && <span style={{color:'#333', fontSize:'0.9rem'}}> (SO: {wo.soId || wo.soNum})</span>}
+                        {(wo.type === 'sales' || wo.soNum) && <span style={{color:'var(--ink-soft)', fontSize:'0.85rem'}}> (SO: {wo.soId || wo.soNum})</span>}
                     </strong>
-                    <span style={{ background: '#f4f4f4', padding: '2px 8px', fontSize: '0.9rem', fontWeight: 'bold', border: '1px solid #ccc' }}>{wo.recipe || wo.color}</span>
+                    <span style={{ background: 'var(--paper)', padding: '4px 8px', fontSize: '0.85rem', fontFamily: 'var(--mono)', textTransform: 'uppercase', border: '1px solid var(--line)', color: 'var(--ink)' }}>{wo.recipe || wo.color}</span>
                 </div>
-                <div style={{ fontSize: '0.85rem', marginBottom: '10px' }}><b>Customer:</b> {wo.customer || wo.clientName || 'N/A'}</div>
-                <div style={{ fontSize: '0.85rem', marginBottom: '10px' }}><b>Req Date:</b> <span style={{ color: '#d9534f', fontWeight: 'bold' }}>{wo.reqDate || 'ASAP'}</span></div>
+                <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '12px' }}><span style={{color:'var(--ink-soft)'}}>Customer:</span> {wo.customer || wo.clientName || 'N/A'}</div>
+                <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '16px' }}><span style={{color:'var(--ink-soft)'}}>Req Date:</span> <span style={{ fontWeight: 500 }}>{wo.reqDate || 'ASAP'}</span></div>
                 
-                <div style={{ fontSize: '0.85rem', lineHeight: '1.4' }}>
-                    <b>Type:</b> {(wo.type || wo.itemName || 'Custom').toUpperCase()} | <b>Total Parts:</b> {wo.totalParts || wo.qty || 1} <br/>
+                <div style={{ fontSize: '0.85rem', lineHeight: '1.6', color: 'var(--ink)' }}>
+                    <span style={{color:'var(--ink-soft)'}}>Type:</span> {(wo.type || wo.itemName || 'Custom').toUpperCase()} | <span style={{color:'var(--ink-soft)'}}>Total Parts:</span> {wo.totalParts || wo.qty || 1} <br/>
                     {wo.type === 'sales' && (
-                        <span style={{color: '#666'}}>
+                        <span style={{color: 'var(--ink-soft)'}}>
                             (Poles: {wo.poles?.qty || 0}, Fin: {wo.smallParts?.fin || 0}, Rng: {wo.smallParts?.rng || 0}, Brk: {wo.smallParts?.brk || 0})
                         </span>
                     )}
                     {wo.dimensions && (
-                        <div style={{ color: '#CC6600', fontWeight: 'bold', marginTop: '5px', fontSize: '0.85rem' }}>
-                            📐 Item Dimensions: {wo.dimensions.length}L x {wo.dimensions.width}W x {wo.dimensions.height}H
+                        <div style={{ fontWeight: 500, marginTop: '8px', fontSize: '0.85rem', color: 'var(--ink)' }}>
+                            Item Dimensions: {wo.dimensions.length}L x {wo.dimensions.width}W x {wo.dimensions.height}H
                         </div>
                     )}
                 </div>
                 
-                {/* 🚀 UPGRADED BUTTON LAYOUT WITH GOLDEN PAYLOAD TRIGGER */}
-                <div style={{ display: 'flex', gap: '10px', marginTop: '15px' }}>
-                    <button onClick={() => setActiveSpecs(wo)} style={{ ...btnStyle, flex: 1, background: '#17a2b8', color: '#fff', padding: '10px', fontSize: '0.8rem' }}>🖼️ SPECS</button>
+                <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                    <button onClick={() => setActiveSpecs(wo)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>Specs</button>
                     {wo.stepStatus === "Pending" ? (
-                        <button onClick={() => startSetup(wo)} style={{ ...btnStyle, flex: 2, background: '#e9ecef', padding: '10px', fontSize: '0.8rem' }}>START SETUP</button>
+                        <button onClick={() => startSetup(wo)} style={{ ...btnStyle, flex: 2, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup</button>
                     ) : (
-                        <button onClick={() => stageToFloor(wo)} style={{ ...btnStyle, flex: 2, background: '#28a745', color: '#fff', padding: '10px', fontSize: '0.8rem' }}>STAGE TO FLOOR</button>
+                        <button onClick={() => stageToFloor(wo)} style={{ ...btnStyle, flex: 2, background: 'var(--ink)', color: '#fff' }}>Stage to Floor</button>
                     )}
                 </div>
             </div>
@@ -264,53 +255,52 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
         )}
       </div>
 
-      {/* 🚀 BRAND NEW: THE GOLDEN PAYLOAD MODAL */}
       {activeSpecs && (
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ background: '#fff', padding: '30px', borderRadius: '12px', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: '4px solid #333', boxShadow: '10px 10px 0 #CC6600' }}>
-                  <h2 style={{ color: '#CC6600', marginTop: 0, borderBottom: '2px solid #ccc', paddingBottom: '10px' }}>JOB SPECIFICATIONS: {activeSpecs.woNum || activeSpecs.displayId || activeSpecs.id}</h2>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ background: '#fff', padding: '40px', borderRadius: '2px', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '20px', marginBottom: '30px' }}>
+                      <h2 style={{ color: 'var(--ink)', margin: 0, fontFamily: 'var(--serif)', fontSize: '2rem', fontWeight: 500 }}>Job Specs: {activeSpecs.woNum || activeSpecs.displayId || activeSpecs.id}</h2>
+                      <button onClick={() => setActiveSpecs(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '2rem', cursor: 'pointer' }}>×</button>
+                  </div>
                   
-                  <div style={{ display: 'flex', gap: '20px' }}>
+                  <div style={{ display: 'flex', gap: '30px' }}>
                       {activeSpecs.imageUrl && (
-                          <div style={{ flex: 1 }}>
-                              <img src={activeSpecs.imageUrl} alt="Part" style={{ width: '100%', border: '2px solid #ccc', borderRadius: '8px' }}/>
+                          <div style={{ flex: 1, background: 'var(--paper)', border: '1px solid var(--line)', padding: '20px' }}>
+                              <img src={activeSpecs.imageUrl} alt="Part" style={{ width: '100%', objectFit: 'contain' }}/>
                           </div>
                       )}
                       
-                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                          <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '2px solid #ccc' }}>
-                              <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>CLIENT</div>
-                              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#000' }}>{activeSpecs.clientName || activeSpecs.customer || 'N/A'}</div>
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                          <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Client</div>
+                              <div style={{ fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', fontFamily: 'var(--sans)' }}>{activeSpecs.clientName || activeSpecs.customer || 'N/A'}</div>
                           </div>
                           
                           {activeSpecs.note && (
-                              <div style={{ background: '#fffdf5', padding: '15px', borderRadius: '8px', border: '2px solid #f39c12' }}>
-                                  <div style={{ fontSize: '12px', color: '#f39c12', fontWeight: 'bold' }}>CLIENT / RFI NOTES</div>
-                                  <div style={{ fontSize: '14px', whiteSpace: 'pre-wrap' }}>{activeSpecs.note}</div>
+                              <div style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)', borderLeft: '4px solid var(--brass)' }}>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)', marginBottom: '8px' }}>Client / RFI Notes</div>
+                                  <div style={{ fontSize: '0.95rem', whiteSpace: 'pre-wrap', color: 'var(--ink)', lineHeight: '1.5' }}>{activeSpecs.note}</div>
                               </div>
                           )}
                           
                           {activeSpecs.cpqSpecs && Object.keys(activeSpecs.cpqSpecs).length > 0 && (
-                              <div style={{ background: '#eef5ff', padding: '15px', borderRadius: '8px', border: '2px solid #0056b3' }}>
-                                  <div style={{ fontSize: '12px', color: '#0056b3', fontWeight: 'bold', marginBottom: '5px' }}>CPQ BUILD SPECS</div>
+                              <div style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)' }}>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '16px', borderBottom: '1px solid var(--line)', paddingBottom: '8px' }}>CPQ Build Specs</div>
                                   {Object.entries(activeSpecs.cpqSpecs).map(([k, v]) => (
-                                      <div key={k} style={{ fontSize: '13px', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #cce0ff', padding: '6px 0' }}>
-                                          <span style={{ color: '#555' }}>{k}:</span><span style={{ fontWeight: 'bold' }}>{v}</span>
+                                      <div key={k} style={{ fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', padding: '8px 0' }}>
+                                          <span style={{ color: 'var(--ink-soft)' }}>{k}:</span><span style={{ fontWeight: 500, color: 'var(--ink)' }}>{v}</span>
                                       </div>
                                   ))}
                               </div>
                           )}
 
-                          {/* Fallback if no specs or notes exist but they opened the modal */}
                           {!activeSpecs.imageUrl && !activeSpecs.note && (!activeSpecs.cpqSpecs || Object.keys(activeSpecs.cpqSpecs).length === 0) && (
-                              <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic', border: '1px dashed #ccc', borderRadius: '8px' }}>
+                              <div style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', border: '1px dashed var(--line)', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>
                                   No extended specifications or client notes attached to this Work Order.
                               </div>
                           )}
                       </div>
                   </div>
-                  
-                  <button onClick={() => setActiveSpecs(null)} style={{ width: '100%', background: '#333', border: 'none', padding: '15px', color: '#fff', fontWeight: 'bold', cursor: 'pointer', marginTop: '20px', borderRadius: '6px' }}>CLOSE VIEW</button>
               </div>
           </div>
       )}

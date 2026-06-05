@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { db } from '../../firebase'; 
 import { addDoc, collection, serverTimestamp, updateDoc, doc, deleteDoc } from "firebase/firestore";
-import { cardStyle, btnStyle, inputStyle } from './finishingStyles';
+import { btnStyle, inputStyle } from './finishingStyles';
 
 const Messaging = ({ messages, user }) => {
     const [msgBody, setMsgBody] = useState("");
@@ -20,25 +20,59 @@ const Messaging = ({ messages, user }) => {
     };
 
     return (
-        <div style={{ padding: '30px', maxWidth: '800px', margin: '0 auto' }}>
-            <h2 style={{ margin: '0 0 20px 0', borderBottom: '2px solid #000', paddingBottom: '10px' }}>SHOP BROADCASTS</h2>
-            <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', boxShadow: '6px 6px 0 rgba(0,0,0,0.05)', marginBottom: '30px' }}>
-                <textarea value={msgBody} onChange={e=>setMsgBody(e.target.value)} placeholder="Broadcast a shop message..." style={{...inputStyle, height: '100px', resize: 'vertical'}}></textarea>
-                <button onClick={handleSend} style={{ ...btnStyle, width: '100%', marginTop: '10px' }}>POST MESSAGE</button>
+        <div style={{ padding: '40px', maxWidth: '800px', margin: '0 auto', fontFamily: 'var(--sans)' }}>
+            <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '30px' }}>
+                <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Shop Broadcasts</h2>
             </div>
             
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '40px' }}>
+                <textarea 
+                    value={msgBody} 
+                    onChange={e=>setMsgBody(e.target.value)} 
+                    placeholder="Broadcast a shop message..." 
+                    style={{...inputStyle, height: '120px', resize: 'vertical', marginBottom: '16px'}}
+                />
+                <button onClick={handleSend} style={{ ...btnStyle, width: '100%' }}>Post Message</button>
+            </div>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                {messages.length === 0 && <div style={{ textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem', padding: '40px' }}>No active broadcasts.</div>}
+                
                 {messages.map(m => {
                     const readMap = m.read || {}; const compMap = m.completed || {};
                     const hasRead = !!readMap[user.name]; const hasComp = !!compMap[user.name];
                     return (
-                        <div key={m.id} style={cardStyle}>
-                            {['admin', 'floor_manager'].includes(user.role) && <button onClick={() => deleteDoc(doc(db, "fin_messaging", m.id))} style={{ float: 'right', background: '#fff0f0', color: '#d9534f', border: '1px solid #ffcccc', cursor: 'pointer', padding: '2px 8px', fontSize: '0.7rem', fontWeight: 'bold' }}>DEL</button>}
-                            <b>{m.u}</b> <span style={{ color: '#888', fontSize: '0.7rem', marginLeft: '10px' }}>{m.t?.toDate().toLocaleString() || 'Just now'}</span>
-                            <div style={{ marginTop: '10px', fontSize: '1rem', marginBottom: '15px', color: '#000' }}>{m.msg}</div>
-                            <div style={{ paddingTop: '10px', borderTop: '1px dashed #eee', display: 'flex', gap: '15px' }}>
-                                <button onClick={() => toggleAction(m.id, 'read', readMap)} style={{ background: hasRead ? '#eafaf1' : '#f8f9fa', border: '1px solid #ccc', padding: '6px 12px', borderRadius: '4px', fontSize: '0.75rem', cursor: 'pointer', fontWeight: 'bold' }}>{hasRead ? '☑️ READ' : '⬜ MARK READ'}</button>
-                                <button onClick={() => toggleAction(m.id, 'completed', compMap)} style={{ background: hasComp ? '#eafaf1' : '#f8f9fa', border: '1px solid #ccc', padding: '6px 12px', borderRadius: '4px', fontSize: '0.75rem', cursor: 'pointer', fontWeight: 'bold' }}>{hasComp ? '✅ COMPLETED' : '⬜ MARK COMPLETE'}</button>
+                        <div key={m.id} style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
+                            {['admin', 'floor_manager'].includes(user.role) && (
+                                <button onClick={() => deleteDoc(doc(db, "fin_messaging", m.id))} style={{ float: 'right', background: 'transparent', color: '#d9534f', border: 'none', cursor: 'pointer', fontSize: '1.5rem', lineHeight: 1, padding: 0 }}>×</button>
+                            )}
+                            
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginBottom: '16px' }}>
+                                <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '1.1rem' }}>{m.u}</span> 
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>
+                                    {m.t?.toDate().toLocaleString() || 'Just now'}
+                                </span>
+                            </div>
+                            
+                            <div style={{ fontSize: '1.05rem', color: 'var(--ink)', lineHeight: '1.6', marginBottom: '24px', whiteSpace: 'pre-wrap' }}>
+                                {m.msg}
+                            </div>
+                            
+                            <div style={{ paddingTop: '16px', borderTop: '1px solid var(--line)', display: 'flex', gap: '16px' }}>
+                                <button 
+                                    onClick={() => toggleAction(m.id, 'read', readMap)} 
+                                    style={{ background: hasRead ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', border: '1px solid var(--line)', padding: '10px 20px', borderRadius: '2px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '8px' }}
+                                >
+                                    <span style={{ fontSize: '1.2rem', color: hasRead ? 'var(--brass)' : 'var(--line)' }}>{hasRead ? '☑' : '☐'}</span> 
+                                    {hasRead ? 'Read' : 'Mark Read'}
+                                </button>
+                                <button 
+                                    onClick={() => toggleAction(m.id, 'completed', compMap)} 
+                                    style={{ background: hasComp ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', border: '1px solid var(--line)', padding: '10px 20px', borderRadius: '2px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '8px' }}
+                                >
+                                    <span style={{ fontSize: '1.2rem', color: hasComp ? 'var(--brass)' : 'var(--line)' }}>{hasComp ? '☑' : '☐'}</span> 
+                                    {hasComp ? 'Completed' : 'Mark Complete'}
+                                </button>
                             </div>
                         </div>
                     );

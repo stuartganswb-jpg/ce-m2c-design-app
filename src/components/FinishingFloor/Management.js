@@ -1,10 +1,7 @@
 import React, { useState } from 'react';
 import { db } from '../../firebase';
 import { doc, setDoc, deleteDoc, collection, getDocs, writeBatch } from "firebase/firestore";
-
-const btnStyle = { padding: '10px 15px', border: 'none', borderRadius: 0, cursor: 'pointer', fontWeight: 'bold', textTransform: 'uppercase' };
-const inputStyle = { padding: '8px', border: '2px solid #ccc', borderRadius: 0, width: '100%', boxSizing: 'border-box', fontFamily: 'Avenir, sans-serif' };
-const labelStyle = { fontSize: '0.7rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '4px' };
+import { btnStyle, inputStyle, labelStyle } from './finishingStyles';
 
 const ROLES = ['setup', 'setup_manager', 'painter', 'hand_painter', 'paint_manager', 'packaging', 'floor_manager', 'office', 'admin'];
 const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'MESSAGING', 'MANAGEMENT', 'DAILY SUMMARY'];
@@ -33,7 +30,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
     const [permissions, setPermissions] = useState(perms || {});
 
     if (user?.role !== 'admin' && user?.role !== 'floor_manager') {
-        return <div style={{ padding: '30px', fontFamily: 'Avenir, sans-serif' }}><h2>ACCESS DENIED</h2><p>You need Admin or Floor Manager privileges to view this page.</p></div>;
+        return <div style={{ padding: '40px', fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink-soft)', fontStyle: 'italic', textAlign: 'center' }}>Access Denied. You need Admin or Floor Manager privileges to view this page.</div>;
     }
 
     const handleSaveConfig = async () => {
@@ -114,7 +111,6 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                 partsList: partsList,
                 currentPhase: 'Painting', 
                 currentStepIndex: 0,
-                // Refined Task Structure to match physical machine states
                 tasks: {
                     spinSetup: { status: 'Pending', assignedTo: '' },
                     spinSpray: { status: 'Pending', assignedTo: '' },
@@ -123,7 +119,7 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
                     poleBake: { status: 'Pending', assignedTo: '' },
                     hand: { status: 'Pending', assignedTo: '' } 
                 },
-                machineAssigned: null // 'RED' or 'BLUE'
+                machineAssigned: null 
             };
         };
 
@@ -145,124 +141,154 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
     };
 
     return (
-        <div style={{ padding: '30px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', fontFamily: 'Avenir, sans-serif' }}>
-            <div>
-                <h2 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #333', paddingBottom: '10px', color: '#333' }}>AI PRODUCTION TIMERS (MINUTES)</h2>
-                <div style={{ background: '#fff', border: '2px solid #333', padding: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                    <div><label style={labelStyle}>Mix Station</label><input type="number" step="0.1" value={config.mixMins} onChange={e=>setConfig({...config, mixMins: Number(e.target.value)})} style={inputStyle} /></div>
-                    <div><label style={labelStyle}>Spin Setup (Small Parts)</label><input type="number" step="0.1" value={config.spinSetupMins} onChange={e=>setConfig({...config, spinSetupMins: Number(e.target.value)})} style={inputStyle} /></div>
-                    <div><label style={labelStyle}>Spin Paint Time</label><input type="number" step="0.1" value={config.spinPaintMins} onChange={e=>setConfig({...config, spinPaintMins: Number(e.target.value)})} style={inputStyle} /></div>
-                    <div><label style={labelStyle}>Oven Bake Time</label><input type="number" step="0.1" value={config.ovenMins} onChange={e=>setConfig({...config, ovenMins: Number(e.target.value)})} style={inputStyle} /></div>
-                    <div><label style={labelStyle}>Hand Finish (Small)</label><input type="number" step="0.1" value={config.handSmallMins} onChange={e=>setConfig({...config, handSmallMins: Number(e.target.value)})} style={inputStyle} /></div>
-                    <div><label style={labelStyle}>Hand Finish (Pole)</label><input type="number" step="0.1" value={config.handPoleMins} onChange={e=>setConfig({...config, handPoleMins: Number(e.target.value)})} style={inputStyle} /></div>
-                    <div><label style={labelStyle}>Pole Paint (Per Piece)</label><input type="number" step="0.1" value={config.poleMins} onChange={e=>setConfig({...config, poleMins: Number(e.target.value)})} style={inputStyle} /></div>
-                    <div style={{ borderTop: '2px dashed #ccc', paddingTop: '10px', gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                        <div><label style={{...labelStyle, color: '#CC6600'}}>Pot Life</label><input type="number" step="1" value={config.potLifeMins} onChange={e=>setConfig({...config, potLifeMins: Number(e.target.value)})} style={inputStyle} /></div>
-                        <div><label style={{...labelStyle, color: '#d9534f'}}>Recoat Window</label><input type="number" step="1" value={config.recoatMins} onChange={e=>setConfig({...config, recoatMins: Number(e.target.value)})} style={inputStyle} /></div>
+        <div style={{ padding: '40px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px', fontFamily: 'var(--sans)', maxWidth: '1400px', margin: '0 auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '40px' }}>
+                
+                <div>
+                    <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
+                        <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>AI Production Timers (Minutes)</h2>
                     </div>
-                    <button onClick={handleSaveConfig} style={{ ...btnStyle, gridColumn: '1 / -1', background: '#333', color: '#fff' }}>SAVE TIMERS</button>
-                </div>
-
-                <h2 style={{ borderBottom: '2px solid #333', paddingBottom: '10px', marginTop: '30px', color: '#333' }}>DATABASE MANAGEMENT</h2>
-                <div style={{ background: '#fff0f0', border: '2px solid #d9534f', padding: '15px' }}>
-                    <p style={{ fontSize: '0.8rem', color: '#666', marginTop: 0 }}>These actions permanently delete live production data.</p>
-                    <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-                        <button onClick={handleWipePots} style={{ flex: 1, padding: '10px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>WIPE POTS</button>
-                        <button onClick={handleWipeWorkOrders} style={{ flex: 1, padding: '10px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>WIPE WORK ORDERS</button>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div><label style={labelStyle}>Mix Station</label><input type="number" step="0.1" value={config.mixMins} onChange={e=>setConfig({...config, mixMins: Number(e.target.value)})} style={inputStyle} /></div>
+                        <div><label style={labelStyle}>Spin Setup (Small Parts)</label><input type="number" step="0.1" value={config.spinSetupMins} onChange={e=>setConfig({...config, spinSetupMins: Number(e.target.value)})} style={inputStyle} /></div>
+                        <div><label style={labelStyle}>Spin Paint Time</label><input type="number" step="0.1" value={config.spinPaintMins} onChange={e=>setConfig({...config, spinPaintMins: Number(e.target.value)})} style={inputStyle} /></div>
+                        <div><label style={labelStyle}>Oven Bake Time</label><input type="number" step="0.1" value={config.ovenMins} onChange={e=>setConfig({...config, ovenMins: Number(e.target.value)})} style={inputStyle} /></div>
+                        <div><label style={labelStyle}>Hand Finish (Small)</label><input type="number" step="0.1" value={config.handSmallMins} onChange={e=>setConfig({...config, handSmallMins: Number(e.target.value)})} style={inputStyle} /></div>
+                        <div><label style={labelStyle}>Hand Finish (Pole)</label><input type="number" step="0.1" value={config.handPoleMins} onChange={e=>setConfig({...config, handPoleMins: Number(e.target.value)})} style={inputStyle} /></div>
+                        <div><label style={labelStyle}>Pole Paint (Per Piece)</label><input type="number" step="0.1" value={config.poleMins} onChange={e=>setConfig({...config, poleMins: Number(e.target.value)})} style={inputStyle} /></div>
+                        <div style={{ borderTop: '1px solid var(--line)', paddingTop: '24px', gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+                            <div><label style={{...labelStyle, color: 'var(--brass)'}}>Pot Life</label><input type="number" step="1" value={config.potLifeMins} onChange={e=>setConfig({...config, potLifeMins: Number(e.target.value)})} style={inputStyle} /></div>
+                            <div><label style={{...labelStyle, color: '#d9534f'}}>Recoat Window</label><input type="number" step="1" value={config.recoatMins} onChange={e=>setConfig({...config, recoatMins: Number(e.target.value)})} style={inputStyle} /></div>
+                        </div>
+                        <button onClick={handleSaveConfig} style={{ ...btnStyle, gridColumn: '1 / -1', marginTop: '8px' }}>Save Timers</button>
                     </div>
                 </div>
 
-                <h2 style={{ borderBottom: '2px solid #333', paddingBottom: '10px', marginTop: '30px', color: '#333' }}>OPERATOR DIRECTORY</h2>
-                <div style={{ background: '#fff', border: '2px solid #333', padding: '20px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '10px', marginBottom: '10px' }}>
-                        <input value={uName} onChange={e=>setUName(e.target.value)} placeholder="Name" disabled={!!oldId} style={{ ...inputStyle, background: oldId ? '#eee' : '#fff' }}/>
-                        <input value={uPin} onChange={e=>setUPin(e.target.value)} placeholder="PIN" maxLength="4" style={inputStyle}/>
-                        <select value={uRole} onChange={e=>setURole(e.target.value)} style={inputStyle}>
-                            {ROLES.map(r => <option key={r} value={r}>{r.toUpperCase().replace(/_/g, ' ')}</option>)}
-                        </select>
+                <div>
+                    <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
+                        <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: '#d9534f' }}>Database Management</h2>
                     </div>
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                        <button onClick={handleSaveUser} style={{ ...btnStyle, flex: 1, background: oldId ? '#CC6600' : '#333', color: '#fff' }}>{oldId ? 'UPDATE OPERATOR' : 'ADD OPERATOR'}</button>
-                        {oldId && <button onClick={() => { setUName(""); setUPin(""); setURole("painter"); setOldId(""); }} style={{ ...btnStyle, background: '#888', color: '#fff' }}>CANCEL</button>}
+                    <div style={{ background: '#fdf2f2', border: '1px solid #d9534f', padding: '30px', borderRadius: '2px' }}>
+                        <p style={{ fontSize: '0.9rem', color: 'var(--ink)', marginTop: 0, marginBottom: '20px' }}>These actions permanently delete live production data. Use with extreme caution.</p>
+                        <div style={{ display: 'flex', gap: '16px' }}>
+                            <button onClick={handleWipePots} style={{ flex: 1, padding: '16px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={e => { e.currentTarget.style.background = '#d9534f'; e.currentTarget.style.color = '#fff'; }} onMouseOut={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#d9534f'; }}>Wipe Pots</button>
+                            <button onClick={handleWipeWorkOrders} style={{ flex: 1, padding: '16px', background: '#d9534f', color: '#fff', border: '1px solid #d9534f', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Wipe Work Orders</button>
+                        </div>
                     </div>
-                    <div style={{ marginTop: '20px', maxHeight: '300px', overflowY: 'auto' }}>
-                        {users.map(u => (
-                            <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', borderBottom: '1px solid #eee' }}>
-                                <span><b>{u.name}</b> ({u.role})</span>
-                                <div style={{ display: 'flex', gap: '10px' }}>
-                                    <button onClick={() => { setUName(u.name); setUPin(u.pin || ''); setURole(u.role || 'painter'); setOldId(u.id); }} style={{ background: '#fffdf5', color: '#000', border: '1px solid #CC6600', cursor: 'pointer', padding: '4px 8px', fontSize: '11px', fontWeight: 'bold' }}>EDIT</button>
-                                    <button onClick={() => deleteDoc(doc(db, "fin_users", u.id))} style={{ background: '#fff0f0', color: '#d9534f', border: '1px solid #ffcccc', cursor: 'pointer', padding: '4px 8px', fontSize: '11px', fontWeight: 'bold' }}>DEL</button>
+                </div>
+
+                <div>
+                    <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
+                        <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Operator Directory</h2>
+                    </div>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '16px', marginBottom: '24px' }}>
+                            <input value={uName} onChange={e=>setUName(e.target.value)} placeholder="Full Name" disabled={!!oldId} style={{ ...inputStyle, background: oldId ? 'var(--paper-2)' : '#fff' }}/>
+                            <input value={uPin} onChange={e=>setUPin(e.target.value)} placeholder="PIN" maxLength="4" style={inputStyle}/>
+                            <select value={uRole} onChange={e=>setURole(e.target.value)} style={inputStyle}>
+                                {ROLES.map(r => <option key={r} value={r}>{r.toUpperCase().replace(/_/g, ' ')}</option>)}
+                            </select>
+                        </div>
+                        <div style={{ display: 'flex', gap: '16px', marginBottom: '30px' }}>
+                            <button onClick={handleSaveUser} style={{ ...btnStyle, flex: 1, background: oldId ? 'var(--brass)' : 'var(--ink)' }}>{oldId ? 'Update Operator' : 'Add Operator'}</button>
+                            {oldId && <button onClick={() => { setUName(""); setUPin(""); setURole("painter"); setOldId(""); }} style={{ ...btnStyle, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)' }}>Cancel</button>}
+                        </div>
+                        <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                            {users.map(u => (
+                                <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', borderBottom: '1px solid var(--line)' }}>
+                                    <span style={{ fontSize: '0.95rem', color: 'var(--ink)' }}>
+                                        <span style={{ fontWeight: 500 }}>{u.name}</span> 
+                                        <span style={{ color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', marginLeft: '12px' }}>{u.role.replace(/_/g, ' ')}</span>
+                                    </span>
+                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                        <button onClick={() => { setUName(u.name); setUPin(u.pin || ''); setURole(u.role || 'painter'); setOldId(u.id); }} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Edit</button>
+                                        <button onClick={() => deleteDoc(doc(db, "fin_users", u.id))} style={{ background: 'transparent', color: '#d9534f', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: '0 8px' }}>×</button>
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
+                            ))}
+                        </div>
                     </div>
                 </div>
 
-                {/* RESTORED PERMISSIONS MATRIX */}
-                <h2 style={{ borderBottom: '2px solid #333', paddingBottom: '10px', marginTop: '30px', color: '#333' }}>PERMISSIONS MATRIX</h2>
-                <div style={{ background: '#fff', border: '2px solid #333', padding: '20px', overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center', fontSize: '0.75rem' }}>
-                        <thead style={{ background: '#eee' }}>
-                            <tr>
-                                <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #000' }}>TAB</th>
-                                {ROLES.map(r => (
-                                    <th key={r} style={{ padding: '10px', borderBottom: '2px solid #000', borderLeft: '1px solid #ccc' }}>
-                                        {r.toUpperCase().replace(/_/g, ' ')}
-                                    </th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {TABS.map(tab => (
-                                <tr key={tab} style={{ borderBottom: '1px solid #eee' }}>
-                                    <td style={{ padding: '10px', textAlign: 'left', fontWeight: 'bold', borderRight: '2px solid #eee' }}>{tab}</td>
-                                    {ROLES.map(role => (
-                                        <td key={role} style={{ padding: '10px', borderLeft: '1px solid #eee' }}>
-                                            <input 
-                                                type="checkbox" 
-                                                checked={permissions[role]?.includes(tab) || false} 
-                                                onChange={() => togglePermission(tab, role)} 
-                                                style={{ cursor: 'pointer', transform: 'scale(1.2)' }}
-                                            />
-                                        </td>
+                <div>
+                    <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
+                        <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Permissions Matrix</h2>
+                    </div>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', overflowX: 'auto', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center' }}>
+                            <thead style={{ background: 'var(--paper)' }}>
+                                <tr>
+                                    <th style={{ padding: '16px', textAlign: 'left', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Tab</th>
+                                    {ROLES.map(r => (
+                                        <th key={r} style={{ padding: '16px', borderBottom: '1px solid var(--line)', borderLeft: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>
+                                            {r.replace(/_/g, ' ')}
+                                        </th>
                                     ))}
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                    <button onClick={handleSavePermissions} style={{ ...btnStyle, width: '100%', background: '#28a745', color: '#fff', marginTop: '15px' }}>
-                        💾 SAVE PERMISSIONS MATRIX
-                    </button>
+                            </thead>
+                            <tbody>
+                                {TABS.map(tab => (
+                                    <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
+                                        <td style={{ padding: '16px', textAlign: 'left', fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)' }}>{tab}</td>
+                                        {ROLES.map(role => (
+                                            <td key={role} style={{ padding: '16px', borderLeft: '1px solid var(--line)' }}>
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={permissions[role]?.includes(tab) || false} 
+                                                    onChange={() => togglePermission(tab, role)} 
+                                                    style={{ cursor: 'pointer' }}
+                                                />
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                        <button onClick={handleSavePermissions} style={{ ...btnStyle, width: '100%', marginTop: '24px' }}>
+                            Save Permissions Matrix
+                        </button>
+                    </div>
                 </div>
 
             </div>
 
-            <div>
-                <h2 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #007bff', paddingBottom: '10px', color: '#007bff' }}>SIMULATION & DEMO DATA</h2>
-                <div style={{ background: '#e3f2fd', border: '2px solid #007bff', padding: '20px', marginBottom: '30px' }}>
-                    <p style={{ fontSize: '0.85rem', color: '#333', marginTop: 0, marginBottom: '15px' }}>
-                        Configure and push synthetic work orders directly to the Active Floor. Uses established P-Codes (e.g. P01, P30) to test dispatch logic, routing, and spindle track animations. 
-                    </p>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
-                        <div>
-                            <label style={{...labelStyle, color: '#007bff'}}>Small Orders (&lt;70 Parts, 2 Poles)</label>
-                            <input type="number" min="0" value={demoSmall} onChange={e=>setDemoSmall(Number(e.target.value))} style={{...inputStyle, borderColor: '#007bff'}} />
-                        </div>
-                        <div>
-                            <label style={{...labelStyle, color: '#007bff'}}>Large Orders (100 Parts, 5 Poles)</label>
-                            <input type="number" min="0" value={demoLarge} onChange={e=>setDemoLarge(Number(e.target.value))} style={{...inputStyle, borderColor: '#007bff'}} />
-                        </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '40px' }}>
+                <div>
+                    <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
+                        <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Simulation & Demo Data</h2>
                     </div>
-                    <button onClick={handleInjectDemoData} style={{ ...btnStyle, width: '100%', background: '#007bff', color: '#fff' }}>🚀 INJECT BATCH TO FLOOR</button>
+                    <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px' }}>
+                        <p style={{ fontSize: '0.95rem', color: 'var(--ink-soft)', marginTop: 0, marginBottom: '24px', lineHeight: '1.5' }}>
+                            Configure and push synthetic work orders directly to the Active Floor. Uses established P-Codes (e.g. P01, P30) to test dispatch logic, routing, and spindle track animations. 
+                        </p>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                            <div>
+                                <label style={labelStyle}>Small Orders (&lt;70 Parts, 2 Poles)</label>
+                                <input type="number" min="0" value={demoSmall} onChange={e=>setDemoSmall(Number(e.target.value))} style={inputStyle} />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Large Orders (100 Parts, 5 Poles)</label>
+                                <input type="number" min="0" value={demoLarge} onChange={e=>setDemoLarge(Number(e.target.value))} style={inputStyle} />
+                            </div>
+                        </div>
+                        <button onClick={handleInjectDemoData} style={{ ...btnStyle, width: '100%', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', transition: 'background 0.2s' }} onMouseOver={e => { e.currentTarget.style.background = 'var(--ink)'; e.currentTarget.style.color = '#fff'; }} onMouseOut={e => { e.currentTarget.style.background = 'var(--paper-2)'; e.currentTarget.style.color = 'var(--ink)'; }}>
+                            Inject Batch to Floor
+                        </button>
+                    </div>
                 </div>
 
-                <h2 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #333', paddingBottom: '10px', color: '#333' }}>SYSTEM LOGS</h2>
-                <div style={{ background: '#333', color: '#00ff00', padding: '15px', height: '300px', overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.8rem', border: '2px solid #000' }}>
-                    {logs.map(l => (
-                        <div key={l.id} style={{ marginBottom: '5px', borderBottom: '1px solid #444', paddingBottom: '5px' }}>
-                            <span style={{ color: '#888' }}>[{new Date(l.t?.toDate()).toLocaleTimeString()}]</span> <span style={{ color: '#fff' }}>{l.u}:</span> {l.msg}
-                        </div>
-                    ))}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
+                        <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>System Logs</h2>
+                    </div>
+                    <div style={{ background: 'var(--dark)', color: '#a8a5a0', padding: '24px', flex: 1, minHeight: '400px', overflowY: 'auto', fontFamily: 'var(--mono)', fontSize: '11px', borderRadius: '2px' }}>
+                        {logs.map(l => (
+                            <div key={l.id} style={{ marginBottom: '8px', borderBottom: '1px solid #333', paddingBottom: '8px' }}>
+                                <span style={{ opacity: 0.5, marginRight: '12px' }}>[{new Date(l.t?.toDate()).toLocaleTimeString()}]</span> 
+                                <span style={{ color: 'var(--paper)', fontWeight: 'bold' }}>{l.u}:</span> {l.msg}
+                            </div>
+                        ))}
+                    </div>
                 </div>
             </div>
         </div>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../../firebase';
+import { finishingDb as db } from '../../firebase';
 import { collection, onSnapshot } from "firebase/firestore";
 
 const FloorAssetViewer = ({ activeBrand }) => {
@@ -8,21 +8,18 @@ const FloorAssetViewer = ({ activeBrand }) => {
     const [searchQuery, setSearchQuery] = useState('');
     
     const [activeAsset, setActiveAsset] = useState(null);
-    const [isZoomed, setIsZoomed] = useState(false); // 🚀 NEW: Image Zoom state
+    const [isZoomed, setIsZoomed] = useState(false);
 
-    // 1. Fetch all Global Assets (Read-Only)
     useEffect(() => {
         const unsub = onSnapshot(collection(db, "global_assets"), (snap) => {
             if (!snap || !snap.docs) return;
             let fetchedAssets = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            // Sort newest first
             fetchedAssets.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
             setAssets(fetchedAssets);
         });
         return () => unsub();
     }, []);
 
-    // 2. Fetch Finish Recipes to link them to the images
     useEffect(() => {
         const unsub = onSnapshot(collection(db, "fin_recipes"), (snap) => {
             if (!snap || !snap.docs) return;
@@ -31,7 +28,6 @@ const FloorAssetViewer = ({ activeBrand }) => {
         return () => unsub();
     }, []);
 
-    // Filter logic for the floor (Quick Search)
     const filteredAssets = assets.filter(asset => {
         if (!searchQuery) return true;
         const q = String(searchQuery).toLowerCase();
@@ -43,62 +39,60 @@ const FloorAssetViewer = ({ activeBrand }) => {
     });
 
     const openModal = (asset) => {
-        setIsZoomed(false); // Reset zoom when opening a new image
+        setIsZoomed(false); 
         setActiveAsset(asset);
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
             
             {/* HEADER & SEARCH */}
-            <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
                 <div>
-                    <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.6rem', color: '#CC6600' }}>FINISHING VISUAL DICTIONARY</h2>
-                    <span style={{ fontSize: '0.8rem', color: '#666', fontWeight: 'bold' }}>QUICK SEARCH REFERENCE & INSTRUCTIONS</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Quick Search Reference & Instructions</span>
+                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Finishing Visual Dictionary</h2>
                 </div>
                 
                 <div style={{ flex: 0.6, position: 'relative' }}>
-                    <span style={{ position: 'absolute', left: '15px', top: '50%', transform: 'translateY(-50%)', fontSize: '1.2rem' }}>🔍</span>
+                    <span style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', fontSize: '1.2rem', opacity: 0.5 }}>🔍</span>
                     <input 
                         type="text" 
                         placeholder="Scan or type Finish ID, Pattern, or Customer..." 
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        style={{ width: '100%', padding: '15px 15px 15px 45px', fontSize: '1.2rem', border: '3px solid #CC6600', borderRadius: '8px', outline: 'none', fontWeight: 'bold', boxSizing: 'border-box' }}
+                        style={{ width: '100%', padding: '16px 16px 16px 48px', fontSize: '1rem', fontFamily: 'var(--sans)', border: '1px solid var(--line)', borderRadius: '2px', outline: 'none', boxSizing: 'border-box', background: 'var(--paper)', color: 'var(--ink)' }}
                     />
                 </div>
             </div>
 
             {/* ASSET GRID (VIEW ONLY) */}
-            <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)', minHeight: '60vh' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '20px' }}>
+            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', minHeight: '60vh' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '24px' }}>
                     {filteredAssets.length === 0 ? (
-                        <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '50px', color: '#888', fontWeight: 'bold', fontSize: '1.2rem' }}>
-                            NO MATCHING IMAGES FOUND
+                        <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '60px', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>
+                            No matching images found.
                         </div>
                     ) : (
                         filteredAssets.slice(0, 100).map(asset => (
-                            <div key={asset.id} onClick={() => openModal(asset)} style={{ border: '2px solid #ccc', borderRadius: '8px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: '0.2s', background: '#f8f9fa' }} onMouseOver={e => e.currentTarget.style.borderColor = '#CC6600'} onMouseOut={e => e.currentTarget.style.borderColor = '#ccc'}>
+                            <div key={asset.id} onClick={() => openModal(asset)} style={{ border: '1px solid var(--line)', borderRadius: '2px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s ease', background: '#fff' }} onMouseOver={e => { e.currentTarget.style.borderColor = 'var(--brass)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.05)'; }} onMouseOut={e => { e.currentTarget.style.borderColor = 'var(--line)'; e.currentTarget.style.boxShadow = 'none'; }}>
                                 
-                                <div style={{ position: 'relative', width: '100%', height: '220px', background: '#e5e5e5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                    {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'2rem'}}>🖼️</span>}
+                                <div style={{ position: 'relative', width: '100%', height: '240px', background: 'var(--paper)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderBottom: '1px solid var(--line)' }}>
+                                    {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'2rem', opacity: 0.2}}>🖼️</span>}
                                     
-                                    {/* 🚀 THE BOTTOM-LEFT WATERMARK BADGE */}
-                                    <div style={{ position: 'absolute', bottom: '8px', left: '8px', color: '#333', fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 'bold', background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #ccc', zIndex: 2 }}>
+                                    <div style={{ position: 'absolute', bottom: '12px', left: '12px', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'rgba(255,255,255,0.9)', padding: '4px 8px', borderRadius: '2px', border: '1px solid var(--line)', zIndex: 2 }}>
                                         {String(asset.patternId || '')}{asset.finishId ? `/${String(asset.finishId)}` : ''}
                                     </div>
                                     
-                                    {/* Overlay Customer ID Badge */}
                                     {(asset.clientSku || asset.customerPartId) && (
-                                        <div style={{ position: 'absolute', top: '8px', right: '8px', color: '#fff', fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 'bold', background: '#28a745', padding: '2px 6px', borderRadius: '4px', zIndex: 2 }}>
-                                            CUST: {String(asset.clientSku || asset.customerPartId)}
+                                        <div style={{ position: 'absolute', top: '12px', right: '12px', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', padding: '4px 8px', borderRadius: '2px', border: '1px solid var(--line)', zIndex: 2 }}>
+                                            Cust: {String(asset.clientSku || asset.customerPartId)}
                                         </div>
                                     )}
                                 </div>
 
-                                <div style={{ padding: '12px', background: '#fff', borderTop: '1px solid #ccc' }}>
-                                    <div style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#000' }}>{asset.finishId || 'NO FINISH ID'}</div>
-                                    <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '4px' }}>PART: {asset.patternId || 'N/A'}</div>
+                                <div style={{ padding: '16px', background: '#fff' }}>
+                                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>{asset.finishId || 'No Finish ID'}</div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>Part: {asset.patternId || 'N/A'}</div>
                                 </div>
                             </div>
                         ))
@@ -111,67 +105,63 @@ const FloorAssetViewer = ({ activeBrand }) => {
                 const linkedRecipe = recipes.find(r => r.code === activeAsset.finishId);
                 
                 return (
-                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-                        <div style={{ background: '#fff', border: '4px solid #000', width: '95%', maxWidth: '1400px', height: '90vh', display: 'flex', boxShadow: '20px 20px 0 #000', overflow: 'hidden' }}>
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }}>
+                        <div style={{ background: '#fff', border: '1px solid var(--line)', width: '100%', maxWidth: '1400px', height: '90vh', display: 'flex', borderRadius: '2px', boxShadow: '0 12px 48px rgba(0,0,0,0.2)', overflow: 'hidden' }}>
                             
-                            {/* 🚀 LEFT: FULL SIZE IMAGE (NOW WITH ZOOM CROP) */}
                             <div 
-                                style={{ flex: 1.5, background: '#e5e5e5', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', position: 'relative', overflow: 'hidden', cursor: isZoomed ? 'zoom-out' : 'zoom-in' }}
+                                style={{ flex: 1.5, background: 'var(--paper)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px', position: 'relative', overflow: 'hidden', cursor: isZoomed ? 'zoom-out' : 'zoom-in' }}
                                 onClick={() => setIsZoomed(!isZoomed)}
                             >
                                 <img 
                                     src={activeAsset.originalUrl || activeAsset.url} 
                                     alt="Master Reference" 
                                     style={{ 
-                                        maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 10px 30px rgba(0,0,0,0.3)', border: '2px solid #ccc',
-                                        transform: isZoomed ? 'scale(2)' : 'scale(1)', transition: 'transform 0.25s ease-in-out'
+                                        maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 12px 40px rgba(0,0,0,0.1)', border: '1px solid var(--line)', background: '#fff',
+                                        transform: isZoomed ? 'scale(2)' : 'scale(1)', transition: 'transform 0.3s cubic-bezier(0.2, 0, 0, 1)'
                                     }} 
                                 />
                                 
                                 {!isZoomed && (
-                                    <div style={{ position: 'absolute', top: '20px', right: '20px', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '8px 12px', borderRadius: '4px', fontSize: '0.9rem', fontWeight: 'bold', pointerEvents: 'none' }}>
-                                        🔍 CLICK TO CROP / ZOOM
+                                    <div style={{ position: 'absolute', top: '24px', right: '24px', background: 'rgba(255,255,255,0.9)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 16px', borderRadius: '2px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', pointerEvents: 'none' }}>
+                                        Click to Zoom
                                     </div>
                                 )}
                             </div>
 
-                            {/* RIGHT: RECIPE & INSTRUCTIONS PANEL */}
-                            <div style={{ flex: 1, borderLeft: '4px solid #000', padding: '30px', display: 'flex', flexDirection: 'column', background: '#f8f9fa', overflowY: 'auto' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '4px solid #000', paddingBottom: '15px', marginBottom: '20px' }}>
+                            <div style={{ flex: 1, borderLeft: '1px solid var(--line)', padding: '40px', display: 'flex', flexDirection: 'column', background: '#fff', overflowY: 'auto' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '20px', marginBottom: '30px' }}>
                                     <div>
-                                        <h2 style={{ margin: 0, color: '#CC6600', fontSize: '2rem' }}>{activeAsset.finishId || 'NO FINISH ID'}</h2>
-                                        <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#666', marginTop: '5px' }}>REFERENCE PART: {activeAsset.patternId || 'N/A'}</div>
+                                        <h2 style={{ margin: 0, color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '2.4rem', fontWeight: 500 }}>{activeAsset.finishId || 'No Finish ID'}</h2>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>Ref Part: {activeAsset.patternId || 'N/A'}</div>
                                     </div>
-                                    <button onClick={() => { setActiveAsset(null); setIsZoomed(false); }} style={{ background: '#000', color: '#fff', border: 'none', fontSize: '1.5rem', fontWeight: 'bold', width: '40px', height: '40px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+                                    <button onClick={() => { setActiveAsset(null); setIsZoomed(false); }} style={{ background: 'none', color: 'var(--ink-soft)', border: 'none', fontSize: '2rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'color 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>×</button>
                                 </div>
 
-                                {/* RECIPE DATA */}
-                                <div style={{ marginBottom: '25px' }}>
-                                    <h3 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #ccc', paddingBottom: '5px' }}>🧪 RECIPE BUILDER STEPS</h3>
+                                <div style={{ marginBottom: '40px' }}>
+                                    <h3 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Recipe Builder Steps</h3>
                                     {!linkedRecipe ? (
-                                        <div style={{ padding: '15px', background: '#fff3cd', border: '2px solid #ffc107', color: '#856404', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                                        <div style={{ padding: '20px', background: 'var(--paper)', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>
                                             No recipe profile exists for "{activeAsset.finishId}". A floor manager must build this in the Recipes tab first.
                                         </div>
                                     ) : (
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                             {linkedRecipe.steps.map(st => (
-                                                <div key={st.step} style={{ display: 'flex', alignItems: 'center', background: '#fff', padding: '10px 15px', border: '1px solid #ccc', fontSize: '0.9rem' }}>
-                                                    <b style={{ width: '40px', color: '#CC6600' }}>S{st.step}:</b> 
-                                                    <span style={{ flex: 1, fontWeight: 'bold' }}>{st.color}</span>
-                                                    <span style={{ background: st.app === 'Sprayed' ? '#007bff' : '#ffc107', color: st.app === 'Sprayed' ? '#fff' : '#000', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>{st.app}</span>
+                                                <div key={st.step} style={{ display: 'flex', alignItems: 'center', background: 'var(--paper-2)', padding: '16px 20px', border: '1px solid var(--line)' }}>
+                                                    <b style={{ width: '40px', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '11px' }}>S{st.step}</b> 
+                                                    <span style={{ flex: 1, fontFamily: 'var(--sans)', fontSize: '1rem', color: 'var(--ink)' }}>{st.color}</span>
+                                                    <span style={{ background: st.app === 'Sprayed' ? 'var(--ink)' : 'var(--paper)', color: st.app === 'Sprayed' ? '#fff' : 'var(--ink)', border: st.app === 'Sprayed' ? 'none' : '1px solid var(--line)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{st.app}</span>
                                                 </div>
                                             ))}
                                         </div>
                                     )}
                                 </div>
 
-                                {/* 🚀 UPDATED: FLOOR INSTRUCTIONS (MASSIVE READ-ONLY VIEW) */}
-                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#fff', border: '2px solid #ccc', padding: '20px' }}>
-                                    <h3 style={{ margin: '0 0 15px 0', borderBottom: '2px solid #ccc', paddingBottom: '10px', color: '#000', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                        📋 APPLICATION INSTRUCTIONS
+                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                    <h3 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>
+                                        Application Instructions
                                     </h3>
                                     
-                                    <div style={{ flex: 1, fontSize: '1.1rem', fontFamily: 'monospace', whiteSpace: 'pre-wrap', overflowY: 'auto', color: linkedRecipe?.instructions ? '#000' : '#888', lineHeight: '1.6' }}>
+                                    <div style={{ flex: 1, padding: '24px', background: 'var(--paper)', border: '1px solid var(--line)', fontSize: '1rem', fontFamily: 'var(--sans)', whiteSpace: 'pre-wrap', overflowY: 'auto', color: linkedRecipe?.instructions ? 'var(--ink)' : 'var(--ink-soft)', lineHeight: '1.8' }}>
                                         {linkedRecipe?.instructions || "No finishing instructions have been saved for this recipe yet. Instructions are entered via the Master Recipe Builder tab."}
                                     </div>
                                 </div>

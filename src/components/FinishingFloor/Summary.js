@@ -6,25 +6,33 @@ const Summary = ({ workOrders }) => {
     const completed = workOrders.filter(w => w.currentPhase === "Complete" && w.completedAt && new Date(w.completedAt).toDateString() === today).sort((a,b) => b.completedAt - a.completedAt);
     
     return (
-        <div style={{ padding: '30px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', borderBottom: '2px solid #000', paddingBottom: '15px' }}>
-                <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.5rem' }}>DAILY PRODUCTION SUMMARY</h2>
-                <button onClick={() => window.print()} style={btnStyle}>🖨️ PRINT REPORT</button>
+        <div style={{ padding: '40px', maxWidth: '1400px', margin: '0 auto', fontFamily: 'var(--sans)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px', borderBottom: '1px solid var(--line)', paddingBottom: '20px' }}>
+                <div>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Production Reporting</span>
+                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Daily Summary</h2>
+                </div>
+                <button onClick={() => window.print()} style={{ ...btnStyle, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>Print Report</button>
             </div>
             
-            <div style={{ background: '#fff', border: '2px solid #000', overflowX: 'auto', boxShadow: '6px 6px 0 rgba(0,0,0,0.05)' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-                    <thead style={{ background: '#000', color: '#fff' }}>
+            <div style={{ background: '#fff', border: '1px solid var(--line)', overflowX: 'auto', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                    <thead style={{ background: 'var(--paper)' }}>
                         <tr>
-                            <th style={{ padding: '12px' }}>Time</th><th style={{ padding: '12px' }}>WO #</th>
-                            <th style={{ padding: '12px' }}>SO #</th><th style={{ padding: '12px' }}>Cust PO</th>
-                            <th style={{ padding: '12px' }}>Poles</th><th style={{ padding: '12px' }}>Brackets</th>
-                            <th style={{ padding: '12px' }}>Rings</th><th style={{ padding: '12px' }}>Finials</th>
-                            <th style={{ padding: '12px', color: '#d9534f' }}>Scrap</th><th style={{ padding: '12px' }}>Notes</th>
+                            <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Time</th>
+                            <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>WO #</th>
+                            <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>SO #</th>
+                            <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Cust PO</th>
+                            <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Poles</th>
+                            <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Brackets</th>
+                            <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Rings</th>
+                            <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Finials</th>
+                            <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Scrap</th>
+                            <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Notes</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {completed.length === 0 && <tr><td colSpan="10" style={{ padding: '30px', textAlign: 'center', color: '#999', fontStyle: 'italic' }}>No work orders have been completed today.</td></tr>}
+                        {completed.length === 0 && <tr><td colSpan="10" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>No work orders have been completed today.</td></tr>}
                         {completed.map(wo => {
                             let p=0, b=0, r=0, f=0;
                             if(wo.type === 'sales') {
@@ -36,15 +44,17 @@ const Summary = ({ workOrders }) => {
                             if(wo.scrapReported > 0) notesArr.push("Reported Scrap");
                             
                             return (
-                                <tr key={wo.id} style={{ borderBottom: '1px solid #eee' }}>
-                                    <td style={{ padding: '12px' }}>{new Date(wo.completedAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
-                                    <td style={{ padding: '12px', fontWeight: 'bold', color: '#007bff' }}>{wo.id}</td>
-                                    <td style={{ padding: '12px', fontWeight: 'bold', color: '#6f42c1' }}>{wo.soId || '-'}</td>
-                                    <td style={{ padding: '12px' }}>{wo.custPo || '-'}</td>
-                                    <td style={{ padding: '12px' }}>{wo.type === 'stock' ? <b>{p} (Stock)</b> : p}</td>
-                                    <td style={{ padding: '12px' }}>{b}</td><td style={{ padding: '12px' }}>{r}</td><td style={{ padding: '12px' }}>{f}</td>
-                                    <td style={{ padding: '12px', color: '#d9534f', fontWeight: 'bold' }}>{wo.scrapReported || 0}</td>
-                                    <td style={{ padding: '12px', color: '#666', fontSize: '0.75rem' }}>{notesArr.join(' | ') || '-'}</td>
+                                <tr key={wo.id} style={{ borderBottom: '1px solid var(--line)', background: '#fff' }}>
+                                    <td style={{ padding: '16px 20px', color: 'var(--ink-soft)' }}>{new Date(wo.completedAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
+                                    <td style={{ padding: '16px 20px', fontWeight: 500, color: 'var(--ink)' }}>{wo.id}</td>
+                                    <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{wo.soId || '-'}</td>
+                                    <td style={{ padding: '16px 20px', color: 'var(--ink-soft)' }}>{wo.custPo || '-'}</td>
+                                    <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{wo.type === 'stock' ? <span style={{fontFamily: 'var(--mono)', fontSize: '10px'}}>{p} (STOCK)</span> : p}</td>
+                                    <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{b}</td>
+                                    <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{r}</td>
+                                    <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{f}</td>
+                                    <td style={{ padding: '16px 20px', color: wo.scrapReported > 0 ? '#d9534f' : 'var(--ink-soft)', fontWeight: wo.scrapReported > 0 ? 500 : 400 }}>{wo.scrapReported || 0}</td>
+                                    <td style={{ padding: '16px 20px', color: 'var(--ink-soft)', fontSize: '0.85rem' }}>{notesArr.join(' | ') || '-'}</td>
                                 </tr>
                             )
                         })}

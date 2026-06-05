@@ -89,36 +89,43 @@ const FinishingFloor = () => {
 
   if (!user) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', fontFamily: 'monospace' }}>
-        <div style={{ background: '#fff', padding: '40px', border: '4px solid #333', boxShadow: '10px 10px 0 #CC6600', width: '350px', textAlign: 'center' }}>
-          <h1 style={{ margin: '0 0 20px 0', color: '#CC6600', fontSize: '1.8rem' }}>FINISHING O.S.</h1>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--paper)', fontFamily: 'var(--sans)' }}>
+        <div style={{ background: '#fff', padding: '50px 40px', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.02)', width: '400px', textAlign: 'center', borderRadius: '2px' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.25em', textTransform: 'uppercase', color: 'var(--brass)', display: 'block', marginBottom: '1rem' }}>
+            Authorization Required
+          </span>
+          <h1 style={{ margin: '0 0 30px 0', color: 'var(--ink)', fontSize: '2.2rem', fontFamily: 'var(--serif)', fontWeight: 500 }}>Finishing O.S.</h1>
           <form onSubmit={attemptLogin}>
-            <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{width: '100%', padding: '10px', textAlign: 'center', fontSize: '1.5rem', marginBottom: '20px', border: '2px solid #ccc', boxSizing: 'border-box'}} />
-            <button type="submit" style={{ width: '100%', padding: '15px', background: '#333', color: '#fff', fontSize: '1.2rem', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>LOGIN</button>
+            <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{width: '100%', padding: '15px', textAlign: 'center', fontSize: '1.5rem', marginBottom: '20px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--mono)', letterSpacing: '10px', outline: 'none'}} />
+            <button type="submit" style={{ width: '100%', padding: '15px', background: 'var(--ink)', color: '#fff', fontSize: '10px', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }}>Authenticate</button>
           </form>
-          <button onClick={() => navigate('/')} style={{ marginTop: '20px', background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontWeight: 'bold' }}>← BACK TO HUB</button>
+          <button onClick={() => navigate('/')} style={{ marginTop: '30px', background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid var(--brass)', paddingBottom: '2px' }}>Return to Hub</button>
         </div>
       </div>
     );
   }
 
 return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#e5e5e5', display: 'flex', flexDirection: 'column', fontFamily: 'monospace' }}>
-      <header style={{ backgroundColor: '#333', color: '#fff', padding: '15px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div><h1 style={{ margin: 0, fontSize: '1.4rem' }}>FINISHING O.S.</h1></div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <button onClick={() => navigate('/')} style={{ padding: '8px 15px', cursor: 'pointer', background: '#fff', color: '#333', border: '2px solid #333', fontWeight: 'bold' }}>🏠 HUB</button>
+    <div style={{ minHeight: '100vh', backgroundColor: 'var(--paper)', display: 'flex', flexDirection: 'column', fontFamily: 'var(--sans)' }}>
+      <header style={{ backgroundColor: '#fff', color: 'var(--ink)', padding: '18px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '4px solid var(--brass)', borderBottom: '1px solid var(--line)' }}>
+        <div>
+            <h1 style={{ margin: 0, fontSize: '1.6rem', fontFamily: 'var(--serif)', fontWeight: 500, letterSpacing: '0.05em' }}>Finishing O.S.</h1>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', letterSpacing: '.18em', textTransform: 'uppercase' }}>Shop Floor Execution</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Operator: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{user.name}</strong></span>
+          <button onClick={() => navigate('/')} style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Return to Hub</button>
         </div>
       </header>
-      <nav style={{ display: 'flex', backgroundColor: '#fff', borderBottom: '4px solid #333', overflowX: 'auto' }}>
+      <nav style={{ display: 'flex', backgroundColor: 'var(--paper)', borderBottom: '1px solid var(--line)', overflowX: 'auto', padding: '0 20px' }}>
         {TABS.filter(t => myTabs.includes(t)).map((tab) => (
-          <button key={tab} onClick={() => setActiveTab(tab)} style={{ flex: 1, minWidth: '120px', padding: '15px 10px', cursor: 'pointer', border: 'none', borderRight: '2px solid #333', borderBottom: activeTab === tab ? `6px solid #CC6600` : '6px solid transparent', background: activeTab === tab ? '#FFF0E6' : 'transparent', fontWeight: activeTab === tab ? 'bold' : 'normal', textTransform: 'uppercase', fontSize: '0.75rem', transition: 'all 0.2s' }}>
+          <button key={tab} onClick={() => setActiveTab(tab)} style={{ whiteSpace: 'nowrap', padding: '16px 20px', cursor: 'pointer', border: 'none', borderBottom: activeTab === tab ? `2px solid var(--brass)` : '2px solid transparent', background: 'transparent', color: activeTab === tab ? 'var(--ink)' : 'var(--ink-soft)', fontWeight: 400, fontFamily: 'var(--mono)', textTransform: 'uppercase', fontSize: '11px', letterSpacing: '.1em', transition: 'all 0.2s', opacity: activeTab === tab ? 1 : 0.7 }}>
             {tab}
           </button>
         ))}
       </nav>
-      <main style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ backgroundColor: '#fff', border: '4px solid #333', flex: 1, boxShadow: '10px 10px 0px rgba(0,0,0,0.1)', overflowY: 'auto' }}>
+      <main style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ backgroundColor: '#fff', border: '1px solid var(--line)', flex: 1, boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto', borderRadius: '2px' }}>
           {activeTab === 'SETUP QUEUE' && <SetupQueue workOrders={workOrders} recipes={recipes} writeLog={writeLog} />}
           {activeTab === 'ACTIVE FLOOR' && <ActiveFloor workOrders={workOrders} recipes={recipes} activePots={activePots} sysConfig={sysConfig} setMixModal={setMixModal} now={now} user={user} setQcModal={setQcModal} users={users} />}
           {activeTab === 'FINISH RECIPES' && <Recipes recipes={recipes} paintProfiles={paintProfiles} supplies={supplies} writeLog={writeLog} user={user} />}

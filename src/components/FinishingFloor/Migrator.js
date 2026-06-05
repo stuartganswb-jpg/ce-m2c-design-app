@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, getDocs, doc, setDoc } from "firebase/firestore";
-import { db as destinationDb } from '../../firebase'; // Your new unified database
+import { db as destinationDb } from '../../firebase'; 
 
 // 1. Connect to the OLD Abandoned Database
 const oldConfig = {
@@ -13,11 +13,9 @@ const oldConfig = {
   appId: "1:170548146592:web:c3c802b5a8e36c18f9f4c5"
 };
 
-// We name it "OldProject" so it doesn't collide with your main app
 const oldApp = initializeApp(oldConfig, "OldProject");
 const sourceDb = getFirestore(oldApp);
 
-// 2. The exact list of collections you want to copy
 const COLLECTIONS = [
   "fin_config", "fin_logs", "fin_messaging", "fin_paint_profiles", 
   "fin_pots", "fin_recipes", "fin_supplies", "fin_users", "fin_workorders"
@@ -33,13 +31,10 @@ export default function Migrator() {
     for (const colName of COLLECTIONS) {
       setStatus(`Copying ${colName}...`);
       try {
-        // Get all documents from the old database
         const snapshot = await getDocs(collection(sourceDb, colName));
         let count = 0;
         
-        // Loop through them and copy them to the new database
         for (const document of snapshot.docs) {
-          // setDoc ensures we keep the exact same Document ID (like '1032' for the user)
           await setDoc(doc(destinationDb, colName, document.id), document.data());
           count++;
         }
@@ -51,20 +46,26 @@ export default function Migrator() {
       }
     }
     
-    setStatus("✅ MIGRATION COMPLETE! All data copied.");
+    setStatus("Migration Complete. All data copied.");
   };
 
   return (
-    <div style={{ padding: '40px', background: '#fff', border: '4px solid #000', margin: '40px', textAlign: 'center' }}>
-      <h2>🚛 DATABASE MOVING TRUCK</h2>
-      <p style={{ color: '#666', marginBottom: '20px' }}>This will copy all historical data from ce-finishing-floor into ce-m2c-design-collab.</p>
+    <div style={{ padding: '60px', background: '#fff', border: '1px solid var(--line)', margin: '40px auto', maxWidth: '600px', textAlign: 'center', fontFamily: 'var(--sans)', borderRadius: '2px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+      <h2 style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)', margin: '0 0 16px 0', fontWeight: 500 }}>Database Moving Truck</h2>
+      <p style={{ color: 'var(--ink-soft)', marginBottom: '40px', fontSize: '1rem', lineHeight: '1.6' }}>This tool will copy all historical application data from <strong>ce-finishing-floor</strong> into the unified <strong>ce-m2c-design-collab</strong> environment.</p>
+      
       <button 
         onClick={runMigration} 
-        style={{ padding: '15px 30px', background: '#007bff', color: '#fff', fontSize: '1.2rem', fontWeight: 'bold', cursor: 'pointer', border: 'none' }}
+        style={{ padding: '16px 32px', background: 'var(--ink)', color: '#fff', fontSize: '11px', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', border: 'none', transition: 'background 0.2s', width: '100%' }}
       >
-        START MIGRATION
+        Start Migration
       </button>
-      <h3 style={{ marginTop: '20px', color: status.includes('ERROR') ? 'red' : 'green' }}>{status}</h3>
+      
+      <div style={{ marginTop: '30px', padding: '16px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
+          <h3 style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: status.includes('ERROR') ? '#d9534f' : (status.includes('Complete') ? 'var(--brass)' : 'var(--ink)') }}>
+            {status}
+          </h3>
+      </div>
     </div>
   );
 }

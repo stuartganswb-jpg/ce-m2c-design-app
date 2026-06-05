@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { db } from '../../firebase'; 
+import { finishingDb as db } from '../../firebase'; 
 import { doc, setDoc, deleteDoc } from "firebase/firestore";
-import { cardStyle, btnStyle, inputStyle, labelStyle } from './finishingStyles';
+import { cardStyle, btnStyle, inputStyle, labelStyle, sectionHeaderStyle } from './finishingStyles';
 
 const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
     const [rCode, setRCode] = useState("");
@@ -9,7 +9,7 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
         {step:1, color:'', app:'Sprayed'}, {step:2, color:'', app:'None'}, 
         {step:3, color:'', app:'None'}, {step:4, color:'', app:'None'}, {step:5, color:'', app:'None'}
     ]);
-    const [instructions, setInstructions] = useState(""); // 🚀 NEW: Instructions state
+    const [instructions, setInstructions] = useState(""); 
     const [base, setBase] = useState("");
     const [cat, setCat] = useState("");
     const [rBase, setRBase] = useState("");
@@ -24,7 +24,7 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
         if(activeSteps.length === 0) return alert("You must define at least one step and select a color.");
         
         const cleanedSteps = activeSteps.map((s, idx) => ({ ...s, step: idx + 1 }));
-        // 🚀 Save instructions to the database payload
+        
         await setDoc(doc(db, "fin_recipes", safeCode), { code: safeCode, steps: cleanedSteps, instructions });
         if (writeLog) writeLog(`Updated Recipe: ${safeCode}`, 'recipes');
         setRCode(""); 
@@ -34,7 +34,7 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
 
     const handleEditRecipe = (r) => {
         setRCode(r.code);
-        setInstructions(r.instructions || ""); // 🚀 Load existing instructions
+        setInstructions(r.instructions || ""); 
         let loadedSteps = r.steps?.map(s => ({ ...s })) || [];
         while (loadedSteps.length < 5) loadedSteps.push({ step: loadedSteps.length + 1, color: '', app: 'None' });
         setSteps(loadedSteps);
@@ -42,22 +42,19 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
     };
 
     const handleSaveProfile = async () => {
-        // 1. Removed rCat from the strict validation since Catalyst is optional
         if(!base || !rBase) return alert("Base color and base ratio are required fields");
         
-        // 2. Sanitize the ID to prevent Firebase path crashes if a supply name contains a slash
         const safeBaseID = base.replace(/\//g, '-');
 
         try {
             await setDoc(doc(db, "fin_paint_profiles", safeBaseID), { 
-                base, // Keep the original name for the UI display
+                base, 
                 cat, 
                 rBase, 
-                rCat: rCat || "0" // Default to 0 if left blank
+                rCat: rCat || "0" 
             });
             if (writeLog) writeLog(`Updated Paint Profile: ${base}`, 'recipes');
             
-            // Clear the form
             setBase(""); setCat(""); setRBase(""); setRCat("");
         } catch (error) {
             console.error("Firebase error saving profile:", error);
@@ -84,18 +81,21 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
     const canEdit = user && ['admin', 'floor_manager', 'paint_manager'].includes(user.role);
 
     return (
-        <div style={{ padding: '30px' }}>
-            <h2 style={{ margin: '0 0 20px 0', borderBottom: '2px solid #000', paddingBottom: '10px' }}>FINISH RECIPES & MIXING PROFILES</h2>
+        <div style={{ padding: '40px', maxWidth: '1200px', margin: '0 auto', fontFamily: 'var(--sans)' }}>
+            <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '40px' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Formula Management</span>
+                <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '2rem', fontWeight: 500, color: 'var(--ink)' }}>Finish Recipes & Mixing Profiles</h2>
+            </div>
             
             {/* TOP HALF: FORMS */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
-                <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', boxShadow: '6px 6px 0 rgba(0,0,0,0.05)' }}>
-                    <h3 style={{ marginTop: 0 }}>RECIPE BUILDER</h3>
-                    <input value={rCode} onChange={e => setRCode(e.target.value)} placeholder="Finish Code" style={{...inputStyle, fontSize: '1.2rem', fontWeight: 'bold'}} />
-                    <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '40px', marginBottom: '60px' }}>
+                <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '32px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <h3 style={sectionHeaderStyle}>Recipe Builder</h3>
+                    <input value={rCode} onChange={e => setRCode(e.target.value)} placeholder="Finish Code (e.g. AB)" style={{...inputStyle, fontSize: '1.1rem', marginBottom: '24px'}} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                         {steps.map((s, i) => (
-                            <div key={i} style={{ display: 'grid', gridTemplateColumns: '40px 1fr 1fr', gap: '10px', alignItems: 'center' }}>
-                                <strong>S{s.step}:</strong>
+                            <div key={i} style={{ display: 'grid', gridTemplateColumns: '40px 1fr 1fr', gap: '16px', alignItems: 'center' }}>
+                                <strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>S{s.step}</strong>
                                 <select value={s.color} onChange={e => updateStep(i, 'color', e.target.value)} style={inputStyle}>
                                     <option value="">Select Color...</option>
                                     {paintSupplies.map(opt => <option key={opt} value={opt}>{opt}</option>)}
@@ -106,65 +106,65 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
                             </div>
                         ))}
                     </div>
-                    <button onClick={addStepRow} style={{ width: '100%', padding: '10px', background: '#f4f4f4', color: '#666', fontWeight: 'bold', border: '2px dashed #ccc', marginTop: '15px', cursor: 'pointer' }}>+ ADD ANOTHER STEP</button>
+                    <button onClick={addStepRow} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink-soft)', border: '1px dashed var(--line)', marginTop: '24px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Add Another Step</button>
                     
-                    {/* 🚀 NEW: Instructions Input Block */}
-                    <div style={{ marginTop: '15px', borderTop: '2px solid #eee', paddingTop: '15px' }}>
-                        <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#CC6600', display: 'block', marginBottom: '5px' }}>📋 FLOOR APPLICATION INSTRUCTIONS</label>
+                    <div style={{ marginTop: '24px', borderTop: '1px solid var(--line)', paddingTop: '24px' }}>
+                        <label style={{...labelStyle, color: 'var(--ink)'}}>Floor Application Instructions</label>
                         <textarea 
                             value={instructions} 
                             onChange={e => setInstructions(e.target.value)} 
-                            placeholder="Type step-by-step physical SOP instructions here (e.g. Scuff sand with 400 grit before applying step 2...)" 
-                            style={{ width: '100%', padding: '10px', boxSizing: 'border-box', border: '1px solid #ccc', minHeight: '80px', fontFamily: 'monospace', resize: 'vertical' }}
+                            placeholder="Type step-by-step physical SOP instructions here..." 
+                            style={{ ...inputStyle, minHeight: '100px', resize: 'vertical' }}
                         />
                     </div>
 
-                    <button onClick={handleSaveRecipe} style={{ ...btnStyle, width: '100%', marginTop: '15px' }}>SAVE RECIPE</button>
+                    <button onClick={handleSaveRecipe} style={{ ...btnStyle, width: '100%', marginTop: '24px' }}>Save Recipe</button>
                 </div>
 
-                <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', boxShadow: '6px 6px 0 rgba(0,0,0,0.05)' }}>
-                    <h3 style={{ marginTop: 0 }}>PAINT MIXING PROFILES</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
-                        <div><label style={labelStyle}>BASE COLOR</label><select value={base} onChange={e=>setBase(e.target.value)} style={inputStyle}><option value="">Select...</option>{paintSupplies.map(opt => <option key={opt} value={opt}>{opt}</option>)}</select></div>
-                        <div><label style={labelStyle}>CATALYST (Optional)</label><select value={cat} onChange={e=>setCat(e.target.value)} style={inputStyle}><option value="">Select...</option>{paintSupplies.map(opt => <option key={opt} value={opt}>{opt}</option>)}</select></div>
+                <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '32px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', height: 'fit-content' }}>
+                    <h3 style={sectionHeaderStyle}>Paint Mixing Profiles</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px', marginBottom: '24px' }}>
+                        <div><label style={labelStyle}>Base Color</label><select value={base} onChange={e=>setBase(e.target.value)} style={inputStyle}><option value="">Select...</option>{paintSupplies.map(opt => <option key={opt} value={opt}>{opt}</option>)}</select></div>
+                        <div><label style={labelStyle}>Catalyst (Optional)</label><select value={cat} onChange={e=>setCat(e.target.value)} style={inputStyle}><option value="">Select...</option>{paintSupplies.map(opt => <option key={opt} value={opt}>{opt}</option>)}</select></div>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                        <div><label style={labelStyle}>BASE RATIO (Parts)</label><input type="number" step="0.1" value={rBase} onChange={e=>setRBase(e.target.value)} style={inputStyle} /></div>
-                        <div><label style={labelStyle}>CAT RATIO (Parts)</label><input type="number" step="0.1" value={rCat} onChange={e=>setRCat(e.target.value)} style={inputStyle} /></div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                        <div><label style={labelStyle}>Base Ratio (Parts)</label><input type="number" step="0.1" value={rBase} onChange={e=>setRBase(e.target.value)} style={inputStyle} /></div>
+                        <div><label style={labelStyle}>Cat Ratio (Parts)</label><input type="number" step="0.1" value={rCat} onChange={e=>setRCat(e.target.value)} style={inputStyle} /></div>
                     </div>
-                    <button onClick={handleSaveProfile} style={{ ...btnStyle, background: '#fff', color: '#000', border: '2px solid #000', width: '100%', marginTop: '20px' }}>SAVE MIX PROFILE</button>
+                    <button onClick={handleSaveProfile} style={{ ...btnStyle, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', width: '100%', marginTop: '32px' }}>Save Mix Profile</button>
                 </div>
             </div>
             
             {/* BOTTOM HALF: DICTIONARIES */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginTop: '40px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '40px' }}>
                 
                 {/* RECIPE LIST */}
                 <div>
-                    <h3 style={{ borderBottom: '2px solid #000', paddingBottom: '10px' }}>SAVED RECIPE DICTIONARY</h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                    <h3 style={sectionHeaderStyle}>Saved Recipe Dictionary</h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                        {Object.values(recipes).map(r => (
                             <div key={r.code} style={cardStyle}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #eee', paddingBottom: '5px', marginBottom: '10px' }}>
-                                    <strong style={{ fontSize: '1.2rem', color: '#007bff' }}>{r.code}</strong>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
+                                    <strong style={{ fontSize: '1.2rem', color: 'var(--ink)', fontFamily: 'var(--serif)' }}>{r.code}</strong>
                                     {canEdit && (
-                                        <div style={{ display: 'flex', gap: '5px' }}>
-                                            <button onClick={() => handleEditRecipe(r)} style={{ background: '#f4f4f4', color: '#007bff', border: '1px solid #ccc', padding: '2px 8px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>EDIT</button>
-                                            <button onClick={() => { if(window.confirm(`Delete recipe ${r.code}?`)) deleteDoc(doc(db, "fin_recipes", r.code)); }} style={{ background: '#fff0f0', color: '#d9534f', border: '1px solid #ffcccc', padding: '2px 8px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>DEL</button>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button onClick={() => handleEditRecipe(r)} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Edit</button>
+                                            <button onClick={() => { if(window.confirm(`Delete recipe ${r.code}?`)) deleteDoc(doc(db, "fin_recipes", r.code)); }} style={{ background: 'transparent', color: '#d9534f', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Del</button>
                                         </div>
                                     )}
                                 </div>
                                 
                                 {r.steps?.map(st => (
-                                    <div key={st.step} style={{ fontSize: '0.8rem', padding: '5px 0', borderBottom: '1px dashed #eee' }}>
-                                        <b>S{st.step}:</b> {st.color} <span style={{ background: st.app === 'Sprayed' ? '#007bff' : '#ffc107', color: st.app === 'Sprayed' ? '#fff' : '#000', padding: '2px 6px', borderRadius: '12px', fontSize: '0.7rem', marginLeft: '10px', fontWeight: 'bold' }}>{st.app}</span>
+                                    <div key={st.step} style={{ fontSize: '0.9rem', padding: '8px 0', borderBottom: '1px solid rgba(28,26,22,.05)', display: 'flex', alignItems: 'center' }}>
+                                        <span style={{ width: '40px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>S{st.step}</span> 
+                                        <span style={{ flex: 1, color: 'var(--ink)' }}>{st.color}</span>
+                                        <span style={{ background: st.app === 'Sprayed' ? 'var(--paper-2)' : 'var(--paper)', border: '1px solid var(--line)', color: 'var(--ink)', padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{st.app}</span>
                                     </div>
                                 ))}
                                 
-                                {/* 🚀 NEW: Indicator that instructions exist */}
                                 {r.instructions && (
-                                    <div style={{ fontSize: '0.75rem', color: '#CC6600', marginTop: '10px', padding: '5px', background: '#fffdf5', border: '1px solid #ffeeba', fontWeight: 'bold' }}>
-                                        📋 Includes Floor Instructions
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--line)' }}>
+                                        Includes Floor Instructions
                                     </div>
                                 )}
                             </div>
@@ -174,32 +174,32 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
 
                 {/* PAINT PROFILES LIST */}
                 <div>
-                    <h3 style={{ borderBottom: '2px solid #000', paddingBottom: '10px' }}>SAVED MIXING PROFILES</h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                    <h3 style={sectionHeaderStyle}>Saved Mixing Profiles</h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                        {Object.values(paintProfiles).map(p => (
-                            <div key={p.base} style={{...cardStyle, borderLeft: '6px solid #CC6600'}}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #eee', paddingBottom: '5px', marginBottom: '10px' }}>
+                            <div key={p.base} style={{...cardStyle, borderLeft: '2px solid var(--brass)'}}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
                                     <div>
-                                        <strong style={{ fontSize: '1.1rem', color: '#333', display: 'block' }}>{p.base}</strong>
-                                        {p.cat && <span style={{ fontSize: '0.8rem', color: '#666' }}>+ {p.cat}</span>}
+                                        <strong style={{ fontSize: '1.1rem', color: 'var(--ink)', display: 'block', fontWeight: 500 }}>{p.base}</strong>
+                                        {p.cat && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px', display: 'block' }}>+ {p.cat}</span>}
                                     </div>
                                     {canEdit && (
-                                        <div style={{ display: 'flex', gap: '5px' }}>
-                                            <button onClick={() => handleEditProfile(p)} style={{ background: '#f4f4f4', color: '#CC6600', border: '1px solid #ccc', padding: '2px 8px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>EDIT</button>
-                                            <button onClick={() => { if(window.confirm(`Delete profile for ${p.base}?`)) deleteDoc(doc(db, "fin_paint_profiles", p.base)); }} style={{ background: '#fff0f0', color: '#d9534f', border: '1px solid #ffcccc', padding: '2px 8px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>DEL</button>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button onClick={() => handleEditProfile(p)} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Edit</button>
+                                            <button onClick={() => { if(window.confirm(`Delete profile for ${p.base}?`)) deleteDoc(doc(db, "fin_paint_profiles", p.base)); }} style={{ background: 'transparent', color: '#d9534f', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Del</button>
                                         </div>
                                     )}
                                 </div>
                                 
-                                <div style={{ display: 'flex', gap: '20px', background: '#f8f9fa', padding: '10px', borderRadius: '4px' }}>
-                                    <div style={{ textAlign: 'center' }}>
-                                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#333' }}>{p.rBase}</div>
-                                        <div style={{ fontSize: '0.7rem', color: '#888', fontWeight: 'bold' }}>BASE PARTS</div>
+                                <div style={{ display: 'flex', gap: '30px', background: 'var(--paper)', padding: '16px', borderRadius: '2px', border: '1px solid var(--line)' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink)' }}>{p.rBase}</div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Base Parts</div>
                                     </div>
-                                    <div style={{ textAlign: 'center', fontSize: '1.2rem', fontWeight: 'bold', color: '#ccc' }}>:</div>
-                                    <div style={{ textAlign: 'center' }}>
-                                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#CC6600' }}>{p.rCat || 0}</div>
-                                        <div style={{ fontSize: '0.7rem', color: '#888', fontWeight: 'bold' }}>CAT PARTS</div>
+                                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink-soft)' }}>:</div>
+                                    <div style={{ flex: 1, textAlign: 'right' }}>
+                                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink)' }}>{p.rCat || 0}</div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Cat Parts</div>
                                     </div>
                                 </div>
                             </div>
