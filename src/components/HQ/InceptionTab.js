@@ -393,7 +393,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       setActiveAssembly(prev => ({ ...prev, spatialCallouts: updatedCallouts }));
       setActiveCalloutId(newCallout.id);
       
-      // Automatically transition to 'Edit' mode so user can type text smoothly
       setIsAddingCallout(false);
       setIsEditingPins(true);
       if(!is3D) setActiveTool(TOOL_NONE);   
@@ -420,7 +419,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       catch (err) { console.error(err); }
   };
 
-  // --- Interaction Mode Handlers ---
   const activatePanMode = () => {
       setIsAddingCallout(false);
       setIsEditingPins(false);
@@ -443,7 +441,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       setActiveTool(TOOL_NONE);
       setIsCanvasLocked(false);
   };
-  // ---------------------------------
 
   const handleMouseMove = (e) => {
       if (!isAddingCallout || !viewerContainerRef.current) return;
@@ -852,6 +849,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                 ref={setReactSvgPanZoomRef} width={viewerSize.width} height={viewerSize.height}
                                 tool={activeTool} onChangeTool={tool => setActiveTool(tool)}
                                 preventPanOutside={false} background="var(--paper)" detectWheel={false}
+                                detectAutoPan={false}
                                 customMiniature={() => null} customToolbar={() => null} 
                                 onClick={handle2DViewerClick}  
                             >
