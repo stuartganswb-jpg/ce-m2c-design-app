@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../../firebase';
-import { collection, onSnapshot, query, doc, updateDoc, getDocs, where } from "firebase/firestore";
+import { db, auth, functions } from '../../firebase';
+import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import { signInWithCustomToken } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
 import SharedMessaging from '../Shared/SharedMessaging';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
@@ -21,15 +23,23 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const attemptLogin = async (e) => {
         e.preventDefault();
         if (!pinInput) return;
+        
         try {
-            const snap = await getDocs(query(collection(db, "directory"), where("pin", "==", pinInput)));
-            if (!snap.empty) {
-                setOperator(snap.docs[0].data());
-                setPinInput("");
-            } else { 
-                alert("Invalid PIN. Access Denied."); 
-            }
-        } catch (error) { console.error(error); alert("Authentication failed."); }
+            // Updated secure cloud function handshake
+            const authenticatePin = httpsCallable(functions, 'authenticatePin');
+            const result = await authenticatePin({ pin: pinInput });
+            
+            const { token, user: userData } = result.data;
+
+            // Sign into the auth context
+            await signInWithCustomToken(auth, token);
+
+            setOperator(userData);
+            setPinInput("");
+        } catch (error) { 
+            console.error("Authentication failed:", error); 
+            alert("Invalid PIN. Access Denied."); 
+        }
     };
 
     useEffect(() => {
@@ -107,7 +117,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             <div style={{ position: 'fixed', inset: 0, backgroundColor: theme.paper, color: theme.ink, zIndex: 9999, display: 'flex', flexDirection: 'column', padding: '40px', fontFamily: theme.sans }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: `1px solid ${theme.line}`, paddingBottom: '20px', marginBottom: '40px' }}>
                     <h1 style={{ margin: 0, fontSize: '2.5rem', fontFamily: theme.serif, fontWeight: 500, color: theme.ink }}>Picking: {activePickJob.id}</h1>
-                    <button onClick={() => setActivePickJob(null)} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
+                    <button onClick={() => setActivePickJob(null)} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
                 </div>
 
                 {showNacho ? (
@@ -123,7 +133,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                             <div style={{ fontSize: '3rem', fontWeight: 300, color: theme.ink, margin: '20px 0', fontFamily: theme.serif }}>{line.name}</div>
                             <div style={{ fontSize: '1.2rem', fontFamily: theme.mono, color: theme.brass, marginBottom: '40px' }}>BIN: {line.binLocation || 'UNASSIGNED'}</div>
                             
-                            <a href={line.assetUrl || '#'} target="_blank" rel="noreferrer" style={{ display: 'inline-block', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textDecoration: 'none', textTransform: 'uppercase' }}>
+                            <a href={line.assetUrl || '#'} target="_blank" rel="noreferrer" style={{ display: 'inline-block', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textDecoration: 'none', textTransform: 'uppercase', transition: 'all 0.2s' }} onMouseOver={(e) => e.currentTarget.style.borderColor = theme.brass} onMouseOut={(e) => e.currentTarget.style.borderColor = theme.line}>
                                 OPEN REFERENCE PHOTO
                             </a>
                         </div>
