@@ -454,7 +454,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const isCurrent3D = currentRevisionObj?.is3D || is3DFile(currentRevisionObj?.url);
   const filteredCallouts = (activeAssembly?.spatialCallouts || []).filter(c => c.revisionId === activeRevisionId || (!c.revisionId && activeRevisionId === 'INITIAL'));
 
-  // --- EDITOR VIEW ---
   if (isEditing) {
     const fieldStyle = { width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' };
     const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
@@ -582,7 +581,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
-      {/* HEADER */}
       {!isCanvasMaximized && (
           <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
             <div>
@@ -598,7 +596,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
         {/* SIDEBAR: GROUPED ASSEMBLIES */}
         {!isCanvasMaximized && (
             <div style={{ width: activeAssembly ? '320px' : '100%', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {masterAssemblies.length === 0 && assemblies.length === 0 && (
+              {assemblies.length === 0 && (
                   <div style={{ background: 'var(--paper)', padding: '40px', border: '1px dashed var(--line)', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontStyle: 'italic' }}>
                       No assemblies found. Initiate a new product to begin.
                   </div>
