@@ -211,7 +211,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         }
     };
 
-    // --- ENRICHED BRIDGE: HQ to Finishing Floor ---
     const pushToFinishing = async (hqOrder, orderType) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
 
@@ -275,7 +274,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         }
     };
 
-    // --- ENRICHED BRIDGE: HQ to Shop Floor Custom Fabrication ---
     const pushToShop = async (hqOrder, orderType) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Shop Floor Custom Fabrication Queue?`)) return;
 
@@ -291,7 +289,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
             const shopJobId = orderType === 'sales' ? `SHOP-${hqOrder.soId || Date.now()}` : `SHOP-${hqOrder.woId || Date.now()}`;
             
-            // Check if recipe requires outsourced finishing and fetch service price (multiplier)
             const outSnap = await getDocs(collection(db, "hq_outsource_finishes"));
             const outsourceFinishes = outSnap.docs.map(d => d.data());
             const matchedOutsource = outsourceFinishes.find(f => finishRecipe.toUpperCase().includes(f.name.toUpperCase()));
@@ -347,143 +344,169 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         }
     };
 
-    const cardStyle = { border: '1px solid #ccc', padding: '15px', marginBottom: '15px', borderRadius: '4px', background: '#f8f9fa' };
-    const btnStyle = { padding: '8px 12px', fontSize: '0.75rem', fontWeight: 'bold', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginRight: '5px', marginBottom: '5px' };
+    const cardStyle = { border: '1px solid var(--line)', padding: '20px', marginBottom: '16px', borderRadius: '2px', background: '#fff', transition: 'box-shadow 0.2s' };
+    const btnStyle = { padding: '10px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', background: 'var(--paper-2)', border: '1px solid var(--line)', cursor: 'pointer', transition: 'all 0.2s ease', whiteSpace: 'nowrap' };
 
     return (
-        <div style={{ padding: '30px', fontFamily: 'monospace' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #ccc', paddingBottom: '10px', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
+            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
                 <div>
-                    <h2 style={{ margin: 0, color: '#333' }}>READY TO GO (RTG) DISPATCH</h2>
-                    <div style={{ fontSize: '0.8rem', color: '#666' }}>Action Center for Netsuite Approved Orders</div>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Action Center for Approved Orders</span>
+                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Ready to Go (RTG) Dispatch</h2>
                 </div>
-                <div>
-                    <button onClick={pullNSSalesOrders} disabled={isSyncing} style={{ ...btnStyle, background: isSyncing ? '#ccc' : '#007bff' }}>
-                        {isSyncing ? 'SYNCING...' : '⬇️ PULL ERP SALES ORDERS'}
+                <div style={{ display: 'flex', gap: '12px' }}>
+                    <button onClick={pullNSSalesOrders} disabled={isSyncing} style={{ ...btnStyle, background: isSyncing ? 'var(--paper)' : 'var(--ink)', color: isSyncing ? 'var(--ink-soft)' : '#fff', border: 'none' }}>
+                        {isSyncing ? 'Syncing...' : 'Pull ERP Sales Orders'}
                     </button>
-                    <button onClick={loadRTGOrders} style={{ ...btnStyle, background: '#333', margin: 0 }}>{loading ? 'SCANNING...' : '🔄 REFRESH DISPATCH LIST'}</button>
+                    <button onClick={loadRTGOrders} style={{ ...btnStyle }}>
+                        {loading ? 'Scanning...' : 'Refresh Dispatch List'}
+                    </button>
                 </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
                 
                 {/* LEFT: 4x GRID BOARD */}
-                <div style={{ flex: 1.5, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                <div style={{ flex: 1.5, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
                     
                     {/* 1. SALES ORDERS */}
-                    <div style={{ borderTop: '4px solid #004080', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                        <h3 style={{ margin: '0 0 15px 0', color: '#004080', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📦 SALES ORDERS (CUSTOM)</h3>
-                        {salesOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved sales orders pending dispatch.</p>}
-                        
-                        {salesOrders.map(so => (
-                            <div key={so.id} style={cardStyle}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '5px', color: '#333' }}>
-                                        SO: {so.soId || so.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Cust: {so.customer || 'N/A'}</span>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '20px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Sales Orders</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Custom</span>
+                        </div>
+                        <div style={{ padding: '24px', flex: 1, background: 'var(--paper)', maxHeight: '600px', overflowY: 'auto' }}>
+                            {salesOrders.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved sales orders pending dispatch.</p>}
+                            
+                            {salesOrders.map(so => (
+                                <div key={so.id} style={{ ...cardStyle, borderLeft: '4px solid var(--ink)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }}>SO: {so.soId || so.id}</div>
+                                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Cust: {so.customer || 'N/A'}</div>
+                                        </div>
+                                        <button onClick={() => deleteOrder('hq_sales_orders', so.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
-                                    <button onClick={() => deleteOrder('hq_sales_orders', so.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>🗑️</button>
-                                </div>
-                                {so.memo && (
-                                    <div style={{ fontSize: '0.75rem', color: '#007bff', marginBottom: '10px', fontStyle: 'italic' }}>
-                                        "{so.memo}"
+                                    {so.memo && (
+                                        <div style={{ fontSize: '0.85rem', color: 'var(--ink)', marginBottom: '16px', fontStyle: 'italic', borderLeft: '2px solid var(--line)', paddingLeft: '8px' }}>
+                                            "{so.memo}"
+                                        </div>
+                                    )}
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                        <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(so)}>View</button>
+                                        <button style={{ ...btnStyle, flex: 1, background: so.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: so.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: so.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(so, 'sales')}>
+                                            {so.pushedToFinishing ? 'Finishing Pushed ✓' : 'Push to Finishing'}
+                                        </button>
+                                        <button style={{ ...btnStyle, flex: 1, background: so.pushedToShop ? 'var(--paper-2)' : 'var(--brass)', color: so.pushedToShop ? 'var(--ink-soft)' : '#fff', border: so.pushedToShop ? '1px solid var(--line)' : 'none' }} onClick={() => pushToShop(so, 'sales')}>
+                                            {so.pushedToShop ? 'Shop Pushed ✓' : 'Push to Shop'}
+                                        </button>
                                     </div>
-                                )}
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                                    <button style={{ ...btnStyle, background: '#17a2b8' }} onClick={() => handleViewOrder(so)}>👁️ VIEW ORDER</button>
-                                    <button style={{ ...btnStyle, background: so.pushedToFinishing ? '#28a745' : '#CC6600' }} onClick={() => pushToFinishing(so, 'sales')}>
-                                        {so.pushedToFinishing ? '✅ Finishing Pushed' : 'Push to Finishing'}
-                                    </button>
-                                    <button style={{ ...btnStyle, background: so.pushedToShop ? '#28a745' : '#f39c12', color: so.pushedToShop ? '#fff' : '#000' }} onClick={() => pushToShop(so, 'sales')}>
-                                        {so.pushedToShop ? '✅ Shop Pushed' : 'Push to Shop'}
-                                    </button>
                                 </div>
-                            </div>
-                        ))}
+                            ))}
+                        </div>
                     </div>
 
                     {/* 2. WORK ORDERS */}
-                    <div style={{ borderTop: '4px solid #d4af37', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                        <h3 style={{ margin: '0 0 15px 0', color: '#d4af37', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>🛠️ WORK ORDERS (STOCK BUILDS)</h3>
-                        {workOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved work orders pending dispatch.</p>}
-                        
-                        {workOrders.map(wo => (
-                            <div key={wo.id} style={cardStyle}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '10px', color: '#333' }}>
-                                        WO: {wo.woId || wo.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Build to Stock</span>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '20px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Work Orders</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Stock Builds</span>
+                        </div>
+                        <div style={{ padding: '24px', flex: 1, background: 'var(--paper)', maxHeight: '600px', overflowY: 'auto' }}>
+                            {workOrders.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved work orders pending dispatch.</p>}
+                            
+                            {workOrders.map(wo => (
+                                <div key={wo.id} style={{ ...cardStyle, borderLeft: '4px solid var(--brass)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }}>WO: {wo.woId || wo.id}</div>
+                                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Build to Stock</div>
+                                        </div>
+                                        <button onClick={() => deleteOrder('hq_work_orders', wo.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
-                                    <button onClick={() => deleteOrder('hq_work_orders', wo.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>🗑️</button>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                        <button style={{ ...btnStyle, flex: 1, background: wo.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: wo.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: wo.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(wo, 'stock')}>
+                                            {wo.pushedToFinishing ? 'Finishing Pushed ✓' : 'Push to Finishing'}
+                                        </button>
+                                        <button style={{ ...btnStyle, flex: 1, background: wo.pushedToShop ? 'var(--paper-2)' : 'var(--brass)', color: wo.pushedToShop ? 'var(--ink-soft)' : '#fff', border: wo.pushedToShop ? '1px solid var(--line)' : 'none' }} onClick={() => pushToShop(wo, 'stock')}>
+                                            {wo.pushedToShop ? 'Shop Pushed ✓' : 'Push to Shop'}
+                                        </button>
+                                    </div>
                                 </div>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                                    <button style={{ ...btnStyle, background: wo.pushedToFinishing ? '#28a745' : '#CC6600' }} onClick={() => pushToFinishing(wo, 'stock')}>
-                                        {wo.pushedToFinishing ? '✅ Finishing Pushed' : 'Push to Finishing'}
-                                    </button>
-                                    <button style={{ ...btnStyle, background: wo.pushedToShop ? '#28a745' : '#f39c12', color: wo.pushedToShop ? '#fff' : '#000' }} onClick={() => pushToShop(wo, 'stock')}>
-                                        {wo.pushedToShop ? '✅ Shop Pushed' : 'Push to Shop'}
-                                    </button>
-                                </div>
-                            </div>
-                        ))}
+                            ))}
+                        </div>
                     </div>
 
                     {/* 3. PURCHASE ORDERS */}
-                    <div style={{ borderTop: '4px solid #28a745', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                        <h3 style={{ margin: '0 0 15px 0', color: '#28a745', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📥 PURCHASE ORDERS (INBOUND)</h3>
-                        {purchaseOrders.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No approved purchase orders incoming.</p>}
-                        
-                        {purchaseOrders.map(po => (
-                            <div key={po.id} style={cardStyle}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '10px', color: '#333' }}>
-                                        PO: {po.poId || po.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Vendor: {po.vendor || 'N/A'}</span>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '20px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Purchase Orders</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Inbound</span>
+                        </div>
+                        <div style={{ padding: '24px', flex: 1, background: 'var(--paper)', maxHeight: '600px', overflowY: 'auto' }}>
+                            {purchaseOrders.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved purchase orders incoming.</p>}
+                            
+                            {purchaseOrders.map(po => (
+                                <div key={po.id} style={{ ...cardStyle, borderLeft: '4px solid var(--line)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }}>PO: {po.poId || po.id}</div>
+                                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Vendor: {po.vendor || 'N/A'}</div>
+                                        </div>
+                                        <button onClick={() => deleteOrder('hq_purchase_orders', po.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
-                                    <button onClick={() => deleteOrder('hq_purchase_orders', po.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>🗑️</button>
+                                    <button style={{ ...btnStyle, width: '100%', background: 'var(--ink)', color: '#fff', border: 'none' }} onClick={() => alert('Sent to Receiving Dock App')}>Alert Receiving Dock</button>
                                 </div>
-                                <button style={{ ...btnStyle, background: '#28a745' }} onClick={() => alert('Sent to Receiving Dock App')}>Alert Receiving Dock</button>
-                            </div>
-                        ))}
+                            ))}
+                        </div>
                     </div>
 
                     {/* 4. INVENTORY CONTROL */}
-                    <div style={{ borderTop: '4px solid #d9534f', background: '#fff', padding: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                        <h3 style={{ margin: '0 0 15px 0', color: '#d9534f', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>📋 INVENTORY CONTROL</h3>
-                        {inventoryTasks.length === 0 && <p style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>No active inventory tasks.</p>}
-                        
-                        {inventoryTasks.map(inv => (
-                            <div key={inv.id} style={cardStyle}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ fontWeight: 'bold', fontSize: '1rem', marginBottom: '10px', color: '#333' }}>
-                                        Task: {inv.taskId || inv.id} <span style={{ fontSize: '0.7rem', color: '#666', fontWeight: 'normal' }}>| Type: {inv.type || 'Count'}</span>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '20px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Inventory Tasks</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Control</span>
+                        </div>
+                        <div style={{ padding: '24px', flex: 1, background: 'var(--paper)', maxHeight: '600px', overflowY: 'auto' }}>
+                            {inventoryTasks.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No active inventory tasks.</p>}
+                            
+                            {inventoryTasks.map(inv => (
+                                <div key={inv.id} style={{ ...cardStyle, borderLeft: '4px solid var(--line)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }}>Task: {inv.taskId || inv.id}</div>
+                                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Type: {inv.type || 'Count'}</div>
+                                        </div>
+                                        <button onClick={() => deleteOrder('hq_inventory_tasks', inv.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
-                                    <button onClick={() => deleteOrder('hq_inventory_tasks', inv.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>🗑️</button>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                        <button style={{ ...btnStyle, flex: 1 }} onClick={() => alert('Cycle Count Dispatched')}>Dispatch Count</button>
+                                        <button style={{ ...btnStyle, flex: 1 }} onClick={() => alert('Bin Transfer Initiated')}>Init Transfer</button>
+                                    </div>
                                 </div>
-                                <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-                                    <button style={{ ...btnStyle, background: '#d9534f' }} onClick={() => alert('Cycle Count Dispatched')}>Dispatch Count</button>
-                                    <button style={{ ...btnStyle, background: '#d4af37', color: '#000' }} onClick={() => alert('Bin Transfer Initiated')}>Init Bin Transfer</button>
-                                </div>
-                            </div>
-                        ))}
+                            ))}
+                        </div>
                     </div>
 
                 </div>
 
                 {/* RIGHT: TERMINAL */}
-                <div style={{ flex: 0.8, background: '#1e1e1e', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000', height: '800px', position: 'sticky', top: '20px' }}>
-                    <div style={{ padding: '10px 15px', background: '#333', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between' }}>
-                        <span>>_ SUITEQL PULL TERMINAL</span>
-                        <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '0.7rem' }}>CLEAR</button>
+                <div style={{ flex: 0.8, background: 'var(--dark)', border: '1px solid var(--line)', borderRadius: '2px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', height: '800px', position: 'sticky', top: '20px', overflow: 'hidden' }}>
+                    <div style={{ padding: '16px 20px', background: 'var(--dark-2)', color: 'var(--paper)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>>_ SuiteQL Pull Terminal</span>
+                        <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: 'var(--paper)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', opacity: 0.6, textTransform: 'uppercase' }}>Clear</button>
                     </div>
-                    <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                        {syncLog.length === 0 && <span style={{ color: '#666' }}>Awaiting command...</span>}
+                    <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', flex: 1, overflowY: 'auto', fontFamily: 'var(--mono)', fontSize: '11px', color: '#a8a5a0' }}>
+                        {syncLog.length === 0 && <span style={{ opacity: 0.6 }}>Awaiting command...</span>}
                         {syncLog.map((log, idx) => {
-                            let color = '#fff';
-                            if (log.type === 'error') color = '#ff4d4d';
-                            if (log.type === 'success') color = '#28a745';
-                            if (log.type === 'warn') color = '#ffc107';
+                            let color = '#a8a5a0';
+                            if (log.type === 'error') color = '#e27373';
+                            if (log.type === 'success') color = '#7dbb81';
+                            if (log.type === 'warn') color = '#e2b373';
                             
                             return (
-                                <div key={idx} style={{ color, borderBottom: '1px dotted #333', paddingBottom: '4px' }}>
-                                    <span style={{ color: '#888', marginRight: '8px' }}>[{log.time}]</span>
+                                <div key={idx} style={{ color, borderBottom: '1px solid #333', paddingBottom: '6px' }}>
+                                    <span style={{ opacity: 0.5, marginRight: '10px' }}>[{log.time}]</span>
                                     {log.msg}
                                 </div>
                             );
@@ -493,83 +516,83 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
             </div>
 
-            {/* 🚀 VIEW ORDER MODAL */}
+            {/* VIEW ORDER MODAL */}
             {activeViewOrder && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <div style={{ background: '#fff', padding: '30px', borderRadius: '12px', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: '4px solid #333', boxShadow: '10px 10px 0 #007bff' }}>
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ background: '#fff', padding: '40px', borderRadius: '2px', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)' }}>
                         
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #ccc', paddingBottom: '15px', marginBottom: '20px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '20px', marginBottom: '30px' }}>
                             <div>
-                                <h2 style={{ color: '#007bff', margin: 0, fontSize: '1.8rem' }}>SALES ORDER: {activeViewOrder.soId}</h2>
-                                <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '5px' }}>CPQ App ID: {activeViewOrder.hqJobId || 'N/A'}</div>
+                                <h2 style={{ color: 'var(--ink)', margin: 0, fontFamily: 'var(--serif)', fontSize: '2rem', fontWeight: 500 }}>Sales Order: {activeViewOrder.soId}</h2>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>CPQ App ID: {activeViewOrder.hqJobId || 'N/A'}</div>
                             </div>
-                            <button onClick={() => setActiveViewOrder(null)} style={{ background: '#d9534f', border: 'none', color: '#fff', padding: '8px 12px', cursor: 'pointer', fontWeight: 'bold', borderRadius: '4px' }}>CLOSE</button>
+                            <button onClick={() => setActiveViewOrder(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '2rem', cursor: 'pointer' }}>×</button>
                         </div>
 
                         {!activeJobDetails ? (
-                            <div style={{ padding: '40px', textAlign: 'center', color: '#666', fontSize: '1.2rem', fontWeight: 'bold' }}>
-                                ⏳ Fetching Original Configuration Data...
+                            <div style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>
+                                Fetching Original Configuration Data...
                             </div>
                         ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
                                 
                                 {activeJobDetails.svgUri ? (
-                                    <div style={{ border: '2px solid #ccc', borderRadius: '8px', padding: '10px', background: '#fff' }}>
-                                        <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold', marginBottom: '10px' }}>ENGINEERING DRAWING</div>
-                                        <img src={activeJobDetails.svgUri} alt="Shop Drawing" style={{ width: '100%', maxHeight: '300px', objectFit: 'contain' }} />
+                                    <div style={{ border: '1px solid var(--line)', padding: '20px', background: 'var(--paper)' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '16px' }}>Engineering Drawing</div>
+                                        <img src={activeJobDetails.svgUri} alt="Shop Drawing" style={{ width: '100%', maxHeight: '400px', objectFit: 'contain', background: '#fff', border: '1px solid var(--line)' }} />
                                     </div>
                                 ) : (
-                                    <div style={{ padding: '15px', background: '#fff3cd', color: '#856404', fontStyle: 'italic', border: '1px dashed #ffeeba', borderRadius: '8px' }}>
+                                    <div style={{ padding: '20px', background: 'var(--paper)', color: 'var(--ink-soft)', fontStyle: 'italic', border: '1px solid var(--line)' }}>
                                         No Shop Drawing attached to this configuration.
                                     </div>
                                 )}
 
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
-                                    <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
-                                        <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>CUSTOMER / ENTITY</div>
-                                        <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#000' }}>{activeJobDetails.customer?.name || activeJobDetails.customer || activeViewOrder.customer}</div>
+                                    <div style={{ background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Customer / Entity</div>
+                                        <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{activeJobDetails.customer?.name || activeJobDetails.customer || activeViewOrder.customer}</div>
                                     </div>
-                                    <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
-                                        <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>PROJECT / SIDEMARK</div>
-                                        <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#007bff' }}>{activeJobDetails.sidemark || activeViewOrder.memo || 'N/A'}</div>
+                                    <div style={{ background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Project / Sidemark</div>
+                                        <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{activeJobDetails.sidemark || activeViewOrder.memo || 'N/A'}</div>
                                     </div>
-                                    <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '8px', border: '1px solid #ccc' }}>
-                                        <div style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>FINISH RECIPE</div>
-                                        <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#CC6600' }}>{activeJobDetails.finishRecipe}</div>
+                                    <div style={{ background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Finish Recipe</div>
+                                        <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{activeJobDetails.finishRecipe}</div>
                                     </div>
                                 </div>
 
-                                <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '20px', borderRadius: '8px' }}>
-                                    <div style={{ fontSize: '14px', color: '#1e7e34', fontWeight: 'bold', marginBottom: '10px', textTransform: 'uppercase' }}>BILL OF MATERIALS / SPECIFICATIONS</div>
+                                <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px' }}>
+                                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink)', fontWeight: 500, marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Bill of Materials / Specifications</div>
                                     
                                     {activeJobDetails.cpqData?.breakdown ? (
-                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', background: '#fff' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>
                                             <tbody>
                                                 {activeJobDetails.cpqData.breakdown.map((item, i) => (
-                                                    <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
-                                                        <td style={{ padding: '10px', fontWeight: 'bold' }}>{item.name}</td>
-                                                        <td style={{ padding: '10px', textAlign: 'right', fontWeight: 'bold', color: '#007bff' }}>Qty: {item.qty}</td>
+                                                    <tr key={i} style={{ borderBottom: '1px solid var(--line)' }}>
+                                                        <td style={{ padding: '16px 0', color: 'var(--ink)' }}>{item.name}</td>
+                                                        <td style={{ padding: '16px 0', textAlign: 'right', color: 'var(--ink-soft)' }}>Qty: {item.qty}</td>
                                                     </tr>
                                                 ))}
                                             </tbody>
                                         </table>
                                     ) : (
-                                        <div style={{ fontStyle: 'italic', color: '#666' }}>No itemized breakdown found in source document.</div>
+                                        <div style={{ fontStyle: 'italic', color: 'var(--ink-soft)' }}>No itemized breakdown found in source document.</div>
                                     )}
                                 </div>
 
-                                <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                                <div style={{ display: 'flex', gap: '16px', marginTop: '10px' }}>
                                     <button 
                                         onClick={() => { pushToFinishing(activeViewOrder, 'sales'); setActiveViewOrder(null); }} 
-                                        style={{ flex: 1, padding: '15px', background: '#CC6600', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px', fontSize: '1rem' }}
+                                        style={{ flex: 1, padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}
                                     >
-                                        PUSH TO FINISHING FLOOR ➔
+                                        Push to Finishing Floor
                                     </button>
                                     <button 
                                         onClick={() => { pushToShop(activeViewOrder, 'sales'); setActiveViewOrder(null); }} 
-                                        style={{ flex: 1, padding: '15px', background: '#f39c12', color: '#000', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderRadius: '6px', fontSize: '1rem' }}
+                                        style={{ flex: 1, padding: '16px', background: 'var(--brass)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}
                                     >
-                                        PUSH TO SHOP FLOOR ➔
+                                        Push to Shop Floor
                                     </button>
                                 </div>
                             </div>

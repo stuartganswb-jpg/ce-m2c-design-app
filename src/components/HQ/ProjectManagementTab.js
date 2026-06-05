@@ -7,7 +7,6 @@ const ProjectManagementTab = ({ currentUser, activeBrand }) => {
     const [activeProject, setActiveProject] = useState(null);
     const [libraryParts, setLibraryParts] = useState([]);
 
-    // 1. Fetch Complex Projects (Jobs flagged with isProjectManaged)
     useEffect(() => {
         if (!activeBrand) return;
         const q = query(
@@ -17,7 +16,6 @@ const ProjectManagementTab = ({ currentUser, activeBrand }) => {
         );
         const unsub = onSnapshot(q, (snap) => {
             const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            // Sort by newest first
             docs.sort((a, b) => {
                 const timeA = a.createdAt?.seconds || 0;
                 const timeB = b.createdAt?.seconds || 0;
@@ -28,7 +26,6 @@ const ProjectManagementTab = ({ currentUser, activeBrand }) => {
         return () => unsub();
     }, [activeBrand]);
 
-    // 2. Fetch Master Parts Dictionary for ID Resolution & Vendor Lookup
     useEffect(() => {
         const unsub = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
             setLibraryParts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -36,7 +33,6 @@ const ProjectManagementTab = ({ currentUser, activeBrand }) => {
         return () => unsub();
     }, []);
 
-    // Helper: Find the part name and routing destination based on the CPQ ID
     const getPartInfo = (partId) => {
         if (!partId) return { name: 'Unknown Part', isInHouse: true, vendor: 'Unknown' };
         
@@ -50,24 +46,20 @@ const ProjectManagementTab = ({ currentUser, activeBrand }) => {
         };
     };
 
-    // 🚀 THE ERP SIMULATION ENGINE
     const handleSimulateErpSync = async () => {
         if (!activeProject) return;
         if (!window.confirm("⚠️ SIMULATION: Auto-assigning Sales Order # and cascading Work/Purchase Orders to all line items. Proceed?")) return;
 
-        // Generate a mock master Sales Order Number
         const dummySo = `SO-PRJ-${Math.floor(1000 + Math.random() * 9000)}`;
         const updatedLines = [];
         let count = 1;
 
-        // Dissect the CPQ configuration line-by-line
         if (activeProject.cpqData?.configuration) {
             Object.values(activeProject.cpqData.configuration).forEach(val => {
                 if (!val) return;
                 
                 const info = getPartInfo(val);
                 const orderType = info.isInHouse ? 'WO' : 'PO';
-                // E.g., WO-8492-001 or PO-8492-002
                 const orderId = `${orderType}-${dummySo.split('-')[2]}-00${count}`;
                 
                 updatedLines.push({
@@ -86,7 +78,6 @@ const ProjectManagementTab = ({ currentUser, activeBrand }) => {
             const batch = writeBatch(db);
             const jobRef = doc(db, "jobs", activeProject.id);
             
-            // Update the master job document with the dissected lines
             batch.update(jobRef, {
                 soNum: dummySo,
                 projectLines: updatedLines,
@@ -103,38 +94,38 @@ const ProjectManagementTab = ({ currentUser, activeBrand }) => {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
             
-            {/* HEADER */}
-            <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
                 <div>
-                    <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#17a2b8' }}>10.5 Project Management</h2>
-                    <span style={{ fontSize: '0.7rem', color: '#666' }}>COMPLEX BUILD TRACKING & MULTI-ORDER DISSECTION</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Complex Build Tracking & Multi-Order Dissection</span>
+                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Project Management</h2>
                 </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start', flex: 1 }}>
+            <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start', flex: 1 }}>
                 
                 {/* LEFT: PROJECT LIST QUEUE */}
-                <div style={{ width: '350px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)', flexShrink: 0 }}>
-                    <div style={{ padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold' }}>
-                        ACTIVE PROJECTS ({projects.length})
+                <div style={{ width: '380px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', flexShrink: 0 }}>
+                    <div style={{ padding: '20px 24px', background: 'var(--paper-2)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Active Projects</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{projects.length} Total</span>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '15px', background: '#f8f9fa', minHeight: '600px', overflowY: 'auto' }}>
-                        {projects.length === 0 && <div style={{ color: '#999', fontStyle: 'italic', fontSize: '0.85rem' }}>No active complex projects.</div>}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '24px', background: '#fff', minHeight: '600px', overflowY: 'auto' }}>
+                        {projects.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', textAlign: 'center' }}>No active complex projects.</div>}
                         
                         {projects.map(p => {
                             const isSelected = activeProject?.id === p.id;
                             return (
-                                <div key={p.id} onClick={() => setActiveProject(p)} style={{ background: isSelected ? '#e6f2ff' : '#fff', border: `2px solid ${isSelected ? '#17a2b8' : '#ccc'}`, padding: '15px', cursor: 'pointer', transition: '0.2s', boxShadow: isSelected ? '4px 4px 0 #17a2b8' : 'none' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '1rem', color: '#000' }}>
-                                        <span>{p.soNum || 'PENDING SO#'}</span>
-                                        <span style={{ color: p.status === 'CONFIGURED' ? '#ffc107' : '#28a745', fontSize: '0.8rem', background: '#333', padding: '2px 6px', borderRadius: '4px' }}>
-                                            {p.status === 'CONFIGURED' ? 'AWAITING ERP' : 'IN PROD'}
+                                <div key={p.id} onClick={() => setActiveProject(p)} style={{ background: isSelected ? 'var(--paper-2)' : '#fff', border: `1px solid ${isSelected ? 'var(--brass)' : 'var(--line)'}`, padding: '20px', cursor: 'pointer', transition: 'all 0.2s', boxShadow: isSelected ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span style={{ fontFamily: 'var(--sans)', fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }}>{p.soNum || 'Pending SO#'}</span>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: p.status === 'CONFIGURED' ? 'var(--ink-soft)' : 'var(--ink)', background: p.status === 'CONFIGURED' ? 'var(--paper)' : 'var(--brass-light)', border: '1px solid var(--line)', padding: '4px 8px' }}>
+                                            {p.status === 'CONFIGURED' ? 'Awaiting ERP' : 'In Prod'}
                                         </span>
                                     </div>
-                                    <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '10px', fontWeight: 'bold' }}>{p.jobName || p.sidemark}</div>
-                                    <div style={{ fontSize: '0.75rem', color: '#17a2b8', marginTop: '5px', fontWeight: 'bold' }}>{p.customer?.name}</div>
+                                    <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginTop: '12px', fontWeight: 500 }}>{p.jobName || p.sidemark}</div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{p.customer?.name}</div>
                                 </div>
                             )
                         })}
@@ -142,79 +133,79 @@ const ProjectManagementTab = ({ currentUser, activeBrand }) => {
                 </div>
 
                 {/* RIGHT: PROJECT DETAILS & DISSECTION DASHBOARD */}
-                <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 rgba(0,0,0,0.1)', minHeight: '600px' }}>
+                <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', minHeight: '600px' }}>
                     {!activeProject ? (
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999', fontWeight: 'bold', fontSize: '1.2rem' }}>
-                            SELECT A PROJECT FROM THE QUEUE TO VIEW DISSECTION
+                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.4rem' }}>
+                            Select a project from the queue to view dissection.
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                             
                             {/* Dashboard Header */}
-                            <div style={{ padding: '20px', background: '#17a2b8', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
+                            <div style={{ padding: '30px 40px', background: 'var(--paper-2)', color: 'var(--ink)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
                                 <div>
-                                    <h3 style={{ margin: 0, fontSize: '1.6rem' }}>{activeProject.jobName || activeProject.sidemark}</h3>
-                                    <div style={{ fontSize: '0.9rem', opacity: 0.9, marginTop: '5px' }}>{activeProject.customer?.name}</div>
+                                    <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '2rem', fontWeight: 500 }}>{activeProject.jobName || activeProject.sidemark}</h3>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{activeProject.customer?.name}</div>
                                 </div>
                                 <div style={{ textAlign: 'right' }}>
-                                    <div style={{ fontSize: '1.4rem', fontWeight: 'bold', background: '#000', padding: '5px 15px' }}>
-                                        {activeProject.soNum || 'NO SALES ORDER ASSIGNED'}
+                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '1.2rem', fontWeight: 500, background: '#fff', border: '1px solid var(--line)', padding: '10px 20px', color: 'var(--ink)' }}>
+                                        {activeProject.soNum || 'No Sales Order Assigned'}
                                     </div>
-                                    <div style={{ fontSize: '0.8rem', marginTop: '5px' }}>Quote Ref: {activeProject.jobId}</div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>Quote Ref: {activeProject.jobId}</div>
                                 </div>
                             </div>
 
                             {/* KPI Banner */}
-                            <div style={{ padding: '20px', background: '#eafaf1', borderBottom: '2px solid #ccc', display: 'flex', gap: '20px' }}>
+                            <div style={{ padding: '30px 40px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', display: 'flex', gap: '40px' }}>
                                 <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#666' }}>REQUIRED DATE:</label>
-                                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#d9534f' }}>{activeProject.reqDate || 'TBD'}</div>
+                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Required Date</label>
+                                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)', fontWeight: 500 }}>{activeProject.reqDate || 'TBD'}</div>
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#666' }}>TOTAL VALUE:</label>
-                                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#28a745' }}>${activeProject.cpqData?.totalPrice?.toFixed(2) || '0.00'}</div>
+                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Total Value</label>
+                                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)', fontWeight: 500 }}>${activeProject.cpqData?.totalPrice?.toFixed(2) || '0.00'}</div>
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#666' }}>MASTER ASSEMBLY:</label>
-                                    <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#007bff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Master Assembly</label>
+                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 500 }}>
                                         {getPartInfo(activeProject.linkedAssemblyId).name}
                                     </div>
                                 </div>
                             </div>
 
                             {/* Dissection Table */}
-                            <div style={{ padding: '20px', flex: 1, overflowY: 'auto' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                                    <h4 style={{ margin: 0, color: '#333' }}>📋 LINE ITEM DISSECTION (CPQ COMPONENTS)</h4>
+                            <div style={{ padding: '40px', flex: 1, overflowY: 'auto' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                                    <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Line Item Dissection (CPQ Components)</h4>
                                     {!activeProject.soNum && (
-                                        <button onClick={handleSimulateErpSync} style={{ padding: '10px 20px', background: '#ffc107', color: '#000', border: '2px solid #856404', fontWeight: 'bold', cursor: 'pointer', boxShadow: '2px 2px 0 #856404', transition: '0.2s' }}>
-                                            ⚠️ TEST: SIMULATE ERP DISSECTION
+                                        <button onClick={handleSimulateErpSync} style={{ padding: '12px 24px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}>
+                                            Test: Simulate ERP Dissection
                                         </button>
                                     )}
                                 </div>
 
-                                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-                                    <thead style={{ background: '#333', color: '#fff' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontFamily: 'var(--sans)' }}>
+                                    <thead style={{ background: 'var(--paper)', borderBottom: '1px solid var(--line)', borderTop: '1px solid var(--line)' }}>
                                         <tr>
-                                            <th style={{ padding: '12px', borderBottom: '2px solid #000' }}>COMPONENT NAME</th>
-                                            <th style={{ padding: '12px', borderBottom: '2px solid #000' }}>TYPE</th>
-                                            <th style={{ padding: '12px', borderBottom: '2px solid #000' }}>ASSIGNED ORDER #</th>
-                                            <th style={{ padding: '12px', borderBottom: '2px solid #000' }}>VENDOR / DESTINATION</th>
-                                            <th style={{ padding: '12px', borderBottom: '2px solid #000' }}>STATUS</th>
+                                            <th style={{ padding: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Component Name</th>
+                                            <th style={{ padding: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Type</th>
+                                            <th style={{ padding: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Assigned Order #</th>
+                                            <th style={{ padding: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Vendor / Destination</th>
+                                            <th style={{ padding: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Status</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {activeProject.projectLines ? (
                                             activeProject.projectLines.map((line, idx) => (
-                                                <tr key={idx} style={{ borderBottom: '1px solid #ccc', background: line.orderType === 'WO' ? '#e6f2ff' : '#fff0f0' }}>
-                                                    <td style={{ padding: '15px', fontWeight: 'bold', color: '#000' }}>{line.partName}</td>
-                                                    <td style={{ padding: '15px', fontWeight: 'bold', color: line.orderType === 'WO' ? '#007bff' : '#d9534f' }}>
-                                                        {line.orderType === 'WO' ? 'IN-HOUSE (WO)' : 'OUTSOURCE (PO)'}
+                                                <tr key={idx} style={{ borderBottom: '1px solid var(--line)', background: line.orderType === 'WO' ? '#fff' : 'var(--paper-2)' }}>
+                                                    <td style={{ padding: '20px 16px', fontWeight: 500, color: 'var(--ink)' }}>{line.partName}</td>
+                                                    <td style={{ padding: '20px 16px', color: 'var(--ink-soft)', fontSize: '0.9rem' }}>
+                                                        {line.orderType === 'WO' ? 'In-House (WO)' : 'Outsource (PO)'}
                                                     </td>
-                                                    <td style={{ padding: '15px', fontWeight: 'bold', fontSize: '1rem' }}>{line.orderId}</td>
-                                                    <td style={{ padding: '15px', color: '#666', fontWeight: 'bold' }}>{line.vendor}</td>
-                                                    <td style={{ padding: '15px' }}>
-                                                        <span style={{ background: line.orderType === 'WO' ? '#28a745' : '#17a2b8', color: '#fff', padding: '4px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 'bold' }}>
+                                                    <td style={{ padding: '20px 16px', fontWeight: 500, fontSize: '1.05rem', color: 'var(--ink)' }}>{line.orderId}</td>
+                                                    <td style={{ padding: '20px 16px', color: 'var(--ink-soft)', fontSize: '0.9rem' }}>{line.vendor}</td>
+                                                    <td style={{ padding: '20px 16px' }}>
+                                                        <span style={{ background: 'var(--paper)', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                                                             {line.status}
                                                         </span>
                                                     </td>
@@ -222,7 +213,7 @@ const ProjectManagementTab = ({ currentUser, activeBrand }) => {
                                             ))
                                         ) : (
                                             <tr>
-                                                <td colSpan="5" style={{ padding: '40px 20px', textAlign: 'center', color: '#999', fontStyle: 'italic', fontSize: '1rem' }}>
+                                                <td colSpan="5" style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>
                                                     Order has not been dissected yet. Awaiting ERP Sync to generate Work/Purchase Orders.
                                                 </td>
                                             </tr>

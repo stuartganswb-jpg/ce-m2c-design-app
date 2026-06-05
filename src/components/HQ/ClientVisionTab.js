@@ -4,7 +4,7 @@ import { collection, onSnapshot, query, where, doc } from "firebase/firestore";
 
 import VisionHardware from './VisionHardware';
 import VisionPillow from './VisionPillow';
-import VisionLighting from './VisionLighting'; // 🚀 UNCOMMENTED
+import VisionLighting from './VisionLighting';
 
 const CATEGORIES_BY_BRAND = {
   ce: [{ id: 'HARDWARE', label: 'Drapery Hardware' }],
@@ -26,12 +26,10 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
       stitchTypes: ['STANDARD', 'RAILROAD', 'KNIFE_EDGE', 'FRINGE'] 
   });
 
-  // 🚀 NEW DATA ARRAYS FOR ADVANCED CPQ/LIGHTING
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
 
-  // Ensure category is valid for current brand
   useEffect(() => {
       const allowed = CATEGORIES_BY_BRAND[activeBrand] || [{ id: 'HARDWARE', label: 'Drapery Hardware' }];
       if (!allowed.find(c => c.id === visionCategory)) {
@@ -39,14 +37,12 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
       }
   }, [activeBrand, visionCategory]);
 
-  // Fetch CPQ Drafts
   useEffect(() => {
       if (!activeBrand) return;
       const q = query(collection(db, "cpq_drafts"), where("brandId", "==", activeBrand));
       return onSnapshot(q, (snap) => setVisionConfigs(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
   }, [activeBrand]);
 
-  // Fetch Library Parts, Lists, & Custom CPQ Dictionaries
   useEffect(() => {
       if (!activeBrand) return;
       
@@ -62,7 +58,6 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
           }
       });
 
-      // 🚀 NEW FETCHERS
       const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (snap) => { if(snap.exists() && snap.data().finishes) setGlobalFinishes(snap.data().finishes); });
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
@@ -71,20 +66,20 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
   }, [activeBrand]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
       {/* GLOBAL ROUTER HEADER */}
-      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000', marginBottom: '20px' }}>
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div>
-          <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>9. Client Vision System</h2>
-          <span style={{ fontSize: '0.7rem', color: '#666' }}>SPATIAL OVERLAY & DYNAMIC ENVIRONMENTS</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Spatial Overlay & Dynamic Environments</span>
+          <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Client Vision System</h2>
         </div>
         
-        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <label style={{ fontSize: '0.8rem', fontWeight: 'bold' }}>SCENE TYPE:</label>
-          <select value={visionCategory} onChange={(e) => setVisionCategory(e.target.value)} style={{ padding: '8px', border: '2px solid #007bff', fontWeight: 'bold', outline: 'none', background: '#eafaf1', color: '#28a745' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Scene Type:</label>
+          <select value={visionCategory} onChange={(e) => setVisionCategory(e.target.value)} style={{ padding: '12px 16px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper-2)', color: 'var(--ink)', cursor: 'pointer' }}>
               {(CATEGORIES_BY_BRAND[activeBrand] || CATEGORIES_BY_BRAND['ce']).map(c => (
-                  <option key={c.id} value={c.id}>{c.label.toUpperCase()}</option>
+                  <option key={c.id} value={c.id}>{c.label}</option>
               ))}
           </select>
         </div>
@@ -99,7 +94,6 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
           <VisionPillow currentUser={currentUser} activeBrand={activeBrand} visionConfigs={visionConfigs.filter(c => c.category === 'PILLOW')} libraryParts={libraryParts} globalLists={globalLists} />
       )}
 
-      {/* 🚀 NEW LIGHTING MODULE ACTIVATED */}
       {visionCategory === 'LIGHTING' && (
           <VisionLighting 
               currentUser={currentUser} 

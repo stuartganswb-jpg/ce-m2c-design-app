@@ -14,7 +14,7 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
     const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
     const [cpqRoutingTypes, setCpqRoutingTypes] = useState([]);
     
-    // 🚀 NEW: Live CRM Data State
+    // Live CRM Data State
     const [liveCustomers, setLiveCustomers] = useState([]);
     const [liveVendors, setLiveVendors] = useState([]);
 
@@ -31,7 +31,6 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
     const [coopModalOpen, setCoopModalOpen] = useState(false);
     const [coopFormData, setCoopFormData] = useState({ target: 'CUSTOMER', entityId: '', note: '' });
 
-    // Fetch Master Assemblies, Data Lists, and unified CRM records
     useEffect(() => {
         const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
             if (docSnap.exists() && docSnap.data().cpqRoutingTypes) {
@@ -45,7 +44,6 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
             setMasterAssemblies(docs);
         });
 
-        // 🚀 NEW: Listen for unified CRM records
         const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
             const records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
             setLiveCustomers(records.filter(r => r.type === 'CUSTOMER'));
@@ -103,7 +101,7 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                 category: 'LIGHTING',
                 brandId: activeBrand,
                 author: currentUser,
-                linkedAssemblyId: selectedAssemblyId, // 🚀 Critical for Tab 8 alignment
+                linkedAssemblyId: selectedAssemblyId, 
                 specs: { room, cluster },
                 createdAt: serverTimestamp()
             };
@@ -135,7 +133,6 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                 
                 const newJobId = `LEAD-${Math.floor(1000 + Math.random() * 9000)}`;
                 
-                // Lookup full entity data for formatting
                 const selectedEntity = (coopFormData.target === 'CUSTOMER' ? liveCustomers : liveVendors).find(e => e.id === coopFormData.entityId);
                 const entityName = selectedEntity ? `${selectedEntity.name} - ${selectedEntity.id}` : coopFormData.entityId;
 
@@ -172,25 +169,21 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
 
         return (
             <group position={[fixture.x, 0, fixture.y]}>
-                {/* Stem/Chain from ceiling */}
                 <Cylinder args={[0.5, 0.5, fixture.drop, 8]} position={[0, mountY - (fixture.drop / 2), 0]}>
-                    <meshStandardMaterial color="#333" />
+                    <meshStandardMaterial color="#b08d57" />
                 </Cylinder>
                 
-                {/* Parametric Tiers */}
                 <group position={[0, topOfFixtureY, 0]}>
                     {fixture.tiers.map(tier => (
                         <group key={tier.id} position={[0, tier.zOffset - (tier.height / 2), 0]}>
-                            {/* Inner Volume Block */}
                             <Cylinder args={[tier.diameter / 2, tier.diameter / 2, tier.height, 32, 1, true]} side={THREE.DoubleSide}>
-                                <meshStandardMaterial color="#007bff" transparent opacity={0.1} depthWrite={false} />
+                                <meshStandardMaterial color="#b08d57" transparent opacity={0.05} depthWrite={false} />
                             </Cylinder>
-                            {/* Crisp Wireframe Edge */}
                             <Cylinder args={[tier.diameter / 2, tier.diameter / 2, tier.height, 32, 1, true]} side={THREE.DoubleSide} wireframe>
-                                <meshBasicMaterial color="#007bff" />
+                                <meshBasicMaterial color="#b08d57" />
                             </Cylinder>
                             <Html position={[0, 0, tier.diameter / 2]} center>
-                                <div style={{ color: '#fff', background: '#007bff', padding: '2px 5px', fontSize: '0.6rem', fontWeight: 'bold', borderRadius: '4px', whiteSpace: 'nowrap' }}>
+                                <div style={{ color: '#fff', background: 'var(--ink)', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', borderRadius: '2px', whiteSpace: 'nowrap' }}>
                                     Ø {tier.diameter}" | {tier.height}"h
                                 </div>
                             </Html>
@@ -201,20 +194,24 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
         );
     };
 
+    const fieldStyle = { width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' };
+    const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
+    const sectionHeaderStyle = { margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' };
+
     return (
-        <div style={{ display: 'flex', gap: '20px', alignItems: 'stretch', flex: 1, minHeight: '800px' }}>
+        <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1, minHeight: '800px', backgroundColor: 'transparent' }}>
             
             {/* LEFT: CONTROLS */}
-            <div style={{ width: '450px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000', overflowY: 'auto' }}>
-                <div style={{ padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold' }}>📐 SCALE & SPATIAL PLANNER</div>
+            <div style={{ width: '450px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', overflowY: 'auto' }}>
+                <div style={{ padding: '20px 24px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>Scale & Spatial Planner</div>
                 
                 {/* Assembly Data Binder */}
-                <div style={{ padding: '15px', borderBottom: '2px solid #ccc', background: '#eafaf1' }}>
-                    <h4 style={{ margin: '0 0 10px 0', color: '#1e7e34' }}>1. BASE CHANDELIER MODEL</h4>
+                <div style={{ padding: '24px', borderBottom: '1px solid var(--line)', background: 'var(--paper)' }}>
+                    <h4 style={sectionHeaderStyle}>1. Base Chandelier Model</h4>
                     <select 
                         value={selectedAssemblyId} 
                         onChange={(e) => setSelectedAssemblyId(e.target.value)} 
-                        style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold' }}
+                        style={{ ...fieldStyle, background: '#fff' }}
                     >
                         <option value="">-- Select Master Assembly --</option>
                         {validAssemblies.map(a => (
@@ -223,49 +220,49 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                     </select>
                 </div>
 
-                <div style={{ padding: '15px', borderBottom: '2px solid #000', background: '#f0f8ff' }}>
-                    <h4 style={{ margin: '0 0 10px 0', color: '#007bff' }}>2. ROOM DIMENSIONS (INCHES)</h4>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                        <div style={{ gridColumn: 'span 2' }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>CEILING HEIGHT (in):</label><input type="number" value={room.height} onChange={e => setRoom({...room, height: Number(e.target.value)})} style={{ width: '100%', padding: '8px', border: '2px solid #000', fontWeight: 'bold' }} /></div>
-                        <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>ROOM WIDTH:</label><input type="number" value={room.width} onChange={e => setRoom({...room, width: Number(e.target.value)})} style={{ width: '100%', padding: '5px', border: '1px solid #ccc' }} /></div>
-                        <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>ROOM DEPTH:</label><input type="number" value={room.depth} onChange={e => setRoom({...room, depth: Number(e.target.value)})} style={{ width: '100%', padding: '5px', border: '1px solid #ccc' }} /></div>
+                <div style={{ padding: '24px', borderBottom: '1px solid var(--line)', background: '#fff' }}>
+                    <h4 style={sectionHeaderStyle}>2. Room Dimensions (Inches)</h4>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                        <div style={{ gridColumn: 'span 2' }}><label style={labelStyle}>Ceiling Height (in)</label><input type="number" value={room.height} onChange={e => setRoom({...room, height: Number(e.target.value)})} style={fieldStyle} /></div>
+                        <div><label style={labelStyle}>Room Width</label><input type="number" value={room.width} onChange={e => setRoom({...room, width: Number(e.target.value)})} style={fieldStyle} /></div>
+                        <div><label style={labelStyle}>Room Depth</label><input type="number" value={room.depth} onChange={e => setRoom({...room, depth: Number(e.target.value)})} style={fieldStyle} /></div>
                     </div>
                 </div>
 
-                <div style={{ padding: '15px', flex: 1, overflowY: 'auto', background: '#f8f9fa' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                        <h4 style={{ margin: 0, color: '#e83e8c' }}>3. LIGHTING CLUSTER ({cluster.length})</h4>
-                        <button onClick={addFixture} style={{ padding: '5px 10px', background: '#e83e8c', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>+ ADD FIXTURE</button>
+                <div style={{ padding: '24px', flex: 1, overflowY: 'auto', background: 'var(--paper-2)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                        <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>3. Lighting Cluster ({cluster.length})</h4>
+                        <button onClick={addFixture} style={{ padding: '8px 16px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Add Fixture</button>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                         {cluster.map((fix, idx) => (
-                            <div key={fix.id} style={{ background: '#fff', border: '2px solid #e83e8c', padding: '10px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #eee', paddingBottom: '10px', marginBottom: '10px' }}>
-                                    <strong style={{ color: '#e83e8c', fontSize: '1.1rem' }}>Fixture {idx + 1}</strong>
-                                    <button onClick={() => removeFixture(fix.id)} disabled={cluster.length === 1} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontWeight: 'bold' }}>🗑️ REMOVE</button>
+                            <div key={fix.id} style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '20px' }}>
+                                    <strong style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Fixture {idx + 1}</strong>
+                                    <button onClick={() => removeFixture(fix.id)} disabled={cluster.length === 1} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Remove</button>
                                 </div>
 
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '15px' }}>
-                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>X POSITION (OFFSET):</label><input type="range" min={-room.width/2} max={room.width/2} value={fix.x} onChange={e => updateFixture(fix.id, 'x', e.target.value)} style={{ width: '100%' }} /><div style={{fontSize:'0.75rem', textAlign:'center', fontWeight:'bold'}}>{fix.x}"</div></div>
-                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>Z POSITION (OFFSET):</label><input type="range" min={-room.depth/2} max={room.depth/2} value={fix.y} onChange={e => updateFixture(fix.id, 'y', e.target.value)} style={{ width: '100%' }} /><div style={{fontSize:'0.75rem', textAlign:'center', fontWeight:'bold'}}>{fix.y}"</div></div>
-                                    <div style={{ gridColumn: 'span 2' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d9534f' }}>STEM / OVERALL DROP FROM CEILING:</label><input type="range" min="6" max={room.height - 30} value={fix.drop} onChange={e => updateFixture(fix.id, 'drop', e.target.value)} style={{ width: '100%' }} /><div style={{fontSize:'0.75rem', textAlign:'center', color: '#d9534f', fontWeight: 'bold'}}>{fix.drop}" DROP</div></div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                                    <div><label style={labelStyle}>X Position</label><input type="range" min={-room.width/2} max={room.width/2} value={fix.x} onChange={e => updateFixture(fix.id, 'x', e.target.value)} style={{ width: '100%' }} /><div style={{fontFamily: 'var(--mono)', fontSize: '10px', textAlign: 'center', marginTop: '8px', color: 'var(--ink-soft)'}}>{fix.x}"</div></div>
+                                    <div><label style={labelStyle}>Z Position</label><input type="range" min={-room.depth/2} max={room.depth/2} value={fix.y} onChange={e => updateFixture(fix.id, 'y', e.target.value)} style={{ width: '100%' }} /><div style={{fontFamily: 'var(--mono)', fontSize: '10px', textAlign: 'center', marginTop: '8px', color: 'var(--ink-soft)'}}>{fix.y}"</div></div>
+                                    <div style={{ gridColumn: 'span 2' }}><label style={labelStyle}>Stem / Drop from Ceiling</label><input type="range" min="6" max={room.height - 30} value={fix.drop} onChange={e => updateFixture(fix.id, 'drop', e.target.value)} style={{ width: '100%' }} /><div style={{fontFamily: 'var(--mono)', fontSize: '10px', textAlign: 'center', color: 'var(--ink)', marginTop: '8px'}}>{fix.drop}" Drop</div></div>
                                 </div>
 
-                                <div style={{ background: '#fdfdfd', border: '2px dashed #007bff', padding: '10px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                                        <strong style={{ fontSize: '0.85rem', color: '#007bff' }}>TIERS / RINGS ({fix.tiers.length})</strong>
-                                        <button onClick={() => addTier(fix.id)} style={{ padding: '5px 10px', background: '#007bff', color: '#fff', border: 'none', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>+ ADD TIER</button>
+                                <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '20px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                        <strong style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: 'var(--ink)' }}>Tiers / Rings ({fix.tiers.length})</strong>
+                                        <button onClick={() => addTier(fix.id)} style={{ padding: '6px 12px', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Add Tier</button>
                                     </div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                                         {fix.tiers.map((tier, tIdx) => (
-                                            <div key={tier.id} style={{ background: '#fff', border: '1px solid #ccc', padding: '10px', position: 'relative' }}>
-                                                <button onClick={() => removeTier(fix.id, tier.id)} disabled={fix.tiers.length === 1} style={{ position: 'absolute', top: '5px', right: '5px', background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }}>×</button>
-                                                <div style={{ fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '10px' }}>Tier {tIdx + 1}</div>
-                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px' }}>
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>Diameter (in):</label><input type="number" value={tier.diameter} onChange={e => updateTier(fix.id, tier.id, 'diameter', e.target.value)} style={{ width: '80px', padding: '4px', border: '1px solid #000' }} /></div>
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>Tassel Height (in):</label><input type="number" value={tier.height} onChange={e => updateTier(fix.id, tier.id, 'height', e.target.value)} style={{ width: '80px', padding: '4px', border: '1px solid #000' }} /></div>
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#CC6600' }}>Z-Offset (Gap in):</label><input type="number" value={tier.zOffset} onChange={e => updateTier(fix.id, tier.id, 'zOffset', e.target.value)} style={{ width: '80px', padding: '4px', border: '1px solid #CC6600' }} /></div>
+                                            <div key={tier.id} style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px', position: 'relative' }}>
+                                                <button onClick={() => removeTier(fix.id, tier.id)} disabled={fix.tiers.length === 1} style={{ position: 'absolute', top: '8px', right: '8px', background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }}>×</button>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '12px' }}>Tier {tIdx + 1}</div>
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Diameter (in):</label><input type="number" value={tier.diameter} onChange={e => updateTier(fix.id, tier.id, 'diameter', e.target.value)} style={{ width: '80px', padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--sans)' }} /></div>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Tassel Height (in):</label><input type="number" value={tier.height} onChange={e => updateTier(fix.id, tier.id, 'height', e.target.value)} style={{ width: '80px', padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--sans)' }} /></div>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)' }}>Z-Offset (Gap in):</label><input type="number" value={tier.zOffset} onChange={e => updateTier(fix.id, tier.id, 'zOffset', e.target.value)} style={{ width: '80px', padding: '6px', border: '1px solid var(--ink)', fontFamily: 'var(--sans)' }} /></div>
                                                 </div>
                                             </div>
                                         ))}
@@ -276,21 +273,21 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                     </div>
                 </div>
 
-                <div style={{ display: 'flex', gap: '5px', padding: '10px', background: '#f4f4f4', borderTop: '2px solid #ccc' }}>
-                    <button onClick={pushToCPQ} disabled={isSaving} style={{ flex: 1, padding: '15px', background: isSaving ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', border: 'none', cursor: isSaving ? 'not-allowed' : 'pointer', boxShadow: '2px 2px 0 rgba(0,0,0,0.2)' }}>
-                        {isSaving ? "SAVING..." : "📥 PUSH TO CPQ"}
+                <div style={{ display: 'flex', gap: '12px', padding: '20px', background: 'var(--paper)', borderTop: '1px solid var(--line)' }}>
+                    <button onClick={pushToCPQ} disabled={isSaving} style={{ flex: 1, padding: '16px', background: isSaving ? 'var(--paper-2)' : 'var(--ink)', color: isSaving ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: isSaving ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
+                        {isSaving ? "Saving..." : "Push to CPQ"}
                     </button>
-                    <button onClick={() => setCoopModalOpen(true)} disabled={isSaving} style={{ flex: 1, padding: '15px', background: isSaving ? '#ccc' : '#17a2b8', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', border: 'none', cursor: isSaving ? 'not-allowed' : 'pointer', boxShadow: '2px 2px 0 rgba(0,0,0,0.2)' }}>
-                        📸 PUSH TO COOP
+                    <button onClick={() => setCoopModalOpen(true)} disabled={isSaving} style={{ flex: 1, padding: '16px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: isSaving ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
+                        Push to Coop
                     </button>
                 </div>
             </div>
 
             {/* RIGHT: LIVE 3D CANVAS */}
-            <div id="vision-lighting-canvas" style={{ flex: 1, background: '#fff', border: '2px solid #000', boxShadow: '10px 10px 0 #000', position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', top: '15px', left: '20px', color: '#000', zIndex: 10 }}>
-                    <h3 style={{ margin: 0 }}>ARCHITECTURAL SCALE ENVIRONMENT</h3>
-                    <div style={{ fontSize: '0.8rem', color: '#666', fontWeight: 'bold' }}>{room.width}"w x {room.depth}"d x {room.height}"h</div>
+            <div id="vision-lighting-canvas" style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'relative', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', top: '24px', left: '30px', color: 'var(--ink)', zIndex: 10 }}>
+                    <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Architectural Scale Environment</h3>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{room.width}"W × {room.depth}"D × {room.height}"H</div>
                 </div>
                 
                 <Canvas gl={{ preserveDrawingBuffer: true }} camera={{ position: [0, room.height / 2, room.width], fov: 60 }}>
@@ -298,27 +295,23 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                     <directionalLight position={[100, 200, 100]} intensity={1.2} />
                     <OrbitControls makeDefault target={[0, room.height / 2, 0]} maxPolarAngle={Math.PI / 2 - 0.05} />
 
-                    {/* Room Floor */}
                     <Plane args={[room.width, room.depth]} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
-                        <meshStandardMaterial color="#f0f0f0" />
+                        <meshStandardMaterial color="#f2efe8" /> {/* var(--paper-2) */}
                     </Plane>
 
-                    {/* Ceiling Grid */}
                     <Plane args={[room.width, room.depth]} rotation={[Math.PI / 2, 0, 0]} position={[0, room.height, 0]}>
-                        <meshStandardMaterial color="#ddd" wireframe />
+                        <meshStandardMaterial color="#e5e5e5" wireframe />
                     </Plane>
 
-                    {/* Reference Dining Table (72" x 40" x 30"h) */}
                     <group position={[0, 15, 0]}>
                         <Box args={[72, 30, 40]}>
-                            <meshStandardMaterial color="#ddd" />
+                            <meshStandardMaterial color="#e5e5e5" />
                         </Box>
                         <Html position={[0, 20, 0]} center>
-                            <div style={{ color: '#333', background: '#fff', padding: '4px 8px', fontSize: '0.7rem', borderRadius: '4px', fontWeight: 'bold', whiteSpace: 'nowrap', border: '1px solid #ccc' }}>72" Reference Table</div>
+                            <div style={{ color: 'var(--ink-soft)', background: '#fff', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', borderRadius: '2px', whiteSpace: 'nowrap', border: '1px solid var(--line)' }}>72" Reference Table</div>
                         </Html>
                     </group>
 
-                    {/* Render Cluster */}
                     {cluster.map(fixture => (
                         <FixtureGhost key={fixture.id} fixture={fixture} ceilingHeight={room.height} />
                     ))}
@@ -326,23 +319,23 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
             </div>
 
             {coopModalOpen && (
-                <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000 }}>
-                   <div style={{ background: '#fff', border: '4px solid #000', width: '450px', boxShadow: '15px 15px 0 #000', display: 'flex', flexDirection: 'column' }}>
-                       <div style={{ padding: '20px', background: '#17a2b8', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                           <h3 style={{ margin: 0, fontSize: '1.2rem' }}>📸 CAPTURE & PUSH TO COOP</h3>
-                           <button onClick={() => setCoopModalOpen(false)} disabled={isCapturing} style={{ background: 'none', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: isCapturing ? 'not-allowed' : 'pointer' }}>×</button>
+                <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000 }}>
+                   <div style={{ background: '#fff', border: '1px solid var(--line)', width: '500px', borderRadius: '2px', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column' }}>
+                       <div style={{ padding: '24px 30px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                           <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Capture & Push to Coop</h3>
+                           <button onClick={() => setCoopModalOpen(false)} disabled={isCapturing} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: isCapturing ? 'not-allowed' : 'pointer' }}>×</button>
                        </div>
-                       <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                       <div style={{ padding: '30px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
                            <div>
-                               <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>ROUTING DESTINATION:</label>
-                               <select value={coopFormData.target} onChange={(e) => setCoopFormData({...coopFormData, target: e.target.value, entityId: '' })} style={{ width: '100%', padding: '10px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }}>
-                                   <option value="CUSTOMER">👥 Customer CRM</option>
-                                   <option value="VENDOR">🏢 Vendor Portal</option>
+                               <label style={labelStyle}>Routing Destination</label>
+                               <select value={coopFormData.target} onChange={(e) => setCoopFormData({...coopFormData, target: e.target.value, entityId: '' })} style={fieldStyle}>
+                                   <option value="CUSTOMER">Customer CRM</option>
+                                   <option value="VENDOR">Vendor Portal</option>
                                </select>
                            </div>
                            <div>
-                               <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#007bff' }}>ASSIGN TO {coopFormData.target}:</label>
-                               <select value={coopFormData.entityId} onChange={(e) => setCoopFormData({...coopFormData, entityId: e.target.value})} style={{ width: '100%', padding: '10px', border: '2px solid #007bff', boxSizing: 'border-box' }}>
+                               <label style={{ ...labelStyle, color: 'var(--ink)' }}>Assign to {coopFormData.target}</label>
+                               <select value={coopFormData.entityId} onChange={(e) => setCoopFormData({...coopFormData, entityId: e.target.value})} style={fieldStyle}>
                                    <option value="">-- Select {coopFormData.target} --</option>
                                    {(coopFormData.target === 'CUSTOMER' ? liveCustomers : liveVendors).map(item => ( 
                                        <option key={item.id} value={item.id}>{item.name} - {item.id}</option> 
@@ -350,11 +343,11 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                                </select>
                            </div>
                            <div>
-                               <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>EXTERNAL NOTE / RFI:</label>
-                               <textarea value={coopFormData.note} onChange={(e) => setCoopFormData({...coopFormData, note: e.target.value})} placeholder="e.g. Please review chandelier scale..." rows={4} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box', resize: 'none' }} />
+                               <label style={labelStyle}>External Note / RFI</label>
+                               <textarea value={coopFormData.note} onChange={(e) => setCoopFormData({...coopFormData, note: e.target.value})} placeholder="e.g. Please review chandelier scale..." rows={4} style={{ ...fieldStyle, resize: 'vertical' }} />
                            </div>
-                           <button onClick={handlePushToCoop} disabled={isCapturing} style={{ width: '100%', padding: '15px', background: isCapturing ? '#ccc' : '#17a2b8', color: '#fff', fontWeight: 'bold', fontSize: '1rem', border: 'none', cursor: isCapturing ? 'wait' : 'pointer', marginTop: '10px' }}>
-                               {isCapturing ? "📸 SNAPPING & UPLOADING..." : "🚀 SEND TO TAB 10 (COOP)"}
+                           <button onClick={handlePushToCoop} disabled={isCapturing} style={{ width: '100%', padding: '16px', background: isCapturing ? 'var(--paper-2)' : 'var(--ink)', color: isCapturing ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: isCapturing ? 'wait' : 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                               {isCapturing ? "Snapping & Uploading..." : "Send to Tab 10 (Coop)"}
                            </button>
                        </div>
                    </div>

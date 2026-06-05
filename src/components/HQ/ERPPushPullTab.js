@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 
-// 🚀 DYNAMIC BRAND MAPPING DICTIONARY
+// DYNAMIC BRAND MAPPING DICTIONARY
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
     'uniquity': { subsidiary: "6", location: "22" },
@@ -48,7 +48,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       setSyncLog(prev => [{ time, msg, type }, ...prev]);
   };
 
-  // 🎯 Intelligent Line Item Extractor
   const getJobLineItems = (job) => {
       if (!job || !job.cpqData) return [];
       
@@ -89,7 +88,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       return lines;
   };
 
-  // --- 🚀 THE PUSH ENGINE (PROXY VERSION) ---
   const handlePushToNetSuite = async (job) => {
       const linesToPush = getJobLineItems(job);
       
@@ -108,7 +106,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           const lineItems = [];
           let physicalItemsTotal = 0;
           
-          // 1. Process Physical Inventory Components
           for (const line of linesToPush) {
               if (line.nsId !== 'UNMAPPED' && line.nsId !== 'PENDING') {
                   const rawRate = line.masterPart.manufacturingSpecs?.basePrice || 0;
@@ -139,31 +136,24 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               throw new Error("No valid NetSuite IDs were found to push. Sync aborted.");
           }
 
-          // 2. Calculate "Silent Costs" (Fees, Base Price, Upcharges)
           const cpqGrandTotal = parseFloat(job.cpqData.totalPrice || 0);
           const silentFeeBalance = Math.max(0, cpqGrandTotal - physicalItemsTotal);
 
-          // 3. Extract Customer & Brand
           let nsCustomerId = job.customer?.id || "";
           if (nsCustomerId.startsWith('CUST-')) nsCustomerId = nsCustomerId.replace('CUST-', '');
           const brandMapping = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2", location: "17" };
 
-          // 4. Set Description
           const flowName = cpqFlows.find(f => f.id === job.flowId)?.name || 'Custom Assembly';
           const headerDesc = `${flowName} labor portion of quote# ${job.jobId || job.id} for Job: ${job.jobName || 'N/A'} Sidemark: ${job.sidemark || 'N/A'}`;
 
-          // 🚀 5. CONSTRUCT SHIPPING OVERRIDES
           const shippingPayload = {};
           if (job.shippingMethod === 'SAVED' && job.shippingAddressId) {
               shippingPayload.shipaddresslist = { id: job.shippingAddressId };
           } else if (job.shippingMethod === 'CUSTOM' && job.customShippingAddress) {
-              
-              // Clean the state code (NetSuite expects strict 2-letter uppercase without periods, e.g., "FL" not "fl.")
               let cleanState = job.customShippingAddress.state || '';
               if (cleanState) {
                   cleanState = cleanState.toUpperCase().replace(/\./g, '').trim();
               }
-
               shippingPayload.shippingaddress = {
                   attention: job.customShippingAddress.attention || '',
                   addressee: job.customShippingAddress.addressee || '',
@@ -176,10 +166,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               };
           }
 
-          // 🚀 Clean the Memo Field (Removed the HQ APP CONFIG string)
           const memoText = [job.jobName, job.sidemark].filter(Boolean).join(' - ').trim();
 
-          // 6. Construct the Final NetSuite Payload
           const payload = {
               entity: { id: nsCustomerId }, 
               subsidiary: { id: brandMapping.subsidiary }, 
@@ -204,7 +192,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           addLog(`Payload constructed. Silent Fees/Assembly assigned $${silentFeeBalance.toFixed(2)}`, 'success');
           if (shippingPayload.shippingaddress) addLog(`Custom Shipping Override Attached.`, 'info');
 
-          // 7. Fire to Google Cloud Proxy
           const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
           addLog(`Transmitting to NetSuite via Google Cloud...`, 'info');
 
@@ -245,49 +232,51 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
-      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div>
-            <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#6f42c1' }}>12. ERP Push/Pull</h2>
-            <span style={{ fontSize: '0.7rem', color: '#666' }}>NETSUITE SYNCHRONIZATION PIPELINE</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>NetSuite Synchronization Pipeline</span>
+            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>ERP Push/Pull Hub</h2>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start', flex: 1 }}>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start', flex: 1 }}>
         
         {/* LEFT COLUMN: JOB QUEUES */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px' }}>
             
-            <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                <div style={{ padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '1.1rem', borderBottom: '2px solid #000' }}>
-                    🟢 PENDING ERP DISPATCH ({approvedJobs.length})
+            <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <div style={{ padding: '20px 24px', background: 'var(--paper)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Pending ERP Dispatch</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{approvedJobs.length} Orders</span>
                 </div>
-                <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px', background: '#f8f9fa', maxHeight: '400px', overflowY: 'auto' }}>
-                    {approvedJobs.length === 0 && <span style={{ color: '#999', fontStyle: 'italic' }}>No jobs pending push.</span>}
+                <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', background: '#fff', maxHeight: '400px', overflowY: 'auto' }}>
+                    {approvedJobs.length === 0 && <span style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem' }}>No jobs pending push.</span>}
                     {approvedJobs.map(job => (
-                        <div key={job.id} onClick={() => setActiveJob(job)} style={{ background: activeJob?.id === job.id ? '#eafaf1' : '#fff', border: `2px solid ${activeJob?.id === job.id ? '#28a745' : '#ccc'}`, padding: '15px', cursor: 'pointer', transition: '0.2s' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
-                                <span style={{ color: '#007bff' }}>{job.customer?.name || job.clientName || 'Unknown Customer'}</span>
-                                <span style={{ color: '#28a745' }}>${job.cpqData?.totalPrice?.toFixed(2) || '0.00'}</span>
+                        <div key={job.id} onClick={() => setActiveJob(job)} style={{ background: activeJob?.id === job.id ? 'var(--paper-2)' : '#fff', border: `1px solid ${activeJob?.id === job.id ? 'var(--brass)' : 'var(--line)'}`, padding: '16px', cursor: 'pointer', transition: 'all 0.2s ease', boxShadow: activeJob?.id === job.id ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '1.05rem' }}>{job.customer?.name || job.clientName || 'Unknown Customer'}</span>
+                                <span style={{ fontFamily: 'var(--serif)', fontSize: '1.1rem', color: 'var(--ink)' }}>${job.cpqData?.totalPrice?.toFixed(2) || '0.00'}</span>
                             </div>
-                            <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '5px' }}><strong>ID:</strong> {job.jobId || job.id}</div>
-                            <div style={{ fontSize: '0.8rem', color: '#666' }}><strong>REF:</strong> {job.sidemark || 'N/A'}</div>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontFamily: 'var(--mono)', textTransform: 'uppercase' }}>ID: {job.jobId || job.id}</div>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Ref: {job.sidemark || 'N/A'}</div>
                         </div>
                     ))}
                 </div>
             </div>
 
-            <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                <div style={{ padding: '15px', background: '#6c757d', color: '#fff', fontWeight: 'bold', fontSize: '1.1rem', borderBottom: '2px solid #000' }}>
-                    🔘 SYNCHRONIZED HISTORICAL ({syncedJobs.length})
+            <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <div style={{ padding: '20px 24px', background: 'var(--paper)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Synchronized Historical</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{syncedJobs.length} Orders</span>
                 </div>
-                <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px', background: '#f8f9fa', maxHeight: '300px', overflowY: 'auto' }}>
-                    {syncedJobs.length === 0 && <span style={{ color: '#999', fontStyle: 'italic' }}>No history found.</span>}
+                <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', background: '#fff', maxHeight: '300px', overflowY: 'auto' }}>
+                    {syncedJobs.length === 0 && <span style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem' }}>No history found.</span>}
                     {syncedJobs.map(job => (
-                        <div key={job.id} style={{ background: '#fff', border: '1px solid #ccc', borderLeft: '4px solid #6c757d', padding: '10px' }}>
-                            <div style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>{job.customer?.name || job.clientName || 'Unknown Customer'}</div>
-                            <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '3px' }}><strong>NETSUITE ID:</strong> {job.netsuiteEstimateId || 'Unknown'}</div>
+                        <div key={job.id} style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '16px', opacity: 0.8 }}>
+                            <div style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', marginBottom: '6px' }}>{job.customer?.name || job.clientName || 'Unknown Customer'}</div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>NetSuite ID: <span style={{ color: 'var(--ink)' }}>{job.netsuiteEstimateId || 'Unknown'}</span></div>
                         </div>
                     ))}
                 </div>
@@ -296,38 +285,38 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
         </div>
 
         {/* MIDDLE COLUMN: PAYLOAD BUILDER / CONFIRMATION */}
-        <div style={{ flex: 1.5, background: '#fff', border: '3px solid #000', boxShadow: '10px 10px 0 #000', display: 'flex', flexDirection: 'column', minHeight: '600px' }}>
+        <div style={{ flex: 1.5, background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column', minHeight: '600px' }}>
             {activeJob ? (
                 <>
-                    <div style={{ padding: '20px', background: '#000', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ padding: '24px 30px', background: 'var(--paper-2)', color: 'var(--ink)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
                         <div>
-                            <h3 style={{ margin: 0 }}>PRE-FLIGHT PAYLOAD REVIEW</h3>
-                            <span style={{ fontSize: '0.75rem', color: '#aaa' }}>{activeJob.jobId || activeJob.id}</span>
+                            <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Pre-Flight Payload Review</h3>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px', display: 'block' }}>{activeJob.jobId || activeJob.id}</span>
                         </div>
                     </div>
                     
-                    <div style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
+                    <div style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column', gap: '24px', overflowY: 'auto' }}>
                         
-                        <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '15px' }}>
-                            <h4 style={{ margin: '0 0 10px 0', color: '#1e7e34' }}>TRANSACTION HEADER (NETSUITE ESTIMATE)</h4>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '0.85rem' }}>
-                                <div><strong>CUSTOMER ID:</strong> <span style={{ color: '#007bff' }}>{activeJob.customer?.id || 'Missing!'}</span></div>
-                                <div><strong>MEMO / SIDEMARK:</strong> {activeJob.sidemark || 'None'}</div>
-                                <div><strong>TOTAL VALUE:</strong> <span style={{ color: '#28a745', fontWeight: 'bold' }}>${activeJob.cpqData?.totalPrice?.toFixed(2) || '0.00'}</span></div>
-                                <div><strong>DATE:</strong> {new Date().toLocaleDateString()}</div>
+                        <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px' }}>
+                            <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>Transaction Header (NetSuite Estimate)</h4>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', fontSize: '0.9rem' }}>
+                                <div><strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Customer ID</strong> <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{activeJob.customer?.id || 'Missing!'}</span></div>
+                                <div><strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Memo / Sidemark</strong> <span style={{ color: 'var(--ink)' }}>{activeJob.sidemark || 'None'}</span></div>
+                                <div><strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Total Value</strong> <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink)', fontWeight: 500 }}>${activeJob.cpqData?.totalPrice?.toFixed(2) || '0.00'}</span></div>
+                                <div><strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Date</strong> <span style={{ color: 'var(--ink)' }}>{new Date().toLocaleDateString()}</span></div>
                             </div>
                         </div>
 
-                        <div style={{ background: '#f8f9fa', border: '2px solid #17a2b8', padding: '15px' }}>
-                            <h4 style={{ margin: '0 0 10px 0', color: '#17a2b8' }}>SHIPPING DESTINATION OVERRIDE</h4>
-                            <div style={{ fontSize: '0.85rem', color: '#333' }}>
-                                <strong>Method:</strong> {activeJob.shippingMethod || 'Standard Defaults'}<br/>
+                        <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '24px' }}>
+                            <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>Shipping Destination Override</h4>
+                            <div style={{ fontSize: '0.9rem', color: 'var(--ink)' }}>
+                                <div style={{ marginBottom: '8px' }}><strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginRight: '8px' }}>Method:</strong> {activeJob.shippingMethod || 'Standard Defaults'}</div>
                                 {activeJob.shippingMethod === 'SAVED' && activeJob.shippingAddressId && (
-                                    <div style={{ marginTop: '5px' }}><strong>NetSuite Address Book ID:</strong> {activeJob.shippingAddressId}</div>
+                                    <div style={{ marginTop: '8px' }}><strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginRight: '8px' }}>NetSuite Address Book ID:</strong> {activeJob.shippingAddressId}</div>
                                 )}
                                 {activeJob.shippingMethod === 'CUSTOM' && activeJob.customShippingAddress && (
-                                    <div style={{ marginTop: '5px', padding: '10px', background: '#fff', border: '1px solid #ccc' }}>
-                                        <div style={{ fontWeight: 'bold' }}>{activeJob.customShippingAddress.attention || activeJob.customShippingAddress.addressee}</div>
+                                    <div style={{ marginTop: '12px', padding: '16px', background: '#fff', border: '1px solid var(--line)', lineHeight: '1.5' }}>
+                                        <div style={{ fontWeight: 500 }}>{activeJob.customShippingAddress.attention || activeJob.customShippingAddress.addressee}</div>
                                         <div>{activeJob.customShippingAddress.addr1}</div>
                                         {activeJob.customShippingAddress.addr2 && <div>{activeJob.customShippingAddress.addr2}</div>}
                                         <div>{activeJob.customShippingAddress.city}, {activeJob.customShippingAddress.state} {activeJob.customShippingAddress.zip}</div>
@@ -336,30 +325,30 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
 
-                        <div style={{ border: '2px solid #ccc', padding: '15px', background: '#f8f9fa' }}>
-                            <h4 style={{ margin: '0 0 10px 0', color: '#333' }}>MAPPED LINE ITEMS (BOM)</h4>
+                        <div style={{ border: '1px solid var(--line)', padding: '24px', background: '#fff' }}>
+                            <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>Mapped Line Items (BOM)</h4>
                             
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left', background: '#fff' }}>
-                                <thead style={{ background: '#eee' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', textAlign: 'left', background: '#fff' }}>
+                                <thead style={{ background: 'var(--paper-2)' }}>
                                     <tr>
-                                        <th style={{ padding: '8px', borderBottom: '2px solid #000' }}>NETSUITE ID</th>
-                                        <th style={{ padding: '8px', borderBottom: '2px solid #000' }}>DESCRIPTION</th>
-                                        <th style={{ padding: '8px', borderBottom: '2px solid #000', textAlign: 'center' }}>QTY</th>
+                                        <th style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>NetSuite ID</th>
+                                        <th style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Description</th>
+                                        <th style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Qty</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr>
-                                        <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontWeight: 'bold', color: '#007bff' }}>61502</td>
-                                        <td style={{ padding: '8px', borderBottom: '1px solid #eee', fontStyle: 'italic' }}>
+                                        <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', fontWeight: 500, color: 'var(--ink)' }}>61502</td>
+                                        <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', fontStyle: 'italic', color: 'var(--ink-soft)' }}>
                                             {cpqFlows.find(f => f.id === activeJob.flowId)?.name || 'Custom Assembly'} labor portion of quote# {activeJob.jobId || activeJob.id} for Job: {activeJob.jobName || 'N/A'} Sidemark: {activeJob.sidemark || 'N/A'}
                                         </td>
-                                        <td style={{ padding: '8px', borderBottom: '1px solid #eee', textAlign: 'center' }}>1</td>
+                                        <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', textAlign: 'center', color: 'var(--ink)' }}>1</td>
                                     </tr>
                                     {getJobLineItems(activeJob).map((line, idx) => (
                                         <tr key={idx}>
-                                            <td style={{ padding: '8px', borderBottom: '1px solid #eee', color: line.nsId === 'UNMAPPED' || line.nsId === 'PENDING' ? '#d9534f' : '#333', fontWeight: 'bold' }}>{line.nsId}</td>
-                                            <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>{line.masterPart.itemName}</td>
-                                            <td style={{ padding: '8px', borderBottom: '1px solid #eee', textAlign: 'center', fontWeight: 'bold' }}>{line.qty}</td>
+                                            <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', color: line.nsId === 'UNMAPPED' || line.nsId === 'PENDING' ? '#d9534f' : 'var(--ink)', fontFamily: 'var(--mono)' }}>{line.nsId}</td>
+                                            <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', color: 'var(--ink)' }}>{line.masterPart.itemName}</td>
+                                            <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontWeight: 500, color: 'var(--ink)' }}>{line.qty}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -368,40 +357,40 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
                     </div>
 
-                    <div style={{ padding: '20px', background: '#f4f4f4', borderTop: '2px solid #000' }}>
+                    <div style={{ padding: '24px', background: 'var(--paper-2)', borderTop: '1px solid var(--line)' }}>
                         <button 
                             onClick={() => handlePushToNetSuite(activeJob)} 
                             disabled={isPushing}
-                            style={{ width: '100%', padding: '20px', background: isPushing ? '#ccc' : '#6f42c1', color: '#fff', fontSize: '1.2rem', fontWeight: 'bold', border: 'none', cursor: isPushing ? 'wait' : 'pointer', boxShadow: '4px 4px 0 rgba(0,0,0,0.2)', transition: '0.2s' }}
+                            style={{ width: '100%', padding: '16px', background: isPushing ? 'var(--paper)' : 'var(--ink)', color: isPushing ? 'var(--ink-soft)' : '#fff', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', border: '1px solid var(--ink)', cursor: isPushing ? 'wait' : 'pointer', transition: 'all 0.2s' }}
                         >
-                            {isPushing ? "⚡ TRANSMITTING TO NETSUITE..." : "🚀 APPROVE & PUSH TO ERP"}
+                            {isPushing ? "Transmitting to NetSuite..." : "Approve & Push to ERP"}
                         </button>
                     </div>
                 </>
             ) : (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999', fontWeight: 'bold', fontSize: '1.2rem' }}>
-                    SELECT A PENDING JOB TO REVIEW PAYLOAD
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.4rem' }}>
+                    Select a pending job to review payload
                 </div>
             )}
         </div>
 
         {/* RIGHT COLUMN: TERMINAL CONSOLE */}
-        <div style={{ flex: 0.8, background: '#1e1e1e', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000', minHeight: '600px' }}>
-            <div style={{ padding: '10px 15px', background: '#333', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between' }}>
-                <span>>_ TERMINAL LOG</span>
-                <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '0.7rem' }}>CLEAR</button>
+        <div style={{ flex: 0.8, background: 'var(--dark)', border: '1px solid var(--line)', borderRadius: '2px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', minHeight: '600px', overflow: 'hidden' }}>
+            <div style={{ padding: '16px 20px', background: 'var(--dark-2)', color: 'var(--paper)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>>_ Terminal Log</span>
+                <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: 'var(--paper)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', opacity: 0.6, textTransform: 'uppercase' }}>Clear</button>
             </div>
-            <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                {syncLog.length === 0 && <span style={{ color: '#666' }}>Awaiting transmission...</span>}
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', flex: 1, overflowY: 'auto', fontFamily: 'var(--mono)', fontSize: '11px', color: '#a8a5a0' }}>
+                {syncLog.length === 0 && <span style={{ opacity: 0.6 }}>Awaiting transmission...</span>}
                 {syncLog.map((log, idx) => {
-                    let color = '#fff';
-                    if (log.type === 'error') color = '#ff4d4d';
-                    if (log.type === 'success') color = '#28a745';
-                    if (log.type === 'warn') color = '#ffc107';
+                    let color = '#a8a5a0';
+                    if (log.type === 'error') color = '#e27373';
+                    if (log.type === 'success') color = '#7dbb81';
+                    if (log.type === 'warn') color = '#e2b373';
                     
                     return (
-                        <div key={idx} style={{ color, borderBottom: '1px dotted #333', paddingBottom: '4px' }}>
-                            <span style={{ color: '#888', marginRight: '8px' }}>[{log.time}]</span>
+                        <div key={idx} style={{ color, borderBottom: '1px solid #333', paddingBottom: '6px' }}>
+                            <span style={{ opacity: 0.5, marginRight: '10px' }}>[{log.time}]</span>
                             {log.msg}
                         </div>
                     );

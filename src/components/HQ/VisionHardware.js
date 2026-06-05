@@ -1,6 +1,7 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc, serverTimestamp, collection, onSnapshot, query, where } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { UncontrolledReactSVGPanZoom, TOOL_PAN, TOOL_ZOOM_IN, TOOL_ZOOM_OUT, TOOL_NONE } from 'react-svg-pan-zoom'; 
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [viewMode, setViewMode] = useState('ENGINEERING');
@@ -268,53 +269,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       });
   }, [libraryParts, quoteSelections.collection, activeFlow, flowPins]);
 
-  const getOptionsForStep = (step) => {
-      if (!step || !step.dataSource) return [];
-      let options = [];
-
-      const isProdType = globalLists.prodTypes?.includes(step.dataSource);
-      const isRoutingType = globalLists.inventoryTypes?.includes(step.dataSource) || globalLists.assemblyTypes?.includes(step.dataSource);
-
-      if (isProdType || isRoutingType) {
-          options = libraryParts.filter(p => {
-              if (p.manufacturingSpecs?.customData?.feeType) return false;
-              if (isProdType && p.manufacturingSpecs?.productType !== step.dataSource && p.productType !== step.dataSource) return false;
-              if (isRoutingType && p.routingType !== step.dataSource) return false;
-              
-              const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
-              const upperCollections = collectionsArray.map(c => c.toUpperCase());
-              const selCollection = (quoteSelections.collection || "").toUpperCase();
-              
-              if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
-                  if (!upperCollections.includes('N/A')) return false; 
-              }
-
-              const cat = getStepCategory(step);
-              if (!isCustomProj && p.manufacturingSpecs?.customData?.projection && safeProj > 0 && cat !== 'BRACKET') {
-                  if (parseFloat(p.manufacturingSpecs.customData.projection) !== safeProj) return false;
-              }
-
-              return true;
-          }).map(p => ({ id: p.id, itemName: p.itemName, code: p.legacyErpId }));
-      } else if (step.dataSource === 'master_finishes') {
-          const inHouse = globalFinishes.map(f => ({ id: f.id, itemName: f.name, code: f.code }));
-          const outsource = outsourceFinishes.map(f => ({ id: f.id, itemName: f.name }));
-          options = [...inHouse, ...outsource];
-      } else {
-          const customAssets = dynamicAssets.filter(a => a.windowId === step.dataSource);
-          if (customAssets.length > 0) {
-              options = customAssets.map(a => ({ id: a.id, itemName: a.name, code: a.code }));
-          } else if (globalLists[step.dataSource]) {
-              options = globalLists[step.dataSource].map(val => ({ id: val, itemName: val }));
-          }
-      }
-
-      if (step.allowedOptions && step.allowedOptions.length > 0) {
-          return options.filter(opt => step.allowedOptions.includes(opt.id));
-      }
-      return options;
-  };
-
   const rad = (deg) => (deg * Math.PI) / 180;
   const S = 3.5; 
   let mDeduct1=0, mDeduct2=0, wall1=engData.w1, wall2=engData.w2, wall3=engData.w3, pole1=0, pole2=0, pole3=0, sawAngle1=0, sawAngle2=0;
@@ -417,22 +371,22 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const renderEndTreatment = (isLeft, forceFlatten = false) => {
       const isInside = isLeft ? isLeftInside : isRightInside;
       const startOrig = isLeft ? HS : HE; const stopPoint = isLeft ? drawHS : drawHE; const norm = isLeft ? nL : nR; 
-      if (isInside) return forceFlatten ? null : <line x1={startOrig.x - norm.y*15} y1={startOrig.y + norm.x*15} x2={startOrig.x + norm.y*15} y2={startOrig.y - norm.x*15} stroke="#888" strokeWidth="6" />;
+      if (isInside) return forceFlatten ? null : <line x1={startOrig.x - norm.y*15} y1={startOrig.y + norm.x*15} x2={startOrig.x + norm.y*15} y2={startOrig.y - norm.x*15} stroke="var(--line)" strokeWidth="6" />;
       if (engData.endStyle === 'FINIAL') {
           let outVec = {x: -1, y: 0};
           if (engData.shape === 'STRAIGHT') outVec = isLeft ? {x: -1, y: 0} : {x: 1, y: 0};
           else if (engData.shape === 'MITERED') { const dx = (isLeft?HS:HE).x - (isLeft?HC1:HC2).x; const dy = (isLeft?HS:HE).y - (isLeft?HC1:HC2).y; const len = Math.sqrt(dx*dx + dy*dy) || 1; outVec = {x: dx/len, y: dy/len}; }
           else if (engData.shape === 'BOW') { const rx = startOrig.x - bowCX; const ry = startOrig.y - bowCY; const rlen = Math.sqrt(rx*rx + ry*ry) || 1; outVec = isLeft ? {x: ry/rlen, y: -rx/rlen} : {x: -ry/rlen, y: rx/rlen}; }
           const fw = engData.finialW * S;
-          return forceFlatten ? <circle cx={startOrig.x + outVec.x * fw} cy="0" r="10" fill="#d4af37" /> : <line x1={startOrig.x} y1={startOrig.y} x2={startOrig.x + outVec.x*fw} y2={startOrig.y + outVec.y*fw} stroke="#d4af37" strokeWidth="6" />;
+          return forceFlatten ? <circle cx={startOrig.x + outVec.x * fw} cy="0" r="10" fill="var(--brass)" /> : <line x1={startOrig.x} y1={startOrig.y} x2={startOrig.x + outVec.x*fw} y2={startOrig.y + outVec.y*fw} stroke="var(--brass)" strokeWidth="6" />;
       }
       if (engData.endStyle === 'RETURN_MITER') {
           const wx = startOrig.x + norm.x * (safeProj * S); const wy = startOrig.y + norm.y * (safeProj * S);
           let outVec = {x: -1, y: 0};
           if (engData.shape === 'STRAIGHT') outVec = isLeft ? {x: -1, y: 0} : {x: 1, y: 0};
           if (engData.shape === 'MITERED') { const dx = (isLeft?HS:HE).x - (isLeft?HC1:HC2).x; const dy = (isLeft?HS:HE).y - (isLeft?HC1:HC2).y; const len = Math.sqrt(dx*dx + dy*dy) || 1; outVec = {x: dx/len, y: dy/len}; }
-          if (forceFlatten) return <line x1={startOrig.x} y1="0" x2={startOrig.x} y2="-15" stroke="#d4af37" strokeWidth="8" />;
-          return ( <g><line x1={startOrig.x} y1={startOrig.y} x2={wx} y2={wy} stroke="#d4af37" strokeWidth="1.5" /><line x1={startOrig.x + outVec.x*2 - norm.x*2} y1={startOrig.y + outVec.y*2 - norm.y*2} x2={startOrig.x - outVec.x*2 + norm.x*2} y2={startOrig.y - outVec.y*2 + norm.y*2} stroke="#fff" strokeWidth="0.5" /></g> );
+          if (forceFlatten) return <line x1={startOrig.x} y1="0" x2={startOrig.x} y2="-15" stroke="var(--brass)" strokeWidth="8" />;
+          return ( <g><line x1={startOrig.x} y1={startOrig.y} x2={wx} y2={wy} stroke="var(--brass)" strokeWidth="1.5" /><line x1={startOrig.x + outVec.x*2 - norm.x*2} y1={startOrig.y + outVec.y*2 - norm.y*2} x2={startOrig.x - outVec.x*2 + norm.x*2} y2={startOrig.y - outVec.y*2 + norm.y*2} stroke="#fff" strokeWidth="0.5" /></g> );
       }
       if (engData.endStyle === 'RETURN_BEND') {
           const r = engData.returnRadius * S; const projPx = safeProj * S;
@@ -441,8 +395,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           if (engData.shape === 'MITERED') { const dx = (isLeft?HS:HE).x - (isLeft?HC1:HC2).x; const dy = (isLeft?HS:HE).y - (isLeft?HC1:HC2).y; const len = Math.sqrt(dx*dx + dy*dy) || 1; outVec = {x: dx/len, y: dy/len}; }
           if (engData.shape === 'BOW') { const rx = stopPoint.x - bowCX; const ry = stopPoint.y - bowCY; const rlen = Math.sqrt(rx*rx + ry*ry) || 1; outVec = isLeft ? {x: ry/rlen, y: -rx/rlen} : {x: -ry/rlen, y: rx/rlen}; }
           const arcCX = stopPoint.x + norm.x * r; const arcCY = stopPoint.y + norm.y * r; const arcEndX = arcCX + outVec.x * r; const arcEndY = arcCY + outVec.y * r; const sweep = isLeft ? 1 : 0; const wallX = arcEndX + norm.x * (projPx - r); const wallY = arcEndY + norm.y * (projPx - r);
-          if (forceFlatten) return <line x1={stopPoint.x} y1="0" x2={stopPoint.x} y2="-15" stroke="#d4af37" strokeWidth="8" />;
-          return ( <g><path d={`M ${stopPoint.x} ${stopPoint.y} A ${r} ${r} 0 0 ${sweep} ${arcEndX} ${arcEndY}`} fill="none" stroke="#d4af37" strokeWidth="1.5" />{projPx > r && <line x1={arcEndX} y1={arcEndY} x2={wallX} y2={wallY} stroke="#d4af37" strokeWidth="1.5" />}</g> );
+          if (forceFlatten) return <line x1={stopPoint.x} y1="0" x2={stopPoint.x} y2="-15" stroke="var(--brass)" strokeWidth="8" />;
+          return ( <g><path d={`M ${stopPoint.x} ${stopPoint.y} A ${r} ${r} 0 0 ${sweep} ${arcEndX} ${arcEndY}`} fill="none" stroke="var(--brass)" strokeWidth="1.5" />{projPx > r && <line x1={arcEndX} y1={arcEndY} x2={wallX} y2={wallY} stroke="var(--brass)" strokeWidth="1.5" />}</g> );
       }
       return null;
   };
@@ -451,9 +405,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       const eHSx = drawHS.x - perspectiveStretch.L; const eHEx = drawHE.x + perspectiveStretch.R;
       return (
           <g>
-              {engData.shape === 'STRAIGHT' && <line x1={eHSx} y1="0" x2={eHEx} y2="0" stroke="#d4af37" strokeWidth="8" />}
-              {engData.shape === 'MITERED' && ( <g><polyline points={`${eHSx},0 ${HC1.x},0 ${HC2.x},0 ${eHEx},0`} fill="none" stroke="#d4af37" strokeWidth="8" strokeLinejoin="miter" /><line x1={HC1.x} y1="-5" x2={HC1.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" /><line x1={HC2.x} y1="-5" x2={HC2.x} y2="5" stroke="#000" strokeWidth="1" opacity="0.5" /></g> )}
-              {engData.shape === 'BOW' && <line x1={eHSx} y1="0" x2={eHEx} y2="0" stroke="#d4af37" strokeWidth="8" />}
+              {engData.shape === 'STRAIGHT' && <line x1={eHSx} y1="0" x2={eHEx} y2="0" stroke="var(--brass)" strokeWidth="8" />}
+              {engData.shape === 'MITERED' && ( <g><polyline points={`${eHSx},0 ${HC1.x},0 ${HC2.x},0 ${eHEx},0`} fill="none" stroke="var(--brass)" strokeWidth="8" strokeLinejoin="miter" /><line x1={HC1.x} y1="-5" x2={HC1.x} y2="5" stroke="var(--ink)" strokeWidth="1" opacity="0.5" /><line x1={HC2.x} y1="-5" x2={HC2.x} y2="5" stroke="var(--ink)" strokeWidth="1" opacity="0.5" /></g> )}
+              {engData.shape === 'BOW' && <line x1={eHSx} y1="0" x2={eHEx} y2="0" stroke="var(--brass)" strokeWidth="8" />}
               
               {attachments.map(att => {
                   let seg = null;
@@ -479,18 +433,18 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                       <g key={att.id}>
                           {att.type === 'bracket' ? (
                               <g>
-                                  <circle cx={x} cy={y} r="4" fill="#28a745" />
-                                  <line x1={x} y1={y} x2={x + nX * (safeProj * S)} y2={y + nY * (safeProj * S)} stroke="#999" strokeWidth="2" />
+                                  <circle cx={x} cy={y} r="4" fill="var(--ink)" />
+                                  <line x1={x} y1={y} x2={x + nX * (safeProj * S)} y2={y + nY * (safeProj * S)} stroke="var(--ink-soft)" strokeWidth="2" />
                               </g>
                           ) : (
                               <g>
-                                  <line x1={x - nX*8 - nY*4} y1={y - nY*8 + nX*4} x2={x + nX*8 - nY*4} y2={y + nY*8 + nX*4} stroke="#d9534f" strokeWidth="2" />
-                                  <line x1={x - nX*8 + nY*4} y1={y - nY*8 - nX*4} x2={x + nX*8 + nY*4} y2={y + nY*8 - nX*4} stroke="#d9534f" strokeWidth="2" />
+                                  <line x1={x - nX*8 - nY*4} y1={y - nY*8 + nX*4} x2={x + nX*8 - nY*4} y2={y + nY*8 + nX*4} stroke="var(--ink)" strokeWidth="2" />
+                                  <line x1={x - nX*8 + nY*4} y1={y - nY*8 - nX*4} x2={x + nX*8 + nY*4} y2={y + nY*8 - nX*4} stroke="var(--ink)" strokeWidth="2" />
                               </g>
                           )}
-                          <line x1={x} y1={y-5} x2={x} y2={y-80} stroke={att.type==='bracket'?'#28a745':'#d9534f'} strokeWidth="1" strokeDasharray="2,2" />
+                          <line x1={x} y1={y-5} x2={x} y2={y-80} stroke={att.type==='bracket'?'var(--ink)':'var(--ink)'} strokeWidth="1" strokeDasharray="2,2" />
                           <foreignObject x={x - 55} y={y - 135} width="110" height="50" style={{ overflow: 'visible' }}>
-                              <div style={{ background: '#fff', border: `2px solid ${att.type==='bracket'?'#28a745':'#d9534f'}`, display: 'flex', flexDirection: 'column', padding: '4px', borderRadius: '4px', boxShadow: '0 2px 5px rgba(0,0,0,0.3)' }}><input type="number" value={att.distInches} step="0.125" onChange={(e) => handleUpdateAttachmentDist(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '12px', fontWeight: 'bold', textAlign: 'center', border: 'none', background: '#e9ecef', outline: 'none' }} /><span style={{ fontSize: '9px', color: '#666', textAlign: 'center', margin: '2px 0' }}>from {att.ref === 'START' ? seg.nA : seg.nB}</span><input type="text" placeholder="Notes..." value={att.note||''} onChange={(e) => handleUpdateAttachmentNote(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '10px', border: '1px solid #ccc', outline: 'none', textAlign: 'center' }} /></div>
+                              <div style={{ background: '#fff', border: `1px solid ${att.type==='bracket'?'var(--line)':'var(--line)'}`, display: 'flex', flexDirection: 'column', padding: '4px', borderRadius: '2px', boxShadow: '0 2px 5px rgba(0,0,0,0.05)' }}><input type="number" value={att.distInches} step="0.125" onChange={(e) => handleUpdateAttachmentDist(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '12px', fontFamily: 'var(--sans)', textAlign: 'center', border: 'none', background: 'var(--paper)', outline: 'none' }} /><span style={{ fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', color: 'var(--ink-soft)', textAlign: 'center', margin: '2px 0' }}>from {att.ref === 'START' ? seg.nA : seg.nB}</span><input type="text" placeholder="Notes..." value={att.note||''} onChange={(e) => handleUpdateAttachmentNote(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '10px', fontFamily: 'var(--sans)', border: '1px solid var(--line)', outline: 'none', textAlign: 'center' }} /></div>
                           </foreignObject>
                       </g>
                   );
@@ -505,13 +459,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       const ox = offsetDir.x * offsetDist; const oy = offsetDir.y * offsetDist; const sp = { x: pA.x + ox, y: pA.y + oy }; const ep = { x: pB.x + ox, y: pB.y + oy }; const mid = { x: (sp.x + ep.x)/2, y: (sp.y + ep.y)/2 };
       return (
           <g>
-              <line x1={pA.x + offsetDir.x*2} y1={pA.y + offsetDir.y*2} x2={sp.x + offsetDir.x*2} y2={sp.y + offsetDir.y*2} stroke="#ccc" strokeWidth="0.5" />
-              <line x1={pB.x + offsetDir.x*2} y1={pB.y + offsetDir.y*2} x2={ep.x + offsetDir.x*2} y2={ep.y + offsetDir.y*2} stroke="#ccc" strokeWidth="0.5" />
-              <line x1={sp.x} y1={sp.y} x2={ep.x} y2={ep.y} stroke="#007bff" strokeWidth="0.5" strokeDasharray="2,2" />
-              <line x1={sp.x - 2 + offsetDir.x*2} y1={sp.y - 2 + offsetDir.y*2} x2={sp.x + 2 - offsetDir.x*2} y2={sp.y + 2 - offsetDir.y*2} stroke="#007bff" strokeWidth="1" />
-              <line x1={ep.x - 2 + offsetDir.x*2} y1={ep.y - 2 + offsetDir.y*2} x2={ep.x + 2 - offsetDir.x*2} y2={ep.y + 2 - offsetDir.y*2} stroke="#007bff" strokeWidth="1" />
-              <rect x={mid.x - 35} y={mid.y - 9} width="70" height="18" fill="#f8f9fa" />
-              <text x={mid.x} y={mid.y + 4} fill="#007bff" fontSize="12" fontWeight="bold" textAnchor="middle">{label}</text>
+              <line x1={pA.x + offsetDir.x*2} y1={pA.y + offsetDir.y*2} x2={sp.x + offsetDir.x*2} y2={sp.y + offsetDir.y*2} stroke="var(--line)" strokeWidth="1" />
+              <line x1={pB.x + offsetDir.x*2} y1={pB.y + offsetDir.y*2} x2={ep.x + offsetDir.x*2} y2={ep.y + offsetDir.y*2} stroke="var(--line)" strokeWidth="1" />
+              <line x1={sp.x} y1={sp.y} x2={ep.x} y2={ep.y} stroke="var(--ink)" strokeWidth="0.5" strokeDasharray="2,2" />
+              <line x1={sp.x - 2 + offsetDir.x*2} y1={sp.y - 2 + offsetDir.y*2} x2={sp.x + 2 - offsetDir.x*2} y2={sp.y + 2 - offsetDir.y*2} stroke="var(--ink)" strokeWidth="1" />
+              <line x1={ep.x - 2 + offsetDir.x*2} y1={ep.y - 2 + offsetDir.y*2} x2={ep.x + 2 - offsetDir.x*2} y2={ep.y + 2 - offsetDir.y*2} stroke="var(--ink)" strokeWidth="1" />
+              <rect x={mid.x - 45} y={mid.y - 9} width="90" height="18" fill="var(--paper)" />
+              <text x={mid.x} y={mid.y + 4} fill="var(--ink)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">{label}</text>
           </g>
       );
   };
@@ -618,7 +572,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
     if (!config || !isCalibrated) return;
     const realWidthInches = config.specs?.w2 || config.specs?.width || 80;
     const itemWidthPx = realWidthInches * pixelsPerInch; const itemHeightPx = 6 * pixelsPerInch;
-    setPlacedItems([...placedItems, { id: `PLACED-${Date.now()}`, configId: config.id, name: config.jobName || config.sidemark || config.id, x: 500 - itemWidthPx/2, y: 400 - itemHeightPx/2, width: itemWidthPx, height: itemHeightPx, color: '#007bff', label: config.sidemark || "Configured Assembly", realWidth: realWidthInches }]);
+    setPlacedItems([...placedItems, { id: `PLACED-${Date.now()}`, configId: config.id, name: config.jobName || config.sidemark || config.id, x: 500 - itemWidthPx/2, y: 400 - itemHeightPx/2, width: itemWidthPx, height: itemHeightPx, color: 'var(--ink)', label: config.sidemark || "Configured Assembly", realWidth: realWidthInches }]);
     setVisualTool("pan"); 
   };
 
@@ -643,11 +597,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       setIsPushingToCPQ(true);
       const draftId = `QUOTE-${Date.now()}`;
 
-      // Snapshot the drawing SVG to pass to the CPQ cart
       let capturedSvg = "";
       if (svgRef.current) {
           const clone = svgRef.current.cloneNode(true);
-          // Set a white background for clean PDF rendering later
           clone.style.backgroundColor = "#ffffff";
           capturedSvg = new XMLSerializer().serializeToString(clone);
       }
@@ -678,7 +630,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   pole1,
                   pole2,
                   pole3,
-                  svgString: capturedSvg // Contains the visual blueprint
+                  svgString: capturedSvg 
               },
               ...dynamicConfigParams
           }, 
@@ -691,28 +643,37 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       finally { setIsPushingToCPQ(false); }
   };
 
+  const fieldStyle = { width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' };
+  const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
+  const btnStyle = { padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' };
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh', overflow: 'hidden' }}>
       
-      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
-        <div><h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>9. Client Vision System</h2><span style={{ fontSize: '0.7rem', color: '#666' }}>DRAPERY HARDWARE ENGINE</span></div>
-        <div style={{ display: 'flex', gap: '10px', background: '#eee', padding: '5px', border: '2px solid #000' }}>
-          <button onClick={() => { setViewMode('VISUAL'); setShowQuotePanel(false); }} style={{ padding: '10px 20px', background: viewMode === 'VISUAL' && !showQuotePanel ? '#007bff' : 'transparent', color: viewMode === 'VISUAL' && !showQuotePanel ? '#fff' : '#666', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>🖼️ VISUAL OVERLAY</button>
-          <button onClick={() => { setViewMode('ENGINEERING'); setShowQuotePanel(false); }} style={{ padding: '10px 20px', background: viewMode === 'ENGINEERING' && !showQuotePanel ? '#d9534f' : 'transparent', color: viewMode === 'ENGINEERING' && !showQuotePanel ? '#fff' : '#666', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>📐 TOP-DOWN BOM</button>
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+        <div>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Drapery Hardware Engine</span>
+            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Client Vision System</h2>
         </div>
-        <button onClick={() => setShowQuotePanel(!showQuotePanel)} style={{ padding: '10px 20px', background: showQuotePanel ? '#000' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', borderRadius: '4px', boxShadow: '3px 3px 0 rgba(0,0,0,0.2)' }}>{showQuotePanel ? "🔙 BACK TO DRAWING" : "💲 CONFIGURE & QUOTE ➔"}</button>
+        <div style={{ display: 'flex', gap: '16px', background: 'var(--paper-2)', padding: '8px', border: '1px solid var(--line)', borderRadius: '2px' }}>
+          <button onClick={() => { setViewMode('VISUAL'); setShowQuotePanel(false); }} style={{ padding: '10px 20px', background: viewMode === 'VISUAL' && !showQuotePanel ? 'var(--ink)' : 'transparent', color: viewMode === 'VISUAL' && !showQuotePanel ? '#fff' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}>Visual Overlay</button>
+          <button onClick={() => { setViewMode('ENGINEERING'); setShowQuotePanel(false); }} style={{ padding: '10px 20px', background: viewMode === 'ENGINEERING' && !showQuotePanel ? 'var(--ink)' : 'transparent', color: viewMode === 'ENGINEERING' && !showQuotePanel ? '#fff' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}>Top-Down BOM</button>
+        </div>
+        <button onClick={() => setShowQuotePanel(!showQuotePanel)} style={{ padding: '16px 24px', background: showQuotePanel ? 'var(--ink)' : 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
+            {showQuotePanel ? "Back to Drawing" : "Configure & Quote"}
+        </button>
       </div>
 
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'stretch', flex: 1 }}>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1 }}>
           
           {!showQuotePanel && (
-            <div style={{ width: viewMode === 'VISUAL' ? '340px' : '480px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            <div style={{ width: viewMode === 'VISUAL' ? '340px' : '480px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '24px' }}>
                 
                 {viewMode === 'ENGINEERING' && (
-                    <div style={{ background: '#e6f2ff', border: '2px solid #007bff' }}>
-                        <div style={{ padding: '10px', background: '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>1. SYSTEM ARCHITECTURE (CPQ FLOW)</div>
-                        <div style={{ padding: '15px' }}>
-                            <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '12px', border: '2px solid #007bff', fontWeight: 'bold', fontSize: '1rem' }}>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>System Architecture (CPQ Flow)</div>
+                        <div style={{ padding: '24px' }}>
+                            <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); }} style={fieldStyle}>
                                 <option value="">-- SELECT MATCHING CPQ FLOW --</option>
                                 {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                             </select>
@@ -722,123 +683,149 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
                 {viewMode === 'VISUAL' ? (
                   <>
-                    <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column' }}>
-                        <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>FILE UPLOAD</div>
-                        <div style={{ padding: '15px' }}><input type="file" accept="image/png, image/jpeg" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} /><button onClick={() => fileInputRef.current.click()} style={{ width: '100%', padding: '10px', background: '#fff', color: '#007bff', fontWeight: 'bold', border: '2px dashed #007bff', cursor: 'pointer' }}>📂 SELECT FRONT ELEVATION</button></div>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>File Upload</div>
+                        <div style={{ padding: '24px' }}>
+                            <input type="file" accept="image/png, image/jpeg" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} />
+                            <button onClick={() => fileInputRef.current.click()} style={{ width: '100%', padding: '16px', background: 'transparent', color: 'var(--ink)', border: '1px dashed var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Select Front Elevation</button>
+                        </div>
                     </div>
-                    <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', opacity: activeBg ? 1 : 0.5 }}>
-                        <div style={{ padding: '10px', background: visualTool === 'calibrate' ? '#007bff' : '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>CALIBRATE SCALE</div>
-                        <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            <div><label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>KNOWN DIMENSION (INCHES):</label><input type="number" value={realInches} onChange={(e) => { const val = e.target.value; setRealInches(val); if(calPoints.length===2 && parseFloat(val) > 0) { setPixelsPerInch(Math.sqrt(Math.pow(calPoints[1].x - calPoints[0].x, 2) + Math.pow(calPoints[1].y - calPoints[0].y, 2)) / parseFloat(val)); setEngData(prev => ({ ...prev, w2: val })); } }} disabled={!activeBg} style={{ width: '100%', padding: '8px', border: '2px solid #000', fontWeight: 'bold', fontSize: '1rem', background: activeBg ? '#fff' : '#eee', boxSizing: 'border-box' }} /></div>
-                            <div style={{ display: 'flex', gap: '5px' }}>
-                                <button onClick={() => setVisualTool("calibrate")} disabled={!activeBg} style={{ flex: 1, padding: '10px', background: visualTool === "calibrate" ? '#007bff' : '#eee', color: visualTool === "calibrate" ? '#fff' : '#000', fontWeight: 'bold', border: '2px solid #000', cursor: activeBg ? 'pointer' : 'not-allowed' }}>📏 {calPoints.length === 1 ? "CLICK POINT 2..." : (isCalibrated ? "RE-DRAW LINE" : "DRAW LINE")}</button>
-                                {calPoints.length > 0 && <button onClick={() => { setCalPoints([]); setIsCalibrated(false); setVisualTool("calibrate"); }} style={{ padding: '10px', background: '#d9534f', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer' }} title="Clear Calibration">✖️</button>}
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', opacity: activeBg ? 1 : 0.5, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '16px 20px', background: visualTool === 'calibrate' ? 'var(--ink)' : 'var(--paper-2)', color: visualTool === 'calibrate' ? '#fff' : 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>Calibrate Scale</div>
+                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            <div>
+                                <label style={labelStyle}>Known Dimension (Inches)</label>
+                                <input type="number" value={realInches} onChange={(e) => { const val = e.target.value; setRealInches(val); if(calPoints.length===2 && parseFloat(val) > 0) { setPixelsPerInch(Math.sqrt(Math.pow(calPoints[1].x - calPoints[0].x, 2) + Math.pow(calPoints[1].y - calPoints[0].y, 2)) / parseFloat(val)); setEngData(prev => ({ ...prev, w2: val })); } }} disabled={!activeBg} style={{ ...fieldStyle, background: activeBg ? '#fff' : 'var(--paper)' }} />
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button onClick={() => setVisualTool("calibrate")} disabled={!activeBg} style={{ flex: 1, padding: '12px', background: visualTool === "calibrate" ? 'var(--ink)' : 'var(--paper-2)', color: visualTool === "calibrate" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: activeBg ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                    {calPoints.length === 1 ? "Click Point 2..." : (isCalibrated ? "Re-draw Line" : "Draw Line")}
+                                </button>
+                                {calPoints.length > 0 && <button onClick={() => { setCalPoints([]); setIsCalibrated(false); setVisualTool("calibrate"); }} style={{ padding: '12px 16px', background: 'transparent', color: '#d9534f', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }} title="Clear Calibration">Clear</button>}
                             </div>
                         </div>
                     </div>
-                    <div style={{ background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', opacity: isCalibrated ? 1 : 0.5 }}>
-                        <div style={{ padding: '10px', background: '#28a745', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>DROP CPQ CONFIG</div>
-                        <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            <select value={selectedConfigId} onChange={(e) => setSelectedConfigId(e.target.value)} disabled={!isCalibrated || visionConfigs.length === 0} style={{ width: '100%', padding: '10px', border: '2px solid #000', fontWeight: 'bold', background: isCalibrated ? '#fff' : '#eee', boxSizing: 'border-box' }}>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', opacity: isCalibrated ? 1 : 0.5, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>Drop CPQ Config</div>
+                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            <select value={selectedConfigId} onChange={(e) => setSelectedConfigId(e.target.value)} disabled={!isCalibrated || visionConfigs.length === 0} style={{ ...fieldStyle, background: isCalibrated ? '#fff' : 'var(--paper)' }}>
                                 {visionConfigs.length === 0 && <option value="">No configs found.</option>}
                                 {visionConfigs.map(cfg => <option key={cfg.id} value={cfg.id}>{cfg.jobName || cfg.sidemark || cfg.id}</option>)}
                             </select>
-                            <button onClick={handleDropConfig} disabled={!isCalibrated || visionConfigs.length === 0} style={{ width: '100%', padding: '12px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: isCalibrated && visionConfigs.length > 0 ? 'pointer' : 'not-allowed', opacity: isCalibrated && visionConfigs.length > 0 ? 1 : 0.5 }}>➕ PLACE IN ROOM</button>
+                            <button onClick={handleDropConfig} disabled={!isCalibrated || visionConfigs.length === 0} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: isCalibrated && visionConfigs.length > 0 ? 'pointer' : 'not-allowed', opacity: isCalibrated && visionConfigs.length > 0 ? 1 : 0.5, fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Place In Room</button>
                         </div>
                     </div>
                     {activePlacedId && (
-                        <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', borderBottom: '1px solid #eee', paddingBottom: '4px' }}>NUDGE POSITION COCKPIT</div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '5px', width: '150px', margin: '0 auto' }}>
-                                <div></div><button onClick={() => moveItem('up')} style={{ padding: '8px', cursor: 'pointer', fontWeight: 'bold' }}>▲</button><div></div>
-                                <button onClick={() => moveItem('left')} style={{ padding: '8px', cursor: 'pointer', fontWeight: 'bold' }}>◀</button>
-                                <button onClick={() => { setVisScale(1.0); setVisPan({x:0, y:0}); }} style={{ padding: '8px', fontSize: '0.6rem', cursor: 'pointer' }}>CTR</button>
-                                <button onClick={() => moveItem('right')} style={{ padding: '8px', cursor: 'pointer', fontWeight: 'bold' }}>▶</button>
-                                <div></div><button onClick={() => moveItem('down')} style={{ padding: '8px', cursor: 'pointer', fontWeight: 'bold' }}>▼</button><div></div>
+                        <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)', paddingBottom: '8px' }}>Nudge Position Cockpit</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', width: '180px', margin: '0 auto' }}>
+                                <div></div><button onClick={() => moveItem('up')} style={{ padding: '12px', cursor: 'pointer', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)' }}>▲</button><div></div>
+                                <button onClick={() => moveItem('left')} style={{ padding: '12px', cursor: 'pointer', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)' }}>◀</button>
+                                <button onClick={() => { setVisScale(1.0); setVisPan({x:0, y:0}); }} style={{ padding: '12px', cursor: 'pointer', background: 'var(--paper)', border: '1px solid var(--line)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>CTR</button>
+                                <button onClick={() => moveItem('right')} style={{ padding: '12px', cursor: 'pointer', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)' }}>▶</button>
+                                <div></div><button onClick={() => moveItem('down')} style={{ padding: '12px', cursor: 'pointer', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)' }}>▼</button><div></div>
                             </div>
                             {activePlacedId === 'ENG_OVERLAY' && (
-                                <div style={{ marginTop: '10px', borderTop: '1px solid #eee', paddingTop: '10px' }}>
-                                    <div style={{ fontSize: '0.65rem', fontWeight: 'bold', marginBottom: '5px', color: '#007bff' }}>PERSPECTIVE TWEAKS (VISUAL ONLY)</div>
-                                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}><span style={{ fontSize: '0.6rem', width: '40px' }}>L-POLE:</span><input type="range" min="-150" max="150" value={perspectiveStretch.L} onChange={(e) => setPerspectiveStretch(prev => ({...prev, L: parseInt(e.target.value)}))} style={{ flex: 1 }} /></div>
-                                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center', marginTop: '5px' }}><span style={{ fontSize: '0.6rem', width: '40px' }}>R-POLE:</span><input type="range" min="-150" max="150" value={perspectiveStretch.R} onChange={(e) => setPerspectiveStretch(prev => ({...prev, R: parseInt(e.target.value)}))} style={{ flex: 1 }} /></div>
+                                <div style={{ marginTop: '16px', borderTop: '1px solid var(--line)', paddingTop: '16px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', marginBottom: '12px' }}>Perspective Tweaks (Visual Only)</div>
+                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', width: '40px' }}>L-POLE:</span><input type="range" min="-150" max="150" value={perspectiveStretch.L} onChange={(e) => setPerspectiveStretch(prev => ({...prev, L: parseInt(e.target.value)}))} style={{ flex: 1 }} /></div>
+                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '12px' }}><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', width: '40px' }}>R-POLE:</span><input type="range" min="-150" max="150" value={perspectiveStretch.R} onChange={(e) => setPerspectiveStretch(prev => ({...prev, R: parseInt(e.target.value)}))} style={{ flex: 1 }} /></div>
                                 </div>
                             )}
-                            <button onClick={() => removeItem(activePlacedId)} style={{ width: '100%', padding: '6px', background: '#fff', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.7rem', marginTop: '5px' }}>REMOVE SELECTED</button>
+                            <button onClick={() => removeItem(activePlacedId)} style={{ width: '100%', padding: '12px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '12px', transition: 'all 0.2s' }}>Remove Selected</button>
                         </div>
                     )}
                   </>
                 ) : (
                   <>
-                    <div style={{ background: '#fff', border: '2px solid #000' }}>
-                        <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
-                            <span>2. SPATIAL PARAMETERS</span>
-                            <select value={engData.inputMode} onChange={e => setEngData({...engData, inputMode: e.target.value})} style={{ fontSize: '0.65rem', background: '#444', color: '#fff', border: 'none', outline: 'none' }}><option value="ORDERING">USE ORDERING LENGTH (POLE)</option><option value="WALL">USE WALL DIMENSIONS</option></select>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--line)' }}>
+                            <span>2. Spatial Parameters</span>
+                            <select value={engData.inputMode} onChange={e => setEngData({...engData, inputMode: e.target.value})} style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', background: 'transparent', color: 'var(--ink)', border: 'none', outline: 'none', cursor: 'pointer' }}>
+                                <option value="ORDERING">Use Ordering Length (Pole)</option>
+                                <option value="WALL">Use Wall Dimensions</option>
+                            </select>
                         </div>
-                        <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            <div style={{ display: 'flex', gap: '10px' }}>
+                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                            <div style={{ display: 'flex', gap: '20px' }}>
                                 <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BAY CONFIGURATION:</label>
-                                    <select value={engData.shape} onChange={e => setEngData({...engData, shape: e.target.value})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }}><option value="STRAIGHT">STRAIGHT POLE</option><option value="MITERED">MITERED BAY (3-SEG)</option><option value="BOW">CURVED BOW</option></select>
+                                    <label style={labelStyle}>Bay Configuration</label>
+                                    <select value={engData.shape} onChange={e => setEngData({...engData, shape: e.target.value})} style={fieldStyle}>
+                                        <option value="STRAIGHT">Straight Pole</option>
+                                        <option value="MITERED">Mitered Bay (3-Seg)</option>
+                                        <option value="BOW">Curved Bow</option>
+                                    </select>
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d9534f' }}>MOUNT (WALL/WALL):</label>
+                                    <label style={labelStyle}>Mount (Wall/Wall)</label>
                                     {engData.shape === 'STRAIGHT' ? (
-                                        <div style={{ display: 'flex', gap: '5px' }}>
-                                            <select value={engData.mountLeft} onChange={e => setEngData({...engData, mountLeft: e.target.value})} style={{ flex: 1, padding: '6px', border: '1px solid #d9534f' }}><option value="OPEN">L: OPEN</option><option value="INSIDE">L: INSIDE</option><option value="CEILING">L: CEILING</option></select>
-                                            <select value={engData.mountRight} onChange={e => setEngData({...engData, mountRight: e.target.value})} style={{ flex: 1, padding: '6px', border: '1px solid #d9534f' }}><option value="OPEN">R: OPEN</option><option value="INSIDE">R: INSIDE</option><option value="CEILING">R: CEILING</option></select>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <select value={engData.mountLeft} onChange={e => setEngData({...engData, mountLeft: e.target.value})} style={fieldStyle}>
+                                                <option value="OPEN">L: Open</option><option value="INSIDE">L: Inside</option><option value="CEILING">L: Ceiling</option>
+                                            </select>
+                                            <select value={engData.mountRight} onChange={e => setEngData({...engData, mountRight: e.target.value})} style={fieldStyle}>
+                                                <option value="OPEN">R: Open</option><option value="INSIDE">R: Inside</option><option value="CEILING">R: Ceiling</option>
+                                            </select>
                                         </div>
                                     ) : (
-                                        <select value={engData.mountOuter} onChange={e => setEngData({...engData, mountOuter: e.target.value})} style={{ width: '100%', padding: '6px', border: '1px solid #d9534f', fontWeight: 'bold' }}><option value="OPEN">OPEN ENDS (WALL)</option><option value="INSIDE">INSIDE (WALL TO WALL)</option><option value="CEILING">CEILING MOUNT</option></select>
+                                        <select value={engData.mountOuter} onChange={e => setEngData({...engData, mountOuter: e.target.value})} style={fieldStyle}>
+                                            <option value="OPEN">Open Ends (Wall)</option><option value="INSIDE">Inside (Wall to Wall)</option><option value="CEILING">Ceiling Mount</option>
+                                        </select>
                                     )}
                                 </div>
                             </div>
-                            <div style={{ display: 'flex', gap: '5px' }}>
-                                {engData.shape === 'MITERED' && <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>{engData.inputMode === 'ORDERING' ? 'L ORDERING (IN):' : 'LEFT WALL (IN):'}</label><input type="number" value={engData.w1} onChange={e => setEngData({...engData, w1: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>}
-                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>{engData.shape === 'BOW' ? 'CHORD W:' : (engData.inputMode === 'ORDERING' ? 'C ORDERING (IN):' : 'CENTER WALL (IN):')}</label><input type="number" value={engData.w2} onChange={e => setEngData({...engData, w2: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
-                                {engData.shape === 'MITERED' && <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>{engData.inputMode === 'ORDERING' ? 'R ORDERING (IN):' : 'RIGHT WALL (IN):'}</label><input type="number" value={engData.w3} onChange={e => setEngData({...engData, w3: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>}
-                                {engData.shape === 'BOW' && <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>BOW DEPTH:</label><input type="number" value={engData.bowDepth} onChange={e => setEngData({...engData, bowDepth: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>}
+                            <div style={{ display: 'flex', gap: '16px' }}>
+                                {engData.shape === 'MITERED' && <div style={{ flex: 1 }}><label style={labelStyle}>{engData.inputMode === 'ORDERING' ? 'L Ordering (in)' : 'Left Wall (in)'}</label><input type="number" value={engData.w1} onChange={e => setEngData({...engData, w1: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>}
+                                <div style={{ flex: 1 }}><label style={labelStyle}>{engData.shape === 'BOW' ? 'Chord W' : (engData.inputMode === 'ORDERING' ? 'C Ordering (in)' : 'Center Wall (in)')}</label><input type="number" value={engData.w2} onChange={e => setEngData({...engData, w2: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                {engData.shape === 'MITERED' && <div style={{ flex: 1 }}><label style={labelStyle}>{engData.inputMode === 'ORDERING' ? 'R Ordering (in)' : 'Right Wall (in)'}</label><input type="number" value={engData.w3} onChange={e => setEngData({...engData, w3: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>}
+                                {engData.shape === 'BOW' && <div style={{ flex: 1 }}><label style={labelStyle}>Bow Depth</label><input type="number" value={engData.bowDepth} onChange={e => setEngData({...engData, bowDepth: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>}
                             </div>
                             {engData.shape === 'MITERED' && (
-                                <div style={{ display: 'flex', gap: '5px' }}>
-                                    <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>L ANGLE (DEG):</label><input type="number" value={engData.a1} onChange={e => setEngData({...engData, a1: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
-                                    <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>R ANGLE (DEG):</label><input type="number" value={engData.a2} onChange={e => setEngData({...engData, a2: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                                <div style={{ display: 'flex', gap: '16px' }}>
+                                    <div style={{ flex: 1 }}><label style={labelStyle}>L Angle (deg)</label><input type="number" value={engData.a1} onChange={e => setEngData({...engData, a1: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                    <div style={{ flex: 1 }}><label style={labelStyle}>R Angle (deg)</label><input type="number" value={engData.a2} onChange={e => setEngData({...engData, a2: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
                                 </div>
                             )}
                         </div>
                     </div>
-                    <div style={{ background: '#fff', border: '2px solid #000' }}>
-                        <div style={{ padding: '10px', background: '#000', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem' }}>3. FABRICATION SETTINGS</div>
-                        <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            <div style={{ display: 'flex', gap: '10px' }}>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>3. Fabrication Settings</div>
+                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                            <div style={{ display: 'flex', gap: '16px' }}>
                                 <div style={{ flex: 1.5 }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d4af37' }}>SELECT BRACKET (AUTO-SYNCS DIMS):</label>
+                                    <label style={labelStyle}>Select Bracket (Auto-Syncs Dims)</label>
                                     <select 
                                         value={engData.bracketId || ''} 
                                         onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))}
-                                        style={{ width: '100%', padding: '6px', border: '2px solid #d4af37', fontWeight: 'bold', boxSizing: 'border-box' }}
+                                        style={fieldStyle}
                                     >
-                                        <option value="">{quoteFlowId ? '-- SELECT BRACKET --' : '-- SELECT CPQ FLOW FIRST --'}</option>
+                                        <option value="">{quoteFlowId ? '-- Select Bracket --' : '-- Select CPQ Flow First --'}</option>
                                         {allBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
                                     </select>
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROJECTION (IN):</label>
-                                    <input type="number" step="0.125" value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                                    <label style={labelStyle}>Projection (in)</label>
+                                    <input type="number" step="0.125" value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={fieldStyle} />
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>END STYLE:</label>
-                                    <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }}><option value="FLUSH">FLUSH CUT</option><option value="FINIAL">FINIALS</option><option value="RETURN_MITER">MITER RETURN</option><option value="RETURN_BEND">BENT RETURN (FR)</option></select>
+                                    <label style={labelStyle}>End Style</label>
+                                    <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={fieldStyle}>
+                                        <option value="FLUSH">Flush Cut</option>
+                                        <option value="FINIAL">Finials</option>
+                                        <option value="RETURN_MITER">Miter Return</option>
+                                        <option value="RETURN_BEND">Bent Return (FR)</option>
+                                    </select>
                                 </div>
                             </div>
-                            <div style={{ display: 'flex', gap: '5px', background: '#f9f9f9', padding: '10px', border: '1px solid #eee' }}>
-                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>BRACKET W. (IN):</label><input type="number" step="0.125" value={engData.bracketW} onChange={e => setEngData({...engData, bracketW: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
-                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>BRACKET THICK. (IN):</label><input type="number" step="0.125" value={engData.bracketThickness} onChange={e => setEngData({...engData, bracketThickness: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
-                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold' }}>POLE DIA. (IN):</label><input type="number" step="0.125" value={engData.poleDiameter} onChange={e => setEngData({...engData, poleDiameter: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }} /></div>
+                            <div style={{ display: 'flex', gap: '16px', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Bracket W. (in)</label><input type="number" step="0.125" value={engData.bracketW} onChange={e => setEngData({...engData, bracketW: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Bracket Thick. (in)</label><input type="number" step="0.125" value={engData.bracketThickness} onChange={e => setEngData({...engData, bracketThickness: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Pole Dia. (in)</label><input type="number" step="0.125" value={engData.poleDiameter} onChange={e => setEngData({...engData, poleDiameter: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
                             </div>
-                            <div style={{ display: 'flex', gap: '10px', background: '#f9f9f9', padding: '10px', border: '1px solid #eee' }}>
-                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#d9534f' }}>BEND RADIUS (IN):</label><input type="number" step="0.125" value={engData.returnRadius} onChange={e => setEngData({...engData, returnRadius: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ width: '100%', padding: '6px', border: '1px solid #d9534f', boxSizing: 'border-box', opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
-                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#d9534f' }}>GRIP ALLOWANCE (IN):</label><input type="number" step="0.125" value={engData.gripAllowance} onChange={e => setEngData({...engData, gripAllowance: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ width: '100%', padding: '6px', border: '1px solid #d9534f', boxSizing: 'border-box', opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
-                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.6rem', fontWeight: 'bold', color: '#888' }}>IM DEDUCT. (IN):</label><input type="number" step="0.125" value={engData.insideMountDeduct} onChange={e => setEngData({...engData, insideMountDeduct: parseFloat(e.target.value)||0})} style={{ width: '100%', padding: '6px', border: '1px solid #888', boxSizing: 'border-box' }} /></div>
+                            <div style={{ display: 'flex', gap: '16px', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Bend Radius (in)</label><input type="number" step="0.125" value={engData.returnRadius} onChange={e => setEngData({...engData, returnRadius: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Grip Allowance (in)</label><input type="number" step="0.125" value={engData.gripAllowance} onChange={e => setEngData({...engData, gripAllowance: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>IM Deduct. (in)</label><input type="number" step="0.125" value={engData.insideMountDeduct} onChange={e => setEngData({...engData, insideMountDeduct: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
                             </div>
                         </div>
                     </div>
@@ -847,31 +834,35 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
             </div>
           )}
 
-          <div style={{ flex: showQuotePanel ? 2 : 1, display: 'flex', flexDirection: 'column', background: '#fff', border: '2px solid #000', boxShadow: '10px 10px 0 #000', minHeight: '600px' }}>
+          <div style={{ flex: showQuotePanel ? 2 : 1, display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', minHeight: '600px', borderRadius: '2px', overflow: 'hidden' }}>
               
               {viewMode === 'VISUAL' ? (
-                  <div style={{ padding: '10px 15px', background: '#f4f4f4', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <button onClick={() => setVisualTool("pan")} style={{ padding: '6px 12px', background: visualTool === "pan" ? '#000' : '#fff', color: visualTool === "pan" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.75rem' }}>✋ PAN VIEWPORT</button>
-                    <div style={{ display: 'flex', gap: '5px' }}><button onClick={() => setVisScale(s => Math.min(s + 0.25, 4))} style={{ padding: '4px 10px', fontWeight: 'bold', cursor: 'pointer' }}>➕</button><button onClick={() => setVisScale(s => Math.max(s - 0.25, 0.5))} style={{ padding: '4px 10px', fontWeight: 'bold', cursor: 'pointer' }}>➖</button><button onClick={() => { setVisScale(1); setVisPan({x:0, y:0}); }} style={{ padding: '4px 10px', cursor: 'pointer', fontSize: '0.7rem' }}>RESET</button></div>
+                  <div style={{ padding: '16px 20px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <button onClick={() => setVisualTool("pan")} style={{ padding: '8px 16px', background: visualTool === "pan" ? 'var(--ink)' : '#fff', color: visualTool === "pan" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', letterSpacing: '.1em', transition: 'all 0.2s' }}>Pan Viewport</button>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={() => setVisScale(s => Math.min(s + 0.25, 4))} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>➕</button>
+                        <button onClick={() => setVisScale(s => Math.max(s - 0.25, 0.5))} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>➖</button>
+                        <button onClick={() => { setVisScale(1); setVisPan({x:0, y:0}); }} style={{ padding: '8px 16px', background: 'var(--paper)', border: '1px solid var(--line)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', letterSpacing: '.1em' }}>Reset</button>
+                    </div>
                   </div>
               ) : (
-                  <div style={{ padding: '10px 15px', background: '#e9ecef', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>JOB:</label><input type="text" value={engData.jobName} onChange={e => setEngData({...engData, jobName: e.target.value})} style={{ width: '120px', padding: '4px', fontSize: '0.7rem', border: '1px solid #ccc' }} /></div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>SIDEMARK:</label><input type="text" value={engData.sidemark} onChange={e => setEngData({...engData, sidemark: e.target.value})} style={{ width: '120px', padding: '4px', fontSize: '0.7rem', border: '1px solid #ccc' }} /></div>
+                  <div style={{ padding: '16px 20px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+                    <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Job:</label><input type="text" value={engData.jobName} onChange={e => setEngData({...engData, jobName: e.target.value})} style={{ width: '150px', padding: '8px', fontFamily: 'var(--sans)', fontSize: '0.9rem', border: '1px solid var(--line)', outline: 'none' }} /></div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Sidemark:</label><input type="text" value={engData.sidemark} onChange={e => setEngData({...engData, sidemark: e.target.value})} style={{ width: '150px', padding: '8px', fontFamily: 'var(--sans)', fontSize: '0.9rem', border: '1px solid var(--line)', outline: 'none' }} /></div>
                     </div>
-                    <div style={{ display: 'flex', gap: '5px' }}>
-                        <button onClick={() => setEngTool("pan")} style={{ padding: '4px 8px', background: engTool === "pan" ? '#000' : '#fff', color: engTool === "pan" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✋ PAN</button>
-                        <button onClick={() => setEngTool("bracket")} style={{ padding: '4px 8px', background: engTool === "bracket" ? '#28a745' : '#fff', color: engTool === "bracket" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📍 BRACKET</button>
-                        <button onClick={() => setEngTool("splice")} style={{ padding: '4px 8px', background: engTool === "splice" ? '#d9534f' : '#fff', color: engTool === "splice" ? '#fff' : '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>✂️ SPLICE</button>
-                        <button onClick={() => setEngTool("note")} style={{ padding: '4px 8px', background: engTool === "note" ? '#ffc107' : '#fff', color: '#000', border: '1px solid #000', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>📝 NOTE</button>
-                        <button onClick={() => {setAttachments([]); setShopNotes([]);}} style={{ padding: '4px 8px', background: '#fff', border: '1px solid #ccc', fontSize: '0.7rem', cursor: 'pointer' }}>CLEAR</button>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={() => setEngTool("pan")} style={{ padding: '8px 16px', background: engTool === "pan" ? 'var(--ink)' : '#fff', color: engTool === "pan" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Pan</button>
+                        <button onClick={() => setEngTool("bracket")} style={{ padding: '8px 16px', background: engTool === "bracket" ? 'var(--ink)' : '#fff', color: engTool === "bracket" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Bracket</button>
+                        <button onClick={() => setEngTool("splice")} style={{ padding: '8px 16px', background: engTool === "splice" ? 'var(--ink)' : '#fff', color: engTool === "splice" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Splice</button>
+                        <button onClick={() => setEngTool("note")} style={{ padding: '8px 16px', background: engTool === "note" ? 'var(--ink)' : '#fff', color: engTool === "note" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Note</button>
+                        <button onClick={() => {setAttachments([]); setShopNotes([]);}} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--line)', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Clear</button>
                     </div>
                   </div>
               )}
 
-              <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: viewMode === 'VISUAL' ? '#1e1e1e' : '#f8f9fa', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {viewMode === 'VISUAL' && !activeBg && <div style={{ color: '#666', textAlign: 'center' }}><div style={{ fontSize: '3rem', marginBottom: '10px' }}>🖼️</div><h3 style={{ margin: 0, color: '#999' }}>NO PLAN LOADED</h3></div>}
+              <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: viewMode === 'VISUAL' ? 'var(--dark)' : 'var(--paper)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {viewMode === 'VISUAL' && !activeBg && <div style={{ color: 'var(--ink-soft)', textAlign: 'center' }}><div style={{ fontSize: '3rem', marginBottom: '16px', opacity: 0.5 }}>🖼️</div><h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>No Plan Loaded</h3></div>}
 
                   {(viewMode === 'ENGINEERING' || activeBg) && (
                       <svg ref={svgRef} viewBox="0 0 1000 600" style={{ width: '100%', height: '100%', display: 'block', cursor: (viewMode==='VISUAL'?visualTool:engTool) === 'pan' ? (isPanning?'grabbing':'grab') : 'crosshair', touchAction: 'none' }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
@@ -880,13 +871,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                               {viewMode === 'VISUAL' && activeBg && (
                                   <g>
                                       <image href={activeBg.url} x="0" y="0" width="1000" height="600" preserveAspectRatio="xMidYMid slice" opacity="0.85" />
-                                      {calPoints.map((pt, i) => <g key={`cal-${i}`} transform={`translate(${pt.x}, ${pt.y})`}><circle cx="0" cy="0" r="1.5" fill="#007bff" /><line x1="-6" y1="0" x2="-2" y2="0" stroke="#007bff" strokeWidth="1.5" /><line x1="2" y1="0" x2="6" y2="0" stroke="#007bff" strokeWidth="1.5" /><line x1="0" y1="-6" x2="0" y2="-2" stroke="#007bff" strokeWidth="1.5" /><line x1="0" y1="2" x2="0" y2="6" stroke="#007bff" strokeWidth="1.5" /></g>)}
+                                      {calPoints.map((pt, i) => <g key={`cal-${i}`} transform={`translate(${pt.x}, ${pt.y})`}><circle cx="0" cy="0" r="1.5" fill="var(--ink)" /><line x1="-6" y1="0" x2="-2" y2="0" stroke="var(--ink)" strokeWidth="1.5" /><line x1="2" y1="0" x2="6" y2="0" stroke="var(--ink)" strokeWidth="1.5" /><line x1="0" y1="-6" x2="0" y2="-2" stroke="var(--ink)" strokeWidth="1.5" /><line x1="0" y1="2" x2="0" y2="6" stroke="var(--ink)" strokeWidth="1.5" /></g>)}
                                       {calPoints.length === 2 && (() => {
                                           const midX = (calPoints[0].x + calPoints[1].x) / 2; const midY = (calPoints[0].y + calPoints[1].y) / 2;
                                           const dx = calPoints[1].x - calPoints[0].x; const dy = calPoints[1].y - calPoints[0].y;
                                           const len = Math.sqrt(dx * dx + dy * dy); const nx = -dy / len; const ny = dx / len;
                                           const offX = midX + nx * 40; const offY = midY + ny * 40;
-                                          return (<g><line x1={calPoints[0].x} y1={calPoints[0].y} x2={calPoints[1].x} y2={calPoints[1].y} stroke="#007bff" strokeWidth="2" strokeDasharray="3,3" /><line x1={midX} y1={midY} x2={offX} y2={offY} stroke="#007bff" strokeWidth="1.5" /><rect x={offX - 35} y={offY - 12} width="70" height="24" fill="#fff" stroke="#007bff" strokeWidth="1.5" /><text x={offX} y={offY + 4} fill="#000" fontSize="12" fontWeight="bold" textAnchor="middle">{realInches}" SPEC</text></g>);
+                                          return (<g><line x1={calPoints[0].x} y1={calPoints[0].y} x2={calPoints[1].x} y2={calPoints[1].y} stroke="var(--ink)" strokeWidth="2" strokeDasharray="3,3" /><line x1={midX} y1={midY} x2={offX} y2={offY} stroke="var(--ink)" strokeWidth="1.5" /><rect x={offX - 45} y={offY - 12} width="90" height="24" fill="#fff" stroke="var(--line)" strokeWidth="1" /><text x={offX} y={offY + 4} fill="var(--ink)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">{realInches}" SPEC</text></g>);
                                       })()}
                                       {showEngOverlay && (
                                           <g transform={`translate(${engOverlayPos.x}, ${engOverlayPos.y}) scale(${pixelsPerInch / S}) translate(-500, 0)`} onClick={(e) => { e.stopPropagation(); setActivePlacedId('ENG_OVERLAY'); }} style={{ cursor: 'move' }}>
@@ -898,11 +889,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                           const isSelected = item.id === activePlacedId;
                                           return (
                                               <g key={item.id} transform={`translate(${item.x}, ${item.y})`} onClick={(e) => { e.stopPropagation(); setActivePlacedId(item.id); }} style={{ cursor: 'move' }}>
-                                              <rect x="0" y="0" width={item.width} height={item.height} fill={item.color} fillOpacity="0.6" stroke={isSelected ? '#fff' : '#000'} strokeWidth={isSelected ? '4' : '2'} strokeDasharray={isSelected ? 'none' : '2,2'} />
+                                              <rect x="0" y="0" width={item.width} height={item.height} fill={item.color} fillOpacity="0.6" stroke={isSelected ? '#fff' : 'transparent'} strokeWidth={isSelected ? '2' : '0'} />
                                               <circle cx={item.width} cy={0} r="3" fill={item.color} stroke="#fff" strokeWidth="1.5" />
                                               <path d={`M ${item.width} 0 L ${item.width + 10} -10 L ${item.width + 20} -10`} fill="none" stroke={item.color} strokeWidth="2" />
-                                              <foreignObject x={item.width + 20} y="-22" width="100" height="40" style={{ overflow: 'visible' }}>
-                                                  <div style={{ background: '#fff', border: `2px solid ${item.color}`, padding: '3px 5px', boxShadow: `2px 2px 0 ${item.color}` }}><div style={{ fontWeight: 'bold', fontSize: '9px', color: '#000', lineHeight: '1.1' }}>{item.label}</div><div style={{ fontSize: '8px', color: '#666', marginTop: '2px', borderTop: '1px solid #ccc', paddingTop: '2px' }}>W: {item.realWidth}"</div></div>
+                                              <foreignObject x={item.width + 20} y="-22" width="120" height="40" style={{ overflow: 'visible' }}>
+                                                  <div style={{ background: '#fff', border: `1px solid var(--line)`, padding: '6px 10px', boxShadow: `0 4px 12px rgba(0,0,0,0.1)` }}><div style={{ fontWeight: 500, fontSize: '10px', fontFamily: 'var(--sans)', color: 'var(--ink)', lineHeight: '1.2' }}>{item.label}</div><div style={{ fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', color: 'var(--ink-soft)', marginTop: '4px' }}>W: {item.realWidth}"</div></div>
                                               </foreignObject>
                                               </g>
                                           );
@@ -912,30 +903,30 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
                               {viewMode === 'ENGINEERING' && (
                                   <g>
-                                      {Array.from({ length: 15 }).map((_, i) => <line key={`h-${i}`} x1="0" y1={i * 40} x2="1000" y2={i * 40} stroke="#e0e0e0" strokeWidth="1" />)}
-                                      {Array.from({ length: 25 }).map((_, i) => <line key={`v-${i}`} x1={i * 40} y1="0" x2={i * 40} y2="600" stroke="#e0e0e0" strokeWidth="1" />)}
+                                      {Array.from({ length: 15 }).map((_, i) => <line key={`h-${i}`} x1="0" y1={i * 40} x2="1000" y2={i * 40} stroke="var(--line)" strokeWidth="1" />)}
+                                      {Array.from({ length: 25 }).map((_, i) => <line key={`v-${i}`} x1={i * 40} y1="0" x2={i * 40} y2="600" stroke="var(--line)" strokeWidth="1" />)}
                                   </g>
                               )}
 
                               {viewMode === 'ENGINEERING' && isCustomProj && (
-                                  <g transform="translate(500, 50)"><rect x="-225" y="-20" width="450" height="30" fill="#ffcccc" stroke="#d9534f" strokeWidth="2" rx="5" /><text x="0" y="0" fill="#d9534f" fontSize="16" fontWeight="bold" textAnchor="middle">⚠️ CUSTOM PROJECTION REQUESTED: {engData.proj}" ⚠️</text></g>
+                                  <g transform="translate(500, 50)"><rect x="-225" y="-24" width="450" height="40" fill="#fff" stroke="#d9534f" strokeWidth="2" rx="2" /><text x="0" y="2" fill="#d9534f" fontSize="13" fontFamily="var(--mono)" letterSpacing=".1em" fontWeight="bold" textAnchor="middle">⚠️ CUSTOM PROJECTION REQUESTED: {engData.proj}" ⚠️</text></g>
                               )}
 
                               {viewMode === 'ENGINEERING' && (
                                   <g>
-                                      {engData.shape === 'STRAIGHT' && <g><line x1={P2.x} y1={P2.y} x2={P3.x} y2={P3.y} stroke="#aaa" strokeWidth="3" /><text x={500} y={P2.y - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text><text x={500} y={HS.y + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text></g>}
-                                      {engData.shape === 'MITERED' && <g><polyline points={`${P1.x},${P1.y} ${P2.x},${P2.y} ${P3.x},${P3.y} ${P4.x},${P4.y}`} fill="none" stroke="#aaa" strokeWidth="3" /><text x={500} y={P2.y - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text><text x={500} y={HC1.y + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text><text x={(P1.x+P2.x)/2 - 10} y={(P1.y+P2.y)/2 - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">WALL A: {wall1.toFixed(1)}"</text><text x={(HS.x+HC1.x)/2 + 10} y={(HS.y+HC1.y)/2 + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE A CUT: {rawLeft.toFixed(2)}"</text><text x={(P3.x+P4.x)/2 + 10} y={(P3.y+P4.y)/2 - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">WALL C: {wall3.toFixed(1)}"</text><text x={(HC2.x+HE.x)/2 - 10} y={(HC2.y+HE.y)/2 + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE C CUT: {rawRight.toFixed(2)}"</text></g>}
-                                      {engData.shape === 'BOW' && <g><path d={bowWallPath} fill="none" stroke="#aaa" strokeWidth="3" /><text x={500} y={P2.y - 30} fill="#666" fontSize="12" fontWeight="bold" textAnchor="middle">CHORD B: {wall2.toFixed(1)}"</text><text x={500} y={HS.y + 40} fill="#b8860b" fontSize="12" fontWeight="bold" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text></g>}
+                                      {engData.shape === 'STRAIGHT' && <g><line x1={P2.x} y1={P2.y} x2={P3.x} y2={P3.y} stroke="var(--ink-soft)" strokeWidth="2" opacity="0.3" /><text x={500} y={P2.y - 30} fill="var(--ink-soft)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text><text x={500} y={HS.y + 40} fill="var(--brass)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text></g>}
+                                      {engData.shape === 'MITERED' && <g><polyline points={`${P1.x},${P1.y} ${P2.x},${P2.y} ${P3.x},${P3.y} ${P4.x},${P4.y}`} fill="none" stroke="var(--ink-soft)" strokeWidth="2" opacity="0.3" /><text x={500} y={P2.y - 30} fill="var(--ink-soft)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">WALL B: {wall2.toFixed(1)}"</text><text x={500} y={HC1.y + 40} fill="var(--brass)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text><text x={(P1.x+P2.x)/2 - 10} y={(P1.y+P2.y)/2 - 30} fill="var(--ink-soft)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">WALL A: {wall1.toFixed(1)}"</text><text x={(HS.x+HC1.x)/2 + 10} y={(HS.y+HC1.y)/2 + 40} fill="var(--brass)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">TUBE A CUT: {rawLeft.toFixed(2)}"</text><text x={(P3.x+P4.x)/2 + 10} y={(P3.y+P4.y)/2 - 30} fill="var(--ink-soft)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">WALL C: {wall3.toFixed(1)}"</text><text x={(HC2.x+HE.x)/2 - 10} y={(HC2.y+HE.y)/2 + 40} fill="var(--brass)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">TUBE C CUT: {rawRight.toFixed(2)}"</text></g>}
+                                      {engData.shape === 'BOW' && <g><path d={bowWallPath} fill="none" stroke="var(--ink-soft)" strokeWidth="2" opacity="0.3" /><text x={500} y={P2.y - 30} fill="var(--ink-soft)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">CHORD B: {wall2.toFixed(1)}"</text><text x={500} y={HS.y + 40} fill="var(--brass)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">TUBE B CUT: {rawCenter.toFixed(2)}"</text></g>}
 
                                       {engData.shape === 'STRAIGHT' && renderDimLine(HS, HE, {x:0,y:1}, 65, `C-to-C: ${(pole2).toFixed(1)}"`)}
                                       {engData.shape === 'MITERED' && <g>{renderDimLine(HS, HC1, {x:-nL.x, y:-nL.y}, 65, `C-to-C: ${(pole1).toFixed(1)}"`)}{renderDimLine(HC1, HC2, {x:0, y:1}, 65, `C-to-C: ${(pole2).toFixed(1)}"`)}{renderDimLine(HC2, HE, {x:-nR.x, y:-nR.y}, 65, `C-to-C: ${(pole3).toFixed(1)}"`)}</g>}
 
-                                      {engData.shape === 'STRAIGHT' && <line x1={drawHS.x} y1={drawHS.y} x2={drawHE.x} y2={drawHE.y} stroke="#d4af37" strokeWidth="1.5" />}
-                                      {engData.shape === 'MITERED' && <polyline points={`${drawHS.x},${drawHS.y} ${HC1.x},${HC1.y} ${HC2.x},${HC2.y} ${drawHE.x},${drawHE.y}`} fill="none" stroke="#d4af37" strokeWidth="1.5" />}
-                                      {engData.shape === 'BOW' && bowHWPath && <path d={bowHWPath} fill="none" stroke="#d4af37" strokeWidth="1.5" />}
+                                      {engData.shape === 'STRAIGHT' && <line x1={drawHS.x} y1={drawHS.y} x2={drawHE.x} y2={drawHE.y} stroke="var(--brass)" strokeWidth="2" />}
+                                      {engData.shape === 'MITERED' && <polyline points={`${drawHS.x},${drawHS.y} ${HC1.x},${HC1.y} ${HC2.x},${HC2.y} ${drawHE.x},${drawHE.y}`} fill="none" stroke="var(--brass)" strokeWidth="2" />}
+                                      {engData.shape === 'BOW' && bowHWPath && <path d={bowHWPath} fill="none" stroke="var(--brass)" strokeWidth="2" />}
 
-                                      {engData.shape === 'MITERED' && sawAngle1 > 0 && <g><line x1={HC1.x} y1={HC1.y + 15} x2={HC1.x + 60} y2={HC1.y + 100} stroke="#666" strokeWidth="1" strokeDasharray="2,2" /><rect x={HC1.x + 30} y={HC1.y + 93} width="60" height="14" fill="#fff" stroke="#666" strokeWidth="1" /><text x={HC1.x + 60} y={HC1.y + 103} fill="#000" fontSize="10" fontWeight="bold" textAnchor="middle">{sawAngle1.toFixed(1)}° MITER</text></g>}
-                                      {engData.shape === 'MITERED' && sawAngle2 > 0 && <g><line x1={HC2.x} y1={HC2.y + 15} x2={HC2.x - 60} y2={HC2.y + 100} stroke="#666" strokeWidth="1" strokeDasharray="2,2" /><rect x={HC2.x - 90} y={HC2.y + 93} width="60" height="14" fill="#fff" stroke="#666" strokeWidth="1" /><text x={HC2.x - 60} y={HC2.y + 103} fill="#000" fontSize="10" fontWeight="bold" textAnchor="middle">{sawAngle2.toFixed(1)}° MITER</text></g>}
+                                      {engData.shape === 'MITERED' && sawAngle1 > 0 && <g><line x1={HC1.x} y1={HC1.y + 15} x2={HC1.x + 60} y2={HC1.y + 100} stroke="var(--ink-soft)" strokeWidth="1" strokeDasharray="2,2" /><rect x={HC1.x + 20} y={HC1.y + 90} width="80" height="20" fill="#fff" stroke="var(--line)" strokeWidth="1" /><text x={HC1.x + 60} y={HC1.y + 104} fill="var(--ink)" fontSize="10" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">{sawAngle1.toFixed(1)}° MITER</text></g>}
+                                      {engData.shape === 'MITERED' && sawAngle2 > 0 && <g><line x1={HC2.x} y1={HC2.y + 15} x2={HC2.x - 60} y2={HC2.y + 100} stroke="var(--ink-soft)" strokeWidth="1" strokeDasharray="2,2" /><rect x={HC2.x - 100} y={HC2.y + 90} width="80" height="20" fill="#fff" stroke="var(--line)" strokeWidth="1" /><text x={HC2.x - 60} y={HC2.y + 104} fill="var(--ink)" fontSize="10" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">{sawAngle2.toFixed(1)}° MITER</text></g>}
 
                                       {attachments.map(att => {
                                           let seg = null;
@@ -961,24 +952,24 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                                               <g key={att.id}>
                                                   {att.type === 'bracket' ? (
                                                       <g>
-                                                          <circle cx={x} cy={y} r="4" fill="#28a745" />
-                                                          <line x1={x} y1={y} x2={x + nX * (safeProj * S)} y2={y + nY * (safeProj * S)} stroke="#999" strokeWidth="2" />
+                                                          <circle cx={x} cy={y} r="4" fill="var(--ink)" />
+                                                          <line x1={x} y1={y} x2={x + nX * (safeProj * S)} y2={y + nY * (safeProj * S)} stroke="var(--ink-soft)" strokeWidth="2" />
                                                       </g>
                                                   ) : (
                                                       <g>
-                                                          <line x1={x - nX*8 - nY*4} y1={y - nY*8 + nX*4} x2={x + nX*8 - nY*4} y2={y + nY*8 + nX*4} stroke="#d9534f" strokeWidth="2" />
-                                                          <line x1={x - nX*8 + nY*4} y1={y - nY*8 - nX*4} x2={x + nX*8 + nY*4} y2={y + nY*8 - nX*4} stroke="#d9534f" strokeWidth="2" />
+                                                          <line x1={x - nX*8 - nY*4} y1={y - nY*8 + nX*4} x2={x + nX*8 - nY*4} y2={y + nY*8 + nX*4} stroke="var(--ink)" strokeWidth="2" />
+                                                          <line x1={x - nX*8 + nY*4} y1={y - nY*8 - nX*4} x2={x + nX*8 + nY*4} y2={y + nY*8 - nX*4} stroke="var(--ink)" strokeWidth="2" />
                                                       </g>
                                                   )}
-                                                  <line x1={x} y1={y-5} x2={x} y2={y-80} stroke={att.type==='bracket'?'#28a745':'#d9534f'} strokeWidth="1" strokeDasharray="2,2" />
-                                                  <foreignObject x={x - 55} y={y - 135} width="110" height="50" style={{ overflow: 'visible' }}>
-                                                      <div style={{ background: '#fff', border: `2px solid ${att.type==='bracket'?'#28a745':'#d9534f'}`, display: 'flex', flexDirection: 'column', padding: '4px', borderRadius: '4px', boxShadow: '0 2px 5px rgba(0,0,0,0.3)' }}><input type="number" value={att.distInches} step="0.125" onChange={(e) => handleUpdateAttachmentDist(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '12px', fontWeight: 'bold', textAlign: 'center', border: 'none', background: '#e9ecef', outline: 'none' }} /><span style={{ fontSize: '9px', color: '#666', textAlign: 'center', margin: '2px 0' }}>from {att.ref === 'START' ? seg.nA : seg.nB}</span><input type="text" placeholder="Notes..." value={att.note||''} onChange={(e) => handleUpdateAttachmentNote(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '10px', border: '1px solid #ccc', outline: 'none', textAlign: 'center' }} /></div>
+                                                  <line x1={x} y1={y-5} x2={x} y2={y-80} stroke={att.type==='bracket'?'var(--line)':'var(--line)'} strokeWidth="1" strokeDasharray="2,2" />
+                                                  <foreignObject x={x - 60} y={y - 145} width="120" height="60" style={{ overflow: 'visible' }}>
+                                                      <div style={{ background: '#fff', border: `1px solid var(--line)`, display: 'flex', flexDirection: 'column', padding: '6px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}><input type="number" value={att.distInches} step="0.125" onChange={(e) => handleUpdateAttachmentDist(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '13px', fontFamily: 'var(--sans)', fontWeight: 500, textAlign: 'center', border: '1px solid var(--line)', background: 'var(--paper-2)', outline: 'none', boxSizing: 'border-box' }} /><span style={{ fontSize: '9px', fontFamily: 'var(--mono)', color: 'var(--ink-soft)', textTransform: 'uppercase', textAlign: 'center', margin: '4px 0' }}>from {att.ref === 'START' ? seg.nA : seg.nB}</span><input type="text" placeholder="Notes..." value={att.note||''} onChange={(e) => handleUpdateAttachmentNote(att.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', fontSize: '11px', fontFamily: 'var(--sans)', border: '1px solid var(--line)', outline: 'none', textAlign: 'center', boxSizing: 'border-box' }} /></div>
                                                   </foreignObject>
                                               </g>
                                           );
                                       })}
                                       {shopNotes.map(n => (
-                                          <g key={n.id}><circle cx={n.x} cy={n.y} r="4" fill="#ffc107" /><line x1={n.x} y1={n.y} x2={n.x + 20} y2={n.y - 70} stroke="#ffc107" strokeWidth="2" /><foreignObject x={n.x + 20} y={n.y - 120} width="160" height="50" style={{ overflow: 'visible' }}><textarea value={n.text} placeholder="Type shop floor note here..." onChange={(e) => handleUpdateShopNote(n.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', height: '100%', fontSize: '12px', fontWeight: 'bold', border: '2px solid #ffc107', background: '#fff3cd', outline: 'none', resize: 'none', padding: '6px', boxShadow: '0 2px 5px rgba(0,0,0,0.2)' }} /></foreignObject></g>
+                                          <g key={n.id}><circle cx={n.x} cy={n.y} r="4" fill="var(--ink)" /><line x1={n.x} y1={n.y} x2={n.x + 20} y2={n.y - 70} stroke="var(--ink)" strokeWidth="1" /><foreignObject x={n.x + 20} y={n.y - 120} width="180" height="60" style={{ overflow: 'visible' }}><textarea value={n.text} placeholder="Type shop floor note here..." onChange={(e) => handleUpdateShopNote(n.id, e.target.value)} onPointerDown={e => e.stopPropagation()} style={{ width: '100%', height: '100%', fontSize: '12px', fontFamily: 'var(--sans)', border: '1px solid var(--line)', background: '#fff', outline: 'none', resize: 'none', padding: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', boxSizing: 'border-box' }} /></foreignObject></g>
                                       ))}
                                       {renderEndTreatment(true)}
                                       {renderEndTreatment(false)}
@@ -990,27 +981,27 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               </div>
 
               {viewMode === 'ENGINEERING' && !showQuotePanel && (
-                  <div style={{ background: '#fff', borderTop: '2px solid #000', display: 'flex', minHeight: '120px' }}>
-                      <div style={{ flex: 1, padding: '15px', borderRight: '1px solid #ccc' }}>
-                          <h4 style={{ margin: '0 0 10px 0', color: '#007bff' }}>📋 CLIENT DETAILS & ORDERING</h4>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '0.8rem' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#1e7e34' }}><span>System O2O (Outside-to-Outside edges including backplates):</span><strong>{systemO2O.toFixed(2)}"</strong></div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#007bff' }}><span>System C2C (Center-to-Center):</span><strong>{systemC2C.toFixed(2)}"</strong></div>
-                              {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '5px' }}><span>Left Wall C2C:</span><strong>{pole1.toFixed(2)}"</strong></div>}
-                              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{engData.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</span><strong>{pole2.toFixed(2)}"</strong></div>
-                              {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Right Wall C2C:</span><strong>{pole3.toFixed(2)}"</strong></div>}
-                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#666', marginTop: '5px' }}><span>End Style:</span><strong>{engData.endStyle.replace('_', ' ')}</strong></div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#666' }}><span>Projection:</span><strong>{isCustomProj ? `CUSTOM (${engData.proj}")` : `${engData.proj}"`}</strong></div>
+                  <div style={{ background: '#fff', borderTop: '1px solid var(--line)', display: 'flex', minHeight: '140px' }}>
+                      <div style={{ flex: 1, padding: '24px', borderRight: '1px solid var(--line)' }}>
+                          <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Client Details & Ordering</h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.9rem', fontFamily: 'var(--sans)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>System O2O (Outside-to-Outside):</span><strong style={{ fontWeight: 500 }}>{systemO2O.toFixed(2)}"</strong></div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>System C2C (Center-to-Center):</span><strong style={{ fontWeight: 500 }}>{systemC2C.toFixed(2)}"</strong></div>
+                              {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px' }}><span style={{ color: 'var(--ink-soft)' }}>Left Wall C2C:</span><strong style={{ fontWeight: 500 }}>{pole1.toFixed(2)}"</strong></div>}
+                              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{engData.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</span><strong style={{ fontWeight: 500 }}>{pole2.toFixed(2)}"</strong></div>
+                              {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Right Wall C2C:</span><strong style={{ fontWeight: 500 }}>{pole3.toFixed(2)}"</strong></div>}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)', marginTop: '8px' }}><span style={{ color: 'var(--ink-soft)' }}>End Style:</span><strong style={{ fontWeight: 500 }}>{engData.endStyle.replace('_', ' ')}</strong></div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>Projection:</span><strong style={{ fontWeight: 500 }}>{isCustomProj ? `CUSTOM (${engData.proj}")` : `${engData.proj}"`}</strong></div>
                           </div>
                       </div>
-                      <div style={{ flex: 1, padding: '15px', background: '#f8f9fa' }}>
-                          <h4 style={{ margin: '0 0 10px 0', color: '#b8860b' }}>⚙️ SHOP FLOOR BOM & RAW CUTS</h4>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '0.8rem' }}>
-                              {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>TUBE A RAW CUT:</span><strong>{rawLeft.toFixed(2)}"</strong></div>}
-                              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{engData.shape === 'STRAIGHT' ? 'MAIN TUBE RAW CUT:' : 'TUBE B RAW CUT:'}</span><strong>{rawCenter.toFixed(2)}"</strong></div>
-                              {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>TUBE C RAW CUT:</span><strong>{rawRight.toFixed(2)}"</strong></div>}
-                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#6f42c1', marginTop: '5px' }}><span>Total Splices Req:</span><strong>{qtySplices}</strong></div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#28a745' }}><span>Total Brackets Req:</span><strong>{qtyBrackets}</strong></div>
+                      <div style={{ flex: 1, padding: '24px', background: 'var(--paper-2)' }}>
+                          <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Shop Floor BOM & Raw Cuts</h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.9rem', fontFamily: 'var(--sans)' }}>
+                              {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Tube A Raw Cut:</span><strong style={{ fontWeight: 500 }}>{rawLeft.toFixed(2)}"</strong></div>}
+                              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{engData.shape === 'STRAIGHT' ? 'Main Tube Raw Cut:' : 'Tube B Raw Cut:'}</span><strong style={{ fontWeight: 500 }}>{rawCenter.toFixed(2)}"</strong></div>
+                              {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Tube C Raw Cut:</span><strong style={{ fontWeight: 500 }}>{rawRight.toFixed(2)}"</strong></div>}
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)', marginTop: '8px' }}><span style={{ color: 'var(--ink-soft)' }}>Total Splices Req:</span><strong style={{ fontWeight: 500 }}>{qtySplices}</strong></div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>Total Brackets Req:</span><strong style={{ fontWeight: 500 }}>{qtyBrackets}</strong></div>
                           </div>
                       </div>
                   </div>
@@ -1018,51 +1009,51 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           </div>
 
           {showQuotePanel && (
-              <div style={{ width: '400px', background: '#fff', border: '3px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '-10px 0 20px rgba(0,0,0,0.1)', zIndex: 100 }}>
-                  <div style={{ padding: '15px 20px', background: '#28a745', color: '#fff', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <h3 style={{ margin: 0, fontSize: '1.2rem', textTransform: 'uppercase' }}>CPQ QUOTING ENGINE</h3>
+              <div style={{ width: '450px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', zIndex: 100 }}>
+                  <div style={{ padding: '24px 30px', background: 'var(--paper-2)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>CPQ Quoting Engine</h3>
                   </div>
 
-                  <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px', background: '#f8f9fa' }}>
+                  <div style={{ flex: 1, overflowY: 'auto', padding: '30px', display: 'flex', flexDirection: 'column', gap: '30px', background: '#fff' }}>
                       
-                      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#007bff', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>COLLECTION ASSIGNMENT</h4>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '24px' }}>
+                          <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Collection Assignment</h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                               <div>
-                                  <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>COLLECTION (FILTERS HARDWARE):</label>
-                                  <select value={quoteSelections.collection} onChange={e => { setQuoteSelections({...quoteSelections, collection: e.target.value}); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '10px', border: '1px solid #000', fontWeight: 'bold', background: '#e6f2ff' }}>
-                                      <option value="">-- NO COLLECTION RESTRICTION --</option>
+                                  <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' }}>Collection (Filters Hardware)</label>
+                                  <select value={quoteSelections.collection} onChange={e => { setQuoteSelections({...quoteSelections, collection: e.target.value}); setDynamicConfigParams({}); }} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', background: '#fff', outline: 'none' }}>
+                                      <option value="">-- No Collection Restriction --</option>
                                       {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                   </select>
                               </div>
                           </div>
                       </div>
 
-                      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#1e7e34', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>ENGINEERING EXPORT (TO CART)</h4>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.8rem', color: '#333' }}>
+                      <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '24px' }}>
+                          <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Engineering Export (To Cart)</h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '0.9rem', color: 'var(--ink)' }}>
                               
                               {!activeFlow ? (
-                                  <div style={{ color: '#d9534f', fontWeight: 'bold', fontStyle: 'italic', padding: '10px', border: '1px dashed #d9534f' }}>
+                                  <div style={{ color: '#d9534f', fontStyle: 'italic', padding: '16px', border: '1px dashed #d9534f', background: '#fdf2f2' }}>
                                       ⚠️ WARNING: No CPQ Flow selected.
                                       <br/><br/>
                                       To configure options, please select a CPQ Flow in the left panel.
                                   </div>
                               ) : (
                                   <>
-                                      <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
-                                          <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>✅ MATH SYNCHRONIZED</div>
-                                          <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.6' }}>
-                                              <li>Pole Length: <strong>{poleFeetQty} FT</strong></li>
-                                              {qtyBrackets > 0 && <li>Brackets: <strong>{qtyBrackets}</strong></li>}
-                                              {recRings > 0 && <li>Rec. Rings: <strong>{recRings}</strong></li>}
-                                              {qtyFinials > 0 && <li>Finials: <strong>{qtyFinials}</strong></li>}
-                                              {qtySplices > 0 && <li style={{color:'#d9534f'}}>Splices: <strong>{qtySplices}</strong></li>}
-                                              {qtyMiters > 0 && <li style={{color:'#d9534f'}}>Miters: <strong>{qtyMiters}</strong></li>}
-                                              {qtyBends > 0 && <li style={{color:'#d9534f'}}>Bent Returns: <strong>{qtyBends}</strong></li>}
+                                      <div style={{ background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)' }}>
+                                          <div style={{ fontWeight: 500, marginBottom: '12px', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)' }}>Math Synchronized</div>
+                                          <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.8', color: 'var(--ink-soft)' }}>
+                                              <li>Pole Length: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{poleFeetQty} FT</strong></li>
+                                              {qtyBrackets > 0 && <li>Brackets: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{qtyBrackets}</strong></li>}
+                                              {recRings > 0 && <li>Rec. Rings: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{recRings}</strong></li>}
+                                              {qtyFinials > 0 && <li>Finials: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{qtyFinials}</strong></li>}
+                                              {qtySplices > 0 && <li>Splices: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{qtySplices}</strong></li>}
+                                              {qtyMiters > 0 && <li>Miters: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{qtyMiters}</strong></li>}
+                                              {qtyBends > 0 && <li>Bent Returns: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{qtyBends}</strong></li>}
                                           </ul>
                                       </div>
-                                      <div style={{ fontSize: '0.7rem', color: '#666', fontStyle: 'italic' }}>
+                                      <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic', lineHeight: '1.5' }}>
                                           Clicking 'Send to CPQ Cart' will bundle these quantities and attach them as a reference sheet in the final configuration tool.
                                       </div>
                                   </>
@@ -1072,9 +1063,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
                   </div>
                   
-                  <div style={{ padding: '20px', background: '#000', borderTop: '2px solid #000' }}>
-                      <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeFlow || !engData.bracketId} style={{ width: '100%', padding: '15px', background: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? '#666' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? 'not-allowed' : 'pointer', fontSize: '1.1rem', transition: '0.2s' }}>
-                          {isPushingToCPQ ? 'SAVING DRAFT...' : '🛒 SEND TO CPQ CART'}
+                  <div style={{ padding: '30px', background: 'var(--paper-2)', borderTop: '1px solid var(--line)' }}>
+                      <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeFlow || !engData.bracketId} style={{ width: '100%', padding: '16px', background: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? 'var(--paper)' : 'var(--ink)', color: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                          {isPushingToCPQ ? 'Saving Draft...' : 'Send to CPQ Cart'}
                       </button>
                   </div>
               </div>

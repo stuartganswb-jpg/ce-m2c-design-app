@@ -16,7 +16,6 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     const [searchQuery, setSearchQuery] = useState("");
     const [syncLog, setSyncLog] = useState([]);
 
-    // --- NEW FILTER STATES ---
     const [globalLists, setGlobalLists] = useState({});
     const [collectionsData, setCollectionsData] = useState([]);
     const [partClassFilter, setPartClassFilter] = useState("ALL");
@@ -28,13 +27,10 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         setSyncLog(prev => [{ time, msg, type }, ...prev]);
     };
 
-    // 1. Fetch Local HQ Library Data & Master Lists
     useEffect(() => {
         const q = query(collection(db, "Approved_Designs"));
         const unsubParts = onSnapshot(q, (snap) => {
             const parts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            
-            // Extract unique vendors for the dropdown
             const uniqueVendors = [...new Set(parts.map(p => p.manufacturingSpecs?.vendorName).filter(Boolean))];
             setVendors(uniqueVendors.sort());
             setHqParts(parts);
@@ -51,14 +47,12 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         return () => { unsubParts(); unsubLists(); unsubCollections(); };
     }, []);
 
-    // 2. Fetch Live Inventory from NetSuite (Batched)
     const pullNetSuiteStock = async () => {
         setIsSyncing(true);
         setSyncLog([]);
         addLog("Initiating SuiteQL pull for Item Inventory...", "info");
 
         try {
-            // Get all ERP IDs we care about from our local database
             const erpIds = hqParts.map(p => p.legacyErpId || p.itemId).filter(Boolean);
             if (erpIds.length === 0) {
                 addLog("No ERP IDs found in HQ catalog to sync.", "warn");
@@ -66,20 +60,18 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                 return;
             }
 
-            // Chunk IDs into batches of 500 to respect NetSuite query length limits
             const chunkSize = 500;
             const chunks = [];
             for (let i = 0; i < erpIds.length; i += chunkSize) {
                 chunks.push(erpIds.slice(i, i + chunkSize));
             }
 
-            addLog(`Found ${erpIds.length} tracked items. Splitting into ${chunks.length} batches to bypass the 1000 record limit...`, "info");
+            addLog(`Found ${erpIds.length} tracked items. Splitting into ${chunks.length} batches...`, "info");
 
             let allResults = [];
             
             for (let i = 0; i < chunks.length; i++) {
                 const chunk = chunks[i];
-                // Format IDs for SQL IN clause: 'ID1','ID2'
                 const idList = chunk.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
 
                 const q = `
@@ -140,7 +132,6 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    // Calculate dynamic reorder suggestion
     const calculateSuggestedQty = (available, rop, moq, leadTime) => {
         if (available > rop) return 0;
         const dynamicRateOfSale = 1.5; 
@@ -191,7 +182,6 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         setOrderDrafts({}); 
     };
 
-    // --- ENRICHED INVENTORY & ADVANCED MULTI-FILTER ---
     const enrichedInventory = hqParts.map(part => {
         const erpId = (part.legacyErpId || part.itemId).toUpperCase();
         const stock = nsStock[erpId] || { onHand: 0, available: 0, onOrder: 0, backorder: 0 };
@@ -210,18 +200,14 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
             const term = searchQuery.toLowerCase();
             const specs = part.manufacturingSpecs || {};
 
-            // Search Term
             const matchesSearch = part.itemName?.toLowerCase().includes(term) || 
                                   (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term));
             
-            // Product Type
             let matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase() || (part.productType || "").toUpperCase() === typeFilter.toUpperCase();
             
-            // Collection
             const partCollections = specs.collections ? specs.collections.map(c=>c.toUpperCase()) : (specs.customData?.collection ? [specs.customData.collection.toUpperCase()] : []);
             let matchesCollection = collectionFilter === "" || partCollections.includes(collectionFilter.toUpperCase()); 
             
-            // Part Class
             let matchesClass = true;
             if (partClassFilter !== "ALL") {
                 if (partClassFilter === "INVENTORY") matchesClass = part.partClass === "Inventory" && specs.isInHouse !== false;
@@ -234,152 +220,152 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         });
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
             
             {/* HEADER */}
-            <div style={{ background: '#fff', border: '2px solid #000', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
                 <div>
-                    <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#17a2b8' }}>ERP Stock & Sourcing View</h2>
-                    <span style={{ fontSize: '0.8rem', color: '#666' }}>Live NetSuite Inventory Integration</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Live NetSuite Inventory Integration</span>
+                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>ERP Stock & Sourcing View</h2>
                 </div>
                 
-                {/* --- ADVANCED FILTER BAR --- */}
-                <div style={{ display: 'flex', gap: '15px', width: '75%', alignItems: 'center', justifyContent: 'flex-end' }}>
+                {/* ADVANCED FILTER BAR */}
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                     
-                    <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '10px', border: '2px solid #17a2b8', fontWeight: 'bold', background: '#e0f7fa', color: '#17a2b8', textTransform: 'uppercase' }}>
-                        <option value="ALL">ALL CLASSES</option>
-                        <option value="INVENTORY">RAW MAT / COMPONENTS</option>
-                        <option value="OUTSOURCED">OUTSOURCED COMPONENTS</option>
-                        <optgroup label="ASSEMBLIES & KITS">
-                            <option value="UNASSIGNED">UNASSIGNED / PENDING</option>
+                    <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper-2)', color: 'var(--ink)' }}>
+                        <option value="ALL">All Classes</option>
+                        <option value="INVENTORY">Raw Mat / Components</option>
+                        <option value="OUTSOURCED">Outsourced Components</option>
+                        <optgroup label="Assemblies & Kits">
+                            <option value="UNASSIGNED">Unassigned / Pending</option>
                             {(globalLists.assemblyTypes || []).map(type => <option key={type} value={type}>{type}</option>)}
                         </optgroup>
                     </select>
                     
-                    <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '10px', border: '2px solid #000', fontWeight: 'bold' }}>
-                        <option value="">ALL CATEGORIES</option>
+                    <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                        <option value="">All Categories</option>
                         {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}
                     </select>
 
-                    <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '10px', border: '2px solid #6f42c1', color: '#6f42c1', fontWeight: 'bold' }}>
-                        <option value="">ALL COLLECTIONS</option>
+                    <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                        <option value="">All Collections</option>
                         {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                     </select>
 
                     <input 
-                        placeholder="🔍 Search Global Inventory..." 
+                        placeholder="Search Global Inventory..." 
                         value={searchQuery} 
                         onChange={(e) => setSearchQuery(e.target.value)} 
                         disabled={!!activeVendor}
-                        style={{ flex: 1, padding: '10px', border: '2px solid #ccc', fontWeight: 'bold' }} 
+                        style={{ width: '250px', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} 
                     />
                     
-                    <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '10px 20px', background: isSyncing ? '#ccc' : '#17a2b8', color: '#fff', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer', boxShadow: '3px 3px 0 #000', whiteSpace: 'nowrap' }}>
-                        {isSyncing ? '🔄 SYNCING...' : '⬇️ PULL NETSUITE STOCK'}
+                    <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '12px 24px', background: isSyncing ? 'var(--paper)' : 'var(--ink)', color: isSyncing ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s', whiteSpace: 'nowrap' }}>
+                        {isSyncing ? 'Syncing...' : 'Pull NetSuite Stock'}
                     </button>
                 </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
                 
                 {/* LEFT: GLOBAL INVENTORY BOARD */}
-                <div style={{ flex: 1.5, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                    <div style={{ padding: '15px', background: '#333', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem', display: 'flex', justifyContent: 'space-between' }}>
-                        <span>📦 GLOBAL INVENTORY HEALTH</span>
-                        <span style={{ fontSize: '0.8rem', background: '#d9534f', padding: '2px 8px', borderRadius: '12px' }}>RED = AT OR BELOW ROP</span>
+                <div style={{ flex: 1.5, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <div style={{ padding: '24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Global Inventory Health</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', border: '1px solid #d9534f', padding: '4px 8px' }}>Highlighted = At or Below ROP</span>
                     </div>
                     
-                    <div style={{ overflowY: 'auto', maxHeight: '75vh' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-                            <thead style={{ background: '#e9ecef', position: 'sticky', top: 0 }}>
+                    <div style={{ overflowY: 'auto', maxHeight: '75vh', background: '#fff' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontFamily: 'var(--sans)' }}>
+                            <thead style={{ background: 'var(--paper)', position: 'sticky', top: 0, zIndex: 10 }}>
                                 <tr>
-                                    <th style={{ padding: '12px', borderBottom: '2px solid #000' }}>ERP ID</th>
-                                    <th style={{ padding: '12px', borderBottom: '2px solid #000' }}>ITEM NAME</th>
-                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>ON HAND</th>
-                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>AVAIL</th>
-                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>ON ORDER</th>
-                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>BACKORDER</th>
-                                    <th style={{ padding: '12px', borderBottom: '2px solid #000', textAlign: 'center' }}>ROP</th>
+                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>ERP ID</th>
+                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Item Name</th>
+                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>On Hand</th>
+                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Avail</th>
+                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>On Order</th>
+                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Backorder</th>
+                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>ROP</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {displayItems.length === 0 && <tr><td colSpan="7" style={{ padding: '20px', textAlign: 'center', color: '#888', fontStyle: 'italic' }}>No inventory items matched.</td></tr>}
+                                {displayItems.length === 0 && <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>No inventory items matched.</td></tr>}
                                 {!activeVendor && displayItems.map(item => (
-                                    <tr key={item.id} style={{ borderBottom: '1px solid #eee', background: item.isLowStock ? '#fff0f0' : '#fff' }}>
-                                        <td style={{ padding: '12px', fontWeight: 'bold', color: item.isLowStock ? '#d9534f' : '#007bff' }}>
+                                    <tr key={item.id} style={{ borderBottom: '1px solid var(--line)', background: item.isLowStock ? '#fdf2f2' : '#fff' }}>
+                                        <td style={{ padding: '16px 20px', fontFamily: 'var(--mono)', fontSize: '11px', color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>
                                             {item.legacyErpId || item.itemId}
-                                            {item.manufacturingSpecs?.isInHouse === false && <span style={{display: 'block', fontSize: '0.65rem', color: '#17a2b8', marginTop: '3px'}}>OUTSOURCED</span>}
+                                            {item.manufacturingSpecs?.isInHouse === false && <span style={{display: 'block', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px', textTransform: 'uppercase'}}>Outsourced</span>}
                                         </td>
-                                        <td style={{ padding: '12px', fontWeight: 'bold' }}>{item.itemName}</td>
-                                        <td style={{ padding: '12px', textAlign: 'center', fontSize: '1rem', fontWeight: 'bold' }}>{item.stock.onHand}</td>
-                                        <td style={{ padding: '12px', textAlign: 'center', fontSize: '1rem', fontWeight: 'bold', color: item.isLowStock ? '#d9534f' : '#28a745' }}>{item.stock.available}</td>
-                                        <td style={{ padding: '12px', textAlign: 'center', fontSize: '1rem', fontWeight: 'bold', color: '#17a2b8' }}>{item.stock.onOrder}</td>
-                                        <td style={{ padding: '12px', textAlign: 'center', fontSize: '1rem', fontWeight: 'bold', color: item.stock.backorder > 0 ? '#d9534f' : '#333' }}>{item.stock.backorder}</td>
-                                        <td style={{ padding: '12px', textAlign: 'center', fontWeight: 'bold', color: '#666' }}>{item.rop || '-'}</td>
+                                        <td style={{ padding: '16px 20px', fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>{item.itemName}</td>
+                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink)' }}>{item.stock.onHand}</td>
+                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', fontWeight: 500, color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>{item.stock.available}</td>
+                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink-soft)' }}>{item.stock.onOrder}</td>
+                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.backorder > 0 ? '#d9534f' : 'var(--ink-soft)' }}>{item.stock.backorder}</td>
+                                        <td style={{ padding: '16px 20px', textAlign: 'center', color: 'var(--ink-soft)' }}>{item.rop || '-'}</td>
                                     </tr>
                                 ))}
-                                {activeVendor && <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: '#17a2b8', fontWeight: 'bold', fontSize: '1.2rem' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
+                                {activeVendor && <tr><td colSpan="7" style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
                             </tbody>
                         </table>
                     </div>
                 </div>
 
                 {/* MIDDLE: VENDOR PO BUILDER */}
-                <div style={{ flex: 1, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 rgba(0,0,0,0.1)' }}>
-                    <div style={{ padding: '15px', background: '#17a2b8', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem' }}>
-                        🛒 VENDOR PO BUILDER
+                <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <div style={{ padding: '24px', background: 'var(--paper)', borderBottom: '1px solid var(--line)' }}>
+                        <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Vendor PO Builder</h3>
                     </div>
                     
-                    <div style={{ padding: '20px', borderBottom: '2px solid #ccc', background: '#f8f9fa' }}>
-                        <label style={{ fontSize: '0.85rem', fontWeight: 'bold', display: 'block', marginBottom: '8px', color: '#333' }}>SELECT VENDOR FOR RESTOCK:</label>
+                    <div style={{ padding: '24px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Select Vendor for Restock</label>
                         <select 
                             value={activeVendor} 
                             onChange={(e) => { setActiveVendor(e.target.value); setOrderDrafts({}); }} 
-                            style={{ width: '100%', padding: '12px', border: '2px solid #17a2b8', fontWeight: 'bold', fontSize: '1rem', outline: 'none' }}
+                            style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' }}
                         >
                             <option value="">-- View Global Inventory (No Vendor Selected) --</option>
                             {vendors.map(v => <option key={v} value={v}>{v}</option>)}
                         </select>
                     </div>
 
-                    <div style={{ flex: 1, padding: '20px', overflowY: 'auto', maxHeight: '55vh' }}>
+                    <div style={{ flex: 1, padding: '24px', overflowY: 'auto', maxHeight: '55vh', background: '#fff' }}>
                         {!activeVendor ? (
-                            <div style={{ color: '#888', fontStyle: 'italic', textAlign: 'center', marginTop: '40px' }}>Select a vendor from the dropdown to load their catalog and generate restocking suggestions.</div>
+                            <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', textAlign: 'center', marginTop: '60px', fontFamily: 'var(--serif)', fontSize: '1.2rem', padding: '0 20px' }}>Select a vendor from the dropdown to load their catalog and generate restocking suggestions.</div>
                         ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                                 {displayItems.map(item => {
                                     const suggested = calculateSuggestedQty(item.stock.available, item.rop, item.moq, item.leadTime);
                                     const currentDraft = orderDrafts[item.id] !== undefined ? orderDrafts[item.id] : (suggested > 0 ? suggested : 0);
                                     
                                     return (
-                                        <div key={item.id} style={{ border: item.isLowStock ? '2px solid #d9534f' : '1px solid #ccc', padding: '15px', borderRadius: '8px', background: item.isLowStock ? '#fffdf5' : '#fff' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                                        <div key={item.id} style={{ border: item.isLowStock ? '1px solid #d9534f' : '1px solid var(--line)', padding: '20px', background: item.isLowStock ? '#fdf2f2' : 'var(--paper)' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
                                                 <div>
-                                                    <div style={{ fontWeight: 'bold', fontSize: '1rem', color: '#000' }}>{item.itemName}</div>
-                                                    <div style={{ fontSize: '0.75rem', color: '#007bff', fontWeight: 'bold', marginTop: '3px' }}>ERP: {item.legacyErpId} | VENDOR SKU: {item.manufacturingSpecs?.vendorId || 'N/A'}</div>
+                                                    <div style={{ fontWeight: 500, fontSize: '1.05rem', color: 'var(--ink)' }}>{item.itemName}</div>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px' }}>ERP: {item.legacyErpId} | Vendor SKU: <span style={{color: 'var(--ink)'}}>{item.manufacturingSpecs?.vendorId || 'N/A'}</span></div>
                                                 </div>
-                                                {item.isLowStock && <span style={{ background: '#d9534f', color: '#fff', padding: '4px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', height: 'fit-content' }}>LOW STOCK</span>}
+                                                {item.isLowStock && <span style={{ background: '#d9534f', color: '#fff', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', height: 'fit-content' }}>Low Stock</span>}
                                             </div>
                                             
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', background: '#f4f4f4', padding: '10px', borderRadius: '4px', fontSize: '0.8rem', textAlign: 'center', marginBottom: '15px' }}>
-                                                <div><div style={{ color: '#666', fontWeight: 'bold' }}>AVAIL</div><div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: item.isLowStock ? '#d9534f' : '#28a745' }}>{item.stock.available}</div></div>
-                                                <div><div style={{ color: '#666', fontWeight: 'bold' }}>ROP</div><div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{item.rop || 0}</div></div>
-                                                <div><div style={{ color: '#666', fontWeight: 'bold' }}>MOQ</div><div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{item.moq || 0}</div></div>
-                                                <div><div style={{ color: '#666', fontWeight: 'bold' }}>LEAD</div><div style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>{item.leadTime || 0}d</div></div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', background: '#fff', padding: '16px', border: '1px solid var(--line)', textAlign: 'center', marginBottom: '20px' }}>
+                                                <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Avail</div><div style={{ fontSize: '1.1rem', fontWeight: 500, color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>{item.stock.available}</div></div>
+                                                <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>ROP</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.rop || 0}</div></div>
+                                                <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>MOQ</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.moq || 0}</div></div>
+                                                <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Lead</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.leadTime || 0}d</div></div>
                                             </div>
 
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
                                                 <div style={{ flex: 1 }}>
-                                                    <div style={{ fontSize: '0.75rem', color: '#666', fontWeight: 'bold', marginBottom: '3px' }}>SUGGESTED REORDER:</div>
-                                                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: suggested > 0 ? '#17a2b8' : '#333' }}>{suggested} units</div>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '6px' }}>Suggested Reorder</div>
+                                                    <div style={{ fontSize: '1.2rem', fontWeight: 500, color: suggested > 0 ? 'var(--ink)' : 'var(--ink-soft)' }}>{suggested} units</div>
                                                 </div>
                                                 <div style={{ flex: 1.5 }}>
-                                                    <label style={{ fontSize: '0.75rem', color: '#000', fontWeight: 'bold', display: 'block', marginBottom: '3px' }}>FINAL ORDER QTY:</label>
+                                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Final Order Qty</label>
                                                     <input 
                                                         type="number" 
                                                         value={currentDraft} 
                                                         onChange={(e) => handleOrderQtyChange(item.id, e.target.value)}
-                                                        style={{ width: '100%', padding: '10px', fontSize: '1.1rem', fontWeight: 'bold', border: currentDraft > 0 ? '2px solid #28a745' : '1px solid #ccc', boxSizing: 'border-box' }}
+                                                        style={{ width: '100%', padding: '12px', fontSize: '1.1rem', fontFamily: 'var(--sans)', border: currentDraft > 0 ? '1px solid var(--ink)' : '1px solid var(--line)', boxSizing: 'border-box', outline: 'none' }}
                                                     />
                                                 </div>
                                             </div>
@@ -391,34 +377,34 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                     </div>
 
                     {activeVendor && (
-                        <div style={{ padding: '20px', borderTop: '2px solid #000', background: '#e0f7fa' }}>
+                        <div style={{ padding: '24px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
                             <button 
                                 onClick={generatePOPayload}
-                                style={{ width: '100%', padding: '15px', background: '#17a2b8', color: '#fff', fontSize: '1.2rem', fontWeight: 'bold', border: '2px solid #000', cursor: 'pointer', boxShadow: '3px 3px 0 #000' }}
+                                style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}
                             >
-                                📤 EXPORT PO PAYLOAD TO ERP
+                                Export PO Payload to ERP
                             </button>
                         </div>
                     )}
                 </div>
 
                 {/* RIGHT: TERMINAL */}
-                <div style={{ flex: 0.8, background: '#1e1e1e', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000', height: '80vh', position: 'sticky', top: '20px' }}>
-                    <div style={{ padding: '10px 15px', background: '#333', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between' }}>
-                        <span>>_ SUITEQL PULL TERMINAL</span>
-                        <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '0.7rem' }}>CLEAR</button>
+                <div style={{ flex: 0.8, background: 'var(--dark)', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', height: '80vh', position: 'sticky', top: '20px', overflow: 'hidden' }}>
+                    <div style={{ padding: '16px 20px', background: 'var(--dark-2)', color: 'var(--paper)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>>_ SuiteQL Pull Terminal</span>
+                        <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: 'var(--paper)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', opacity: 0.6, textTransform: 'uppercase' }}>Clear</button>
                     </div>
-                    <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                        {syncLog.length === 0 && <span style={{ color: '#666' }}>Awaiting command...</span>}
+                    <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', flex: 1, overflowY: 'auto', fontFamily: 'var(--mono)', fontSize: '11px', color: '#a8a5a0' }}>
+                        {syncLog.length === 0 && <span style={{ opacity: 0.6 }}>Awaiting command...</span>}
                         {syncLog.map((log, idx) => {
-                            let color = '#fff';
-                            if (log.type === 'error') color = '#ff4d4d';
-                            if (log.type === 'success') color = '#28a745';
-                            if (log.type === 'warn') color = '#ffc107';
+                            let color = '#a8a5a0';
+                            if (log.type === 'error') color = '#e27373';
+                            if (log.type === 'success') color = '#7dbb81';
+                            if (log.type === 'warn') color = '#e2b373';
                             
                             return (
-                                <div key={idx} style={{ color, borderBottom: '1px dotted #333', paddingBottom: '4px' }}>
-                                    <span style={{ color: '#888', marginRight: '8px' }}>[{log.time}]</span>
+                                <div key={idx} style={{ color, borderBottom: '1px solid #333', paddingBottom: '6px' }}>
+                                    <span style={{ opacity: 0.5, marginRight: '10px' }}>[{log.time}]</span>
                                     {log.msg}
                                 </div>
                             );
