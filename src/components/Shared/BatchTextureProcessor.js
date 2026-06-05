@@ -24,9 +24,9 @@ const BatchTextureProcessor = ({ currentUser }) => {
     const imageRef = useRef(null);
     const canvasRef = useRef(null);
     const [imgDims, setImgDims] = useState({ w: 0, h: 0, natW: 0, natH: 0 });
-    const [cropScale, setCropScale] = useState(100); // 10% to 100% size
-    const [cropX, setCropX] = useState(50); // Pan X percentage
-    const [cropY, setCropY] = useState(50); // Pan Y percentage
+    const [cropScale, setCropScale] = useState(100); 
+    const [cropX, setCropX] = useState(50); 
+    const [cropY, setCropY] = useState(50); 
 
     // 1. Fetch Existing Finishes for Conflict Checking
     useEffect(() => {
@@ -212,7 +212,7 @@ const BatchTextureProcessor = ({ currentUser }) => {
             ) : isDone ? (
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: theme.paper2 }}>
                     <h2 style={{ fontFamily: theme.serif }}>Batch Complete</h2>
-                    <button onClick={() => { setQueue([]); setCurrentIndex(0); }} style={{ padding: '12px 24px', background: theme.ink, color: '#fff', cursor: 'pointer' }}>NEW BATCH</button>
+                    <button onClick={() => { setQueue([]); setCurrentIndex(0); }} style={{ padding: '12px 24px', background: theme.ink, color: '#fff', cursor: 'pointer', border: 'none', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>NEW BATCH</button>
                 </div>
             ) : (
                 <div style={{ display: 'flex', gap: '20px', flex: 1, padding: '0 20px', paddingBottom: '30px' }}>
@@ -236,30 +236,32 @@ const BatchTextureProcessor = ({ currentUser }) => {
                                         style={{ maxHeight: '55vh', maxWidth: '100%', objectFit: 'contain', display: 'block' }} 
                                     />
                                     {imgDims.w > 0 && (
-    <div style={{ 
-        position: 'absolute',
-        top: `${topPx}px`, left: `${leftPx}px`,
-        width: `${boxPx}px`, height: `${boxPx}px`,
-        border: `2px dashed ${theme.brass}`,
-        background: 'rgba(255,255,255,0.1)', pointerEvents: 'none',
-        boxShadow: '0 0 0 9999px rgba(28,26,22,0.6)'
-    }}>
-        <div style={{ 
-            position: 'absolute', 
-            bottom: '100%', 
-            left: '-2px', 
-            marginBottom: '4px',
-            color: '#fff', 
-            fontFamily: theme.mono, 
-            fontSize: '10px', 
-            background: theme.brass, 
-            padding: '4px 8px',
-            whiteSpace: 'nowrap'
-        }}>
-            1024x1024 EXTRACTION ZONE
-        </div>
-    </div>
-)}
+                                        <div style={{ 
+                                            position: 'absolute',
+                                            top: `${topPx}px`, left: `${leftPx}px`,
+                                            width: `${boxPx}px`, height: `${boxPx}px`,
+                                            border: `2px dashed ${theme.brass}`,
+                                            background: 'rgba(255,255,255,0.1)', pointerEvents: 'none',
+                                            boxShadow: '0 0 0 9999px rgba(28,26,22,0.6)'
+                                        }}>
+                                            <div style={{ 
+                                                position: 'absolute', 
+                                                bottom: '100%', 
+                                                left: '-2px', 
+                                                marginBottom: '4px',
+                                                color: '#fff', 
+                                                fontFamily: theme.mono, 
+                                                fontSize: '10px', 
+                                                background: theme.brass, 
+                                                padding: '4px 8px',
+                                                whiteSpace: 'nowrap'
+                                            }}>
+                                                1024x1024 EXTRACTION ZONE
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
                             {/* Slider Controls */}
                             {imgDims.w > 0 && (
@@ -348,7 +350,7 @@ const BatchTextureProcessor = ({ currentUser }) => {
                             <button 
                                 onClick={() => setCurrentIndex(prev => prev + 1)} 
                                 disabled={isProcessing} 
-                                style={{ background: 'transparent', color: theme.inkSoft, border: 'none', padding: '10px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px' }}
+                                style={{ background: 'transparent', color: theme.inkSoft, border: 'none', padding: '10px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}
                             >
                                 SKIP FILE
                             </button>
