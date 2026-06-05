@@ -28,7 +28,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [collectionsData, setCollectionsData] = useState([]);
   
-  // Robust NetSuite Customer State
   const [customersData, setCustomersData] = useState([]);
 
   const [activeComponent, setActiveComponent] = useState(null);
@@ -80,7 +79,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     
-    // Listen for the unified CRM records and filter out only the Customers
     const unsubCustomers = onSnapshot(collection(db, "crm_records"), snap => {
         const onlyCustomers = snap.docs
             .map(d => ({id: d.id, ...d.data()}))
@@ -227,20 +225,16 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
   const getCustomerDisplay = (val) => {
       if (!val) return 'N/A';
-      
       const dbCust = customersData.find(c => c.id === val || c.customerId === val || c.legacyId === val);
       if (dbCust) return `${dbCust.companyName || dbCust.name || 'Unknown'} - ${val}`;
-      
       const listCust = globalLists.customers?.find(c => {
           if (typeof c === 'string') return c === val || c.includes(val);
           return c.id === val || c.name === val;
       });
-      
       if (listCust) {
           if (typeof listCust === 'string') return listCust;
           return `${listCust.name} - ${listCust.id}`;
       }
-      
       return val;
   };
 
@@ -399,19 +393,25 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
   const isAssembly = activeComponent?.masterPart?.partClass === 'Assembly' || activeComponent?.masterPart?.partClass === 'Master Assembly';
 
+  // --- REUSABLE UI STYLES FOR THE COMPONENTS ---
+  const fieldStyle = { width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' };
+  const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' };
+  const sectionHeaderStyle = { margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' };
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
-      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
+      {/* HEADER */}
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div>
-          <h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem', color: '#007bff' }}>3. Bill of Materials Engine</h2>
-          <span style={{ fontSize: '0.7rem', color: '#666' }}>GLOBAL COMPONENT DATA SYNC</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Global Component Data Sync</span>
+          <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Bill of Materials Engine</h2>
         </div>
         
-        <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-          <label style={{ fontWeight: 'bold', fontSize: '0.8rem' }}>SELECT ASSEMBLY:</label>
-          <select value={selectedAssemblyId} onChange={(e) => { setSelectedAssemblyId(e.target.value); setActiveComponent(null); }} style={{ padding: '10px', border: '2px solid #000', fontWeight: 'bold', textTransform: 'uppercase', minWidth: '350px' }}>
-            {assemblies.length === 0 && <option value="">NO ASSEMBLIES FOUND</option>}
+        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Select Assembly</label>
+          <select value={selectedAssemblyId} onChange={(e) => { setSelectedAssemblyId(e.target.value); setActiveComponent(null); }} style={{ padding: '10px 16px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', minWidth: '350px', outline: 'none', background: '#fff' }}>
+            {assemblies.length === 0 && <option value="">No Assemblies Found</option>}
             {assemblies.map(a => (
                 <option key={a.id} value={a.itemId}>
                     [{a.routingType ? a.routingType.toUpperCase() : 'UNASSIGNED'}] {a.legacyErpId && a.legacyErpId !== "N/A" ? `${a.legacyErpId} : ` : ''}{a.itemName}
@@ -421,18 +421,19 @@ const BOMTab = ({ currentUser, activeBrand }) => {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'stretch', flex: 1 }}>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1 }}>
         
-        <div style={{ flex: 1.2, background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '8px 8px 0 rgba(0,0,0,0.1)' }}>
-            <div style={{ padding: '15px', background: '#000', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
-                <span style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>ASSEMBLY COMPONENTS (BOM)</span>
-                <span style={{ fontSize: '0.8rem', background: '#28a745', padding: '4px 8px', borderRadius: '4px', fontWeight: 'bold' }}>BOM ROLLED COST: ${totalCost.toFixed(2)}</span>
+        {/* LEFT COLUMN: BOM LIST */}
+        <div style={{ width: '380px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', flexShrink: 0, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+            <div style={{ padding: '20px 24px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Components</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', border: '1px solid var(--line)', padding: '4px 8px', borderRadius: '2px', background: '#fff' }}>Cost: ${totalCost.toFixed(2)}</span>
             </div>
             
-            <div style={{ flex: 1, overflowY: 'auto', padding: '15px', background: '#f8f9fa' }}>
-                {populatedBOM.length === 0 && <div style={{ textAlign: 'center', color: '#999', marginTop: '40px', fontStyle: 'italic' }}>No components found. Drop pins in Tab 2 to build BOM.</div>}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '16px', background: 'var(--paper)' }}>
+                {populatedBOM.length === 0 && <div style={{ textAlign: 'center', color: 'var(--ink-soft)', marginTop: '40px', fontStyle: 'italic', fontSize: '0.9rem' }}>No components found. Drop pins in Visual Assembly to build BOM.</div>}
                 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     {populatedBOM.map(item => {
                         const isSelected = activeComponent?.id === item.id;
                         const isNew = item.masterPart?.manufacturingSpecs?.status === "NEEDS_SPECS";
@@ -443,25 +444,25 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             <div 
                                 key={item.id} 
                                 onClick={() => openComponentEditor(item)}
-                                style={{ background: isSelected ? '#e6f2ff' : '#fff', border: `2px solid ${isSelected ? '#007bff' : '#ccc'}`, display: 'flex', cursor: 'pointer', transition: '0.2s', boxShadow: isSelected ? '4px 4px 0 #007bff' : 'none' }}
+                                style={{ background: '#fff', border: `1px solid ${isSelected ? 'var(--brass)' : 'var(--line)'}`, display: 'flex', cursor: 'pointer', transition: 'all 0.2s ease', boxShadow: isSelected ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}
                             >
-                                <div style={{ width: '80px', height: '80px', background: '#e9ecef', borderRight: '1px solid #ccc', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                                <div style={{ width: '80px', height: '80px', background: 'var(--paper-2)', borderRight: '1px solid var(--line)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                                     {master.finalImageUrl ? (
                                         <img src={master.finalImageUrl} alt="Part" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                     ) : (
-                                        <span style={{ fontSize: '1.5rem', color: '#bbb' }}>⚙️</span>
+                                        <span style={{ fontSize: '1.2rem', color: 'var(--ink-soft)', opacity: 0.5 }}>⚙️</span>
                                     )}
                                 </div>
 
-                                <div style={{ padding: '10px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                                <div style={{ padding: '12px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                        <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#000' }}>{item.partName}</div>
-                                        <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#28a745' }}>QTY: {item.defaultQty}</div>
+                                        <div style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)' }}>{item.partName}</div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>QTY: {item.defaultQty}</div>
                                     </div>
-                                    <div style={{ fontSize: '0.7rem', color: '#666', marginTop: '4px' }}>
-                                        <span style={{ color: '#007bff', fontWeight: 'bold' }}>{item.legacyErpId}</span> | {specs.productType || "NO TYPE"}
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px' }}>
+                                        <span style={{ color: 'var(--ink)' }}>{item.legacyErpId}</span> | {specs.productType || "NO TYPE"}
                                     </div>
-                                    {isNew && <div style={{ fontSize: '0.65rem', color: '#fff', background: '#d9534f', padding: '2px 5px', display: 'inline-block', marginTop: '5px', fontWeight: 'bold' }}>⚠️ NEEDS SPECS</div>}
+                                    {isNew && <div style={{ fontSize: '9px', fontFamily: 'var(--mono)', color: '#d9534f', textTransform: 'uppercase', marginTop: '6px' }}>Needs Specs</div>}
                                 </div>
                             </div>
                         );
@@ -470,78 +471,69 @@ const BOMTab = ({ currentUser, activeBrand }) => {
             </div>
         </div>
 
-        <div style={{ flex: 1.5, background: '#fff', border: '3px solid #000', boxShadow: '10px 10px 0 #000', display: 'flex', flexDirection: 'column' }}>
+        {/* RIGHT COLUMN: EDITOR */}
+        <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
             
-            <div style={{ padding: '15px 20px', background: activeComponent ? '#007bff' : '#28a745', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000' }}>
+            <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
                 <div>
-                    <h3 style={{ margin: 0, fontSize: '1.2rem', textTransform: 'uppercase' }}>{activeComponent ? "GLOBAL PART DATA" : "ASSEMBLY METADATA & PRICING"}</h3>
-                    <span style={{ fontSize: '0.75rem' }}>{activeComponent ? "Changes made here update the Master Library globally." : "Review and set root metadata for this assembly."}</span>
+                    <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>
+                        {activeComponent ? "Global Part Data" : "Assembly Metadata & Pricing"}
+                    </h3>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '4px', display: 'block' }}>
+                        {activeComponent ? "Changes made here update the Master Library globally." : "Review and set root metadata for this assembly."}
+                    </span>
                 </div>
-                {activeComponent && <span style={{ background: '#fff', color: '#007bff', padding: '4px 8px', fontSize: '0.8rem', fontWeight: 'bold' }}>{activeComponent.masterPart?.legacyErpId}</span>}
+                {activeComponent && <span style={{ background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em' }}>{activeComponent.masterPart?.legacyErpId}</span>}
             </div>
 
-            <div style={{ padding: '20px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '25px' }}>
+            <div style={{ padding: '30px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '30px' }}>
                 
+                {/* --- STATE 1: ASSEMBLY METADATA EDITOR --- */}
                 {!activeComponent ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                         {selectedAssemblyData ? (
                             <>
-                                <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+                                <div style={{ textAlign: 'center', marginBottom: '40px' }}>
                                     {selectedAssemblyData.finalImageUrl ? (
-                                        <img src={selectedAssemblyData.finalImageUrl} alt="Assembly" style={{ maxWidth: '80%', maxHeight: '350px', objectFit: 'contain', border: '2px solid #ccc', padding: '10px', background: '#f8f9fa' }} />
+                                        <img src={selectedAssemblyData.finalImageUrl} alt="Assembly" style={{ maxWidth: '80%', maxHeight: '350px', objectFit: 'contain', border: '1px solid var(--line)', padding: '10px', background: 'var(--paper-2)' }} />
                                     ) : (
-                                        <div style={{ height: '200px', background: '#eee', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px dashed #ccc', color: '#999', fontWeight: 'bold', flexDirection: 'column' }}>
-                                            NO IMAGE AVAILABLE
-                                            <span style={{fontSize: '0.7rem', marginTop: '10px', color: '#007bff'}}>Capture Thumbnail via Tab 2 Visual Engine</span>
+                                        <div style={{ height: '200px', background: 'var(--paper-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed var(--line)', color: 'var(--ink-soft)', flexDirection: 'column' }}>
+                                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>No Image Available</span>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', marginTop: '10px', color: 'var(--ink-soft)' }}>Capture Thumbnail via Visual Engine</span>
                                         </div>
                                     )}
                                 </div>
 
-                                <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #28a745', paddingBottom: '10px' }}>
-                                        <h4 style={{ margin: 0, color: '#1e7e34' }}>PARENT ASSEMBLY METADATA</h4>
-                                        <span style={{ background: '#1e7e34', color: '#fff', padding: '4px 8px', fontSize: '0.7rem', fontWeight: 'bold', borderRadius: '4px' }}>
-                                            ROUTING: {assemblyDetails.routingType.toUpperCase()}
-                                        </span>
-                                    </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
+                                    
+                                    <div>
+                                        <h4 style={sectionHeaderStyle}>Parent Assembly Details</h4>
+                                        
+                                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '20px' }}>
+                                            <div><label style={labelStyle}>Assembly Name</label><input name="itemName" value={assemblyDetails.itemName} onChange={handleAssemblySpecChange} style={fieldStyle} /></div>
+                                            <div><label style={labelStyle}>ERP ID</label><input name="legacyErpId" value={assemblyDetails.legacyErpId} onChange={handleAssemblySpecChange} placeholder="PENDING" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                        </div>
 
-                                    <div style={{ background: '#fff3cd', border: '2px dashed #ffc107', padding: '10px', display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '15px' }}>
-                                        <input 
-                                            type="checkbox" 
-                                            checked={assemblyDetails.isProjectManaged} 
-                                            onChange={e => setAssemblyDetails({...assemblyDetails, isProjectManaged: e.target.checked})} 
-                                            style={{ transform: 'scale(1.5)', cursor: 'pointer', marginLeft: '5px' }} 
-                                        />
-                                        <div>
-                                            <div style={{ fontWeight: 'bold', color: '#856404', fontSize: '0.85rem' }}>FLAG AS COMPLEX PROJECT (ROUTE TO TAB 10.5)</div>
-                                            <div style={{ fontSize: '0.7rem', color: '#666' }}>Checking this box ensures that when this product is quoted/ordered, it routes to the Project Management dashboard for multi-WO/PO dissection.</div>
+                                        <div style={{ marginBottom: '20px' }}>
+                                            <label style={labelStyle}>Warehouse Bin Location (Barcode/Ref)</label>
+                                            <input name="binLocation" value={assemblyDetails.binLocation} onChange={handleAssemblySpecChange} placeholder="e.g. KIT-SHELF-B" style={{ ...fieldStyle, textTransform: 'uppercase' }} />
+                                        </div>
+
+                                        <div style={{ background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: '15px' }}>
+                                            <input type="checkbox" checked={assemblyDetails.isProjectManaged} onChange={e => setAssemblyDetails({...assemblyDetails, isProjectManaged: e.target.checked})} style={{ transform: 'scale(1.2)', cursor: 'pointer' }} />
+                                            <div>
+                                                <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500, color: 'var(--ink)' }}>Flag as Complex Project (Route to Project Mgmt)</div>
+                                                <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Checking this box ensures that when this product is quoted/ordered, it routes to the Project Management dashboard for multi-WO/PO dissection.</div>
+                                            </div>
                                         </div>
                                     </div>
 
-                                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '15px' }}>
-                                        <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ASSEMBLY NAME:</label><input name="itemName" value={assemblyDetails.itemName} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontWeight: 'bold' }} /></div>
-                                        <div><label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>ERP ID:</label><input name="legacyErpId" value={assemblyDetails.legacyErpId} onChange={handleAssemblySpecChange} placeholder="PENDING" style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box', textTransform: 'uppercase' }} /></div>
-                                    </div>
-
-                                    <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '10px', marginTop: '10px' }}>
-                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px' }}>
-                                            📍 WAREHOUSE BIN LOCATION (BARCODE/REF)
-                                        </label>
-                                        <input 
-                                            name="binLocation"
-                                            value={assemblyDetails.binLocation} 
-                                            onChange={handleAssemblySpecChange} 
-                                            placeholder="e.g. KIT-SHELF-B" 
-                                            style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', boxSizing: 'border-box', textTransform: 'uppercase', fontWeight: 'bold', fontSize: '1.1rem' }} 
-                                        />
-                                    </div>
-
-                                    <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', marginTop: '10px' }}>
-                                        <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
-                                        <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '15px' }}>
+                                    <div>
+                                        <h4 style={sectionHeaderStyle}>Client-Specific Pricing & SKUs</h4>
+                                        <div style={{ display: 'flex', gap: '15px', alignItems: 'flex-end', marginBottom: '20px' }}>
                                             <div style={{ flex: 2 }}>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOMER (NAME - ID):</label>
-                                                <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                                <label style={labelStyle}>Customer (Name - ID)</label>
+                                                <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={fieldStyle}>
                                                     <option value="">Select Customer...</option>
                                                     {customersData.length > 0 ? (
                                                         customersData.map(c => <option key={c.id} value={c.id}>{c.companyName || c.name} - {c.id}</option>)
@@ -554,38 +546,39 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                                 </select>
                                             </div>
                                             <div style={{ flex: 2 }}>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CLIENT SKU / PART #:</label>
-                                                <input value={newClientPricing.clientSku} onChange={e => setNewClientPricing({...newClientPricing, clientSku: e.target.value})} placeholder="e.g. Brimar-8483" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                                <label style={labelStyle}>Client SKU / Part #</label>
+                                                <input value={newClientPricing.clientSku} onChange={e => setNewClientPricing({...newClientPricing, clientSku: e.target.value})} placeholder="e.g. Brimar-8483" style={fieldStyle} />
                                             </div>
                                             <div style={{ flex: 1 }}>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOM PRICE ($):</label>
-                                                <input type="number" step="0.01" value={newClientPricing.price} onChange={e => setNewClientPricing({...newClientPricing, price: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                                <label style={labelStyle}>Custom Price ($)</label>
+                                                <input type="number" step="0.01" value={newClientPricing.price} onChange={e => setNewClientPricing({...newClientPricing, price: e.target.value})} placeholder="0.00" style={fieldStyle} />
                                             </div>
-                                            <button onClick={() => handleAddClientPricing(true)} style={{ padding: '9px 15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ ADD</button>
+                                            <button onClick={() => handleAddClientPricing(true)} style={{ padding: '10px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Add</button>
                                         </div>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                            {(assemblyDetails.clientPricing || []).length === 0 && <div style={{ fontSize: '0.75rem', color: '#666', fontStyle: 'italic' }}>No custom client pricing assigned. Defaults to Base Price.</div>}
+                                        
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            {(assemblyDetails.clientPricing || []).length === 0 && <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No custom client pricing assigned. Defaults to Base Price.</div>}
                                             {(assemblyDetails.clientPricing || []).map((cp, idx) => (
-                                                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #ccc', padding: '8px 12px' }}>
-                                                    <div style={{ display: 'flex', gap: '20px', fontSize: '0.8rem', width: '100%', alignItems: 'center' }}>
-                                                        <span style={{ fontWeight: 'bold', color: '#007bff', flex: 1 }}>{getCustomerDisplay(cp.customerId)}</span>
-                                                        <span style={{ flex: 1 }}><strong style={{ color: '#666' }}>SKU:</strong> {cp.clientSku || 'N/A'}</span>
-                                                        <span style={{ color: '#28a745', fontWeight: 'bold', width: '80px', textAlign: 'right' }}>${parseFloat(cp.price || 0).toFixed(2)}</span>
+                                                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper)', border: '1px solid var(--line)', padding: '12px 16px' }}>
+                                                    <div style={{ display: 'flex', gap: '24px', fontSize: '0.9rem', width: '100%', alignItems: 'center', color: 'var(--ink)' }}>
+                                                        <span style={{ fontWeight: 500, flex: 1 }}>{getCustomerDisplay(cp.customerId)}</span>
+                                                        <span style={{ flex: 1, color: 'var(--ink-soft)' }}>SKU: <span style={{ color: 'var(--ink)' }}>{cp.clientSku || 'N/A'}</span></span>
+                                                        <span style={{ fontWeight: 500, width: '80px', textAlign: 'right' }}>${parseFloat(cp.price || 0).toFixed(2)}</span>
                                                     </div>
-                                                    <button onClick={() => handleRemoveClientPricing(idx, true)} style={{ background: 'none', border: 'none', color: '#d9534f', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.2rem', marginLeft: '10px' }}>×</button>
+                                                    <button onClick={() => handleRemoveClientPricing(idx, true)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer', marginLeft: '16px' }}>×</button>
                                                 </div>
                                             ))}
                                         </div>
                                     </div>
 
-                                    <div style={{ background: '#f8f9fa', padding: '10px', border: '2px solid #ccc', marginTop: '10px' }}>
-                                        <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>RECORD VISIBILITY & CROSS-BRAND SHARING:</label>
-                                        <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+                                    <div>
+                                        <h4 style={sectionHeaderStyle}>Record Visibility & Sharing</h4>
+                                        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', padding: '20px', background: 'var(--paper-2)', border: '1px solid var(--line)' }}>
                                             {AVAILABLE_BRANDS.map(brand => {
                                                 const isOwner = selectedAssemblyData.brandId === brand.id; 
                                                 const isShared = assemblyDetails.sharedBrands?.includes(brand.id);
                                                 return ( 
-                                                    <label key={brand.id} style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px', cursor: isOwner ? 'not-allowed' : 'pointer', opacity: isOwner ? 0.7 : 1 }}>
+                                                    <label key={brand.id} style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px', cursor: isOwner ? 'not-allowed' : 'pointer', opacity: isOwner ? 0.6 : 1, color: 'var(--ink)' }}>
                                                         <input type="checkbox" checked={isOwner || isShared} disabled={isOwner} onChange={() => handleBrandToggle(brand.id, true)} />
                                                         {brand.name} {isOwner && "(Owner)"}
                                                     </label> 
@@ -594,248 +587,259 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         </div>
                                     </div>
 
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginTop: '10px' }}>
-                                        
-                                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={assemblyDetails.productType || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
-                                        
-                                        <div>
-                                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>ROUTING CLASSIFICATION:</label>
-                                            <select name="routingType" value={assemblyDetails.routingType || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
-                                                <option value="">UNASSIGNED</option>
-                                                {(globalLists.assemblyTypes || []).map(t => <option key={t} value={t}>{t}</option>)}
-                                            </select>
-                                        </div>
+                                    <div>
+                                        <h4 style={sectionHeaderStyle}>Classification & Attributes</h4>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                            
+                                            <div><label style={labelStyle}>Product Type</label><select name="productType" value={assemblyDetails.productType || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
+                                            <div><label style={labelStyle}>Routing Classification</label><select name="routingType" value={assemblyDetails.routingType || ""} onChange={handleAssemblySpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}><option value="">Unassigned</option>{(globalLists.assemblyTypes || []).map(t => <option key={t} value={t}>{t}</option>)}</select></div>
+                                            <div><label style={labelStyle}>Project / Grouping</label><input name="project" value={assemblyDetails.project || ""} onChange={handleAssemblySpecChange} style={fieldStyle} /></div>
 
-                                        <div>
-                                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c' }}>PROJECT / GROUPING:</label>
-                                            <input name="project" value={assemblyDetails.project || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #e83e8c', boxSizing: 'border-box', fontWeight: 'bold' }} />
-                                        </div>
+                                            {windowConfig.system.partHandling?.includes(activeBrand) && (
+                                                <div><label style={labelStyle}>Part Handling</label><select name="partHandling" value={assemblyDetails.partHandling || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Unassigned / Standard</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
+                                            )}
 
-                                        {windowConfig.system.partHandling?.includes(activeBrand) && (
-                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label><select name="partHandling" value={assemblyDetails.partHandling || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}><option value="">UNASSIGNED / STANDARD</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
-                                        )}
-
-                                        <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={assemblyDetails.uom || "EA"} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
-                                        
-                                        {windowConfig.system.collections?.includes(activeBrand) && (
-                                            <div style={{ gridColumn: 'span 2' }}>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>COLLECTIONS (MULTI-SELECT FOR CPQ):</label>
-                                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '10px', border: '2px solid #6f42c1', background: '#f8f9fa', maxHeight: '120px', overflowY: 'auto' }}>
-                                                    {collectionsData.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No collections defined in Admin.</span>}
-                                                    {collectionsData.map(c => {
-                                                        const isSelected = (assemblyDetails.collections || []).includes(c.name);
-                                                        return (
-                                                            <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', background: isSelected ? '#d8b4e2' : '#fff', color: isSelected ? '#4a148c' : '#333', border: `1px solid ${isSelected ? '#6f42c1' : '#ccc'}`, padding: '6px 12px', borderRadius: '20px', transition: '0.2s' }}>
-                                                                <input type="checkbox" checked={isSelected} onChange={() => handleToggleCollection(c.name, true)} style={{ display: 'none' }} />
-                                                                {c.name}
-                                                            </label>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
-                                        )}
-                                        
-                                        {windowConfig.system.pillowSizes?.includes(activeBrand) && (
-                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PILLOW SIZE:</label><select name="pillowSize" value={assemblyDetails.pillowSize || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
-                                        )}
-                                        {windowConfig.system.fillTypes?.includes(activeBrand) && (
-                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>FILL TYPE:</label><select name="fillType" value={assemblyDetails.fillType || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.fillTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
-                                        )}
-                                        {windowConfig.system.flangeStyles?.includes(activeBrand) && (
-                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>EDGE/FLANGE:</label><select name="flangeStyle" value={assemblyDetails.flangeStyle || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.flangeStyles || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
-                                        )}
-                                        {windowConfig.system.stitchTypes?.includes(activeBrand) && (
-                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>STITCH ROUTING:</label><select name="stitchType" value={assemblyDetails.stitchType || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.stitchTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
-                                        )}
-                                        {windowConfig.system.seamCounts?.includes(activeBrand) && (
-                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>SEAM COUNT:</label><select name="seamCount" value={assemblyDetails.seamCount || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
-                                        )}
-                                        {windowConfig.system.outsourceActions?.includes(activeBrand) && (
-                                            <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>OUTSOURCE ACTION:</label><select name="outsourceAction" value={assemblyDetails.outsourceAction || ""} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
-                                        )}
-                                        
-                                        {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
-                                            <div key={w.id}>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c', textTransform: 'uppercase' }}>{w.name}:</label>
-                                                <select value={assemblyDetails.dynamicDicts?.[w.id] || ""} onChange={(e) => handleAssemblyDictChange(w.id, e.target.value)} style={{ width: '100%', padding: '8px', border: '2px solid #e83e8c', outline: 'none', fontWeight: 'bold' }}>
-                                                    <option value="">SELECT...</option><option value="N/A">N/A</option>
-                                                    {dynamicAssets.filter(a => a.windowId === w.id).map(a => <option key={a.id} value={a.name}>{a.name} {a.code ? `(${a.code})` : ''}</option>)}
-                                                </select>
-                                            </div>
-                                        ))}
-
-                                        {customSchema.map(field => (
-                                            <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#fff', padding: '5px', border: '1px solid #28a745' }}>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
-                                                {field.type === 'dropdown' ? (
-                                                    <select value={assemblyDetails.customData?.[field.key] || ""} onChange={(e) => handleAssemblyCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745' }}>
-                                                        <option value="">Select...</option>{(field.options || "").split(',').map(opt => <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>)}
-                                                    </select>
-                                                ) : field.type === 'file' ? (
-                                                    <div>
-                                                        {assemblyDetails.customData?.[field.key] && <a href={assemblyDetails.customData[field.key]} target="_blank" rel="noreferrer" style={{ fontSize: '0.65rem', color: '#007bff', display: 'block', marginBottom: '5px' }}>[View Current File]</a>}
-                                                        <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0], true)} style={{ width: '100%', fontSize: '0.75rem' }} />
+                                            <div><label style={labelStyle}>UOM</label><select name="uom" value={assemblyDetails.uom || "EA"} onChange={handleAssemblySpecChange} style={fieldStyle}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+                                            
+                                            {windowConfig.system.collections?.includes(activeBrand) && (
+                                                <div style={{ gridColumn: 'span 2' }}>
+                                                    <label style={labelStyle}>Collections (Multi-Select for CPQ)</label>
+                                                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '16px', border: '1px solid var(--line)', background: 'var(--paper)', maxHeight: '150px', overflowY: 'auto' }}>
+                                                        {collectionsData.length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No collections defined in Admin.</span>}
+                                                        {collectionsData.map(c => {
+                                                            const isSelected = (assemblyDetails.collections || []).includes(c.name);
+                                                            return (
+                                                                <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer', background: isSelected ? 'var(--ink)' : '#fff', color: isSelected ? '#fff' : 'var(--ink)', border: `1px solid ${isSelected ? 'var(--ink)' : 'var(--line)'}`, padding: '6px 14px', borderRadius: '20px', transition: 'all 0.2s' }}>
+                                                                    <input type="checkbox" checked={isSelected} onChange={() => handleToggleCollection(c.name, true)} style={{ display: 'none' }} />
+                                                                    {c.name}
+                                                                </label>
+                                                            );
+                                                        })}
                                                     </div>
-                                                ) : (
-                                                    <input type={field.type} value={assemblyDetails.customData?.[field.key] || ""} onChange={(e) => handleAssemblyCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box' }} />
-                                                )}
-                                            </div>
-                                        ))}
-
-                                        <div style={{ background: '#fff3cd', border: '1px solid #ffeeba', padding: '5px 10px', gridColumn: 'span 2' }}>
-                                            <label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'block', marginBottom: '3px' }}>ASSIGN TO WATCHLIST:</label>
-                                            <select name="watchList" value={assemblyDetails.watchList || "NONE"} onChange={handleAssemblySpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', fontWeight: 'bold' }}>
-                                                <option value="NONE">NONE</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
-                                            </select>
-                                        </div>
-
-                                    </div>
-
-                                    <div style={{ background: '#f8f9fa', border: '2px solid #d4af37', padding: '15px', marginTop: '10px' }}>
-                                        <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
-                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                                            <div>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET PROJECTION (INCHES):</label>
-                                                <select value={assemblyDetails.customData?.projection || ""} onChange={(e) => handleAssemblyCustomFieldChange("projection", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', fontWeight: 'bold' }}>
-                                                    <option value="">-- NO PROJECTION / NOT BRACKET --</option>
-                                                    {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" PROJECTION</option>)}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET MOUNT TYPE:</label>
-                                                <select value={assemblyDetails.customData?.bracketType || ""} onChange={(e) => handleAssemblyCustomFieldChange("bracketType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
-                                                    <option value="">-- NOT A BRACKET --</option>
-                                                    <option value="WALL">WALL MOUNT</option>
-                                                    <option value="CEILING">CEILING MOUNT</option>
-                                                    <option value="INSIDE MOUNT">INSIDE MOUNT</option>
-                                                </select>
-                                            </div>
-                                            <div style={{ gridColumn: 'span 2' }}>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>SERVICE / FEE TYPE (AUTO-APPEND):</label>
-                                                <select value={assemblyDetails.customData?.feeType || ""} onChange={(e) => handleAssemblyCustomFieldChange("feeType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
-                                                    <option value="">-- NO SPECIAL FEE --</option>
-                                                    <option value="SPLICE">SPLICE FEE</option>
-                                                    <option value="MITER_CUT">MITER CUT FEE</option>
-                                                    <option value="BENT_RETURN">BENT RETURN (FR) FEE</option>
-                                                    <option value="MITER_RETURN">MITER RETURN FEE</option>
-                                                </select>
-                                                <span style={{ fontSize: '0.6rem', color: '#666', fontStyle: 'italic', display: 'block', marginTop: '4px' }}>If selected, the Vision System will automatically bill for this item when triggered (e.g. mapping "Splice Fee" to splices).</span>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div style={{ display: 'flex', gap: '15px', marginTop: '10px' }}>
-                                        <div style={{ flex: 1 }}>
-                                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ASSEMBLY BASE PRICE ($):</label>
-                                            <input name="basePrice" type="number" step="0.01" value={assemblyDetails.basePrice} onChange={handleAssemblySpecChange} placeholder="0.00" style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold', fontSize: '1.1rem', boxSizing: 'border-box' }} />
-                                            <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '3px' }}>Standalone CPQ Base Price</span>
-                                        </div>
-                                        <div style={{ flex: 1 }}>
-                                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>ASSEMBLY UNIT COST ($):</label>
-                                            <input name="cost" type="number" step="0.01" value={assemblyDetails.cost} onChange={handleAssemblySpecChange} placeholder="0.00" style={{ width: '100%', padding: '10px', border: '1px solid #ccc', fontSize: '1.1rem', boxSizing: 'border-box' }} />
-                                            <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '3px' }}>Internal Cost (Optional)</span>
-                                        </div>
-                                    </div>
-                                    
-                                    <div style={{ borderTop: '2px solid #28a745', paddingTop: '15px', marginTop: '15px', display: 'flex', gap: '15px' }}>
-                                        <div style={{ flex: 1 }}>
-                                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>UPLOAD MASTER PRINT (PDF):</label>
-                                            {assemblyDetails.pdfUrl && <a href={assemblyDetails.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>[View Current PDF]</a>}
-                                            <input type="file" accept="application/pdf" onChange={(e) => setAssemblyPdfFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                                        </div>
-                                        <div style={{ flex: 1, borderLeft: '1px solid #28a745', paddingLeft: '15px' }}>
-                                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>MASTER 3D CAD (.GLB):</label>
-                                            {assemblyDetails.cadUrl ? (
-                                                <div style={{ background: '#fff', padding: '8px', border: '1px solid #28a745', borderRadius: '4px' }}>
-                                                    <div style={{ fontSize: '0.7rem', color: '#28a745', fontWeight: 'bold' }}>✓ SYNCED FROM INCEPTION</div>
-                                                    <a href={assemblyDetails.cadUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', margin: '5px 0', fontWeight: 'bold' }}>[Download Current .GLB]</a>
-                                                    <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '8px', marginBottom: '3px' }}>Overwrite file (Optional):</div>
-                                                    <input type="file" accept=".glb" onChange={(e) => setAssemblyCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                                                </div>
-                                            ) : (
-                                                <div>
-                                                    <div style={{ fontSize: '0.7rem', color: '#d9534f', marginBottom: '5px', fontWeight: 'bold' }}>⚠️ NO 3D MODEL FOUND</div>
-                                                    <input type="file" accept=".glb" onChange={(e) => setAssemblyCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
                                                 </div>
                                             )}
+                                            
+                                            {windowConfig.system.pillowSizes?.includes(activeBrand) && (
+                                                <div><label style={labelStyle}>Pillow Size</label><select name="pillowSize" value={assemblyDetails.pillowSize || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                            )}
+                                            {windowConfig.system.fillTypes?.includes(activeBrand) && (
+                                                <div><label style={labelStyle}>Fill Type</label><select name="fillType" value={assemblyDetails.fillType || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.fillTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                            )}
+                                            {windowConfig.system.flangeStyles?.includes(activeBrand) && (
+                                                <div><label style={labelStyle}>Edge/Flange</label><select name="flangeStyle" value={assemblyDetails.flangeStyle || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.flangeStyles || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                            )}
+                                            {windowConfig.system.stitchTypes?.includes(activeBrand) && (
+                                                <div><label style={labelStyle}>Stitch Routing</label><select name="stitchType" value={assemblyDetails.stitchType || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.stitchTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                            )}
+                                            {windowConfig.system.seamCounts?.includes(activeBrand) && (
+                                                <div><label style={labelStyle}>Seam Count</label><select name="seamCount" value={assemblyDetails.seamCount || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                            )}
+                                            {windowConfig.system.outsourceActions?.includes(activeBrand) && (
+                                                <div><label style={labelStyle}>Outsource Action</label><select name="outsourceAction" value={assemblyDetails.outsourceAction || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                            )}
+                                            
+                                            {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
+                                                <div key={w.id}>
+                                                    <label style={labelStyle}>{w.name}</label>
+                                                    <select value={assemblyDetails.dynamicDicts?.[w.id] || ""} onChange={(e) => handleAssemblyDictChange(w.id, e.target.value)} style={fieldStyle}>
+                                                        <option value="">Select...</option><option value="N/A">N/A</option>
+                                                        {dynamicAssets.filter(a => a.windowId === w.id).map(a => <option key={a.id} value={a.name}>{a.name} {a.code ? `(${a.code})` : ''}</option>)}
+                                                    </select>
+                                                </div>
+                                            ))}
+
+                                            {customSchema.map(field => (
+                                                <div key={field.key}>
+                                                    <label style={labelStyle}>{field.label} (Custom)</label>
+                                                    {field.type === 'dropdown' ? (
+                                                        <select value={assemblyDetails.customData?.[field.key] || ""} onChange={(e) => handleAssemblyCustomFieldChange(field.key, e.target.value)} style={fieldStyle}>
+                                                            <option value="">Select...</option>{(field.options || "").split(',').map(opt => <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>)}
+                                                        </select>
+                                                    ) : field.type === 'file' ? (
+                                                        <div style={{ background: 'var(--paper)', padding: '12px', border: '1px solid var(--line)' }}>
+                                                            {assemblyDetails.customData?.[field.key] && <a href={assemblyDetails.customData[field.key]} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--ink)', textDecoration: 'underline', display: 'block', marginBottom: '8px' }}>View Current File</a>}
+                                                            <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0], true)} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
+                                                        </div>
+                                                    ) : (
+                                                        <input type={field.type} value={assemblyDetails.customData?.[field.key] || ""} onChange={(e) => handleAssemblyCustomFieldChange(field.key, e.target.value)} style={fieldStyle} />
+                                                    )}
+                                                </div>
+                                            ))}
+
+                                            <div style={{ gridColumn: 'span 2' }}>
+                                                <label style={labelStyle}>Assign to Watchlist</label>
+                                                <select name="watchList" value={assemblyDetails.watchList || "NONE"} onChange={handleAssemblySpecChange} style={fieldStyle}>
+                                                    <option value="NONE">None</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
+                                                </select>
+                                            </div>
                                         </div>
                                     </div>
 
-                                    <button onClick={saveAssemblyDetails} style={{ padding: '12px', background: isSaving ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', marginTop: '10px' }}>
-                                        {isSaving ? "SAVING..." : "💾 SAVE ASSEMBLY METADATA & FILES"}
+                                    <div>
+                                        <h4 style={sectionHeaderStyle}>Hardware CPQ Metadata (Vision Engine)</h4>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
+                                            <div>
+                                                <label style={labelStyle}>Bracket Projection (Inches)</label>
+                                                <select value={assemblyDetails.customData?.projection || ""} onChange={(e) => handleAssemblyCustomFieldChange("projection", e.target.value)} style={fieldStyle}>
+                                                    <option value="">-- No Projection / Not Bracket --</option>
+                                                    {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" Projection</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label style={labelStyle}>Bracket Mount Type</label>
+                                                <select value={assemblyDetails.customData?.bracketType || ""} onChange={(e) => handleAssemblyCustomFieldChange("bracketType", e.target.value)} style={fieldStyle}>
+                                                    <option value="">-- Not a Bracket --</option>
+                                                    <option value="WALL">Wall Mount</option>
+                                                    <option value="CEILING">Ceiling Mount</option>
+                                                    <option value="INSIDE MOUNT">Inside Mount</option>
+                                                </select>
+                                            </div>
+                                            <div style={{ gridColumn: 'span 2' }}>
+                                                <label style={labelStyle}>Service / Fee Type (Auto-Append)</label>
+                                                <select value={assemblyDetails.customData?.feeType || ""} onChange={(e) => handleAssemblyCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
+                                                    <option value="">-- No Special Fee --</option>
+                                                    <option value="SPLICE">Splice Fee</option>
+                                                    <option value="MITER_CUT">Miter Cut Fee</option>
+                                                    <option value="BENT_RETURN">Bent Return (FR) Fee</option>
+                                                    <option value="MITER_RETURN">Miter Return Fee</option>
+                                                </select>
+                                                <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>If selected, the Vision System will automatically bill for this item when triggered.</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <h4 style={sectionHeaderStyle}>Pricing & Documents</h4>
+                                        <div style={{ display: 'flex', gap: '20px', marginBottom: '30px' }}>
+                                            <div style={{ flex: 1 }}>
+                                                <label style={labelStyle}>Assembly Base Price ($)</label>
+                                                <input name="basePrice" type="number" step="0.01" value={assemblyDetails.basePrice} onChange={handleAssemblySpecChange} placeholder="0.00" style={fieldStyle} />
+                                                <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '4px' }}>Standalone CPQ Base Price</span>
+                                            </div>
+                                            <div style={{ flex: 1 }}>
+                                                <label style={labelStyle}>Assembly Unit Cost ($)</label>
+                                                <input name="cost" type="number" step="0.01" value={assemblyDetails.cost} onChange={handleAssemblySpecChange} placeholder="0.00" style={fieldStyle} />
+                                                <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '4px' }}>Internal Cost (Optional)</span>
+                                            </div>
+                                        </div>
+                                        
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)' }}>
+                                            <div>
+                                                <label style={labelStyle}>Upload Master Print (PDF)</label>
+                                                {assemblyDetails.pdfUrl && <a href={assemblyDetails.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--ink)', textDecoration: 'underline', display: 'block', marginBottom: '10px' }}>View Current PDF</a>}
+                                                <input type="file" accept="application/pdf" onChange={(e) => setAssemblyPdfFile(e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
+                                            </div>
+                                            <div>
+                                                <label style={labelStyle}>Master 3D CAD (.glb)</label>
+                                                {assemblyDetails.cadUrl ? (
+                                                    <div style={{ marginBottom: '10px' }}>
+                                                        <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '6px' }}>Synced from Inception</div>
+                                                        <a href={assemblyDetails.cadUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--ink)', textDecoration: 'underline', display: 'block' }}>Download Current .GLB</a>
+                                                    </div>
+                                                ) : (
+                                                    <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '10px' }}>No 3D Model Found</div>
+                                                )}
+                                                <input type="file" accept=".glb" onChange={(e) => setAssemblyCadFile(e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <button onClick={saveAssemblyDetails} style={{ padding: '16px', background: isSaving ? 'var(--brass-light)' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
+                                        {isSaving ? "Saving..." : "Save Assembly Metadata & Files"}
                                     </button>
                                 </div>
-                                <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '0.85rem', color: '#999', fontStyle: 'italic' }}>Select a component from the BOM list on the left to edit its global master data.</div>
+                                <div style={{ textAlign: 'center', marginTop: '30px', fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>Select a component from the BOM list on the left to edit its global master data.</div>
                             </>
                         ) : (
-                            <div style={{ color: '#999', fontWeight: 'bold', fontSize: '1.1rem', textAlign: 'center', marginTop: '100px' }}>AWAITING ASSEMBLY SELECTION</div>
+                            <div style={{ color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic', textAlign: 'center', marginTop: '100px' }}>Awaiting Assembly Selection</div>
                         )}
                     </div>
                 ) : (
-                    <>
-                        {/* --- COMPONENT EDITOR --- */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
+                        {/* --- STATE 2: COMPONENT EDITOR --- */}
 
-                        <div style={{ background: '#f0f8ff', border: '2px dashed #007bff', padding: '15px' }}>
-                            <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #007bff', paddingBottom: '5px', color: '#007bff', display: 'flex', justifyContent: 'space-between' }}>
-                                <span>🔗 CPQ CONFIGURATION MAPPING</span>
-                                <span style={{ fontSize: '0.6rem', color: '#666' }}>Ties Part to Dictionaries in Tab 11</span>
-                            </h4>
-                            <p style={{ fontSize: '0.75rem', color: '#333', marginBottom: '15px', lineHeight: '1.4' }}>
-                                If this component is highly configurable (e.g., Tassel, Metal Frame), do <strong>not</strong> assign a single fixed texture. Instead, map it to a CPQ Option Category below so the customer can configure it at checkout.
+                        <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '24px' }}>
+                            <h4 style={sectionHeaderStyle}>CPQ Configuration Mapping</h4>
+                            <p style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '20px', lineHeight: '1.5' }}>
+                                If this component is highly configurable, do not assign a single fixed texture. Instead, map it to a CPQ Option Category below so the customer can configure it at checkout.
                             </p>
                             
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', background: '#fff', padding: '15px', border: '1px solid #ccc' }}>
-                                <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={editSpecs.cpqCategories?.includes('master_finishes')} onChange={() => handleCpqCategoryToggle('master_finishes')} style={{ transform: 'scale(1.2)' }} />
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
+                                <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', color: 'var(--ink)' }}>
+                                    <input type="checkbox" checked={editSpecs.cpqCategories?.includes('master_finishes')} onChange={() => handleCpqCategoryToggle('master_finishes')} />
                                     Master Finishes (Global Metals/Wood)
                                 </label>
                                 
                                 {windowConfig.custom.filter(w => w.brands.includes(activeBrand)).map(w => (
-                                    <label key={w.id} style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                                        <input type="checkbox" checked={editSpecs.cpqCategories?.includes(w.id)} onChange={() => handleCpqCategoryToggle(w.id)} style={{ transform: 'scale(1.2)' }} />
+                                    <label key={w.id} style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', color: 'var(--ink)' }}>
+                                        <input type="checkbox" checked={editSpecs.cpqCategories?.includes(w.id)} onChange={() => handleCpqCategoryToggle(w.id)} />
                                         {w.name}
                                     </label>
                                 ))}
                             </div>
                         </div>
 
-                        <div style={{ background: '#f8f9fa', border: '2px solid #6f42c1', padding: '15px', marginTop: '10px' }}>
-                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#6f42c1', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px' }}>
-                                📍 WAREHOUSE BIN LOCATION (BARCODE/REF)
-                            </label>
-                            <input 
-                                name="binLocation" 
-                                value={editSpecs.binLocation || ""} 
-                                onChange={handleSpecChange} 
-                                placeholder="e.g. A1-B2-04" 
-                                style={{ width: '100%', padding: '10px', border: '2px solid #6f42c1', boxSizing: 'border-box', textTransform: 'uppercase', fontWeight: 'bold', fontSize: '1.1rem' }} 
-                            />
-                            <div style={{ fontSize: '0.65rem', color: '#666', marginTop: '5px', fontStyle: 'italic' }}>
-                                Used by the Pick/Pack App to guide operators to the physical item location.
+                        <div>
+                            <h4 style={sectionHeaderStyle}>Identification & Logistics</h4>
+                            
+                            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '20px' }}>
+                                <div><label style={labelStyle}>Record Name / Description</label><input name="tempName" value={editSpecs.tempName !== undefined ? editSpecs.tempName : activeComponent.masterPart.itemName} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                <div><label style={labelStyle}>ERP Legacy ID</label><input name="tempLegacyId" value={editSpecs.tempLegacyId !== undefined ? editSpecs.tempLegacyId : (activeComponent.masterPart.legacyErpId === "PENDING" ? "" : activeComponent.masterPart.legacyErpId)} onChange={handleSpecChange} placeholder="e.g. P-1234" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                            </div>
+
+                            <div style={{ marginBottom: '30px' }}>
+                                <label style={labelStyle}>Warehouse Bin Location (Barcode/Ref)</label>
+                                <input name="binLocation" value={editSpecs.binLocation || ""} onChange={handleSpecChange} placeholder="e.g. A1-B2-04" style={{ ...fieldStyle, textTransform: 'uppercase' }} />
+                                <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px' }}>Used by the Pick/Pack App to guide operators to the physical item location.</div>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
+                                <button onClick={() => setEditSpecs({...editSpecs, isInHouse: true})} style={{ flex: 1, padding: '12px', background: editSpecs.isInHouse ? 'var(--ink)' : 'transparent', color: editSpecs.isInHouse ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>In-House Manufacturing</button>
+                                <button onClick={() => setEditSpecs({...editSpecs, isInHouse: false})} style={{ flex: 1, padding: '12px', background: !editSpecs.isInHouse ? 'var(--ink)' : 'transparent', color: !editSpecs.isInHouse ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Outsourced / Vendor</button>
+                            </div>
+
+                            <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
+                                {editSpecs.isInHouse ? (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '15px' }}>
+                                        <div><label style={labelStyle}>Program #</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                        <div><label style={labelStyle}>Raw Mat</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                        <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                        <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '15px' }}>
+                                            <div><label style={labelStyle}>Vendor Name</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select Vendor...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
+                                            <div><label style={labelStyle}>Vendor Part # / SKU</label><input name="vendorId" value={editSpecs.vendorId || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                            <div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between' }}><label style={labelStyle}>Purchase Link (URL)</label>{editSpecs.vendorUrl && <a href={editSpecs.vendorUrl.startsWith('http') ? editSpecs.vendorUrl : `https://${editSpecs.vendorUrl}`} target="_blank" rel="noreferrer" style={{ fontSize: '0.8rem', color: 'var(--ink)' }}>Open ↗</a>}</div>
+                                                <input name="vendorUrl" value={editSpecs.vendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={fieldStyle} />
+                                            </div>
+                                            <div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between' }}><label style={labelStyle}>Alt Item Link (URL)</label>{editSpecs.altVendorUrl && <a href={editSpecs.altVendorUrl.startsWith('http') ? editSpecs.altVendorUrl : `https://${editSpecs.altVendorUrl}`} target="_blank" rel="noreferrer" style={{ fontSize: '0.8rem', color: 'var(--ink)' }}>Open ↗</a>}</div>
+                                                <input name="altVendorUrl" value={editSpecs.altVendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={fieldStyle} />
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '15px' }}>
+                                            <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                            <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                            <div><label style={labelStyle}>MOQ</label><input name="moq" type="number" value={editSpecs.moq || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                            <div><label style={labelStyle}>Lead (Days)</label><input name="leadTime" type="number" value={editSpecs.leadTime || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
                         <div>
-                            <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px', marginTop: '15px' }}>IDENTIFICATION</h4>
-                            <div style={{ display: 'flex', gap: '10px' }}>
-                                <div style={{ flex: 2 }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>RECORD NAME / DESCRIPTION:</label>
-                                    <input name="tempName" value={editSpecs.tempName !== undefined ? editSpecs.tempName : activeComponent.masterPart.itemName} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box', fontWeight: 'bold' }} />
-                                </div>
-                                <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff' }}>ERP LEGACY ID (Internal):</label>
-                                    <input name="tempLegacyId" value={editSpecs.tempLegacyId !== undefined ? editSpecs.tempLegacyId : (activeComponent.masterPart.legacyErpId === "PENDING" ? "" : activeComponent.masterPart.legacyErpId)} onChange={handleSpecChange} placeholder="e.g. P-1234" style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box', textTransform: 'uppercase' }} />
-                                </div>
-                            </div>
-                        </div>
-
-                        <div style={{ background: '#f0f8ff', border: '2px solid #007bff', padding: '15px', marginTop: '15px' }}>
-                            <h4 style={{ margin: '0 0 10px 0', color: '#007bff', borderBottom: '2px solid #007bff', paddingBottom: '5px' }}>🤝 CLIENT-SPECIFIC PRICING & SKUs</h4>
+                            <h4 style={sectionHeaderStyle}>Client-Specific Pricing & SKUs</h4>
                             
-                            <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '15px' }}>
+                            <div style={{ display: 'flex', gap: '15px', alignItems: 'flex-end', marginBottom: '20px' }}>
                                 <div style={{ flex: 2 }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOMER (NAME - ID):</label>
-                                    <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}>
+                                    <label style={labelStyle}>Customer (Name - ID)</label>
+                                    <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={fieldStyle}>
                                         <option value="">Select Customer...</option>
                                         {customersData.length > 0 ? (
                                             customersData.map(c => <option key={c.id} value={c.id}>{c.companyName || c.name} - {c.id}</option>)
@@ -848,39 +852,39 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     </select>
                                 </div>
                                 <div style={{ flex: 2 }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CLIENT SKU / PART #:</label>
-                                    <input value={newClientPricing.clientSku} onChange={e => setNewClientPricing({...newClientPricing, clientSku: e.target.value})} placeholder="e.g. Brimar-8483" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                    <label style={labelStyle}>Client SKU / Part #</label>
+                                    <input value={newClientPricing.clientSku} onChange={e => setNewClientPricing({...newClientPricing, clientSku: e.target.value})} placeholder="e.g. Brimar-8483" style={fieldStyle} />
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>CUSTOM PRICE ($):</label>
-                                    <input type="number" step="0.01" value={newClientPricing.price} onChange={e => setNewClientPricing({...newClientPricing, price: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }} />
+                                    <label style={labelStyle}>Custom Price ($)</label>
+                                    <input type="number" step="0.01" value={newClientPricing.price} onChange={e => setNewClientPricing({...newClientPricing, price: e.target.value})} placeholder="0.00" style={fieldStyle} />
                                 </div>
-                                <button onClick={() => handleAddClientPricing(false)} style={{ padding: '9px 15px', background: '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ ADD</button>
+                                <button onClick={() => handleAddClientPricing(false)} style={{ padding: '10px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Add</button>
                             </div>
                             
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                {(editSpecs.clientPricing || []).length === 0 && <div style={{ fontSize: '0.75rem', color: '#666', fontStyle: 'italic' }}>No custom client pricing assigned. Defaults to Base Price.</div>}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {(editSpecs.clientPricing || []).length === 0 && <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No custom client pricing assigned. Defaults to Base Price.</div>}
                                 {(editSpecs.clientPricing || []).map((cp, idx) => (
-                                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #ccc', padding: '8px 12px' }}>
-                                        <div style={{ display: 'flex', gap: '20px', fontSize: '0.8rem', width: '100%', alignItems: 'center' }}>
-                                            <span style={{ fontWeight: 'bold', color: '#007bff', flex: 1 }}>{getCustomerDisplay(cp.customerId)}</span>
-                                            <span style={{ flex: 1 }}><strong style={{ color: '#666' }}>SKU:</strong> {cp.clientSku || 'N/A'}</span>
-                                            <span style={{ color: '#28a745', fontWeight: 'bold', width: '80px', textAlign: 'right' }}>${parseFloat(cp.price || 0).toFixed(2)}</span>
+                                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper)', border: '1px solid var(--line)', padding: '12px 16px' }}>
+                                        <div style={{ display: 'flex', gap: '24px', fontSize: '0.9rem', width: '100%', alignItems: 'center', color: 'var(--ink)' }}>
+                                            <span style={{ fontWeight: 500, flex: 1 }}>{getCustomerDisplay(cp.customerId)}</span>
+                                            <span style={{ flex: 1, color: 'var(--ink-soft)' }}>SKU: <span style={{ color: 'var(--ink)' }}>{cp.clientSku || 'N/A'}</span></span>
+                                            <span style={{ fontWeight: 500, width: '80px', textAlign: 'right' }}>${parseFloat(cp.price || 0).toFixed(2)}</span>
                                         </div>
-                                        <button onClick={() => handleRemoveClientPricing(idx, false)} style={{ background: 'none', border: 'none', color: '#d9534f', fontWeight: 'bold', cursor: 'pointer', fontSize: '1.2rem', marginLeft: '10px' }}>×</button>
+                                        <button onClick={() => handleRemoveClientPricing(idx, false)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer', marginLeft: '16px' }}>×</button>
                                     </div>
                                 ))}
                             </div>
                         </div>
 
-                        <div style={{ background: '#f8f9fa', padding: '10px', border: '2px solid #ccc', marginTop: '10px' }}>
-                            <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>RECORD VISIBILITY & CROSS-BRAND SHARING:</label>
-                            <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+                        <div>
+                            <h4 style={sectionHeaderStyle}>Record Visibility & Sharing</h4>
+                            <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', padding: '20px', background: 'var(--paper-2)', border: '1px solid var(--line)' }}>
                                 {AVAILABLE_BRANDS.map(brand => {
                                     const isOwner = activeComponent.masterPart.brandId === brand.id; 
                                     const isShared = editSpecs.sharedBrands?.includes(brand.id);
                                     return ( 
-                                        <label key={brand.id} style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '5px', cursor: isOwner ? 'not-allowed' : 'pointer', opacity: isOwner ? 0.7 : 1 }}>
+                                        <label key={brand.id} style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px', cursor: isOwner ? 'not-allowed' : 'pointer', opacity: isOwner ? 0.6 : 1, color: 'var(--ink)' }}>
                                             <input type="checkbox" checked={isOwner || isShared} disabled={isOwner} onChange={() => handleBrandToggle(brand.id, false)} />
                                             {brand.name} {isOwner && "(Owner)"}
                                         </label> 
@@ -890,39 +894,36 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                         </div>
 
                         <div>
-                            <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px', marginTop: '15px' }}>CORE STATIC ATTRIBUTES</h4>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                            <h4 style={sectionHeaderStyle}>Core Static Attributes</h4>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                 
-                                <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROD TYPE:</label><select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
+                                <div><label style={labelStyle}>Prod Type</label><select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
                                 
                                 <div>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>{isAssembly ? 'ROUTING CLASSIFICATION:' : 'INVENTORY CATEGORY:'}</label>
-                                    <select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}>
-                                        <option value="">UNASSIGNED</option>
+                                    <label style={labelStyle}>{isAssembly ? 'Routing Classification' : 'Inventory Category'}</label>
+                                    <select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}>
+                                        <option value="">Unassigned</option>
                                         {(isAssembly ? (globalLists.assemblyTypes || []) : (globalLists.inventoryTypes || [])).map(t => <option key={t} value={t}>{t}</option>)}
                                     </select>
                                 </div>
                                 
-                                <div>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c' }}>PROJECT / GROUPING:</label>
-                                    <input name="project" value={editSpecs.project || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #e83e8c', boxSizing: 'border-box', fontWeight: 'bold' }} />
-                                </div>
+                                <div><label style={labelStyle}>Project / Grouping</label><input name="project" value={editSpecs.project || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
 
                                 {windowConfig.system.partHandling?.includes(activeBrand) && (
-                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34' }}>PART HANDLING:</label><select name="partHandling" value={editSpecs.partHandling || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', fontWeight: 'bold', textTransform: 'uppercase' }}><option value="">UNASSIGNED / STANDARD</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
+                                    <div><label style={labelStyle}>Part Handling</label><select name="partHandling" value={editSpecs.partHandling || ""} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}><option value="">Unassigned / Standard</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
                                 )}
 
-                                <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>UOM:</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+                                <div><label style={labelStyle}>UOM</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={fieldStyle}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                                 
                                 {windowConfig.system.collections?.includes(activeBrand) && (
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#6f42c1', display: 'block', marginBottom: '5px' }}>COLLECTIONS (MULTI-SELECT FOR CPQ):</label>
-                                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '10px', border: '2px solid #6f42c1', background: '#f8f9fa', maxHeight: '120px', overflowY: 'auto' }}>
-                                            {collectionsData.length === 0 && <span style={{ fontSize: '0.65rem', color: '#999', fontStyle: 'italic' }}>No collections defined in Admin.</span>}
+                                        <label style={labelStyle}>Collections (Multi-Select for CPQ)</label>
+                                        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '16px', border: '1px solid var(--line)', background: 'var(--paper)', maxHeight: '150px', overflowY: 'auto' }}>
+                                            {collectionsData.length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No collections defined in Admin.</span>}
                                             {collectionsData.map(c => {
                                                 const isSelected = (editSpecs.collections || []).includes(c.name);
                                                 return (
-                                                    <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', background: isSelected ? '#d8b4e2' : '#fff', color: isSelected ? '#4a148c' : '#333', border: `1px solid ${isSelected ? '#6f42c1' : '#ccc'}`, padding: '6px 12px', borderRadius: '20px', transition: '0.2s' }}>
+                                                    <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer', background: isSelected ? 'var(--ink)' : '#fff', color: isSelected ? '#fff' : 'var(--ink)', border: `1px solid ${isSelected ? 'var(--ink)' : 'var(--line)'}`, padding: '6px 14px', borderRadius: '20px', transition: 'all 0.2s' }}>
                                                         <input type="checkbox" checked={isSelected} onChange={() => handleToggleCollection(c.name)} style={{ display: 'none' }} />
                                                         {c.name}
                                                     </label>
@@ -933,167 +934,139 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 )}
                                 
                                 {windowConfig.system.pillowSizes?.includes(activeBrand) && (
-                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PILLOW SIZE:</label><select name="pillowSize" value={editSpecs.pillowSize || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                    <div><label style={labelStyle}>Pillow Size</label><select name="pillowSize" value={editSpecs.pillowSize || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                                 )}
                                 {windowConfig.system.fillTypes?.includes(activeBrand) && (
-                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>FILL TYPE:</label><select name="fillType" value={editSpecs.fillType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.fillTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                    <div><label style={labelStyle}>Fill Type</label><select name="fillType" value={editSpecs.fillType || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.fillTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                                 )}
                                 {windowConfig.system.flangeStyles?.includes(activeBrand) && (
-                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>EDGE/FLANGE:</label><select name="flangeStyle" value={editSpecs.flangeStyle || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.flangeStyles || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                    <div><label style={labelStyle}>Edge/Flange</label><select name="flangeStyle" value={editSpecs.flangeStyle || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.flangeStyles || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                                 )}
                                 {windowConfig.system.stitchTypes?.includes(activeBrand) && (
-                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>STITCH ROUTING:</label><select name="stitchType" value={editSpecs.stitchType || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.stitchTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                    <div><label style={labelStyle}>Stitch Routing</label><select name="stitchType" value={editSpecs.stitchType || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.stitchTypes || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                                 )}
                                 {windowConfig.system.seamCounts?.includes(activeBrand) && (
-                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>SEAM COUNT:</label><select name="seamCount" value={editSpecs.seamCount || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                    <div><label style={labelStyle}>Seam Count</label><select name="seamCount" value={editSpecs.seamCount || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                                 )}
                                 {windowConfig.system.outsourceActions?.includes(activeBrand) && (
-                                    <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>OUTSOURCE ACTION:</label><select name="outsourceAction" value={editSpecs.outsourceAction || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000' }}><option value="">SELECT...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                    <div><label style={labelStyle}>Outsource Action</label><select name="outsourceAction" value={editSpecs.outsourceAction || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                                 )}
                                 
                                 {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
                                     <div key={w.id}>
-                                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#e83e8c', textTransform: 'uppercase' }}>{w.name}:</label>
-                                        <select value={editSpecs.dynamicDicts?.[w.id] || ""} onChange={(e) => handleDictChange(w.id, e.target.value)} style={{ width: '100%', padding: '8px', border: '2px solid #e83e8c', outline: 'none', fontWeight: 'bold' }}>
-                                            <option value="">SELECT...</option><option value="N/A">N/A</option>
+                                        <label style={labelStyle}>{w.name}</label>
+                                        <select value={editSpecs.dynamicDicts?.[w.id] || ""} onChange={(e) => handleDictChange(w.id, e.target.value)} style={fieldStyle}>
+                                            <option value="">Select...</option><option value="N/A">N/A</option>
                                             {dynamicAssets.filter(a => a.windowId === w.id).map(a => <option key={a.id} value={a.name}>{a.name} {a.code ? `(${a.code})` : ''}</option>)}
                                         </select>
                                     </div>
                                 ))}
 
                                 {customSchema.map(field => (
-                                    <div key={field.key} style={{ display: 'flex', flexDirection: 'column', background: '#eafaf1', padding: '5px', border: '1px solid #28a745' }}>
-                                        <label style={{ fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '5px', color: '#1e7e34' }}>{field.label} (Custom):</label>
+                                    <div key={field.key}>
+                                        <label style={labelStyle}>{field.label} (Custom)</label>
                                         {field.type === 'dropdown' ? (
-                                            <select value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745' }}>
+                                            <select value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={fieldStyle}>
                                                 <option value="">Select...</option>{(field.options || "").split(',').map(opt => <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>)}
                                             </select>
                                         ) : field.type === 'file' ? (
-                                            <div>
-                                                {editSpecs.customData?.[field.key] && <a href={editSpecs.customData[field.key]} target="_blank" rel="noreferrer" style={{ fontSize: '0.65rem', color: '#007bff', display: 'block', marginBottom: '5px' }}>[View Current File]</a>}
-                                                <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0], false)} style={{ width: '100%', fontSize: '0.75rem' }} />
+                                            <div style={{ background: 'var(--paper)', padding: '12px', border: '1px solid var(--line)' }}>
+                                                {editSpecs.customData?.[field.key] && <a href={editSpecs.customData[field.key]} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--ink)', textDecoration: 'underline', display: 'block', marginBottom: '8px' }}>View Current File</a>}
+                                                <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0], false)} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
                                             </div>
                                         ) : (
-                                            <input type={field.type} value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box' }} />
+                                            <input type={field.type} value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={fieldStyle} />
                                         )}
                                     </div>
                                 ))}
 
-                                <div style={{ background: '#fff3cd', border: '1px solid #ffeeba', padding: '5px 10px', gridColumn: 'span 2' }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'block', marginBottom: '3px' }}>ASSIGN TO WATCHLIST:</label>
-                                    <select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', fontWeight: 'bold' }}>
-                                        <option value="NONE">NONE</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
-                                    </select>
-                                </div>
-
-                            </div>
-                        </div>
-
-                        <div style={{ background: '#f8f9fa', border: '2px solid #d4af37', padding: '15px', marginTop: '10px' }}>
-                            <h4 style={{ margin: '0 0 10px 0', color: '#b8860b', display: 'flex', alignItems: 'center', gap: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' }}>⚙️ HARDWARE CPQ METADATA (VISION ENGINE)</h4>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                                <div>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET PROJECTION (INCHES):</label>
-                                    <select value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37', fontWeight: 'bold' }}>
-                                        <option value="">-- NO PROJECTION / NOT BRACKET --</option>
-                                        {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" PROJECTION</option>)}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>BRACKET MOUNT TYPE:</label>
-                                    <select value={editSpecs.customData?.bracketType || ""} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
-                                        <option value="">-- NOT A BRACKET --</option>
-                                        <option value="WALL">WALL MOUNT</option>
-                                        <option value="CEILING">CEILING MOUNT</option>
-                                        <option value="INSIDE MOUNT">INSIDE MOUNT</option>
-                                    </select>
-                                </div>
                                 <div style={{ gridColumn: 'span 2' }}>
-                                    <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#b8860b' }}>SERVICE / FEE TYPE (AUTO-APPEND):</label>
-                                    <select value={editSpecs.customData?.feeType || ""} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #d4af37' }}>
-                                        <option value="">-- NO SPECIAL FEE --</option>
-                                        <option value="SPLICE">SPLICE FEE</option>
-                                        <option value="MITER_CUT">MITER CUT FEE</option>
-                                        <option value="BENT_RETURN">BENT RETURN (FR) FEE</option>
-                                        <option value="MITER_RETURN">MITER RETURN FEE</option>
+                                    <label style={labelStyle}>Assign to Watchlist</label>
+                                    <select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={fieldStyle}>
+                                        <option value="NONE">None</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
                                     </select>
-                                    <span style={{ fontSize: '0.6rem', color: '#666', fontStyle: 'italic', display: 'block', marginTop: '4px' }}>If selected, the Vision System will automatically bill for this item when triggered (e.g. mapping "Splice Fee" to splices).</span>
                                 </div>
                             </div>
                         </div>
 
                         <div>
-                            <h4 style={{ margin: '0 0 10px 0', borderBottom: '2px solid #eee', paddingBottom: '5px', color: '#007bff' }}>LOGISTICS & SOURCING</h4>
-                            <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
-                                <button onClick={() => setEditSpecs({...editSpecs, isInHouse: true})} style={{ flex: 1, padding: '10px', background: editSpecs.isInHouse ? '#000' : '#eee', color: editSpecs.isInHouse ? '#fff' : '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer' }}>IN-HOUSE</button>
-                                <button onClick={() => setEditSpecs({...editSpecs, isInHouse: false})} style={{ flex: 1, padding: '10px', background: !editSpecs.isInHouse ? '#000' : '#eee', color: !editSpecs.isInHouse ? '#fff' : '#000', border: '2px solid #000', fontWeight: 'bold', cursor: 'pointer' }}>OUTSOURCED</button>
-                            </div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                {editSpecs.isInHouse ? (
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>PROGRAM #:</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                                        <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>RAW MAT:</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                                        <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE PRICE ($):</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                                        <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE COST ($):</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                                    </div>
-                                ) : (
-                                    <>
-                                        <div style={{ display: 'flex', gap: '10px' }}>
-                                            <div style={{ flex: 2 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>VENDOR NAME:</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }}><option value="">SELECT VENDOR...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
-                                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#007bff' }}>VENDOR PART # / SKU:</label><input name="vendorId" value={editSpecs.vendorId || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box' }} /></div>
-                                        </div>
-                                        <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
-                                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between' }}>PURCHASE LINK (URL): {editSpecs.vendorUrl && <a href={editSpecs.vendorUrl.startsWith('http') ? editSpecs.vendorUrl : `https://${editSpecs.vendorUrl}`} target="_blank" rel="noreferrer" style={{color: '#007bff', textDecoration: 'none'}}>Open ↗</a>}</label><input name="vendorUrl" value={editSpecs.vendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between' }}>ALT ITEM LINK (URL): {editSpecs.altVendorUrl && <a href={editSpecs.altVendorUrl.startsWith('http') ? editSpecs.altVendorUrl : `https://${editSpecs.altVendorUrl}`} target="_blank" rel="noreferrer" style={{color: '#007bff', textDecoration: 'none'}}>Open ↗</a>}</label><input name="altVendorUrl" value={editSpecs.altVendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                                        </div>
-                                        <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
-                                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE PRICE ($):</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>BASE COST ($):</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>MOQ:</label><input name="moq" type="number" value={editSpecs.moq || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>LEAD (DAYS):</label><input name="leadTime" type="number" value={editSpecs.leadTime || ""} onChange={handleSpecChange} style={{ width: '100%', padding: '8px', border: '1px solid #000', boxSizing: 'border-box' }} /></div>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                            
-                            <div style={{ borderTop: '2px solid #eee', paddingTop: '10px', marginTop: '5px', display: 'flex', gap: '15px' }}>
-                                <div style={{ flex: 1 }}>
-                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>UPLOAD PRINT (PDF):</label>
-                                    {editSpecs.pdfUrl && <a href={editSpecs.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.7rem', color: '#007bff', display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>[View Current PDF]</a>}
-                                    <input type="file" accept="application/pdf" onChange={(e) => setPdfFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                                    {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
+                            <h4 style={sectionHeaderStyle}>Hardware CPQ Metadata (Vision Engine)</h4>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
+                                <div>
+                                    <label style={labelStyle}>Bracket Projection (Inches)</label>
+                                    <select value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={fieldStyle}>
+                                        <option value="">-- No Projection / Not Bracket --</option>
+                                        {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" Projection</option>)}
+                                    </select>
                                 </div>
-                                <div style={{ flex: 1, borderLeft: '1px solid #eee', paddingLeft: '15px' }}>
-                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', display: 'block', marginBottom: '5px', color: '#e83e8c' }}>3D CAD MODEL (.GLB / .GLTF):</label>
-                                    {editSpecs.cadUrl && <div style={{ fontSize: '0.7rem', color: '#28a745', marginBottom: '5px', fontWeight: 'bold' }}>[✓ 3D Model Assigned]</div>}
-                                    <input type="file" accept=".glb,.gltf" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.7rem', width: '100%' }} />
-                                    {cadUploadProgress > 0 && <progress value={cadUploadProgress} max="100" style={{ width: '100%', marginTop: '5px' }}/>}
+                                <div>
+                                    <label style={labelStyle}>Bracket Mount Type</label>
+                                    <select value={editSpecs.customData?.bracketType || ""} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={fieldStyle}>
+                                        <option value="">-- Not a Bracket --</option>
+                                        <option value="WALL">Wall Mount</option>
+                                        <option value="CEILING">Ceiling Mount</option>
+                                        <option value="INSIDE MOUNT">Inside Mount</option>
+                                    </select>
+                                </div>
+                                <div style={{ gridColumn: 'span 2' }}>
+                                    <label style={labelStyle}>Service / Fee Type (Auto-Append)</label>
+                                    <select value={editSpecs.customData?.feeType || ""} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
+                                        <option value="">-- No Special Fee --</option>
+                                        <option value="SPLICE">Splice Fee</option>
+                                        <option value="MITER_CUT">Miter Cut Fee</option>
+                                        <option value="BENT_RETURN">Bent Return (FR) Fee</option>
+                                        <option value="MITER_RETURN">Miter Return Fee</option>
+                                    </select>
+                                    <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', fontStyle: 'italic', display: 'block', marginTop: '6px' }}>If selected, the Vision System will automatically bill for this item when triggered.</span>
                                 </div>
                             </div>
                         </div>
 
-                        <div style={{ background: '#f8f9fa', border: '2px solid #CC6600', padding: '15px', marginTop: '10px' }}>
-                            <h4 style={{ margin: '0 0 10px 0', color: '#CC6600', display: 'flex', alignItems: 'center', gap: '5px' }}>📐 GEOMETRY & Z-INDEX RULES</h4>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '15px' }}>
-                                <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>LENGTH (in):</label><input name="length" type="number" step="0.1" value={editSpecs.parametric?.length || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                                <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>WIDTH (in):</label><input name="width" type="number" step="0.1" value={editSpecs.parametric?.width || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                                <div><label style={{ fontSize: '0.65rem', fontWeight: 'bold' }}>HEIGHT (in):</label><input name="height" type="number" step="0.1" value={editSpecs.parametric?.height || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #000', boxSizing: 'border-box' }} /></div>
-                            </div>
-                            <div style={{ marginBottom: '15px' }}>
-                                <label style={{ fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}><input type="checkbox" name="isCutToSize" checked={editSpecs.parametric?.isCutToSize || false} onChange={handleParametricChange} />DYNAMIC CUSTOM LENGTH ALLOWED (STRETCHABLE POLE / TRACK)</label>
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                                <div style={{ gridColumn: 'span 2' }}><label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#d9534f' }}>Z-INDEX / RENDER LAYER:</label><input name="layeringSequence" type="number" step="10" value={editSpecs.layeringSequence || ""} onChange={handleSpecChange} placeholder="e.g. 10 (Back), 30 (Front)" style={{ width: '100%', padding: '8px', border: '2px solid #ccc', boxSizing: 'border-box' }} /></div>
-                                <div style={{ gridColumn: 'span 2', background: '#e3f2fd', padding: '10px', border: '2px solid #007bff' }}><label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>WIDTH OFFSET / DEDUCTION (INCHES):</label><input name="widthOffset" type="number" step="0.125" value={editSpecs.parametric?.widthOffset || ""} onChange={handleParametricChange} style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box', fontWeight: 'bold' }} /></div>
+                        <div>
+                            <h4 style={sectionHeaderStyle}>Geometry & Z-Index Rules</h4>
+                            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                                    <div><label style={labelStyle}>Length (in)</label><input name="length" type="number" step="0.1" value={editSpecs.parametric?.length || ""} onChange={handleParametricChange} style={fieldStyle} /></div>
+                                    <div><label style={labelStyle}>Width (in)</label><input name="width" type="number" step="0.1" value={editSpecs.parametric?.width || ""} onChange={handleParametricChange} style={fieldStyle} /></div>
+                                    <div><label style={labelStyle}>Height (in)</label><input name="height" type="number" step="0.1" value={editSpecs.parametric?.height || ""} onChange={handleParametricChange} style={fieldStyle} /></div>
+                                </div>
+                                <div style={{ marginBottom: '24px' }}>
+                                    <label style={{ fontSize: '0.9rem', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <input type="checkbox" name="isCutToSize" checked={editSpecs.parametric?.isCutToSize || false} onChange={handleParametricChange} />
+                                        Dynamic Custom Length Allowed (Stretchable Pole / Track)
+                                    </label>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                    <div style={{ gridColumn: 'span 2' }}><label style={labelStyle}>Z-Index / Render Layer</label><input name="layeringSequence" type="number" step="10" value={editSpecs.layeringSequence || ""} onChange={handleSpecChange} placeholder="e.g. 10 (Back), 30 (Front)" style={fieldStyle} /></div>
+                                    <div style={{ gridColumn: 'span 2', background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)' }}><label style={labelStyle}>Width Offset / Deduction (Inches)</label><input name="widthOffset" type="number" step="0.125" value={editSpecs.parametric?.widthOffset || ""} onChange={handleParametricChange} style={fieldStyle} /></div>
+                                </div>
                             </div>
                         </div>
 
-                        <div style={{ borderTop: '2px solid #eee', paddingTop: '20px', marginTop: 'auto' }}>
-                            <button onClick={saveGlobalUpdates} style={{ width: '100%', padding: '15px', background: isSaving ? '#28a745' : '#007bff', color: '#fff', fontWeight: 'bold', fontSize: '1rem', border: '2px solid #000', cursor: 'pointer', transition: '0.3s' }}>
-                                {isSaving ? "GLOBAL DATA SAVED ✓" : "💾 SAVE GLOBAL PART DATA"}
+                        <div>
+                            <h4 style={sectionHeaderStyle}>Documents</h4>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)' }}>
+                                <div>
+                                    <label style={labelStyle}>Upload Print (PDF)</label>
+                                    {editSpecs.pdfUrl && <a href={editSpecs.pdfUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--ink)', textDecoration: 'underline', display: 'block', marginBottom: '10px' }}>View Current PDF</a>}
+                                    <input type="file" accept="application/pdf" onChange={(e) => setPdfFile(e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
+                                    {uploadProgress > 0 && <progress value={uploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>3D CAD Model (.glb / .gltf)</label>
+                                    {editSpecs.cadUrl && <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '10px' }}>✓ 3D Model Assigned</div>}
+                                    <input type="file" accept=".glb,.gltf" onChange={(e) => setCadFile(e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
+                                    {cadUploadProgress > 0 && <progress value={cadUploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style={{ paddingTop: '20px' }}>
+                            <button onClick={saveGlobalUpdates} style={{ width: '100%', padding: '16px', background: isSaving ? 'var(--brass-light)' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.3s ease' }}>
+                                {isSaving ? "Saving..." : "Save Global Part Data"}
                             </button>
                         </div>
-                    </>
+                    </div>
                 )}
             </div>
         </div>

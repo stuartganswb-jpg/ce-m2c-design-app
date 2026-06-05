@@ -262,7 +262,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               const safeId = `CUST-${c.id}`;
               const docRef = doc(db, "crm_records", safeId);
               
-              // 🚀 NEW: Auto-Map Subsidiary ID to Brand Key
+              // Auto-Map Subsidiary ID to Brand Key
               const targetBrand = Object.keys(BRAND_NETSUITE_MAP).find(key => BRAND_NETSUITE_MAP[key].subsidiary === nsSubsidiaryId?.toString()) || activeBrand;
 
               await setDoc(docRef, {
@@ -279,8 +279,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   contact: '',
                   salesRep: '',
                   notes: 'Imported from NetSuite',
-                  brandId: targetBrand,          // Lock to specific CRM view
-                  sharedBrands: [targetBrand],   // Lock to specific CRM view
+                  brandId: targetBrand,          
+                  sharedBrands: [targetBrand],   
                   ytd: 0, mtd: 0, openOrders: 0
               }, { merge: true });
               successCount++;
@@ -935,100 +935,88 @@ const handleSyncAddresses = async () => {
       : availableSourceItems;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '20px', fontFamily: 'monospace', backgroundColor: '#e5e5e5', minHeight: '100vh' }}>
-      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '5px 5px 0 #000' }}>
-        <div><h2 style={{ margin: 0, textTransform: 'uppercase', fontSize: '1.4rem' }}>11. System Administration</h2><span style={{ fontSize: '0.7rem', color: '#666' }}>SUPERUSER ACCESS GRANTED: {currentUser}</span></div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
+      
+      {/* HEADER */}
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+        <div>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>System Administration</span>
+          <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Master Controls</h2>
+        </div>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '4px 8px', borderRadius: '2px' }}>Role: {currentUser}</span>
       </div>
 
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
-        <div style={{ width: '250px', background: '#fff', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000', flexShrink: 0 }}>
-          <div style={{ padding: '15px', background: '#000', color: '#fff', fontWeight: 'bold' }}>SYSTEM CONTROLS</div>
-          <button onClick={() => setActiveSection("CPQ_FLOWS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "CPQ_FLOWS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "CPQ_FLOWS" ? '4px solid #007bff' : '4px solid transparent' }}>⚙️ CPQ FLOW BUILDER</button>
-          <button onClick={() => setActiveSection("RULES")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "RULES" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "RULES" ? '4px solid #007bff' : '4px solid transparent' }}>📐 CPQ LOGIC ENGINE</button>
-          <button onClick={() => setActiveSection("CRM_SETTINGS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "CRM_SETTINGS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "CRM_SETTINGS" ? '4px solid #fd7e14' : '4px solid transparent' }}>👥 CRM & SALES CONFIG</button>
-          <button onClick={() => setActiveSection("NETSUITE_SYNC")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "NETSUITE_SYNC" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "NETSUITE_SYNC" ? '4px solid #6f42c1' : '4px solid transparent' }}>🌐 NETSUITE SYNC</button>
-          <button onClick={() => setActiveSection("FORMS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "FORMS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "FORMS" ? '4px solid #28a745' : '4px solid transparent' }}>📝 FORM TEMPLATES</button>
-          <button onClick={() => setActiveSection("USERS")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "USERS" ? '#f4f4f4' : '#fff', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "USERS" ? '4px solid #007bff' : '4px solid transparent' }}>👥 USER MATRIX</button>
-          <button onClick={() => setActiveSection("DANGER")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "DANGER" ? '#ffebee' : '#fff', color: '#d9534f', border: 'none', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "DANGER" ? '4px solid #d9534f' : '4px solid transparent' }}>⚠️ DANGER ZONE</button>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
+        
+        {/* SIDEBAR NAVIGATION */}
+        <div style={{ width: '250px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', flexShrink: 0, borderRadius: '2px', overflow: 'hidden' }}>
+          <div style={{ padding: '20px 15px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', borderBottom: '1px solid var(--line)' }}>Settings Menu</div>
           
-          {/* HIDDEN SUPER ADMIN TAB */}
+          <AdminNavButton active={activeSection === "NETSUITE_SYNC"} onClick={() => setActiveSection("NETSUITE_SYNC")} label="NetSuite Sync" icon="🌐" />
+          <AdminNavButton active={activeSection === "CPQ_FLOWS"} onClick={() => setActiveSection("CPQ_FLOWS")} label="CPQ Flow Builder" icon="⚙️" />
+          <AdminNavButton active={activeSection === "RULES"} onClick={() => setActiveSection("RULES")} label="CPQ Logic Engine" icon="📐" />
+          <AdminNavButton active={activeSection === "CRM_SETTINGS"} onClick={() => setActiveSection("CRM_SETTINGS")} label="CRM & Sales Config" icon="👥" />
+          <AdminNavButton active={activeSection === "FORMS"} onClick={() => setActiveSection("FORMS")} label="Form Templates" icon="📝" />
+          <AdminNavButton active={activeSection === "USERS"} onClick={() => setActiveSection("USERS")} label="User Matrix" icon="🔐" />
+          
+          <button onClick={() => setActiveSection("DANGER")} style={{ padding: '16px 20px', textAlign: 'left', background: activeSection === "DANGER" ? '#fdf2f2' : '#fff', color: '#d9534f', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSection === "DANGER" ? '2px solid #d9534f' : '2px solid transparent', display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '1.1rem' }}>⚠️</span> Danger Zone
+          </button>
+          
           {isSuperAdmin && (
-              <button onClick={() => setActiveSection("SUPER_ADMIN")} style={{ padding: '15px', textAlign: 'left', background: activeSection === "SUPER_ADMIN" ? '#f4f4f4' : '#fff', color: '#000', border: 'none', borderBottom: '1px solid #eee', fontWeight: 'bold', cursor: 'pointer', borderLeft: activeSection === "SUPER_ADMIN" ? '4px solid #000' : '4px solid transparent' }}>
-                  🕵️‍♂️ 15.5 SUPER ADMIN
+              <button onClick={() => setActiveSection("SUPER_ADMIN")} style={{ padding: '16px 20px', textAlign: 'left', background: activeSection === "SUPER_ADMIN" ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', border: 'none', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSection === "SUPER_ADMIN" ? '2px solid var(--ink)' : '2px solid transparent', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <span style={{ fontSize: '1.1rem' }}>🕵️‍♂️</span> Super Admin
               </button>
           )}
         </div>
 
-        <div style={{ flex: 1, background: '#fff', border: '2px solid #000', minHeight: '600px', boxShadow: '10px 10px 0 #000' }}>
+        {/* MAIN CONTENT AREA */}
+        <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', minHeight: '600px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
           
-          {/* NETSUITE INTEGRATION MODULE */}
+          {/* --- NETSUITE INTEGRATION MODULE --- */}
           {activeSection === "NETSUITE_SYNC" && (
-              <div style={{ padding: '30px', display: 'flex', gap: '20px', alignItems: 'stretch' }}>
-                  
-                  {/* Left Column: Sync Controls */}
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '10px' }}>
-                          <h3 style={{ margin: 0, color: '#6f42c1' }}>🌐 NETSUITE MASTER SYNC (PULL)</h3>
+              <div style={{ padding: '30px', display: 'flex', gap: '30px', alignItems: 'stretch' }}>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                      <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px' }}>
+                          <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>NetSuite Master Sync (Pull)</h3>
                       </div>
                       
-                      <div style={{ background: '#f8f9fa', border: '2px solid #000', padding: '15px' }}>
-                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff', display: 'block', marginBottom: '5px' }}>TARGET SUBSIDIARY ID (Optional in Safe Mode):</label>
+                      <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '20px', borderRadius: '2px' }}>
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Target Subsidiary ID (Optional in Safe Mode)</label>
                           <input 
                               type="number" 
                               value={nsSubsidiaryId} 
                               onChange={e => setNsSubsidiaryId(e.target.value)} 
                               placeholder="e.g. 3 (Classical Elements)" 
-                              style={{ width: '100%', padding: '10px', border: '2px solid #007bff', boxSizing: 'border-box', fontWeight: 'bold', fontSize: '1.2rem' }} 
+                              style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '1rem', outline: 'none' }} 
                           />
-                          <p style={{ fontSize: '0.7rem', color: '#666', marginTop: '5px' }}>The Internal ID of the NetSuite subsidiary you want to import data from.</p>
+                          <p style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', margin: '8px 0 0 0' }}>The Internal ID of the NetSuite subsidiary you want to import data from.</p>
                       </div>
 
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                          <button onClick={handleSyncCustomers} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#fd7e14', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                              ⬇️ 1. SYNC ACTIVE CUSTOMERS
-                              <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls all active customers mapped to Subsidiary {nsSubsidiaryId}.</div>
-                          </button>
-
-                          <button onClick={handleSyncAddresses} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#e83e8c', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                              ⬇️ 1.2 SYNC CUSTOMER ADDRESS BOOKS
-                              <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls all address books and maps IDs for API Drop-Shipping.</div>
-                          </button>
-                          
-                          <button onClick={handleSyncVendors} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#17a2b8', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                              ⬇️ 1.5 SYNC ACTIVE VENDORS (CO-OP CRM)
-                              <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls all active external vendors/co-ops from NetSuite.</div>
-                          </button>
-                          
-                          <button onClick={() => handleSyncItems('Inventory')} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#007bff', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                              ⬇️ 2. SYNC INVENTORY / COMPONENTS
-                              <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls non-assembly items where "Sync to CPQ App" is checked.</div>
-                          </button>
-
-                          <button onClick={() => handleSyncItems('Assembly')} disabled={isSyncing} style={{ padding: '20px', background: isSyncing ? '#ccc' : '#28a745', color: '#fff', fontWeight: 'bold', border: '2px solid #000', cursor: isSyncing ? 'wait' : 'pointer', textAlign: 'left', fontSize: '1rem', boxShadow: '4px 4px 0 rgba(0,0,0,0.1)' }}>
-                              ⬇️ 3. SYNC KITS / ASSEMBLIES
-                              <div style={{ fontSize: '0.65rem', fontWeight: 'normal', marginTop: '5px' }}>SuiteQL: Pulls Assembly Items where "Sync to CPQ App" is checked.</div>
-                          </button>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                          <SyncButton onClick={handleSyncCustomers} disabled={isSyncing} label="Sync Active Customers" sub="SuiteQL: Pulls all active customers mapped to Subsidiary." />
+                          <SyncButton onClick={handleSyncAddresses} disabled={isSyncing} label="Sync Customer Address Books" sub="SuiteQL: Pulls address books and maps IDs for API Drop-Shipping." />
+                          <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors (Co-Op CRM)" sub="SuiteQL: Pulls all active external vendors/co-ops." />
+                          <SyncButton onClick={() => handleSyncItems('Inventory')} disabled={isSyncing} label="Sync Inventory / Components" sub="SuiteQL: Pulls non-assembly items flagged for CPQ sync." />
+                          <SyncButton onClick={() => handleSyncItems('Assembly')} disabled={isSyncing} label="Sync Kits / Assemblies" sub="SuiteQL: Pulls Assembly Items flagged for CPQ sync." />
                       </div>
                   </div>
 
-                  {/* Right Column: Terminal */}
-                  <div style={{ flex: 1, background: '#1e1e1e', border: '2px solid #000', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #000' }}>
-                      <div style={{ padding: '10px 15px', background: '#333', color: '#fff', fontWeight: 'bold', fontSize: '0.8rem', borderBottom: '2px solid #000', display: 'flex', justifyContent: 'space-between' }}>
-                          <span>>_ SUITEQL TERMINAL</span>
-                          <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '0.7rem' }}>CLEAR</button>
+                  <div style={{ flex: 1, background: 'var(--dark)', display: 'flex', flexDirection: 'column', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div style={{ padding: '12px 20px', background: 'var(--dark-2)', color: 'var(--paper)', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #333' }}>
+                          <span>SuiteQL Terminal</span>
+                          <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: 'var(--paper)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', opacity: 0.7 }}>CLEAR</button>
                       </div>
-                      <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflowY: 'auto', fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                          {syncLog.length === 0 && <span style={{ color: '#666' }}>Awaiting command...</span>}
+                      <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', flex: 1, overflowY: 'auto', fontFamily: 'var(--mono)', fontSize: '12px', color: '#a8a5a0' }}>
+                          {syncLog.length === 0 && <span>Awaiting command execution...</span>}
                           {syncLog.map((log, idx) => {
-                              let color = '#fff';
-                              if (log.type === 'error') color = '#ff4d4d';
-                              if (log.type === 'success') color = '#28a745';
-                              if (log.type === 'warn') color = '#ffc107';
-                              
+                              let color = '#a8a5a0';
+                              if (log.type === 'error') color = '#e27373';
+                              if (log.type === 'success') color = '#7dbb81';
+                              if (log.type === 'warn') color = '#e2b373';
                               return (
-                                  <div key={idx} style={{ color, borderBottom: '1px dotted #333', paddingBottom: '4px' }}>
-                                      <span style={{ color: '#888', marginRight: '8px' }}>[{log.time}]</span>
-                                      {log.msg}
+                                  <div key={idx} style={{ color, borderBottom: '1px solid #333', paddingBottom: '6px' }}>
+                                      <span style={{ opacity: 0.5, marginRight: '10px' }}>[{log.time}]</span>{log.msg}
                                   </div>
                               );
                           })}
@@ -1037,43 +1025,45 @@ const handleSyncAddresses = async () => {
               </div>
           )}
 
-          {/* FLOW BUILDER */}
+          {/* --- FLOW BUILDER --- */}
           {activeSection === "CPQ_FLOWS" && (
             <div style={{ display: 'flex', flex: 1, height: '100%' }}>
                 
-                <div style={{ width: '350px', borderRight: '2px solid #000', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px', background: '#f8f9fa' }}>
-                    <h3 style={{ margin: 0, color: '#007bff' }}>ACTIVE CPQ FLOWS</h3>
+                <div style={{ width: '350px', borderRight: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', background: 'var(--paper)' }}>
+                    <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Active CPQ Flows</h3>
                     
-                    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                        <input value={newFlowName} onChange={e => setNewFlowName(e.target.value)} placeholder="e.g., CHANDELIER CONFIG" style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }} />
-                        <button onClick={handleCreateNewFlow} style={{ background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', padding: '0 15px' }}>ADD</button>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <input value={newFlowName} onChange={e => setNewFlowName(e.target.value)} placeholder="e.g., CHANDELIER CONFIG" style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                        <button onClick={handleCreateNewFlow} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '0 15px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
                     </div>
                     
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px', overflowY: 'auto', flex: 1 }}>
-                        {cpqFlows.filter(f => f.brandId === activeBrand).length === 0 && <div style={{color: '#999', fontStyle: 'italic', fontSize: '0.8rem'}}>No flows exist. Create one above!</div>}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', flex: 1 }}>
+                        {cpqFlows.filter(f => f.brandId === activeBrand).length === 0 && <div style={{color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem'}}>No flows exist. Create one above!</div>}
                         {cpqFlows.filter(f => f.brandId === activeBrand).map(flow => (
-                            <div key={flow.id} onClick={() => setActiveFlowId(flow.id)} style={{ padding: '15px', border: `2px solid ${activeFlowId === flow.id ? '#007bff' : '#ccc'}`, background: activeFlowId === flow.id ? '#e6f2ff' : '#fff', cursor: 'pointer', fontWeight: 'bold', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <span>{flow.name}</span>
-                                    <span style={{ color: '#007bff' }}>{flow.steps?.length || 0} Steps</span>
+                            <div key={flow.id} onClick={() => setActiveFlowId(flow.id)} style={{ padding: '16px', border: `1px solid ${activeFlowId === flow.id ? 'var(--brass)' : 'var(--line)'}`, background: activeFlowId === flow.id ? 'var(--paper-2)' : '#fff', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '0.95rem', fontWeight: 500, color: 'var(--ink)' }}>{flow.name}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)' }}>{flow.steps?.length || 0} Steps</span>
                                 </div>
-                                {flow.legacyErpId && <div style={{ fontSize: '0.65rem', color: '#666' }}>ERP ID: {flow.legacyErpId}</div>}
+                                {flow.legacyErpId && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>ERP ID: {flow.legacyErpId}</div>}
                             </div>
                         ))}
                     </div>
 
                     {orphanedAssemblies.length > 0 && (
-                        <div style={{ marginTop: '20px', borderTop: '2px solid #ccc', paddingTop: '15px' }}>
-                            <h4 style={{ margin: '0 0 10px 0', color: '#e83e8c', fontSize: '0.85rem' }}>⚠️ PENDING CPQ SETUP</h4>
-                            <div style={{ fontSize: '0.7rem', color: '#666', marginBottom: '10px' }}>These assemblies were flagged for CPQ routing but don't have a flow yet.</div>
+                        <div style={{ marginTop: '20px', borderTop: '1px solid var(--line)', paddingTop: '20px' }}>
+                            <h4 style={{ margin: '0 0 10px 0', fontFamily: 'var(--serif)', fontSize: '1.1rem', color: '#d9534f' }}>Pending CPQ Setup</h4>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '15px' }}>These assemblies were flagged for CPQ routing but don't have a flow yet.</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                 {orphanedAssemblies.map(asm => (
                                     <button 
                                         key={asm.id}
                                         onClick={() => handleAutoCreateFlowForAssembly(asm)}
-                                        style={{ padding: '10px', background: '#e83e8c', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', textAlign: 'left', fontSize: '0.75rem', boxShadow: '2px 2px 0 rgba(0,0,0,0.2)' }}
+                                        style={{ padding: '12px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', transition: 'all 0.2s' }}
+                                        onMouseOver={e => { e.currentTarget.style.background = '#d9534f'; e.currentTarget.style.color = '#fff'; }}
+                                        onMouseOut={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#d9534f'; }}
                                     >
-                                        + CREATE FLOW: {asm.itemName}
+                                        + Create Flow: {asm.itemName}
                                     </button>
                                 ))}
                             </div>
@@ -1081,18 +1071,18 @@ const handleSyncAddresses = async () => {
                     )}
                 </div>
 
-                <div style={{ flex: 1, padding: '20px', overflowY: 'auto' }}>
+                <div style={{ flex: 1, padding: '30px', overflowY: 'auto' }}>
                     {!activeFlow ? (
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999', fontWeight: 'bold', height: '100%' }}>SELECT OR CREATE A FLOW TO EDIT</div>
+                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem', height: '100%' }}>Select or create a flow to edit.</div>
                     ) : (
                         <div>
-                            <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '15px', marginBottom: '20px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #28a745', paddingBottom: '10px', marginBottom: '15px' }}>
-                                    <h4 style={{ margin: '0', color: '#1e7e34' }}>🗄️ FILE CABINET LINK (MASTER ASSEMBLY)</h4>
+                            <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '24px', marginBottom: '30px', borderRadius: '2px' }}>
+                                <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '20px' }}>
+                                    <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>File Cabinet Link (Master Assembly)</h4>
                                 </div>
                                 
-                                <div style={{ marginBottom: '15px' }}>
-                                    <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#333' }}>LINK TO MASTER ASSEMBLY (FROM TAB 2):</label>
+                                <div style={{ marginBottom: '20px' }}>
+                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Link to Master Assembly</label>
                                     <select 
                                         value={flowSettings.linkedAssemblyId || ""} 
                                         onChange={(e) => {
@@ -1105,89 +1095,92 @@ const handleSyncAddresses = async () => {
                                                 basePrice: asm?.manufacturingSpecs?.basePrice || flowSettings.basePrice 
                                             });
                                         }}
-                                        style={{ width: '100%', padding: '10px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold', background: '#fff' }}
+                                        style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: '#fff' }}
                                     >
                                         <option value="">-- UNLINKED (STANDALONE FLOW) --</option>
                                         {masterAssemblies.map(a => <option key={a.id} value={a.id}>{a.itemName} {a.legacyErpId && `[${a.legacyErpId}]`}</option>)}
                                     </select>
                                 </div>
 
-                                <div style={{ display: 'flex', gap: '10px' }}>
-                                    <div style={{ flex: 2 }}>
-                                        <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#333' }}>CPQ FLOW NAME:</label>
-                                        <input value={flowSettings.name} onChange={e => setFlowSettings({...flowSettings, name: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '15px' }}>
+                                    <div>
+                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>CPQ Flow Name</label>
+                                        <input value={flowSettings.name} onChange={e => setFlowSettings({...flowSettings, name: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
-                                    <div style={{ flex: 1 }}>
-                                        <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#007bff' }}>ERP ITEM ID:</label>
-                                        <input value={flowSettings.legacyErpId} onChange={e => setFlowSettings({...flowSettings, legacyErpId: e.target.value})} placeholder="e.g. ASM-1234" style={{ width: '100%', padding: '8px', border: '2px solid #007bff', boxSizing: 'border-box' }} />
+                                    <div>
+                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>ERP Item ID</label>
+                                        <input value={flowSettings.legacyErpId} onChange={e => setFlowSettings({...flowSettings, legacyErpId: e.target.value})} placeholder="e.g. ASM-1234" style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
-                                    <div style={{ flex: 1 }}>
-                                        <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#CC6600' }}>BASE PRICE ($):</label>
-                                        <input type="number" step="0.01" value={flowSettings.basePrice} onChange={e => setFlowSettings({...flowSettings, basePrice: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '2px solid #CC6600', boxSizing: 'border-box' }} />
+                                    <div>
+                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Base Price ($)</label>
+                                        <input type="number" step="0.01" value={flowSettings.basePrice} onChange={e => setFlowSettings({...flowSettings, basePrice: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
                                 </div>
                                 
-                                <div style={{ display: 'flex', gap: '10px', marginTop: '15px' }}>
-                                    <button onClick={handleSaveFlowSettings} style={{ flex: 2, padding: '10px 20px', background: isSavingFlowSettings ? '#ccc' : '#000', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>
-                                        {isSavingFlowSettings ? "SYNCING TO DATABASE..." : "💾 SAVE AND CASCADE TO MASTER ASSEMBLY"}
+                                <div style={{ display: 'flex', gap: '15px', marginTop: '24px' }}>
+                                    <button onClick={handleSaveFlowSettings} style={{ flex: 2, padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                        {isSavingFlowSettings ? "Syncing..." : "Save and Cascade to Master"}
                                     </button>
-                                    <button onClick={handleDeleteFlow} style={{ flex: 1, padding: '10px 20px', background: '#d9534f', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>
-                                        🗑️ DELETE FLOW
+                                    <button onClick={handleDeleteFlow} style={{ flex: 1, padding: '12px 24px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => { e.currentTarget.style.background = '#d9534f'; e.currentTarget.style.color = '#fff'; }} onMouseOut={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#d9534f'; }}>
+                                        Delete Flow
                                     </button>
                                 </div>
                             </div>
 
-                            <h3 style={{ margin: '0 0 15px 0', color: '#000', borderBottom: '2px solid #eee', paddingBottom: '10px' }}>CONFIGURE CONFIGURATOR STEPS</h3>
+                            <h3 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '15px' }}>Configure Steps</h3>
                             
                             {flowSettings.linkedAssemblyId && (
-                                <div style={{ background: '#f0f8ff', padding: '15px', border: '2px dashed #007bff', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ background: 'var(--paper)', border: '1px solid var(--brass)', padding: '20px', marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <div>
-                                        <h4 style={{ margin: '0 0 5px 0', color: '#007bff' }}>⚡ AUTO-SYNC AVAILABLE</h4>
-                                        <span style={{ fontSize: '0.8rem', color: '#666' }}>Detected <strong>{linkedBomPins.length} Sub-Assemblies/Components</strong> in the Master File Cabinet.</span>
+                                        <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--brass)' }}>Auto-Sync Available</h4>
+                                        <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Detected <strong>{linkedBomPins.length} Sub-Assemblies/Components</strong> in the Master File Cabinet.</span>
                                     </div>
-                                    <button onClick={() => handleAutoSyncBOM(activeFlow)} style={{ padding: '10px 20px', background: '#007bff', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', boxShadow: '2px 2px 0 rgba(0,0,0,0.2)' }}>
-                                        AUTO-GENERATE STEPS ➔
+                                    <button onClick={() => handleAutoSyncBOM(activeFlow)} style={{ padding: '12px 24px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                        Auto-Generate Steps
                                     </button>
                                 </div>
                             )}
 
-                            <div style={{ background: newStep.id ? '#fff3cd' : '#f8f9fa', padding: '15px', border: newStep.id ? '2px dashed #ffc107' : '1px solid #ccc', marginBottom: '20px' }}>
-                                <h4 style={{ margin: '0 0 10px 0', color: newStep.id ? '#856404' : '#000' }}>
-                                    {newStep.id ? "✏️ EDIT STEP" : "+ MANUAL STEP BUILDER"}
+                            {/* MANUAL STEP BUILDER */}
+                            <div style={{ background: newStep.id ? 'var(--paper-2)' : '#fff', padding: '24px', border: newStep.id ? '1px solid var(--brass)' : '1px solid var(--line)', marginBottom: '30px', borderRadius: '2px' }}>
+                                <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: newStep.id ? 'var(--brass)' : 'var(--ink)' }}>
+                                    {newStep.id ? "Edit Step" : "Manual Step Builder"}
                                 </h4>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                    <input value={newStep.title} onChange={e => setNewStep({...newStep, title: e.target.value})} placeholder="Step Title (e.g. Select Bracket Style)" style={{ padding: '8px', border: '1px solid #ccc' }} />
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value, dataSource: e.target.value === 'STATIC_FEE' ? '' : newStep.dataSource})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }}>
+                                
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                                    <input value={newStep.title} onChange={e => setNewStep({...newStep, title: e.target.value})} placeholder="Step Title (e.g. Select Bracket Style)" style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                                    
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                        <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value, dataSource: e.target.value === 'STATIC_FEE' ? '' : newStep.dataSource})} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                                             <option value="DROPDOWN">Dropdown List</option>
                                             <option value="VISUAL_GRID">Visual Grid (Images/Textures)</option>
-                                            <option value="VISUAL_DIMENSIONS">Visual Grid + Dimensions (2-in-1)</option>
-                                            <option value="DIMENSIONS">Dimensional Input Only (Math)</option>
-                                            <option value="STATIC_FEE">Static Fee / Quantity Only</option>
+                                            <option value="VISUAL_DIMENSIONS">Visual Grid + Dimensions</option>
+                                            <option value="DIMENSIONS">Dimensional Input Only</option>
+                                            <option value="STATIC_FEE">Static Fee / Quantity</option>
                                         </select>
                                         
-                                        <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} disabled={newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE'} style={{ flex: 1, padding: '8px', border: '2px solid #007bff', fontWeight: 'bold', opacity: (newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') ? 0.5 : 1 }}>
+                                        <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} disabled={newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE'} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: (newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') ? 0.5 : 1 }}>
                                             <option value="">-- SELECT DATA SOURCE --</option>
                                             <optgroup label="Core Libraries">
-                                                <option value="master_finishes">Master Finishes (In-House & Outsource)</option>
+                                                <option value="master_finishes">Master Finishes</option>
                                             </optgroup>
                                             <optgroup label="Master Library: Product Types">
-                                                {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>Product Type: {pt}</option>)}
+                                                {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>Type: {pt}</option>)}
                                             </optgroup>
                                             <optgroup label="Master Library: Routing Types">
-                                                {(globalLists.inventoryTypes || []).map(it => <option key={it} value={it}>Routing: {it} (Inventory)</option>)}
-                                                {(globalLists.assemblyTypes || []).map(at => <option key={at} value={at}>Routing: {at} (Assembly)</option>)}
+                                                {(globalLists.inventoryTypes || []).map(it => <option key={it} value={it}>Routing: {it} (Inv)</option>)}
+                                                {(globalLists.assemblyTypes || []).map(at => <option key={at} value={at}>Routing: {at} (Asm)</option>)}
                                             </optgroup>
                                             {customDataWindows.length > 0 && (
-                                                <optgroup label="CPQ Asset Dictionaries (Tab 4)">
+                                                <optgroup label="CPQ Asset Dictionaries">
                                                     {customDataWindows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                                                 </optgroup>
                                             )}
-                                            <optgroup label="Simple Lists (Tab 4)">
+                                            <optgroup label="Simple Lists">
                                                 <option value="uom">UOMs</option>
                                                 <option value="pillowSizes">Pillow Sizes</option>
                                                 <option value="fillTypes">Fill Types</option>
-                                                <option value="flangeStyles">Edge / Flange Styles</option>
+                                                <option value="flangeStyles">Edge Styles</option>
                                                 <option value="stitchTypes">Stitch Routing</option>
                                                 <option value="seamCounts">Seam Counts</option>
                                             </optgroup>
@@ -1195,38 +1188,33 @@ const handleSyncAddresses = async () => {
                                     </div>
 
                                     {(newStep.type === 'VISUAL_DIMENSIONS' || newStep.type === 'DIMENSIONS' || newStep.calculatorTemplate) && (
-                                        <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745' }}>
-                                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '5px' }}>
-                                                📐 HARDWARE MATH / CALCULATOR TEMPLATE (OPTIONAL)
-                                            </label>
-                                            <select value={newStep.calculatorTemplate || ''} onChange={e => setNewStep({...newStep, calculatorTemplate: e.target.value})} style={{ width: '100%', padding: '8px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold' }}>
-                                                <option value="">-- NO CALCULATOR (Standard Step) --</option>
+                                        <div style={{ background: 'var(--paper-2)', padding: '15px', border: '1px solid var(--line)' }}>
+                                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Calculator Template</label>
+                                            <select value={newStep.calculatorTemplate || ''} onChange={e => setNewStep({...newStep, calculatorTemplate: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
+                                                <option value="">-- No Calculator --</option>
                                                 <option value="calc_french_return_1in">1" French Return (+17" cut, C2C -1", Qty = Feet)</option>
                                                 <option value="calc_mitered_bay">Mitered Bay (Wall A/B/C + Angles, Qty = Feet)</option>
                                                 <option value="calc_curved_bay">Curved Bay (Arc / Radius, Qty = Feet)</option>
                                                 <option value="calc_straight_pole">Straight Pole (Qty = Feet)</option>
                                             </select>
-                                            <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>Attaching a calculator will render dimension inputs (Length, Type, etc.) and auto-calculate the Step Quantity based on the formula.</span>
                                         </div>
                                     )}
 
-                                    <div style={{ background: '#fff', padding: '10px', border: '1px solid #ccc' }}>
-                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>STEP QUANTITY DESCRIPTION (Helper Text):</label>
+                                    <div style={{ background: '#fff', padding: '15px', border: '1px solid var(--line)' }}>
+                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Helper Text</label>
                                         <input 
                                             value={newStep.qtyHelperText || ''} 
                                             onChange={e => setNewStep({...newStep, qtyHelperText: e.target.value})} 
-                                            placeholder="e.g. Enter 4 rings per foot of pole." 
-                                            style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} 
+                                            placeholder="e.g. Enter 4 rings per foot." 
+                                            style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} 
                                         />
                                     </div>
 
-                                    <div style={{ background: '#fff', padding: '10px', border: '1px solid #ccc', marginTop: '10px' }}>
-                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '10px' }}>
-                                            🏷️ STEP BASE PRICE / ITEM MAPPING
-                                        </label>
-                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                    <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
+                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '15px' }}>Item Mapping & Base Price</label>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                             <div>
-                                                 <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', display: 'block', marginBottom: '4px' }}>LINK TO LIBRARY ITEM (AUTO-PULLS PRICE):</label>
+                                                 <label style={{ fontSize: '0.85rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Link to Library Item</label>
                                                  <select value={newStep.linkedItemId || newStep.linkedPinId || ''} onChange={e => {
                                                      const selectedId = e.target.value;
                                                      const part = allApprovedDesigns.find(p => p.id === selectedId || p.itemId === selectedId || p.legacyErpId === selectedId);
@@ -1240,21 +1228,21 @@ const handleSyncAddresses = async () => {
                                                      }
                                                      
                                                      setNewStep(prev => ({...prev, linkedItemId: selectedId, linkedPinId: selectedId, basePrice: extractedPrice}));
-                                                 }} style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box', fontWeight: 'bold' }}>
+                                                 }} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                                                      <option value="">-- No Item Linked --</option>
-                                                     {allApprovedDesigns.filter(p => p.partClass === 'Inventory' || p.partClass === 'Assembly').map(p => <option key={p.id} value={p.id}>{p.itemName} {p.legacyErpId && p.legacyErpId !== 'PENDING' ? `[${p.legacyErpId}]` : ''}</option>)}
+                                                     {allApprovedDesigns.filter(p => p.partClass === 'Inventory' || p.partClass === 'Assembly').map(p => <option key={p.id} value={p.id}>{p.itemName}</option>)}
                                                  </select>
                                             </div>
                                             <div>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#333', display: 'block', marginBottom: '4px' }}>STEP BASE PRICE ($):</label>
-                                                <div style={{ display: 'flex', gap: '5px' }}>
+                                                <label style={{ fontSize: '0.85rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Step Base Price ($)</label>
+                                                <div style={{ display: 'flex', gap: '8px' }}>
                                                     <input 
                                                         type="number" 
                                                         step="0.01" 
                                                         value={newStep.basePrice !== undefined && newStep.basePrice !== null && newStep.basePrice !== '' ? newStep.basePrice : ''} 
                                                         onChange={e => setNewStep({...newStep, basePrice: e.target.value})} 
-                                                        placeholder="e.g. 15.00" 
-                                                        style={{ flex: 1, padding: '8px', border: '2px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold' }} 
+                                                        placeholder="0.00" 
+                                                        style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} 
                                                     />
                                                     <button 
                                                         onClick={() => {
@@ -1264,12 +1252,10 @@ const handleSyncAddresses = async () => {
                                                             if (part) {
                                                                 const bp = parseFloat(part.manufacturingSpecs?.basePrice) || parseFloat(part.basePrice) || 0;
                                                                 setNewStep(prev => ({...prev, basePrice: bp}));
-                                                            } else {
-                                                                alert("Item not found in library.");
                                                             }
                                                         }}
-                                                        style={{ padding: '8px 12px', background: '#28a745', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.7rem' }}>
-                                                        🔄 FETCH
+                                                        style={{ padding: '0 15px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>
+                                                        Fetch
                                                     </button>
                                                 </div>
                                             </div>
@@ -1277,14 +1263,14 @@ const handleSyncAddresses = async () => {
                                     </div>
 
                                     {newStep.dataSource && availableSourceItems.length > 0 && newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && (
-                                        <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                                                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>🔍 RESTRICT AVAILABLE OPTIONS (Leave empty to allow all):</span>
-                                                <span style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>{newStep.allowedOptions?.length || 0} Restricted Selected</span>
+                                        <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Restrict Options</span>
+                                                <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>{newStep.allowedOptions?.length || 0} Restricted</span>
                                             </div>
-                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px', maxHeight: '150px', overflowY: 'auto', background: '#f8f9fa', padding: '10px', border: '1px solid #eee' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', maxHeight: '200px', overflowY: 'auto', background: 'var(--paper)', padding: '15px', border: '1px solid var(--line)' }}>
                                                 {availableSourceItems.map(item => (
-                                                    <label key={item.id} style={{ fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer' }}>
+                                                    <label key={item.id} style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--ink)' }}>
                                                         <input
                                                             type="checkbox"
                                                             checked={(newStep.allowedOptions || []).includes(item.id)}
@@ -1301,31 +1287,31 @@ const handleSyncAddresses = async () => {
                                         </div>
                                     )}
                                     
-                                    <div style={{ background: '#e3f2fd', padding: '10px', border: '1px solid #007bff' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                                            <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff' }}>🎯 TARGET 3D MESH/NODE NAME (FOR GLOBAL TEXTURE CHANGES)</label>
+                                    <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Target 3D Mesh / Node</label>
                                             <button 
                                                 onClick={handleInspectNodes} 
                                                 disabled={isInspecting}
-                                                style={{ padding: '3px 8px', background: '#fff', color: '#007bff', border: '1px solid #007bff', fontSize: '0.65rem', fontWeight: 'bold', cursor: isInspecting ? 'wait' : 'pointer' }}
+                                                style={{ padding: '6px 12px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: isInspecting ? 'wait' : 'pointer' }}
                                             >
-                                                {isInspecting ? 'SCANNING...' : '🔍 INSPECT 3D NODES'}
+                                                {isInspecting ? 'Scanning...' : 'Inspect 3D Nodes'}
                                             </button>
                                         </div>
 
                                         {linkedAsm?.nodeClusters?.length > 0 && (
-                                            <div style={{ marginBottom: '10px', background: '#eafaf1', border: '1px solid #28a745', padding: '10px' }}>
-                                                <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#1e7e34', marginBottom: '5px' }}>📦 SAVED SUB-ASSEMBLIES (FROM TAB 1.5):</div>
-                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                                            <div style={{ marginBottom: '15px', background: '#fff', border: '1px solid var(--line)', padding: '15px' }}>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '10px' }}>Saved Sub-Assemblies</div>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                                                     {linkedAsm.nodeClusters.map(cluster => {
                                                         const clusterNodes = cluster.nodes || cluster.meshes || [];
                                                         return (
                                                             <span 
                                                                 key={cluster.id} 
                                                                 onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${clusterNodes.join(', ')}` : clusterNodes.join(', ')}))} 
-                                                                style={{ background: '#28a745', color: '#fff', padding: '4px 8px', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold', boxShadow: '2px 2px 0 rgba(0,0,0,0.1)' }}
+                                                                style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '0.8rem', cursor: 'pointer', borderRadius: '2px' }}
                                                             >
-                                                                {cluster.name} ({clusterNodes.length} Nodes)
+                                                                {cluster.name}
                                                             </span>
                                                         );
                                                     })}
@@ -1334,11 +1320,11 @@ const handleSyncAddresses = async () => {
                                         )}
                                         
                                         {inspectedNodes.length > 0 && (
-                                            <div style={{ marginBottom: '10px', background: '#fff', border: '1px solid #ccc', padding: '5px', maxHeight: '100px', overflowY: 'auto' }}>
-                                                <div style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#666', marginBottom: '5px' }}>AVAILABLE MESHES IN FILE:</div>
-                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                                            <div style={{ marginBottom: '15px', background: '#fff', border: '1px solid var(--line)', padding: '15px', maxHeight: '150px', overflowY: 'auto' }}>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '10px' }}>Available Meshes</div>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                                                     {inspectedNodes.map((node, i) => (
-                                                        <span key={i} onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${node}` : node}))} style={{ background: '#eee', padding: '2px 5px', fontSize: '0.65rem', cursor: 'pointer', border: '1px solid #ccc' }}>
+                                                        <span key={i} onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${node}` : node}))} style={{ background: 'var(--paper-2)', padding: '4px 8px', fontSize: '0.8rem', cursor: 'pointer', border: '1px solid var(--line)' }}>
                                                             {node}
                                                         </span>
                                                     ))}
@@ -1346,46 +1332,40 @@ const handleSyncAddresses = async () => {
                                             </div>
                                         )}
 
-                                        <input value={newStep.targetNodes || ''} onChange={e => setNewStep({...newStep, targetNodes: e.target.value})} placeholder="e.g., Pole_Top, Bracket_Base" style={{ width: '100%', padding: '8px', border: '1px solid #007bff', boxSizing: 'border-box' }} />
-                                        <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>If this is a "Finish" step, it applies the texture to these meshes. Comma separate for multiple.</span>
+                                        <input value={newStep.targetNodes || ''} onChange={e => setNewStep({...newStep, targetNodes: e.target.value})} placeholder="e.g., Pole_Top, Bracket_Base" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
 
-                                    <div style={{ background: '#eafaf1', padding: '10px', border: '1px solid #28a745', marginTop: '10px' }}>
-                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#1e7e34', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '5px' }}>
-                                            🛤️ PART HANDLING & ROUTING <span style={{ color: '#d9534f' }}>*REQUIRED</span>
-                                        </label>
-                                        <select value={newStep.partHandling || ''} onChange={e => setNewStep({...newStep, partHandling: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #28a745', boxSizing: 'border-box', fontWeight: 'bold', textTransform: 'uppercase' }}>
-                                            <option value="">-- SELECT HANDLING ROUTE --</option>
+                                    <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
+                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Part Handling & Routing</label>
+                                        <select value={newStep.partHandling || ''} onChange={e => setNewStep({...newStep, partHandling: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
+                                            <option value="">-- SELECT ROUTING --</option>
                                             {(globalLists.partHandling || ['Small Parts', 'Custom']).map(ph => (
-                                                <option key={ph} value={ph}>{ph.toUpperCase()}</option>
+                                                <option key={ph} value={ph}>{ph}</option>
                                             ))}
                                         </select>
-                                        <span style={{ fontSize: '0.65rem', color: '#666', display: 'block', marginTop: '4px' }}>Groups parts with identical handling together in production (e.g. Finishing vs Shop Floor). This list is managed in Tab 4 Master Lists.</span>
                                     </div>
 
-                                    <div style={{ background: '#fff3cd', padding: '10px', border: '1px solid #ffeeba', marginTop: '10px' }}>
-                                        <label style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#856404', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '10px' }}>
-                                            💰 ADVANCED PRICING RULES
-                                        </label>
-                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                                            <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 'bold', color: '#856404' }}>
-                                                <input type="checkbox" checked={newStep.useClientPricing || false} onChange={e => setNewStep({...newStep, useClientPricing: e.target.checked})} style={{ transform: 'scale(1.2)' }} />
-                                                Enable Client-Specific Pricing (From Tab 3 Mapping)
+                                    <div style={{ background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
+                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '15px' }}>Pricing Rules</label>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                            <label style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', color: 'var(--ink)' }}>
+                                                <input type="checkbox" checked={newStep.useClientPricing || false} onChange={e => setNewStep({...newStep, useClientPricing: e.target.checked})} />
+                                                Enable Client-Specific Pricing
                                             </label>
                                             <div>
-                                                <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: '#dc3545', display: 'block', marginBottom: '4px' }}>FLAT PRICE OVERRIDE ($):</label>
-                                                <input type="number" step="0.01" value={newStep.priceOverride || ''} onChange={e => setNewStep({...newStep, priceOverride: e.target.value})} placeholder="Overrides all other pricing" style={{ width: '100%', padding: '8px', border: '1px solid #dc3545', boxSizing: 'border-box', fontWeight: 'bold' }} />
+                                                <label style={{ fontSize: '0.8rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Flat Price Override ($)</label>
+                                                <input type="number" step="0.01" value={newStep.priceOverride || ''} onChange={e => setNewStep({...newStep, priceOverride: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                             </div>
                                         </div>
                                     </div>
                                     
                                     {optionsToMap.length > 0 && optionsToMap.length < 100 && newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && (
-                                        <div style={{ background: '#fff', padding: '10px', border: '1px solid #007bff' }}>
-                                            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#007bff', marginBottom: '10px' }}>OPTION PROPERTIES: COST UPCHARGES & GEOMETRY SWAPPING</div>
-                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: '10px', maxHeight: '250px', overflowY: 'auto' }}>
-                                                <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>OPTION NAME (BASE PRICE)</div>
-                                                <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>PRICE UPCHARGE ($)</div>
-                                                <div style={{ fontSize: '0.65rem', color: '#666', fontWeight: 'bold' }}>ASSOC. MESH (VISIBILITY)</div>
+                                        <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '15px' }}>Option Properties</div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: '15px', maxHeight: '300px', overflowY: 'auto' }}>
+                                                <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>Option Name</div>
+                                                <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>Upcharge ($)</div>
+                                                <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>Geometry Swap (Mesh)</div>
                                                 
                                                 {optionsToMap.map(opt => {
                                                     const partObj = allApprovedDesigns.find(p => p.id === opt.id) || dynamicAssets.find(a => a.id === opt.id) || globalFinishes.find(f => f.id === opt.id) || outsourceFinishes.find(f => f.id === opt.id);
@@ -1398,15 +1378,14 @@ const handleSyncAddresses = async () => {
 
                                                     return (
                                                         <React.Fragment key={opt.id}>
-                                                            <div style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                                                                {opt.name} {bp > 0 && <span style={{ color: '#28a745', marginLeft: '5px', fontWeight: 'bold' }}>(${bp.toFixed(2)})</span>}
+                                                            <div style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', color: 'var(--ink)' }}>
+                                                                {opt.name}
                                                             </div>
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                                                <span style={{ fontWeight: 'bold' }}>+$</span>
-                                                                <input type="number" step="0.5" value={newStep.priceMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, priceMap: { ...prev.priceMap, [opt.id]: parseFloat(e.target.value) || 0 } }))} placeholder="0.00" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', fontWeight: 'bold' }} disabled={newStep.useClientPricing || !!newStep.priceOverride} />
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                <input type="number" step="0.5" value={newStep.priceMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, priceMap: { ...prev.priceMap, [opt.id]: parseFloat(e.target.value) || 0 } }))} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid var(--line)', outline: 'none' }} disabled={newStep.useClientPricing || !!newStep.priceOverride} />
                                                             </div>
                                                             <div>
-                                                                <input value={newStep.geometryMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, geometryMap: { ...prev.geometryMap, [opt.id]: e.target.value } }))} placeholder="Mesh to Show (e.g. Bracket_Deluxe)" style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }} />
+                                                                <input value={newStep.geometryMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, geometryMap: { ...prev.geometryMap, [opt.id]: e.target.value } }))} placeholder="Mesh to Show" style={{ width: '100%', padding: '8px', border: '1px solid var(--line)', outline: 'none' }} />
                                                             </div>
                                                         </React.Fragment>
                                                     );
@@ -1415,52 +1394,37 @@ const handleSyncAddresses = async () => {
                                         </div>
                                     )}
 
-                                    <label style={{ fontSize: '0.8rem', display: 'flex', gap: '10px' }}>
+                                    <label style={{ fontSize: '0.9rem', display: 'flex', gap: '10px', marginTop: '15px' }}>
                                         <input type="checkbox" checked={newStep.required} onChange={e => setNewStep({...newStep, required: e.target.checked})} /> Required Step
                                     </label>
-                                    <div style={{ display: 'flex', gap: '10px' }}>
-                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={(newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE') && !newStep.dataSource} style={{ flex: 1, padding: '10px', background: newStep.id ? '#ffc107' : '#000', color: newStep.id ? '#000' : '#fff', fontWeight: 'bold', border: newStep.id ? '2px solid #856404' : 'none', cursor: ((newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') || newStep.dataSource) ? 'pointer' : 'not-allowed', opacity: ((newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') || newStep.dataSource) ? 1 : 0.5 }}>
-                                            {newStep.id ? "💾 SAVE EDITS TO STEP" : "➕ MANUAL ADD STEP"}
+                                    
+                                    <div style={{ display: 'flex', gap: '15px', marginTop: '10px' }}>
+                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={(newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE') && !newStep.dataSource} style={{ flex: 1, padding: '15px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: ((newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') || newStep.dataSource) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', opacity: ((newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') || newStep.dataSource) ? 1 : 0.5 }}>
+                                            {newStep.id ? "Save Edits to Step" : "Add Step"}
                                         </button>
                                         {newStep.id && (
-                                            <button onClick={() => setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' })} style={{ padding: '10px 20px', background: '#fff', color: '#333', border: '2px solid #ccc', fontWeight: 'bold', cursor: 'pointer' }}>
-                                                CANCEL EDIT
+                                            <button onClick={() => setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' })} style={{ padding: '15px 30px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                Cancel
                                             </button>
                                         )}
                                     </div>
                                 </div>
                             </div>
 
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                                 {(activeFlow.steps || []).map((step, idx) => (
-                                    <div key={step.id} style={{ padding: '15px', background: '#fff', border: '2px solid #ccc', borderLeft: '6px solid #28a745', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div key={step.id} style={{ padding: '24px', background: '#fff', border: '1px solid var(--line)', borderLeft: '4px solid var(--brass)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
                                         <div>
-                                            <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>Step {idx + 1}: {step.title}</div>
-                                            <div style={{ fontSize: '0.75rem', color: '#666', marginTop: '5px' }}>
-                                                Type: <strong style={{ color: (step.type.includes('DIMENSIONS') || step.type === 'STATIC_FEE') ? '#e83e8c' : '#333'}}>{step.type}</strong> | Data: <span style={{ color: '#007bff', fontWeight: 'bold' }}>{step.dataSource || 'N/A'}</span> | Required: {step.required ? 'Yes' : 'No'}
+                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', fontFamily: 'var(--serif)', color: 'var(--ink)' }}>Step {idx + 1}: {step.title}</div>
+                                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '8px' }}>
+                                                Type: {step.type} | Data: {step.dataSource || 'N/A'} | Req: {step.required ? 'Yes' : 'No'}
                                             </div>
-                                            {step.basePrice !== undefined && step.basePrice !== '' && step.basePrice !== null && (
-                                                <div style={{ fontSize: '0.65rem', color: '#28a745', marginTop: '3px', fontWeight: 'bold' }}>
-                                                    🏷️ BASE PRICE: ${parseFloat(step.basePrice).toFixed(2)}
-                                                </div>
-                                            )}
-                                            {step.allowedOptions && step.allowedOptions.length > 0 && (
-                                                <div style={{ fontSize: '0.65rem', color: '#CC6600', marginTop: '3px', fontWeight: 'bold' }}>🔍 RESTRICTED TO: {step.allowedOptions.length} specific options.</div>
-                                            )}
-                                            {step.calculatorTemplate && <div style={{ fontSize: '0.65rem', color: '#1e7e34', marginTop: '3px', fontWeight: 'bold' }}>📐 CALCULATOR: {step.calculatorTemplate}</div>}
-                                            {step.qtyHelperText && <div style={{ fontSize: '0.65rem', color: '#6f42c1', marginTop: '3px', fontWeight: 'bold' }}>ℹ️ HELPER TEXT: {step.qtyHelperText}</div>}
-                                            {step.targetNodes && <div style={{ fontSize: '0.65rem', color: '#e83e8c', marginTop: '3px', fontWeight: 'bold' }}>🎨 APPLYING TEXTURES TO: {step.targetNodes.substring(0, 30)}{step.targetNodes.length > 30 ? '...' : ''}</div>}
-                                            {step.geometryMap && Object.values(step.geometryMap).some(Boolean) && <div style={{ fontSize: '0.65rem', color: '#28a745', marginTop: '3px', fontWeight: 'bold' }}>🧊 GEOMETRY SWAPPING ACTIVE</div>}
-                                            
-                                            {step.useClientPricing && <div style={{ fontSize: '0.65rem', color: '#856404', marginTop: '3px', fontWeight: 'bold' }}>💰 CLIENT PRICING ENABLED</div>}
-                                            {step.priceOverride && <div style={{ fontSize: '0.65rem', color: '#dc3545', marginTop: '3px', fontWeight: 'bold' }}>⚠️ PRICE OVERRIDE: ${step.priceOverride}</div>}
-                                            {step.partHandling && <div style={{ fontSize: '0.65rem', color: '#1e7e34', marginTop: '3px', fontWeight: 'bold' }}>🛤️ ROUTING: {step.partHandling}</div>}
                                         </div>
-                                        <div style={{ display: 'flex', gap: '5px' }}>
-                                            <button onClick={() => handleMoveStep(activeFlow, idx, 'UP')} disabled={idx === 0} style={{ padding: '5px', cursor: idx === 0 ? 'not-allowed' : 'pointer', background: '#f4f4f4', border: '1px solid #ccc' }}>⬆️</button>
-                                            <button onClick={() => handleMoveStep(activeFlow, idx, 'DOWN')} disabled={idx === activeFlow.steps.length - 1} style={{ padding: '5px', cursor: idx === activeFlow.steps.length - 1 ? 'not-allowed' : 'pointer', background: '#f4f4f4', border: '1px solid #ccc' }}>⬇️</button>
-                                            <button onClick={() => setNewStep(step)} style={{ padding: '5px 15px', background: '#007bff', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer', marginLeft: '10px' }}>EDIT</button>
-                                            <button onClick={() => handleDeleteStep(activeFlow, step.id)} style={{ padding: '5px 15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>DEL</button>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button onClick={() => handleMoveStep(activeFlow, idx, 'UP')} disabled={idx === 0} style={{ padding: '8px', cursor: idx === 0 ? 'not-allowed' : 'pointer', background: 'var(--paper-2)', border: '1px solid var(--line)' }}>⬆️</button>
+                                            <button onClick={() => handleMoveStep(activeFlow, idx, 'DOWN')} disabled={idx === activeFlow.steps.length - 1} style={{ padding: '8px', cursor: idx === activeFlow.steps.length - 1 ? 'not-allowed' : 'pointer', background: 'var(--paper-2)', border: '1px solid var(--line)' }}>⬇️</button>
+                                            <button onClick={() => setNewStep(step)} style={{ padding: '8px 20px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', marginLeft: '10px' }}>Edit</button>
+                                            <button onClick={() => handleDeleteStep(activeFlow, step.id)} style={{ padding: '8px 20px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Del</button>
                                         </div>
                                     </div>
                                 ))}
@@ -1471,77 +1435,81 @@ const handleSyncAddresses = async () => {
             </div>
           )}
 
-          {/* DYNAMIC CPQ RULES ENGINE */}
+          {/* --- DYNAMIC CPQ RULES ENGINE --- */}
           {activeSection === "RULES" && (
-            <div style={{ padding: '30px' }}>
-              <h3 style={{ margin: '0 0 5px 0', borderBottom: '2px solid #000', paddingBottom: '10px', color: '#007bff', textTransform: 'uppercase' }}>Dynamic CPQ Rules Engine</h3>
-              <p style={{ color: '#666', fontSize: '0.85rem', marginBottom: '20px' }}>Define conditional logic using the dynamic attributes built in Tab 4. These rules actively dictate CPQ behaviors and UI filters in Tab 8.</p>
+            <div style={{ padding: '40px', maxWidth: '1000px' }}>
+              <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '30px' }}>
+                  <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Dynamic CPQ Rules Engine</h3>
+                  <p style={{ margin: '8px 0 0 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Define conditional logic using attributes. Rules actively dictate CPQ behaviors and UI filters in Tab 8.</p>
+              </div>
               
-              <div style={{ background: '#f0f8ff', border: '2px dashed #007bff', padding: '15px', marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff', display: 'flex', alignItems: 'center', gap: '5px' }}>✨ AI ASSIST: DESCRIBE YOUR RULE</label>
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                      <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="e.g. 'If weight class is light, disable the trim step'" style={{ flex: 1, padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
-                      <button onClick={handleAiGenerateRule} disabled={isGeneratingAi || !aiPrompt} style={{ padding: '10px 20px', background: isGeneratingAi ? '#ccc' : '#007bff', color: '#fff', fontWeight: 'bold', border: 'none', cursor: isGeneratingAi ? 'wait' : 'pointer' }}>{isGeneratingAi ? 'GENERATING...' : 'GENERATE PARAMETERS'}</button>
+              <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '24px', marginBottom: '30px', borderRadius: '2px' }}>
+                  <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>AI Assist: Describe Your Rule</label>
+                  <div style={{ display: 'flex', gap: '15px' }}>
+                      <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="e.g. 'If weight class is light, disable the trim step'" style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                      <button onClick={handleAiGenerateRule} disabled={isGeneratingAi || !aiPrompt} style={{ padding: '12px 24px', background: isGeneratingAi ? '#ccc' : 'var(--ink)', color: '#fff', border: 'none', cursor: isGeneratingAi ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                          {isGeneratingAi ? 'Generating...' : 'Generate'}
+                      </button>
                   </div>
               </div>
 
-              <div style={{ background: '#eafaf1', border: '2px solid #28a745', padding: '20px', marginBottom: '30px' }}>
-                  <h4 style={{ margin: '0 0 15px 0', color: '#28a745' }}>+ MANUAL RULE BUILDER</h4>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', marginBottom: '40px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                  <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Manual Rule Builder</h4>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
                       <div style={{ gridColumn: 'span 2' }}>
-                          <label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>RULE NAME / DESCRIPTION:</label>
-                          <input value={newRule.name} onChange={e => setNewRule({...newRule, name: e.target.value})} placeholder="e.g. Light Fabrics Cannot Have Trim" style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Rule Name / Description</label>
+                          <input value={newRule.name} onChange={e => setNewRule({...newRule, name: e.target.value})} placeholder="e.g. Light Fabrics Cannot Have Trim" style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                       </div>
                       
-                      <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
-                          <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#007bff', marginBottom: '10px' }}>IF SELECTION CONDITION:</div>
-                          <select value={newRule.conditionField} onChange={e => setNewRule({...newRule, conditionField: e.target.value})} style={{ width: '100%', padding: '8px', marginBottom: '10px', border: '1px solid #ccc' }}>
+                      <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '20px' }}>
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '12px' }}>IF SELECTION CONDITION</div>
+                          <select value={newRule.conditionField} onChange={e => setNewRule({...newRule, conditionField: e.target.value})} style={{ width: '100%', padding: '10px', marginBottom: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                               <option value="">-- Select Trigger Attribute --</option>
                               <optgroup label="Core Specs">
                                   <option value="productType">Product Type</option>
                               </optgroup>
-                              <optgroup label="Dynamic Schema (Tab 4)">
+                              <optgroup label="Dynamic Schema">
                                   {customSchema.map(f => <option key={f.key} value={`customData.${f.key}`}>{f.label}</option>)}
                               </optgroup>
                           </select>
                           <div style={{ display: 'flex', gap: '10px' }}>
-                              <select value={newRule.conditionOp} onChange={e => setNewRule({...newRule, conditionOp: e.target.value})} style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }}>
+                              <select value={newRule.conditionOp} onChange={e => setNewRule({...newRule, conditionOp: e.target.value})} style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                                   <option value="EQUALS">EQUALS</option><option value="NOT_EQUALS">NOT EQUALS</option><option value="CONTAINS">CONTAINS</option>
                               </select>
-                              <input value={newRule.conditionVal} onChange={e => setNewRule({...newRule, conditionVal: e.target.value})} placeholder="Value (e.g. LIGHTWEIGHT)" style={{ flex: 2, padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                              <input value={newRule.conditionVal} onChange={e => setNewRule({...newRule, conditionVal: e.target.value})} placeholder="Value (e.g. LIGHTWEIGHT)" style={{ flex: 2, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                           </div>
                       </div>
 
-                      <div style={{ background: '#fff', border: '1px solid #ccc', padding: '10px' }}>
-                          <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#CC6600', marginBottom: '10px' }}>THEN EFFECT:</div>
-                          <select value={newRule.effectField} onChange={e => setNewRule({...newRule, effectField: e.target.value})} style={{ width: '100%', padding: '8px', marginBottom: '10px', border: '1px solid #ccc' }}>
+                      <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '20px' }}>
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '12px' }}>THEN EFFECT</div>
+                          <select value={newRule.effectField} onChange={e => setNewRule({...newRule, effectField: e.target.value})} style={{ width: '100%', padding: '10px', marginBottom: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                               <option value="">-- Select Target System Rule --</option>
                               <optgroup label="UI Controls">
                                   <option value="UI.disableStep">DISABLE Step (Name)</option>
                                   <option value="UI.hideFinishes">HIDE Specific Finishes</option>
                               </optgroup>
-                              <optgroup label="Hardware Calculations & Mathematics">
+                              <optgroup label="Hardware Mathematics">
                                   <option value="MATH.maxBracketSpacing">SET Max Bracket Spacing (in)</option>
-                                  <option value="MATH.frenchReturn1in">APPLY 1" French Return Logic (17" add, 1" C2C ded)</option>
-                                  <option value="MATH.miteredBay">APPLY Mitered Bay Logic (Wall A/B/C + Angles)</option>
-                                  <option value="MATH.curvedBay">APPLY Curved Bay Logic (Arc/Radius)</option>
+                                  <option value="MATH.frenchReturn1in">APPLY 1" French Return Logic</option>
+                                  <option value="MATH.miteredBay">APPLY Mitered Bay Logic</option>
+                                  <option value="MATH.curvedBay">APPLY Curved Bay Logic</option>
                               </optgroup>
                           </select>
-                          <input value={newRule.effectVal} onChange={e => setNewRule({...newRule, effectVal: e.target.value})} placeholder="Effect Value (e.g. Select Trim / Fringe)" style={{ width: '100%', padding: '8px', border: '1px solid #ccc', boxSizing: 'border-box' }} />
+                          <input value={newRule.effectVal} onChange={e => setNewRule({...newRule, effectVal: e.target.value})} placeholder="Effect Value (e.g. Select Trim)" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                       </div>
                   </div>
-                  <button onClick={handleAddRule} style={{ width: '100%', padding: '12px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', marginTop: '15px' }}>➕ INJECT RULE INTO CPQ</button>
+                  <button onClick={handleAddRule} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '24px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Inject Rule Into CPQ</button>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {cpqRules.length === 0 && <div style={{ padding: '20px', background: '#f8f9fa', fontStyle: 'italic', color: '#666', border: '1px dashed #ccc' }}>No dynamic rules configured yet.</div>}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                  {cpqRules.length === 0 && <div style={{ padding: '20px', background: 'var(--paper-2)', color: 'var(--ink-soft)', fontStyle: 'italic', border: '1px solid var(--line)' }}>No dynamic rules configured yet.</div>}
                   {cpqRules.map(rule => (
-                      <div key={rule.id} style={{ background: '#fff', border: '2px solid #333', borderLeft: '6px solid #28a745', padding: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '4px 4px 0 rgba(0,0,0,0.05)' }}>
+                      <div key={rule.id} style={{ background: '#fff', border: '1px solid var(--line)', borderLeft: '4px solid var(--brass)', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div>
-                              <div style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#333' }}>{rule.name}</div>
-                              <div style={{ fontSize: '0.8rem', marginTop: '5px', display: 'flex', gap: '15px', color: '#555' }}>
-                                  <span><strong style={{color:'#007bff'}}>IF:</strong> {rule.conditionField.replace('customData.', '')} {rule.conditionOp} "{rule.conditionVal}"</span>
-                                  <span><strong style={{color:'#CC6600'}}>THEN:</strong> {rule.effectField} = "{rule.effectVal}"</span>
+                              <div style={{ fontWeight: 500, fontSize: '1.2rem', fontFamily: 'var(--serif)', color: 'var(--ink)' }}>{rule.name}</div>
+                              <div style={{ fontSize: '0.85rem', marginTop: '8px', display: 'flex', gap: '20px', color: 'var(--ink-soft)' }}>
+                                  <span><strong style={{fontFamily: 'var(--mono)'}}>IF:</strong> {rule.conditionField.replace('customData.', '')} {rule.conditionOp} "{rule.conditionVal}"</span>
+                                  <span><strong style={{fontFamily: 'var(--mono)'}}>THEN:</strong> {rule.effectField} = "{rule.effectVal}"</span>
                               </div>
                           </div>
                           <button onClick={() => handleDeleteRule(rule.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
@@ -1551,37 +1519,37 @@ const handleSyncAddresses = async () => {
             </div>
           )}
 
-          {/* CRM & SALES CONFIGURATION VIEW */}
+          {/* --- CRM & SALES CONFIGURATION VIEW --- */}
           {activeSection === "CRM_SETTINGS" && (
-              <div style={{ padding: '30px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px' }}>
-                      <h3 style={{ margin: 0 }}>👥 CRM & SALES DICTIONARIES</h3>
+              <div style={{ padding: '40px', maxWidth: '1200px' }}>
+                  <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '30px' }}>
+                      <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>CRM & Sales Dictionaries</h3>
                   </div>
                   
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
                       
                       {/* DISCOUNT CODES */}
-                      <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', display: 'flex', flexDirection: 'column', boxShadow: '5px 5px 0 #17a2b8' }}>
-                          <h4 style={{ margin: '0 0 15px 0', color: '#17a2b8', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>💰 DISCOUNT CODES</h4>
-                          <div style={{ background: '#e0f7fa', padding: '10px', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '15px' }}>
-                              <div style={{ display: 'flex', gap: '10px' }}>
-                                  <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>CODE:</label><input value={newDiscount.code} onChange={e => setNewDiscount({...newDiscount, code: e.target.value})} placeholder="e.g. AD" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', textTransform: 'uppercase' }} /></div>
-                                  <div style={{ flex: 1 }}><label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>DISC %:</label><input type="number" value={newDiscount.percent} onChange={e => setNewDiscount({...newDiscount, percent: e.target.value})} placeholder="e.g. 20" style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }} /></div>
+                      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                          <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Discount Codes</h4>
+                          <div style={{ background: 'var(--paper-2)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px', border: '1px solid var(--line)' }}>
+                              <div style={{ display: 'flex', gap: '15px' }}>
+                                  <div style={{ flex: 1 }}><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Code</label><input value={newDiscount.code} onChange={e => setNewDiscount({...newDiscount, code: e.target.value})} placeholder="e.g. AD" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', textTransform: 'uppercase' }} /></div>
+                                  <div style={{ flex: 1 }}><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Disc %</label><input type="number" value={newDiscount.percent} onChange={e => setNewDiscount({...newDiscount, percent: e.target.value})} placeholder="e.g. 20" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none' }} /></div>
                               </div>
                               <div>
-                                  <label style={{ fontSize: '0.7rem', fontWeight: 'bold' }}>DESCRIPTION:</label>
-                                  <input value={newDiscount.description} onChange={e => setNewDiscount({...newDiscount, description: e.target.value})} placeholder="e.g. Architect/Designer Tier" style={{ width: '100%', padding: '6px', border: '1px solid #ccc' }} />
+                                  <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Description</label>
+                                  <input value={newDiscount.description} onChange={e => setNewDiscount({...newDiscount, description: e.target.value})} placeholder="e.g. Architect/Designer Tier" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none' }} />
                               </div>
-                              <button onClick={handleAddDiscount} style={{ padding: '8px', background: '#17a2b8', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>+ ADD DISCOUNT</button>
+                              <button onClick={handleAddDiscount} style={{ padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '8px' }}>Add Discount</button>
                           </div>
 
                           <div style={{ flex: 1, overflowY: 'auto', maxHeight: '300px' }}>
-                              {crmDiscounts.length === 0 && <span style={{ fontSize: '0.8rem', color: '#999', fontStyle: 'italic' }}>No discount codes defined.</span>}
+                              {crmDiscounts.length === 0 && <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No discount codes defined.</span>}
                               {crmDiscounts.map(d => (
-                                  <div key={d.code} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8f9fa', padding: '10px', borderBottom: '1px solid #eee' }}>
+                                  <div key={d.code} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper)', padding: '16px', borderBottom: '1px solid var(--line)' }}>
                                       <div>
-                                          <div style={{ fontWeight: 'bold', color: '#000', fontSize: '1rem' }}>{d.code} <span style={{ color: '#28a745' }}>(-{d.percent}%)</span></div>
-                                          <div style={{ fontSize: '0.75rem', color: '#666' }}>{d.description}</div>
+                                          <div style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '1.1rem' }}>{d.code} <span style={{ color: 'var(--brass)', fontFamily: 'var(--mono)', fontSize: '0.85rem' }}>(-{d.percent}%)</span></div>
+                                          <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>{d.description}</div>
                                       </div>
                                       <button onClick={() => handleRemoveDiscount(d.code)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
                                   </div>
@@ -1590,37 +1558,37 @@ const handleSyncAddresses = async () => {
                       </div>
 
                       {/* PAYMENT TERMS & SALES REPS */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
                           
-                          <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', boxShadow: '5px 5px 0 #6f42c1' }}>
-                              <h4 style={{ margin: '0 0 15px 0', color: '#6f42c1', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>🤝 PAYMENT TERMS</h4>
-                              <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
-                                  <input value={crmListInput.paymentTerms || ''} onChange={e => setCrmListInput({...crmListInput, paymentTerms: e.target.value})} placeholder="e.g. Net 60" style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }} />
-                                  <button onClick={() => handleAddCrmList('paymentTerms')} style={{ padding: '8px 15px', background: '#6f42c1', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>ADD</button>
+                          <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                              <h4 style={{ margin: '0 0 15px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Payment Terms</h4>
+                              <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
+                                  <input value={crmListInput.paymentTerms || ''} onChange={e => setCrmListInput({...crmListInput, paymentTerms: e.target.value})} placeholder="e.g. Net 60" style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', outline: 'none' }} />
+                                  <button onClick={() => handleAddCrmList('paymentTerms')} style={{ padding: '0 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
                               </div>
-                              <div style={{ maxHeight: '150px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                  {(globalLists.paymentTerms || []).length === 0 && <span style={{ fontSize: '0.8rem', color: '#999', fontStyle: 'italic' }}>No terms defined.</span>}
+                              <div style={{ maxHeight: '150px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                  {(globalLists.paymentTerms || []).length === 0 && <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No terms defined.</span>}
                                   {(globalLists.paymentTerms || []).map(term => (
-                                      <div key={term} style={{ display: 'flex', justifyContent: 'space-between', background: '#f4f4f4', padding: '8px', border: '1px solid #eee' }}>
-                                          <span style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{term}</span>
-                                          <span onClick={() => handleRemoveCrmList('paymentTerms', term)} style={{ color: '#d9534f', cursor: 'pointer', fontWeight: 'bold' }}>×</span>
+                                      <div key={term} style={{ display: 'flex', justifyContent: 'space-between', background: 'var(--paper)', padding: '12px', border: '1px solid var(--line)' }}>
+                                          <span style={{ fontSize: '0.95rem', color: 'var(--ink)' }}>{term}</span>
+                                          <span onClick={() => handleRemoveCrmList('paymentTerms', term)} style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }}>×</span>
                                       </div>
                                   ))}
                               </div>
                           </div>
 
-                          <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', boxShadow: '5px 5px 0 #e83e8c' }}>
-                              <h4 style={{ margin: '0 0 15px 0', color: '#e83e8c', borderBottom: '2px solid #eee', paddingBottom: '5px' }}>👔 SALES REPRESENTATIVES</h4>
-                              <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
-                                  <input value={crmListInput.salesReps || ''} onChange={e => setCrmListInput({...crmListInput, salesReps: e.target.value})} placeholder="Rep Name" style={{ flex: 1, padding: '8px', border: '1px solid #ccc' }} />
-                                  <button onClick={() => handleAddCrmList('salesReps')} style={{ padding: '8px 15px', background: '#e83e8c', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>ADD</button>
+                          <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                              <h4 style={{ margin: '0 0 15px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Sales Representatives</h4>
+                              <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
+                                  <input value={crmListInput.salesReps || ''} onChange={e => setCrmListInput({...crmListInput, salesReps: e.target.value})} placeholder="Rep Name" style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', outline: 'none' }} />
+                                  <button onClick={() => handleAddCrmList('salesReps')} style={{ padding: '0 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
                               </div>
-                              <div style={{ maxHeight: '150px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                  {(globalLists.salesReps || []).length === 0 && <span style={{ fontSize: '0.8rem', color: '#999', fontStyle: 'italic' }}>No sales reps defined.</span>}
+                              <div style={{ maxHeight: '150px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                  {(globalLists.salesReps || []).length === 0 && <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No sales reps defined.</span>}
                                   {(globalLists.salesReps || []).map(rep => (
-                                      <div key={rep} style={{ display: 'flex', justifyContent: 'space-between', background: '#f4f4f4', padding: '8px', border: '1px solid #eee' }}>
-                                          <span style={{ fontWeight: 'bold', fontSize: '0.85rem' }}>{rep}</span>
-                                          <span onClick={() => handleRemoveCrmList('salesReps', rep)} style={{ color: '#d9534f', cursor: 'pointer', fontWeight: 'bold' }}>×</span>
+                                      <div key={rep} style={{ display: 'flex', justifyContent: 'space-between', background: 'var(--paper)', padding: '12px', border: '1px solid var(--line)' }}>
+                                          <span style={{ fontSize: '0.95rem', color: 'var(--ink)' }}>{rep}</span>
+                                          <span onClick={() => handleRemoveCrmList('salesReps', rep)} style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }}>×</span>
                                       </div>
                                   ))}
                               </div>
@@ -1631,28 +1599,30 @@ const handleSyncAddresses = async () => {
               </div>
           )}
 
-          {/* FORMS & BRANDING VIEW */}
+          {/* --- FORMS & BRANDING VIEW --- */}
           {activeSection === "FORMS" && (
-            <div style={{ padding: '30px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px' }}>
-                <h3 style={{ margin: 0 }}>📝 DOCUMENT TEMPLATES & BRANDING</h3>
+            <div style={{ padding: '40px', maxWidth: '1200px' }}>
+              <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '30px' }}>
+                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Document Templates & Branding</h3>
               </div>
               
-              <div style={{ display: 'flex', gap: '20px' }}>
+              <div style={{ display: 'flex', gap: '30px' }}>
                   {/* LOGO MANAGER */}
-                  <div style={{ flex: 1, background: '#f8f9fa', border: '1px solid #ccc', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                      <h4 style={{ margin: 0, color: '#007bff' }}>1. BRAND LOGO MANAGER</h4>
-                      <p style={{ fontSize: '0.8rem', color: '#666', margin: 0 }}>Upload SVG files for infinitely scalable, high-resolution document branding.</p>
+                  <div style={{ flex: 1, background: 'var(--paper)', border: '1px solid var(--line)', padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Brand Logos</h4>
+                      <p style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', margin: 0 }}>Upload SVG files for infinitely scalable, high-resolution document branding.</p>
                       
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                           {BRANDS_LIST.map(bKey => (
-                              <div key={bKey} style={{ background: '#fff', border: '2px solid #000', padding: '15px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                  <strong style={{ textTransform: 'uppercase' }}>{bKey}</strong>
-                                  <div style={{ height: '80px', background: '#eee', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed #ccc' }}>
-                                      {brandLogos[bKey] ? <img src={brandLogos[bKey]} alt={bKey} style={{ maxWidth: '100%', maxHeight: '100%' }} /> : <span style={{ fontSize: '0.7rem', color: '#999' }}>NO LOGO UPLOADED</span>}
+                              <div key={bKey} style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                                      <strong style={{ fontFamily: 'var(--mono)', textTransform: 'uppercase' }}>{bKey}</strong>
+                                      <div style={{ width: '80px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                          {brandLogos[bKey] ? <img src={brandLogos[bKey]} alt={bKey} style={{ maxWidth: '100%', maxHeight: '100%' }} /> : <span style={{ fontSize: '0.7rem', color: 'var(--ink-soft)' }}>NONE</span>}
+                                      </div>
                                   </div>
-                                  <label style={{ background: isUploadingLogo ? '#ccc' : '#000', color: '#fff', padding: '8px', fontSize: '0.7rem', fontWeight: 'bold', cursor: isUploadingLogo ? 'wait' : 'pointer' }}>
-                                      {isUploadingLogo ? 'UPLOADING...' : 'UPLOAD SVG LOGO'}
+                                  <label style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', padding: '10px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: isUploadingLogo ? 'wait' : 'pointer' }}>
+                                      {isUploadingLogo ? 'Uploading...' : 'Upload SVG'}
                                       <input type="file" accept=".svg,.png" style={{ display: 'none' }} onChange={(e) => handleLogoUpload(e, bKey)} disabled={isUploadingLogo} />
                                   </label>
                               </div>
@@ -1661,160 +1631,199 @@ const handleSyncAddresses = async () => {
                   </div>
 
                   {/* FORM BUILDER */}
-                  <div style={{ flex: 1.5, background: '#fff', border: '2px solid #000', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                      <h4 style={{ margin: 0, color: '#28a745' }}>2. DOCUMENT TEMPLATE CONFIGURATOR</h4>
-                      <p style={{ fontSize: '0.8rem', color: '#666', margin: 0 }}>Define the standard text blocks that will appear on generated PDFs.</p>
+                  <div style={{ flex: 1.5, background: '#fff', border: '1px solid var(--line)', padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                      <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Template Configurator</h4>
                       
                       <div>
-                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>DOCUMENT TYPE:</label>
-                          <select value={activeFormType} onChange={(e) => setActiveFormType(e.target.value)} style={{ width: '100%', padding: '10px', border: '2px solid #28a745', fontWeight: 'bold' }}>
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Document Type</label>
+                          <select value={activeFormType} onChange={(e) => setActiveFormType(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: 'var(--paper)' }}>
                               {DOCUMENT_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
                           </select>
                       </div>
 
                       <div>
-                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>GLOBAL HEADER NOTES:</label>
-                          <textarea value={formEditor.header} onChange={e => setFormEditor({...formEditor, header: e.target.value})} placeholder="e.g. Thank you for your business!" rows={3} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box', fontFamily: 'sans-serif' }} />
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Global Header Notes</label>
+                          <textarea value={formEditor.header} onChange={e => setFormEditor({...formEditor, header: e.target.value})} placeholder="e.g. Thank you for your business!" rows={3} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', resize: 'vertical' }} />
                       </div>
 
                       <div>
-                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>GLOBAL FOOTER NOTES:</label>
-                          <textarea value={formEditor.footer} onChange={e => setFormEditor({...formEditor, footer: e.target.value})} placeholder="e.g. Please remit payment within 30 days." rows={3} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box', fontFamily: 'sans-serif' }} />
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Global Footer Notes</label>
+                          <textarea value={formEditor.footer} onChange={e => setFormEditor({...formEditor, footer: e.target.value})} placeholder="e.g. Please remit payment within 30 days." rows={3} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', resize: 'vertical' }} />
                       </div>
 
                       <div>
-                          <label style={{ fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '5px' }}>TERMS & CONDITIONS (Fine Print):</label>
-                          <textarea value={formEditor.terms} onChange={e => setFormEditor({...formEditor, terms: e.target.value})} placeholder="Standard legal terms..." rows={5} style={{ width: '100%', padding: '10px', border: '1px solid #ccc', boxSizing: 'border-box', fontSize: '0.75rem', fontFamily: 'sans-serif' }} />
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Terms & Conditions (Fine Print)</label>
+                          <textarea value={formEditor.terms} onChange={e => setFormEditor({...formEditor, terms: e.target.value})} placeholder="Standard legal terms..." rows={5} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem', resize: 'vertical' }} />
                       </div>
 
-                      <button onClick={handleSaveFormTemplate} style={{ width: '100%', padding: '15px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', marginTop: '10px' }}>
-                          💾 SAVE {activeFormType.replace('_', ' ')} TEMPLATE
+                      <button onClick={handleSaveFormTemplate} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                          Save {activeFormType.replace('_', ' ')} Template
                       </button>
                   </div>
               </div>
             </div>
           )}
 
-          {/* USERS VIEW */}
+          {/* --- USERS VIEW --- */}
           {activeSection === "USERS" && (
-            <div style={{ padding: '30px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px' }}>
-                <h3 style={{ margin: 0 }}>USER DIRECTORY & ACCESS MATRIX</h3>
+            <div style={{ padding: '40px', maxWidth: '1000px' }}>
+              <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '30px' }}>
+                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>User Directory & Access Matrix</h3>
               </div>
-              <div style={{ background: '#f8f9fa', border: '1px solid #ccc', padding: '15px', marginBottom: '20px' }}>
-                <h4 style={{ margin: '0 0 10px 0', color: '#007bff' }}>1. SYSTEM ROLES</h4>
-                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' }}>
+              
+              <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '24px', marginBottom: '30px' }}>
+                <h4 style={{ margin: '0 0 15px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>System Roles</h4>
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '20px' }}>
                   {dynamicRoles.map(role => (
-                    <span key={role} style={{ background: '#000', color: '#fff', padding: '5px 10px', fontSize: '0.8rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span key={role} style={{ background: 'var(--ink)', color: '#fff', padding: '8px 16px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '12px', borderRadius: '2px' }}>
                       {role.toUpperCase().replace(/_/g, ' ')}
-                      {role !== 'admin' && <button onClick={() => handleDeleteRole(role)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0, fontWeight: 'bold' }}>✖</button>}
+                      {role !== 'admin' && <button onClick={() => handleDeleteRole(role)} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: 0, opacity: 0.6 }}>✖</button>}
                     </span>
                   ))}
                 </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <input value={newRole} onChange={e => setNewRole(e.target.value)} placeholder="New Role (e.g. Sales Rep)" style={{ padding: '8px', border: '1px solid #ccc', width: '250px' }} />
-                  <button onClick={handleAddRole} style={{ padding: '8px 15px', background: '#007bff', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>+ ADD ROLE</button>
+                <div style={{ display: 'flex', gap: '15px' }}>
+                  <input value={newRole} onChange={e => setNewRole(e.target.value)} placeholder="New Role (e.g. Sales Rep)" style={{ padding: '12px', border: '1px solid var(--line)', width: '300px', outline: 'none', fontFamily: 'var(--sans)' }} />
+                  <button onClick={handleAddRole} style={{ padding: '0 24px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add Role</button>
                 </div>
               </div>
-              <div style={{ background: '#fff', border: '2px solid #000', padding: '15px', marginBottom: '20px', overflowX: 'auto' }}>
-                <h4 style={{ margin: '0 0 10px 0' }}>2. PERMISSIONS MATRIX</h4>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'center' }}>
-                  <thead style={{ background: '#333', color: '#fff' }}><tr><th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #000' }}>TAB</th>{dynamicRoles.map(r => (<th key={r} style={{ padding: '10px', borderLeft: '1px solid #555' }}>{r.toUpperCase().replace(/_/g, ' ')}</th>))}</tr></thead>
+              
+              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', marginBottom: '30px', overflowX: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Permissions Matrix</h4>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center', fontFamily: 'var(--sans)' }}>
+                  <thead style={{ background: 'var(--paper)', borderBottom: '1px solid var(--line)' }}>
+                      <tr>
+                          <th style={{ padding: '15px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Tab</th>
+                          {dynamicRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
+                      </tr>
+                  </thead>
                   <tbody>
                     {TABS.map(tab => (
-                      <tr key={tab} style={{ borderBottom: '1px solid #eee' }}><td style={{ padding: '10px', textAlign: 'left', fontWeight: 'bold', borderRight: '2px solid #333' }}>{tab}</td>{dynamicRoles.map(role => (<td key={role} style={{ padding: '10px', borderLeft: '1px solid #eee' }}><input type="checkbox" checked={perms[role]?.includes(tab) || false} onChange={() => handlePermToggle(role, tab)} style={{ cursor: 'pointer', transform: 'scale(1.3)' }} /></td>))}</tr>
+                      <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
+                          <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)' }}>{tab}</td>
+                          {dynamicRoles.map(role => (
+                              <td key={role} style={{ padding: '15px' }}>
+                                  <input type="checkbox" checked={perms[role]?.includes(tab) || false} onChange={() => handlePermToggle(role, tab)} style={{ cursor: 'pointer' }} />
+                              </td>
+                          ))}
+                      </tr>
                     ))}
                   </tbody>
                 </table>
-                <button onClick={handleSavePermissions} style={{ width: '100%', padding: '10px', background: '#28a745', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer', marginTop: '15px' }}>💾 SAVE MATRIX CONFIGURATION</button>
+                <button onClick={handleSavePermissions} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '24px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Matrix Configuration</button>
               </div>
-              <div style={{ background: '#fff', border: '2px solid #000', padding: '15px' }}>
-                <h4 style={{ margin: '0 0 10px 0' }}>3. USER DIRECTORY</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '10px', marginBottom: '10px' }}>
-                  <input value={adminForm.uName} onChange={e => setAdminForm({...adminForm, uName: e.target.value})} placeholder="User Name" disabled={!!adminForm.oldId} style={{ padding: '8px', border: '1px solid #ccc', background: adminForm.oldId ? '#eee' : '#fff' }} />
-                  <input value={adminForm.uPin} onChange={e => setAdminForm({...adminForm, uPin: e.target.value})} placeholder="4-Digit PIN" maxLength="4" style={{ padding: '8px', border: '1px solid #ccc' }} />
-                  <select value={adminForm.uRole} onChange={e => setAdminForm({...adminForm, uRole: e.target.value})} style={{ padding: '8px', border: '1px solid #ccc' }}>{dynamicRoles.map(r => <option key={r} value={r}>{r.toUpperCase().replace(/_/g, ' ')}</option>)}</select>
+
+              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>User Directory</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '15px', marginBottom: '20px' }}>
+                  <input value={adminForm.uName} onChange={e => setAdminForm({...adminForm, uName: e.target.value})} placeholder="User Name" disabled={!!adminForm.oldId} style={{ padding: '12px', border: '1px solid var(--line)', background: adminForm.oldId ? 'var(--paper)' : '#fff', outline: 'none', fontFamily: 'var(--sans)' }} />
+                  <input value={adminForm.uPin} onChange={e => setAdminForm({...adminForm, uPin: e.target.value})} placeholder="4-Digit PIN" maxLength="4" style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                  <select value={adminForm.uRole} onChange={e => setAdminForm({...adminForm, uRole: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>{dynamicRoles.map(r => <option key={r} value={r}>{r.toUpperCase().replace(/_/g, ' ')}</option>)}</select>
                 </div>
-                <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-                  <button onClick={handleSaveUser} style={{ flex: 1, padding: '10px', background: adminForm.oldId ? '#007bff' : '#000', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>{adminForm.oldId ? 'UPDATE USER' : '+ ADD USER'}</button>
-                  {adminForm.oldId && <button onClick={() => setAdminForm({ uName: '', uPin: '', uRole: dynamicRoles[0], oldId: '' })} style={{ padding: '10px', background: '#888', color: '#fff', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>CANCEL</button>}
+                <div style={{ display: 'flex', gap: '15px', marginBottom: '30px' }}>
+                  <button onClick={handleSaveUser} style={{ flex: 1, padding: '16px', background: adminForm.oldId ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{adminForm.oldId ? 'Update User' : 'Add User'}</button>
+                  {adminForm.oldId && <button onClick={() => setAdminForm({ uName: '', uPin: '', uRole: dynamicRoles[0], oldId: '' })} style={{ padding: '16px 30px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Cancel</button>}
                 </div>
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-                  <thead style={{ background: '#eee' }}><tr><th style={{ padding: '10px', borderBottom: '2px solid #000' }}>NAME</th><th style={{ padding: '10px', borderBottom: '2px solid #000' }}>ROLE</th><th style={{ padding: '10px', borderBottom: '2px solid #000', textAlign: 'right' }}>ACTIONS</th></tr></thead>
-                  <tbody>{users.map(u => (<tr key={u.id} style={{ borderBottom: '1px solid #eee' }}><td style={{ padding: '10px', fontWeight: 'bold' }}>{u.name}</td><td style={{ padding: '10px', color: '#666' }}>{u.role?.toUpperCase().replace(/_/g, ' ')}</td><td style={{ padding: '10px', textAlign: 'right' }}><button onClick={() => setAdminForm({ uName: u.name, uPin: u.pin || '', uRole: u.role || dynamicRoles[0], oldId: u.id })} style={{ background: '#fff', border: '1px solid #007bff', color: '#007bff', padding: '4px 8px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer', marginRight: '5px' }}>EDIT</button><button onClick={() => handleDeleteUser(u)} style={{ background: '#fff0f0', border: '1px solid #ffcccc', color: '#d9534f', padding: '4px 8px', fontSize: '0.7rem', fontWeight: 'bold', cursor: 'pointer' }}>DEL</button></td></tr>))}</tbody>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontFamily: 'var(--sans)' }}>
+                  <thead style={{ background: 'var(--paper)' }}>
+                      <tr>
+                          <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Name</th>
+                          <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Role</th>
+                          <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', textAlign: 'right' }}></th>
+                      </tr>
+                  </thead>
+                  <tbody>
+                      {users.map(u => (
+                          <tr key={u.id} style={{ borderBottom: '1px solid var(--line)' }}>
+                              <td style={{ padding: '15px', color: 'var(--ink)' }}>{u.name}</td>
+                              <td style={{ padding: '15px', color: 'var(--ink-soft)' }}>{u.role?.toUpperCase().replace(/_/g, ' ')}</td>
+                              <td style={{ padding: '15px', textAlign: 'right' }}>
+                                  <button onClick={() => setAdminForm({ uName: u.name, uPin: u.pin || '', uRole: u.role || dynamicRoles[0], oldId: u.id })} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', fontSize: '10px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer', marginRight: '10px' }}>Edit</button>
+                                  <button onClick={() => handleDeleteUser(u)} style={{ background: 'transparent', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
+                              </td>
+                          </tr>
+                      ))}
+                  </tbody>
                 </table>
               </div>
             </div>
           )}
 
-          {/* DANGER ZONE VIEW */}
+          {/* --- DANGER ZONE VIEW --- */}
           {activeSection === "DANGER" && (
-            <div style={{ padding: '30px' }}>
-              <h3 style={{ marginTop: 0, borderBottom: '2px solid #d9534f', paddingBottom: '10px', color: '#d9534f' }}>⚠️ DANGER ZONE (DATAFLASH)</h3>
-              <p style={{ color: '#000', fontWeight: 'bold', background: '#ffc107', padding: '10px' }}>ACTIONS TAKEN HERE ARE PERMANENT.</p>
+            <div style={{ padding: '40px', maxWidth: '800px' }}>
+              <h3 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.6rem', color: '#d9534f', borderBottom: '1px solid var(--line)', paddingBottom: '15px' }}>Danger Zone (Dataflash)</h3>
+              <p style={{ color: '#fff', background: '#d9534f', padding: '15px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Actions taken here are permanent and cannot be undone.</p>
               
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginTop: '30px' }}>
-                <div style={{ border: '2px solid #d9534f', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div><h4 style={{ margin: '0 0 5px 0' }}>WIPE ALL JOBS, DRAFTS, & PIPELINE</h4><div style={{fontSize:'0.8rem', color:'#666'}}>Clears all Sales Orders, Work Orders, and CPQ quotes.</div></div>
-                  <button onClick={handleNukeJobs} style={{ padding: '15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>NUKE PIPELINE</button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '30px' }}>
+                <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
+                  <div>
+                      <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: '#d9534f' }}>Wipe All Jobs, Drafts, & Pipeline</h4>
+                      <div style={{fontSize:'0.9rem', color:'var(--ink-soft)'}}>Clears all Sales Orders, Work Orders, and CPQ quotes.</div>
+                  </div>
+                  <button onClick={handleNukeJobs} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Pipeline</button>
                 </div>
                 
-                <div style={{ border: '2px solid #d9534f', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div><h4 style={{ margin: '0 0 5px 0' }}>WIPE ALL MASTER ASSEMBLIES</h4><div style={{fontSize:'0.8rem', color:'#666'}}>Deletes all BOMs and Top-Level Configurations.</div></div>
-                  <button
-                  onClick={handleNukeAssemblies} style={{ padding: '15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>NUKE ASSEMBLIES</button>
+                <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
+                  <div>
+                      <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: '#d9534f' }}>Wipe All Master Assemblies</h4>
+                      <div style={{fontSize:'0.9rem', color:'var(--ink-soft)'}}>Deletes all BOMs and Top-Level Configurations.</div>
+                  </div>
+                  <button onClick={handleNukeAssemblies} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Assemblies</button>
                 </div>
                 
-                <div style={{ border: '2px solid #d9534f', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div><h4 style={{ margin: '0 0 5px 0' }}>WIPE MASTER INVENTORY LIBRARY</h4><div style={{fontSize:'0.8rem', color:'#666'}}>Deletes all raw materials, components, and hardware.</div></div>
-                  <button onClick={handleNukeLibrary} style={{ padding: '15px', background: '#d9534f', color: '#fff', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>NUKE INVENTORY</button>
+                <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
+                  <div>
+                      <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: '#d9534f' }}>Wipe Master Inventory Library</h4>
+                      <div style={{fontSize:'0.9rem', color:'var(--ink-soft)'}}>Deletes all raw materials, components, and hardware.</div>
+                  </div>
+                  <button onClick={handleNukeLibrary} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Inventory</button>
                 </div>
               </div>
             </div>
           )}
 
-          {/* SUPER ADMIN VIEW (TAB 15.5) */}
+          {/* --- SUPER ADMIN VIEW (TAB 15.5) --- */}
           {activeSection === "SUPER_ADMIN" && isSuperAdmin && (
-            <div style={{ padding: '30px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', paddingBottom: '10px', marginBottom: '20px' }}>
-                <h3 style={{ margin: 0, textTransform: 'uppercase' }}>🕵️‍♂️ Master Analytics & Surveillance</h3>
+            <div style={{ padding: '40px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '30px' }}>
+                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Master Analytics & Surveillance</h3>
               </div>
 
               {/* PIN CHANGER */}
-              <div style={{ background: '#000', color: '#fff', border: '2px solid #333', padding: '20px', marginBottom: '30px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '30px', marginBottom: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div>
-                      <h4 style={{ margin: '0 0 5px 0', color: '#f39c12' }}>MASTER PIN CONTROLS</h4>
-                      <p style={{ margin: 0, fontSize: '0.8rem', color: '#ccc' }}>Update your global access PIN. Your Super Admin status will automatically migrate to the new PIN.</p>
+                      <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink)' }}>Master PIN Controls</h4>
+                      <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Update your global access PIN. Your Super Admin status will migrate automatically.</p>
                   </div>
-                  <div style={{ display: 'flex', gap: '10px' }}>
+                  <div style={{ display: 'flex', gap: '15px' }}>
                       <input 
                           type="password" 
                           value={newMasterPin} 
                           onChange={e => setNewMasterPin(e.target.value)} 
-                          placeholder="NEW 4-DIGIT PIN" 
+                          placeholder="NEW PIN" 
                           maxLength="4"
-                          style={{ padding: '10px', fontSize: '1.2rem', textAlign: 'center', width: '150px', fontWeight: 'bold', border: '2px solid #f39c12', background: '#333', color: '#fff' }} 
+                          style={{ padding: '12px', fontSize: '1.2rem', textAlign: 'center', width: '150px', outline: 'none', border: '1px solid var(--line)', fontFamily: 'var(--mono)' }} 
                       />
-                      <button onClick={handleUpdateMasterPin} style={{ background: '#f39c12', color: '#000', padding: '10px 20px', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}>UPDATE PIN</button>
+                      <button onClick={handleUpdateMasterPin} style={{ background: 'var(--ink)', color: '#fff', padding: '0 24px', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Update</button>
                   </div>
               </div>
 
               {/* GLOBAL LOG SURVEILLANCE */}
-              <div style={{ background: '#fff', border: '2px solid #000', padding: '20px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                      <h4 style={{ margin: 0 }}>GLOBAL SYSTEM LOGS</h4>
-                      <div style={{ display: 'flex', gap: '10px' }}>
+              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                      <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Global System Logs</h4>
+                      <div style={{ display: 'flex', gap: '15px' }}>
                           <input 
                               type="text" 
                               placeholder="Filter by User..." 
                               value={logFilter.user} 
                               onChange={e => setLogFilter({...logFilter, user: e.target.value.toLowerCase()})} 
-                              style={{ padding: '8px', border: '1px solid #ccc' }} 
+                              style={{ padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} 
                           />
                           <select 
                               value={logFilter.app} 
                               onChange={e => setLogFilter({...logFilter, app: e.target.value})} 
-                              style={{ padding: '8px', border: '1px solid #ccc', fontWeight: 'bold' }}
+                              style={{ padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}
                           >
                               <option value="ALL">ALL APPS</option>
                               <option value="HQ">HQ</option>
@@ -1824,15 +1833,15 @@ const handleSyncAddresses = async () => {
                       </div>
                   </div>
 
-                  <div style={{ maxHeight: '500px', overflowY: 'auto', border: '1px solid #eee' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
-                          <thead style={{ background: '#f4f4f4', position: 'sticky', top: 0 }}>
+                  <div style={{ maxHeight: '600px', overflowY: 'auto', border: '1px solid var(--line)' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem', textAlign: 'left', fontFamily: 'var(--sans)' }}>
+                          <thead style={{ background: 'var(--paper)', position: 'sticky', top: 0 }}>
                               <tr>
-                                  <th style={{ padding: '10px', borderBottom: '2px solid #000' }}>TIMESTAMP</th>
-                                  <th style={{ padding: '10px', borderBottom: '2px solid #000' }}>APP</th>
-                                  <th style={{ padding: '10px', borderBottom: '2px solid #000' }}>CATEGORY / TAB</th>
-                                  <th style={{ padding: '10px', borderBottom: '2px solid #000' }}>USER</th>
-                                  <th style={{ padding: '10px', borderBottom: '2px solid #000' }}>ACTION</th>
+                                  <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Timestamp</th>
+                                  <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>App</th>
+                                  <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Location</th>
+                                  <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>User</th>
+                                  <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Action</th>
                               </tr>
                           </thead>
                           <tbody>
@@ -1840,15 +1849,15 @@ const handleSyncAddresses = async () => {
                                   .filter(log => logFilter.app === 'ALL' || log.app === logFilter.app)
                                   .filter(log => !logFilter.user || log.u?.toLowerCase().includes(logFilter.user))
                                   .map((log, idx) => (
-                                      <tr key={idx} style={{ borderBottom: '1px solid #eee', background: idx % 2 === 0 ? '#fff' : '#fcfcfc' }}>
-                                          <td style={{ padding: '10px', color: '#666' }}>{log.t?.toDate ? log.t.toDate().toLocaleString() : '-'}</td>
-                                          <td style={{ padding: '10px', fontWeight: 'bold', color: log.app === 'HQ' ? '#6f42c1' : log.app === 'SHOP FLOOR' ? '#007bff' : '#CC6600' }}>{log.app}</td>
-                                          <td style={{ padding: '10px' }}><span style={{ background: '#eee', padding: '2px 6px', borderRadius: '4px', fontSize: '0.7rem' }}>{log.cat || log.tab || 'system'}</span></td>
-                                          <td style={{ padding: '10px', fontWeight: 'bold' }}>{log.u || log.user || 'Unknown'}</td>
-                                          <td style={{ padding: '10px' }}>{log.msg || log.action}</td>
+                                      <tr key={idx} style={{ borderBottom: '1px solid var(--line)' }}>
+                                          <td style={{ padding: '15px', color: 'var(--ink-soft)' }}>{log.t?.toDate ? log.t.toDate().toLocaleString() : '-'}</td>
+                                          <td style={{ padding: '15px', fontWeight: 500, color: 'var(--ink)' }}>{log.app}</td>
+                                          <td style={{ padding: '15px' }}><span style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '4px 8px', fontSize: '0.8rem', color: 'var(--ink)' }}>{log.cat || log.tab || 'system'}</span></td>
+                                          <td style={{ padding: '15px', color: 'var(--ink)' }}>{log.u || log.user || 'Unknown'}</td>
+                                          <td style={{ padding: '15px', color: 'var(--ink-soft)' }}>{log.msg || log.action}</td>
                                       </tr>
                               ))}
-                              {systemLogs.length === 0 && <tr><td colSpan="5" style={{ padding: '20px', textAlign: 'center', color: '#999' }}>No logs found.</td></tr>}
+                              {systemLogs.length === 0 && <tr><td colSpan="5" style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No logs found.</td></tr>}
                           </tbody>
                       </table>
                   </div>
@@ -1861,5 +1870,39 @@ const handleSyncAddresses = async () => {
     </div>
   );
 };
+
+// Reusable UI Components for the Admin Tab
+const AdminNavButton = ({ active, onClick, label, icon }) => (
+    <button 
+        onClick={onClick} 
+        style={{ 
+            padding: '16px 20px', textAlign: 'left', cursor: 'pointer', border: 'none', display: 'flex', alignItems: 'center', gap: '12px',
+            background: active ? 'var(--paper)' : 'transparent',
+            borderLeft: active ? '2px solid var(--brass)' : '2px solid transparent',
+            borderBottom: '1px solid var(--line)',
+            color: active ? 'var(--ink)' : 'var(--ink-soft)',
+            fontFamily: 'var(--sans)', fontSize: '0.95rem', transition: 'all 0.2s ease'
+        }}
+    >
+        <span style={{ fontSize: '1.1rem', opacity: active ? 1 : 0.6 }}>{icon}</span>
+        {label}
+    </button>
+);
+
+const SyncButton = ({ onClick, disabled, label, sub }) => (
+    <button 
+        onClick={onClick} 
+        disabled={disabled} 
+        style={{ 
+            padding: '20px', textAlign: 'left', cursor: disabled ? 'wait' : 'pointer', border: '1px solid var(--line)',
+            background: '#fff', color: 'var(--ink)', transition: 'all 0.2s ease', display: 'flex', flexDirection: 'column', gap: '6px'
+        }}
+        onMouseOver={(e) => { if(!disabled) e.currentTarget.style.borderColor = 'var(--brass)'; }}
+        onMouseOut={(e) => { if(!disabled) e.currentTarget.style.borderColor = 'var(--line)'; }}
+    >
+        <span style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500 }}>{label}</span>
+        <span style={{ fontFamily: 'var(--serif)', fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>{sub}</span>
+    </button>
+);
 
 export default AdminTab;

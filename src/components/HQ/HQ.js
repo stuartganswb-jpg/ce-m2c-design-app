@@ -1,9 +1,9 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { db, auth, functions } from '../../firebase'; // 🚀 NEW: Added auth and functions
+import { db, auth, functions } from '../../firebase'; 
 import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
-import { signInWithCustomToken } from 'firebase/auth'; // 🚀 NEW: Import Custom Token Sign-In
-import { httpsCallable } from 'firebase/functions'; // 🚀 NEW: Import HTTPS Callable
+import { signInWithCustomToken } from 'firebase/auth'; 
+import { httpsCallable } from 'firebase/functions'; 
 import '../../App.css';
 
 const InceptionTab = lazy(() => import('./InceptionTab'));
@@ -25,7 +25,6 @@ const RTGDispatchTab = lazy(() => import('./RTGDispatchTab'));
 const AssetGalleryTab = lazy(() => import('../Shared/AssetGalleryTab'));
 const BatchImageProcessor = lazy(() => import('../Shared/BatchImageProcessor'));
 
-// 🚀 NEW: Import Shared Messaging
 const SharedMessaging = lazy(() => import('../Shared/SharedMessaging'));
 
 const BRANDS = [
@@ -41,6 +40,19 @@ const TABS = [
   '9. Client Vision', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor', 'ERP_WRITE_BACK'
 ];
+
+// Reusable Theme Dictionary based on prototype.html
+const theme = {
+  paper: '#faf8f4',
+  paper2: '#f2efe8',
+  ink: '#1c1a16',
+  inkSoft: '#524e46',
+  brass: '#b08d57',
+  line: 'rgba(28,26,22,.14)',
+  serif: "'Cormorant Garamond', Georgia, serif",
+  sans: "'Inter', -apple-system, sans-serif",
+  mono: "'IBM Plex Mono', monospace"
+};
 
 function HQ() { 
   const navigate = useNavigate(); 
@@ -58,22 +70,18 @@ function HQ() {
     }
   }, []);
 
-  // 🚀 NEW: Secure Authentication Flow
   const attemptLogin = async (e) => {
     e.preventDefault();
     if (!pinInput) return;
     
     try {
-      // 1. Call your new secure Cloud Function
       const authenticatePin = httpsCallable(functions, 'authenticatePin');
       const result = await authenticatePin({ pin: pinInput });
       
       const { token, user: userData } = result.data;
 
-      // 2. Officially sign into Firebase Auth with the minted token
       await signInWithCustomToken(auth, token);
 
-      // 3. Set your local React states to load the UI
       if (pinInput === "1032") {
         setUser(userData);
         setPerms({ admin: TABS });
@@ -86,7 +94,7 @@ function HQ() {
     } catch (err) { 
       console.error(err); 
       alert("Authentication failed: " + (err.message || "Invalid PIN")); 
-      setPinInput(""); // Clear the input on failure
+      setPinInput(""); 
     }
   };
 
@@ -104,41 +112,75 @@ function HQ() {
     setUser(null);
     setPinInput("");
     localStorage.removeItem('m2c_brand');
-    auth.signOut(); // 🚀 NEW: Ensure Firebase session is destroyed on logout
+    auth.signOut(); 
   };
 
+  // --- VIEW: LOGIN ---
   if (!user) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f4f4f4', fontFamily: 'monospace' }}>
-        <div style={{ background: '#fff', padding: '40px', border: '3px solid #000', boxShadow: '15px 15px 0 #000', width: '400px', textAlign: 'center' }}>
-          <h1 style={{ margin: '0 0 20px 0', fontSize: '1.5rem', letterSpacing: '2px' }}>ENTERPRISE PLM</h1>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.paper, fontFamily: theme.sans }}>
+        <div style={{ background: '#fff', padding: '50px 40px', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.02)', width: '400px', textAlign: 'center' }}>
+          <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.25em', textTransform: 'uppercase', color: theme.brass, display: 'block', marginBottom: '1rem' }}>
+            Authorization Required
+          </span>
+          <h1 style={{ fontFamily: theme.serif, margin: '0 0 30px 0', fontSize: '2.2rem', fontWeight: 500, color: theme.ink }}>Enterprise PLM</h1>
           <form onSubmit={attemptLogin}>
-            <label style={{ display: 'block', marginBottom: '10px', fontWeight: 'bold' }}>HQ AUTHORIZATION PIN:</label>
-            <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} autoFocus placeholder="ENTER PIN" maxLength="4" style={{ width: '100%', padding: '12px', border: '2px solid #000', marginBottom: '20px', boxSizing: 'border-box', textAlign: 'center', fontSize: '1.5rem', letterSpacing: '10px' }} />
-            <button type="submit" style={{ width: '100%', padding: '12px', background: '#000', color: '#fff', fontWeight: 'bold', cursor: 'pointer', border: 'none' }}>AUTHENTICATE</button>
+            <input 
+              type="password" 
+              value={pinInput} 
+              onChange={e => setPinInput(e.target.value)} 
+              autoFocus 
+              placeholder="ENTER PIN" 
+              maxLength="4" 
+              style={{ width: '100%', padding: '15px', border: `1px solid ${theme.line}`, marginBottom: '20px', boxSizing: 'border-box', textAlign: 'center', fontSize: '1.5rem', letterSpacing: '10px', fontFamily: theme.mono, color: theme.ink, outline: 'none' }} 
+            />
+            <button 
+              type="submit" 
+              style={{ width: '100%', padding: '15px', background: theme.ink, color: '#fff', fontWeight: 400, fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.18em', textTransform: 'uppercase', cursor: 'pointer', border: 'none', transition: 'background 0.2s' }}
+              onMouseOver={(e) => e.currentTarget.style.background = theme.brass}
+              onMouseOut={(e) => e.currentTarget.style.background = theme.ink}
+            >
+              Authenticate
+            </button>
           </form>
-          <button onClick={() => navigate('/')} style={{ marginTop: '20px', background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontWeight: 'bold' }}>← BACK TO HUB</button>
+          <button 
+            onClick={() => navigate('/')} 
+            style={{ marginTop: '30px', background: 'none', border: 'none', color: theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', borderBottom: `1px solid ${theme.brass}`, paddingBottom: '2px' }}
+          >
+            Return to Hub
+          </button>
         </div>
       </div>
     );
   }
 
+  // --- VIEW: BRAND SELECTOR ---
   if (user && !activeBrand) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f4f4f4', fontFamily: 'monospace' }}>
-        <div style={{ background: '#fff', padding: '40px', border: '3px solid #000', boxShadow: '15px 15px 0 #000', width: '400px', textAlign: 'center' }}>
-          <p style={{ marginBottom: '20px', fontWeight: 'bold', fontSize: '1.2rem' }}>WELCOME, {user.name.toUpperCase()}</p>
-          <p style={{ fontSize: '0.8rem', marginBottom: '15px' }}>SELECT OPERATING DIVISION:</p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.paper, fontFamily: theme.sans }}>
+        <div style={{ background: '#fff', padding: '50px 40px', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.02)', width: '450px', textAlign: 'center' }}>
+          <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.25em', textTransform: 'uppercase', color: theme.brass, display: 'block', marginBottom: '1rem' }}>
+            Welcome, {user.name}
+          </span>
+          <h1 style={{ fontFamily: theme.serif, margin: '0 0 30px 0', fontSize: '2.2rem', fontWeight: 500, color: theme.ink }}>Select Division</h1>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {BRANDS.map(brand => (
               <button 
                 key={brand.id}
                 onClick={() => selectBrand(brand)}
-                style={{ padding: '15px', background: '#fff', border: `2px solid ${brand.color}`, color: brand.color, fontWeight: 'bold', cursor: 'pointer', textTransform: 'uppercase', transition: '0.2s' }}
-                onMouseOver={(e) => { e.target.style.background = brand.color; e.target.style.color = '#fff'; }}
-                onMouseOut={(e) => { e.target.style.background = '#fff'; e.target.style.color = brand.color; }}
+                style={{ padding: '20px', background: '#fff', border: `1px solid ${theme.line}`, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', transition: 'all 0.3s ease' }}
+                onMouseOver={(e) => { 
+                  e.currentTarget.style.borderColor = brand.color; 
+                  e.currentTarget.style.boxShadow = `0 4px 12px rgba(0,0,0,0.05)`;
+                }}
+                onMouseOut={(e) => { 
+                  e.currentTarget.style.borderColor = theme.line;
+                  e.currentTarget.style.boxShadow = `none`;
+                }}
               >
-                {brand.name} <span style={{ display: 'block', fontSize: '0.6rem', marginTop: '5px' }}>{brand.focus}</span>
+                <span style={{ fontFamily: theme.sans, fontSize: '1rem', fontWeight: 500, color: theme.ink, letterSpacing: '0.05em', textTransform: 'uppercase' }}>{brand.name}</span>
+                <span style={{ display: 'block', fontFamily: theme.serif, fontSize: '0.9rem', color: theme.inkSoft, fontStyle: 'italic', marginTop: '4px' }}>{brand.focus}</span>
               </button>
             ))}
           </div>
@@ -150,48 +192,76 @@ function HQ() {
   const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';
   const myTabs = user?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
+  // --- VIEW: MAIN APPLICATION ---
   return (
-    <div className="App" style={{ minHeight: '100vh', backgroundColor: '#e5e5e5', fontFamily: 'monospace', display: 'flex', flexDirection: 'column' }}>
+    <div className="App" style={{ minHeight: '100vh', backgroundColor: theme.paper, fontFamily: theme.sans, display: 'flex', flexDirection: 'column' }}>
       
-      <header style={{ backgroundColor: activeBrand.color, color: '#fff', padding: '15px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '4px solid #000', transition: 'background-color 0.3s' }}>
+      {/* HEADER */}
+      <header style={{ backgroundColor: '#fff', borderTop: `4px solid ${activeBrand.color}`, borderBottom: `1px solid ${theme.line}`, padding: '18px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: '1.4rem', letterSpacing: '2px' }}>{activeBrand.name.toUpperCase()}</h1>
-          <span style={{ fontSize: '0.7rem', opacity: 0.8 }}>PRODUCT LIFECYCLE MANAGEMENT (PLM)</span>
+          <h1 style={{ fontFamily: theme.serif, margin: 0, fontSize: '1.6rem', fontWeight: 500, color: theme.ink, letterSpacing: '0.05em' }}>
+            {activeBrand.name.toUpperCase()}
+          </h1>
+          <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.18em', textTransform: 'uppercase' }}>
+            Product Lifecycle Management
+          </span>
         </div>
-        <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <span style={{ fontSize: '0.85rem' }}>OPERATOR: <strong>{user.name.toUpperCase()}</strong></span>
-          <button onClick={handleLogout} style={{ padding: '5px 12px', fontSize: '0.7rem', cursor: 'pointer', background: 'transparent', color: '#fff', border: '1px solid #fff' }}>SWITCH BRAND / LOGOUT</button>
-          <button onClick={() => navigate('/')} style={{ padding: '5px 12px', fontSize: '0.7rem', cursor: 'pointer', background: '#fff', color: activeBrand.color, border: '1px solid #fff', fontWeight: 'bold' }}>🏠 HUB</button>
+        <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '24px' }}>
+          <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>
+            Operator: <strong style={{ color: theme.ink, fontWeight: 500 }}>{user.name}</strong>
+          </span>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button 
+              onClick={handleLogout} 
+              style={{ padding: '8px 16px', fontSize: '10px', fontFamily: theme.mono, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, transition: 'all 0.2s' }}
+              onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }}
+              onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}
+            >
+              Switch Division
+            </button>
+            <button 
+              onClick={() => navigate('/')} 
+              style={{ padding: '8px 16px', fontSize: '10px', fontFamily: theme.mono, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', background: theme.ink, color: '#fff', border: 'none', transition: 'background 0.2s' }}
+              onMouseOver={(e) => e.currentTarget.style.background = theme.brass}
+              onMouseOut={(e) => e.currentTarget.style.background = theme.ink}
+            >
+              Return to Hub
+            </button>
+          </div>
         </div>
       </header>
 
-     <nav style={{ display: 'flex', backgroundColor: '#fff', borderBottom: '3px solid #000', overflowX: 'auto' }}>
-        {TABS.filter(t => myTabs.includes(t) && t !== 'ERP_WRITE_BACK').map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            style={{
-              flex: 1, minWidth: '120px', padding: '12px 5px', cursor: 'pointer', border: 'none', borderRight: '1px solid #ccc',
-              borderBottom: activeTab === tab ? `4px solid ${activeBrand.color}` : '4px solid transparent',
-              background: activeTab === tab ? '#f4f4f4' : 'transparent',
-              color: activeTab === tab ? activeBrand.color : '#333',
-              fontWeight: activeTab === tab ? 'bold' : 'normal',
-              textTransform: 'uppercase', fontSize: '0.65rem',
-              transition: 'all 0.2s'
-            }}
-          >
-            {tab}
-          </button>
-        ))}
+      {/* NAVIGATION TABS */}
+      <nav style={{ display: 'flex', backgroundColor: theme.paper, borderBottom: `1px solid ${theme.line}`, overflowX: 'auto', padding: '0 20px' }}>
+        {TABS.filter(t => myTabs.includes(t) && t !== 'ERP_WRITE_BACK').map((tab) => {
+          const isActive = activeTab === tab;
+          return (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              style={{
+                whiteSpace: 'nowrap', padding: '16px 20px', cursor: 'pointer', border: 'none', background: 'transparent',
+                borderBottom: isActive ? `2px solid ${activeBrand.color}` : '2px solid transparent',
+                color: isActive ? theme.ink : theme.inkSoft,
+                fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase',
+                opacity: isActive ? 1 : 0.7, transition: 'all 0.2s ease'
+              }}
+              onMouseOver={(e) => { if (!isActive) e.currentTarget.style.opacity = 1; }}
+              onMouseOut={(e) => { if (!isActive) e.currentTarget.style.opacity = 0.7; }}
+            >
+              {tab}
+            </button>
+          );
+        })}
       </nav>
 
-      <main style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        <div style={{ backgroundColor: 'white', border: '2px solid #000', flex: 1, boxShadow: '8px 8px 0px rgba(0,0,0,0.1)', overflow: 'hidden', position: 'relative', padding: '20px' }}>
+      {/* MAIN CONTENT AREA */}
+      <main style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        <div style={{ backgroundColor: '#fff', border: `1px solid ${theme.line}`, flex: 1, overflow: 'hidden', position: 'relative', padding: '30px', borderRadius: '2px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
           
           <Suspense fallback={
             <div style={{ display: 'flex', height: '100%', justifyContent: 'center', alignItems: 'center', flexDirection: 'column', gap: '20px' }}>
-              <div style={{ fontSize: '3rem' }}>⏳</div>
-              <h2 style={{ color: activeBrand.color }}>LOADING MODULE...</h2>
+              <div style={{ fontFamily: theme.serif, fontSize: '2rem', color: theme.brass, fontStyle: 'italic' }}>Loading Module...</div>
             </div>
           }>
             {activeTab === TABS[0] && <InceptionTab currentUser={user.name} activeBrand={activeBrand.id} />}
