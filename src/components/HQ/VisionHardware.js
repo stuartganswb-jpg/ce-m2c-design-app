@@ -8,7 +8,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [showQuotePanel, setShowQuotePanel] = useState(false);
   const [isPushingToCPQ, setIsPushingToCPQ] = useState(false);
 
-  // --- NEW: Global Job Context State ---
+  // --- GLOBAL JOB CONTEXT ---
   const [activeQuoteId, setActiveQuoteId] = useState(null);
   const [liveCustomers, setLiveCustomers] = useState([]);
   const [globalLists, setGlobalLists] = useState({});
@@ -57,7 +57,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [flowPins, setFlowPins] = useState([]);
 
   const [engData, setEngData] = useState({
-    jobName: '', sidemark: '', shape: 'STRAIGHT', inputMode: 'ORDERING',   
+    shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
     endStyle: 'FINIAL', proj: "", bracketId: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
@@ -288,13 +288,28 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const imDeductR = isRightInside ? engData.insideMountDeduct : 0;
 
   if (engData.shape === 'STRAIGHT') {
-      if (engData.inputMode === 'WALL') { wall2 = engData.w2; pole2 = wall2 - bendDeductL - bendDeductR - imDeductL - imDeductR; } 
-      else { pole2 = engData.w2 - bendDeductL - bendDeductR - imDeductL - imDeductR; wall2 = engData.w2; }
+      if (engData.inputMode === 'WALL') { 
+          wall2 = engData.w2; 
+          pole2 = wall2 - bendDeductL - bendDeductR - imDeductL - imDeductR; 
+      } else { 
+          pole2 = engData.w2; 
+          wall2 = pole2 + bendDeductL + bendDeductR + imDeductL + imDeductR; 
+      }
   } else if (engData.shape === 'MITERED') {
       mDeduct1 = engData.a1 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a1) / 2));
       mDeduct2 = engData.a2 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a2) / 2));
-      if (engData.inputMode === 'WALL') { pole1 = Math.max(0, wall1 - mDeduct1 - imDeductL); pole2 = Math.max(0, wall2 - mDeduct1 - mDeduct2); pole3 = Math.max(0, wall3 - mDeduct2 - imDeductR); } 
-      else { pole1 = engData.w1 - bendDeductL - imDeductL; wall1 = pole1 + mDeduct1 + imDeductL; pole2 = engData.w2; wall2 = pole2 + mDeduct1 + mDeduct2; pole3 = engData.w3 - bendDeductR - imDeductR; wall3 = pole3 + mDeduct2 + imDeductR; }
+      if (engData.inputMode === 'WALL') { 
+          pole1 = Math.max(0, wall1 - mDeduct1 - imDeductL); 
+          pole2 = Math.max(0, wall2 - mDeduct1 - mDeduct2); 
+          pole3 = Math.max(0, wall3 - mDeduct2 - imDeductR); 
+      } else { 
+          pole1 = engData.w1;
+          pole2 = engData.w2;
+          pole3 = engData.w3;
+          wall1 = pole1 + mDeduct1 + imDeductL; 
+          wall2 = pole2 + mDeduct1 + mDeduct2; 
+          wall3 = pole3 + mDeduct2 + imDeductR; 
+      }
       sawAngle1 = engData.a1 === 180 ? 0 : 90 - (engData.a1 / 2); sawAngle2 = engData.a2 === 180 ? 0 : 90 - (engData.a2 / 2);
   } else if (engData.shape === 'BOW') {
       if (engData.bowDepth > 0) {
@@ -309,13 +324,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
   const rawLeft = engData.shape === 'MITERED' ? pole1 : 0; 
   const rawRight = engData.shape === 'MITERED' ? pole3 : 0;
-  const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 : pole2;
+  const rawCenter = pole2;
   
   const totalPoleRawInches = rawLeft + rawCenter + rawRight;
   
-  // EXACT MATCH MATH LOGIC
-  const exactOrderLength = engData.shape === 'MITERED' ? (engData.w1 + engData.w2 + engData.w3) : engData.w2;
-  const poleO2O = exactOrderLength;
+  const poleO2O = totalPoleRawInches;
   const totalSystemO2O = poleO2O + engData.bracketW;
 
   const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
@@ -589,6 +602,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   };
 
   const handlePushToCPQ = async () => {
+      if (!activeQuoteId) return alert("Please Initialize Quote ID in Step 1 first.");
+      if (!jobData.sidemark) return alert("Please enter a Sidemark for this specific item.");
       if (!quoteFlowId) return alert("Please select a CPQ Flow in Step 1.");
       if (engData.proj > 0 && !engData.bracketId) return alert("Please select a Bracket in the Fabrication Settings to proceed.");
 
@@ -602,7 +617,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           
           let svgStr = new XMLSerializer().serializeToString(clone);
           
-          // Replace CSS vars with hard hex values so PDFs render them correctly
           svgStr = svgStr.replace(/var\(--brass\)/g, '#c5a059')
                          .replace(/var\(--ink\)/g, '#1c1a16')
                          .replace(/var\(--ink-soft\)/g, '#524e46')
@@ -611,17 +625,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                          .replace(/var\(--paper-2\)/g, '#faf8f4')
                          .replace(/var\(--dark\)/g, '#2a2a2a');
           
-          // Normalize pan/zoom transform back to a centered standard scale (1.7)
           svgStr = svgStr.replace(/transform="[^"]*"/i, 'transform="translate(0, 0) translate(500, 300) scale(1.7) translate(-500, -300)"');
-
-          // Remove foreignObjects (inputs and textareas that break PDF)
           svgStr = svgStr.replace(/<foreignObject[\s\S]*?<\/foreignObject>/g, '');
           capturedSvg = svgStr;
       }
 
       const payload = { 
           id: draftId, brandId: activeBrand, category: 'HARDWARE', status: 'DRAFT_FROM_VISION', 
-          jobName: engData.jobName, sidemark: engData.sidemark, 
+          jobName: jobData.jobName, sidemark: jobData.sidemark, 
           linkedAssemblyId: activeFlow?.linkedAssemblyId || null,
           linkedCpqFlowId: activeFlow?.id || null, 
           flowId: activeFlow?.id || null,          
@@ -654,7 +665,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           author: currentUser, createdAt: serverTimestamp() 
       };
       
-      try { await setDoc(doc(db, "cpq_drafts", draftId), payload); alert("✅ Draft sent! Switch to the CPQ Tab and hit 'Resume Draft' to price this item."); setShowQuotePanel(false); } 
+      try { 
+          await setDoc(doc(db, "cpq_drafts", draftId), payload); 
+          alert("✅ Draft sent to CPQ! Sidemark cleared for your next item."); 
+          setJobData(prev => ({ ...prev, sidemark: '' })); 
+          setAttachments([]);
+          setShopNotes([]);
+          setShowQuotePanel(false); 
+      } 
       catch (e) { console.error(e); alert("Error pushing to CPQ."); } 
       finally { setIsPushingToCPQ(false); }
   };
@@ -681,13 +699,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   </select>
               </div>
               <div style={{ flex: 1 }}>
-                  <label style={labelStyle}>* Sidemark</label>
-                  <input type="text" placeholder="e.g. Master Bath" value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})} style={fieldStyle} />
-              </div>
-              <div style={{ flex: 1 }}>
                   <label style={labelStyle}>Job Name (Optional)</label>
                   <input type="text" placeholder="e.g. Smith Reno" value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={fieldStyle} />
               </div>
+          </div>
+          <div style={{ flex: 1, marginTop: '8px' }}>
+              <label style={labelStyle}>* Sidemark (Line Item Specific)</label>
+              <input type="text" placeholder="e.g. Master Bath" value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})} style={{...fieldStyle, border: '1px solid var(--brass)'}} />
           </div>
           {!activeQuoteId && (
               <button onClick={handleInitializeQuote} style={{ width: '200px', padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '8px' }}>Initialize Quote ID</button>
@@ -880,6 +898,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <button onClick={() => setShowQuotePanel(!showQuotePanel)} style={{ padding: '8px 16px', background: showQuotePanel ? 'var(--ink)' : 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
                             {showQuotePanel ? "Back to Drawing" : "Configure & Quote"}
+                        </button>
+                        <button onClick={() => window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'CPQ' }))} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
+                            Drawings Complete Push to CPQ
                         </button>
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>

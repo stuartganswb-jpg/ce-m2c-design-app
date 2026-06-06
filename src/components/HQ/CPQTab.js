@@ -210,7 +210,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
   const [activeAssembly, setActiveAssembly] = useState(null);
   
-  // NEW: Store masterQuoteId to ensure we append to the right parent Job
   const [activeMasterQuoteId, setActiveMasterQuoteId] = useState(null);
   const [activeDraftId, setActiveDraftId] = useState(null);
   const [activeDraftSvg, setActiveDraftSvg] = useState(null);
@@ -364,6 +363,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       
       const translatedParams = {};
       const newStepQuantities = {};
+      const newDimensionInputs = {};
       const engineeringNotes = draft.specs?.engineeringNotes;
 
       targetFlow.steps.forEach(step => {
@@ -391,6 +391,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               if (lowerTitle.includes("splice") || lowerTitle.includes("connector")) {
                   newStepQuantities[step.id] = engineeringNotes.qtySplices !== undefined ? engineeringNotes.qtySplices : 0;
               }
+              
+              if (step.calculatorTemplate) {
+                  newDimensionInputs[step.id] = {
+                      type: 'O2O',
+                      length: engineeringNotes.poleO2O || '',
+                      wallA: engineeringNotes.pole1 || '',
+                      wallB: engineeringNotes.pole2 || '',
+                      wallC: engineeringNotes.pole3 || '',
+                      calc_cutLength: engineeringNotes.totalPoleRawInches || engineeringNotes.poleO2O,
+                  };
+              }
           }
       });
 
@@ -400,11 +411,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       setDynamicConfigParams(translatedParams);
       setStepQuantities(prev => ({...prev, ...newStepQuantities}));
+      setDimensionInputs(prev => ({...prev, ...newDimensionInputs}));
       setShowCloneModal(false);
       setCurrentStepIndex(0);
       
       if (draft.category === 'HARDWARE') {
-          alert("Hardware Draft Loaded!\n\nPlease reference the pinned Engineering Specs to manually enter quantities and fees.");
+          alert("Hardware Draft Loaded!\n\nAll math and quantities have been successfully mapped from the Vision Tool.");
       } else {
           alert("Draft visual data translated and mapped to CPQ Flow!");
       }
@@ -658,7 +670,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (!jobData.customerId || !jobData.sidemark) return alert("Please select a Customer and enter a Sidemark.");
       if (cart.length === 0) return alert("Your cart is empty. Please add an assembly first.");
 
-      // If a masterQuoteId exists in the cart, use it. Otherwise, fallback to a new ID.
       const targetJobId = cart[0].masterQuoteId || activeMasterQuoteId || `QUOTE-${Date.now()}`;
       const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
       
@@ -714,7 +725,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       };
       
       try {
-          // Use merge: true so if the quote was initialized in Vision, we append the configuration to it.
           await setDoc(doc(db, "jobs", targetJobId), payload, { merge: true });
           
           if (mergedDraftSvg) {
