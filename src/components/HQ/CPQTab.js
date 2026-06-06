@@ -215,7 +215,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
   const [viewMode, setViewMode] = useState("3D");
 
-  // Handoff Listener: Catch active session from Vision Tab
   useEffect(() => {
       const sessionStr = localStorage.getItem('hq_active_quote_session');
       if (sessionStr) {
@@ -421,12 +420,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setDimensionInputs(prev => ({...prev, ...newDimensionInputs}));
       setShowCloneModal(false);
       setCurrentStepIndex(0);
-      
-      if (draft.category === 'HARDWARE') {
-          alert("Hardware Draft Loaded!\n\nAll math and quantities have been successfully mapped from the Vision Tool.");
-      } else {
-          alert("Draft visual data translated and mapped to CPQ Flow!");
-      }
   };
 
   const handleDeleteDraft = async (id) => {
@@ -642,7 +635,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (nextIndex < activeFlow.steps.length) setCurrentStepIndex(nextIndex);
   };
 
-  const handleAddToCart = () => {
+  const handleAddToCart = async () => {
       const activeDraft = previousDrafts.find(d => d.id === activeDraftId);
       const item = {
           id: Date.now().toString(),
@@ -662,6 +655,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       };
       setCart([...cart, item]);
       
+      // Update Firebase to mark this draft as configured!
+      if (activeDraftId) {
+          try {
+              await setDoc(doc(db, "cpq_drafts", activeDraftId), { status: 'CONFIGURED' }, { merge: true });
+          } catch(err) {
+              console.error(err);
+          }
+      }
+
       setActiveFlowId("");
       setDynamicConfigParams({});
       setStepQuantities({});
@@ -685,7 +687,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       let grandTotal = 0;
       let mergedBreakdown = [];
       let mergedNotesObj = null; 
-      let mergedDraftSvg = null; 
+      let allDraftSvgs = []; 
 
       cart.forEach((item) => {
           grandTotal += item.pricing.finalPrice * item.qty;
@@ -707,7 +709,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           });
 
           if (!mergedNotesObj && item.engineeringNotes) mergedNotesObj = item.engineeringNotes;
-          if (!mergedDraftSvg && item.draftSvg) mergedDraftSvg = item.draftSvg;
+          
+          if (item.draftSvg) {
+              allDraftSvgs.push({
+                  sidemark: item.sidemark,
+                  svg: item.draftSvg
+              });
+          }
       });
 
       const payload = {
@@ -737,22 +745,29 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       try {
           await setDoc(doc(db, "jobs", targetJobId), payload, { merge: true });
           
-          if (mergedDraftSvg) {
-              await setDoc(doc(db, "crm_files", `DRAWING-${Date.now()}`), {
-                  customerId: jobData.customerId,
-                  jobId: targetJobId,
-                  sidemark: jobData.jobName || 'Multi-Room Project',
-                  dateSaved: new Date().toISOString(),
-                  type: 'VISION_DRAWING',
-                  svgData: mergedDraftSvg
+          if (allDraftSvgs.length > 0) {
+              const svgPromises = allDraftSvgs.map((draft, idx) => {
+                  return setDoc(doc(db, "crm_files", `DRAWING-${Date.now()}-${idx}`), {
+                      customerId: jobData.customerId,
+                      jobId: targetJobId,
+                      sidemark: draft.sidemark || 'Multi-Room Project',
+                      dateSaved: new Date().toISOString(),
+                      type: 'VISION_DRAWING',
+                      svgData: draft.svg
+                  });
               });
+              await Promise.all(svgPromises);
           }
           
-          if (activeDraftId) {
-              await deleteDoc(doc(db, "cpq_drafts", activeDraftId));
+          // Clean up all the staging drafts that belonged to this Master Quote
+          if (activeMasterQuoteId) {
+              const draftsToDelete = previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId);
+              for (const d of draftsToDelete) {
+                  await deleteDoc(doc(db, "cpq_drafts", d.id));
+              }
           }
 
-          await generateOrderDocuments(payload, mergedDraftSvg);
+          await generateOrderDocuments(payload, allDraftSvgs);
 
           if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
               alert(`✅ Quote Generated!\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
@@ -773,7 +788,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       }
   };
 
-  const generateOrderDocuments = async (job, draftSvg) => {
+  const generateOrderDocuments = async (job, svgs) => {
       const printWindow = window.open('', '_blank');
       
       let mathSection = '';
@@ -781,7 +796,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           const notes = job.engineeringNotes;
           mathSection = `
               <div style="background: #faf8f4; border: 1px dashed rgba(28,26,22,.14); padding: 20px;">
-                  <h4 style="margin:0 0 15px 0; color: #1c1a16; font-family: Georgia, serif; text-transform: uppercase;">Engineering Dimensions</h4>
+                  <h4 style="margin:0 0 15px 0; color: #1c1a16; font-family: Georgia, serif; text-transform: uppercase;">Reference Math</h4>
                   <table style="width: 100%; border-collapse: collapse; font-size: 14px; font-family: sans-serif;">
                       <tr>
                           <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">Pole O2O (Edge-to-Edge):</td>
@@ -855,7 +870,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 </div>
                 
                 <div class="meta-grid">
-                  <div><span class="label">Project / Sidemark</span><span class="val">${job.sidemark}</span></div>
+                  <div><span class="label">Project</span><span class="val">${job.jobName || 'Multi-Room Order'}</span></div>
                   <div><span class="label">Quote ID</span><span class="val">${job.jobId}</span></div>
                   <div><span class="label">Prepared For</span><span class="val">${job.customer?.name}</span></div>
                   <div><span class="label">Date</span><span class="val">${job.dateSaved}</span></div>
@@ -896,7 +911,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 </div>
                 
                 <div class="meta-grid">
-                  <div><span class="label">Project / Sidemark</span><span class="val">${job.sidemark}</span></div>
+                  <div><span class="label">Project</span><span class="val">${job.jobName || 'Multi-Room Order'}</span></div>
                   <div><span class="label">Work Order ID</span><span class="val">${job.jobId}</span></div>
                 </div>
 
@@ -922,25 +937,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 </div>
             </div>
             
-            ${draftSvg ? `
+            ${svgs && svgs.length > 0 ? svgs.map(draft => `
             <div class="page">
                 <div class="header">
                   <div class="brand">${activeBrand}</div>
                   <div class="doc-type">Engineering Drawing</div>
                 </div>
                 <div class="meta-grid">
-                  <div><span class="label">Sidemark</span><span class="val">${job.sidemark}</span></div>
+                  <div><span class="label">Sidemark</span><span class="val">${draft.sidemark}</span></div>
                   <div><span class="label">Quote ID</span><span class="val">${job.jobId}</span></div>
                 </div>
                 <div style="width: 100%; border: 1px solid rgba(28,26,22,.14); background: #fff; padding: 20px; margin-top: 20px; box-sizing: border-box;">
-                    ${draftSvg}
+                    ${draft.svg}
                 </div>
                 <div class="signature-block">
                     <div class="sig-line">Fabrication Sign-Off</div>
                     <div class="sig-line" style="max-width: 200px;">Date</div>
                 </div>
             </div>
-            ` : ''}
+            `).join('') : ''}
 
             <script> 
                 window.onload = function() { 
@@ -1086,11 +1101,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       <h3 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', color: 'var(--ink)' }}>Lines Awaiting Configuration</h3>
                       <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                           {previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).map(draft => (
-                              <div key={draft.id} style={{ border: '1px solid var(--line)', padding: '12px', background: 'var(--paper-2)', flex: 1, minWidth: '140px' }}>
-                                  <div style={{ fontWeight: 500, marginBottom: '8px', fontSize: '0.9rem' }}>{draft.sidemark || 'Unnamed Line'}</div>
-                                  <button onClick={() => handleResumeDraft(draft.id)} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', width: '100%' }}>
-                                      Configure
-                                  </button>
+                              <div key={draft.id} style={{ border: `1px solid ${draft.status === 'CONFIGURED' ? '#4CAF50' : 'var(--line)'}`, padding: '12px', background: draft.status === 'CONFIGURED' ? '#f0fdf4' : 'var(--paper-2)', flex: 1, minWidth: '140px' }}>
+                                  <div style={{ fontWeight: 500, marginBottom: '8px', fontSize: '0.9rem', color: draft.status === 'CONFIGURED' ? '#166534' : 'var(--ink)' }}>
+                                      {draft.sidemark || 'Unnamed Line'}
+                                  </div>
+                                  {draft.status === 'CONFIGURED' ? (
+                                      <div style={{ padding: '8px 16px', background: 'transparent', color: '#166534', border: '1px solid #4CAF50', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', textAlign: 'center', width: '100%', boxSizing: 'border-box' }}>
+                                          ✅ Configured
+                                      </div>
+                                  ) : (
+                                      <button onClick={() => handleResumeDraft(draft.id)} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', width: '100%' }}>
+                                          Configure
+                                      </button>
+                                  )}
                               </div>
                           ))}
                       </div>
@@ -1498,7 +1521,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                         <div style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)' }}>
                             <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Shipping Destination</h4>
                             
-                            <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', pointerEvents: activeMasterQuoteId ? 'none' : 'auto', opacity: activeMasterQuoteId ? 0.6 : 1 }}>
+                            <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
                                 <button 
                                     onClick={() => {
                                         const cust = combinedCustomers.find(c => c.id === jobData.customerId);
@@ -1527,8 +1550,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                         <select 
                                             value={jobData.shippingAddressId} 
                                             onChange={e => setJobData({...jobData, shippingAddressId: e.target.value})}
-                                            disabled={!!activeMasterQuoteId}
-                                            style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff', cursor: activeMasterQuoteId ? 'not-allowed' : 'pointer' }}
+                                            style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff', cursor: 'pointer' }}
                                         >
                                             <option value="">-- Select Saved Address --</option>
                                             {combinedCustomers.find(c => c.id === jobData.customerId)?.shippingAddresses.map(addr => (
@@ -1540,25 +1562,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                     )}
                                 </div>
                             ) : (
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', opacity: activeMasterQuoteId ? 0.6 : 1 }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input disabled={!!activeMasterQuoteId} placeholder="Attention / Contact Name" value={jobData.customShippingAddress.attention} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, attention: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
+                                        <input placeholder="Attention / Contact Name" value={jobData.customShippingAddress.attention} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, attention: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: '#fff' }} />
                                     </div>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input disabled={!!activeMasterQuoteId} placeholder="Addressee / Company Name" value={jobData.customShippingAddress.addressee} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addressee: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
+                                        <input placeholder="Addressee / Company Name" value={jobData.customShippingAddress.addressee} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addressee: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: '#fff' }} />
                                     </div>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input disabled={!!activeMasterQuoteId} placeholder="Street Address 1" value={jobData.customShippingAddress.addr1} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr1: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
+                                        <input placeholder="Street Address 1" value={jobData.customShippingAddress.addr1} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr1: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: '#fff' }} />
                                     </div>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input disabled={!!activeMasterQuoteId} placeholder="Street Address 2 (Suite, Unit, etc.)" value={jobData.customShippingAddress.addr2} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr2: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
+                                        <input placeholder="Street Address 2 (Suite, Unit, etc.)" value={jobData.customShippingAddress.addr2} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr2: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: '#fff' }} />
                                     </div>
                                     <div>
-                                        <input disabled={!!activeMasterQuoteId} placeholder="City" value={jobData.customShippingAddress.city} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, city: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
+                                        <input placeholder="City" value={jobData.customShippingAddress.city} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, city: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: '#fff' }} />
                                     </div>
                                     <div style={{ display: 'flex', gap: '12px' }}>
-                                        <input disabled={!!activeMasterQuoteId} placeholder="State" value={jobData.customShippingAddress.state} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, state: e.target.value}})} style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
-                                        <input disabled={!!activeMasterQuoteId} placeholder="Zip" value={jobData.customShippingAddress.zip} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, zip: e.target.value}})} style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
+                                        <input placeholder="State" value={jobData.customShippingAddress.state} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, state: e.target.value}})} style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: '#fff' }} />
+                                        <input placeholder="Zip" value={jobData.customShippingAddress.zip} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, zip: e.target.value}})} style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: '#fff' }} />
                                     </div>
                                 </div>
                             )}
@@ -1573,43 +1595,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                     <button onClick={handleFinalizeQuote} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
                         Submit Quote to Pipeline
                     </button>
-                </div>
-            </div>
-        </div>
-      )}
-
-      {showCloneModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-            <div style={{ background: '#fff', border: '1px solid var(--line)', width: '800px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', borderRadius: '2px' }}>
-                <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
-                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Resume Draft / Clone Quote</h2>
-                    <button onClick={() => setShowCloneModal(false)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '2rem', cursor: 'pointer' }}>×</button>
-                </div>
-                
-                <div style={{ padding: '16px 30px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', textAlign: 'right' }}>
-                    <button onClick={handleClearAllDrafts} style={{ padding: '10px 20px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
-                        Wipe All Abandoned Drafts
-                    </button>
-                </div>
-
-                <div style={{ padding: '30px', flex: 1, overflowY: 'auto' }}>
-                    {previousDrafts.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem', textAlign: 'center' }}>No drafts pushed from Vision Tab yet.</div> : (
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                            {previousDrafts.map(draft => (
-                                <div key={draft.id} style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', transition: 'all 0.2s', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)' }}>Draft: {draft.category}</span>
-                                        <div style={{ display: 'flex', gap: '12px' }}>
-                                            <button onClick={() => handleDeleteDraft(draft.id)} style={{ background: 'none', color: '#d9534f', border: 'none', fontSize: '0.9rem', cursor: 'pointer' }}>🗑️</button>
-                                            <button onClick={() => handleResumeDraft(draft.id)} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer' }}>Resume</button>
-                                        </div>
-                                    </div>
-                                    <div style={{ fontSize: '0.95rem', color: 'var(--ink)' }}>Generated by: {draft.author}</div>
-                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{new Date(draft.createdAt?.seconds * 1000).toLocaleString()}</div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
                 </div>
             </div>
         </div>

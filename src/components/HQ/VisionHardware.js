@@ -111,25 +111,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       });
   };
 
-  const getFinishStep = (compName) => {
-      if (!activeFlow) return null;
-      const finishSteps = (activeFlow.steps || []).filter(s => {
-          const t = (s.title || '').toLowerCase();
-          const ds = (s.dataSource || '').toLowerCase();
-          return ds === 'master_finishes' || t.includes('finish') || t.includes('color') || t.includes('patina');
-      });
-      if (finishSteps.length === 0) return null;
-      
-      const specific = finishSteps.find(s => s.title.toLowerCase().includes(compName.toLowerCase()));
-      if (specific) return specific;
-      
-      const generic = finishSteps.find(s => {
-          const t = s.title.toLowerCase();
-          return !t.includes('pole') && !t.includes('tube') && !t.includes('bracket') && !t.includes('finial') && !t.includes('ring');
-      });
-      return generic || finishSteps[0];
-  };
-
   const bracketStep = getStepForCategory('BRACKET');
 
   useEffect(() => {
@@ -242,31 +223,34 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const imDeductL = isLeftInside ? engData.insideMountDeduct : 0;
   const imDeductR = isRightInside ? engData.insideMountDeduct : 0;
 
+  // --- MATH CORRECTION ---
+  // If ordering O2O, C2C (Wall) = Pole - Deductions
+  // If Wall C2C, Pole O2O = Wall + Deductions
   if (engData.shape === 'STRAIGHT') {
       if (engData.inputMode === 'WALL') { 
           wall2 = engData.w2; 
-          pole2 = wall2 - bendDeductL - bendDeductR - imDeductL - imDeductR; 
+          pole2 = wall2 + bendDeductL + bendDeductR + imDeductL + imDeductR; 
       } else { 
           pole2 = engData.w2; 
-          wall2 = pole2 + bendDeductL + bendDeductR + imDeductL + imDeductR; 
+          wall2 = pole2 - bendDeductL - bendDeductR - imDeductL - imDeductR; 
       }
   } else if (engData.shape === 'MITERED') {
       mDeduct1 = engData.a1 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a1) / 2));
       mDeduct2 = engData.a2 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a2) / 2));
       if (engData.inputMode === 'WALL') { 
-          pole1 = Math.max(0, wall1 - mDeduct1 - imDeductL); 
-          pole2 = Math.max(0, wall2 - mDeduct1 - mDeduct2); 
-          pole3 = Math.max(0, wall3 - mDeduct2 - imDeductR); 
+          wall1 = engData.w1; wall2 = engData.w2; wall3 = engData.w3;
+          pole1 = Math.max(0, wall1 + mDeduct1 + imDeductL); 
+          pole2 = Math.max(0, wall2 + mDeduct1 + mDeduct2); 
+          pole3 = Math.max(0, wall3 + mDeduct2 + imDeductR); 
       } else { 
-          pole1 = engData.w1;
-          pole2 = engData.w2;
-          pole3 = engData.w3;
-          wall1 = pole1 + mDeduct1 + imDeductL; 
-          wall2 = pole2 + mDeduct1 + mDeduct2; 
-          wall3 = pole3 + mDeduct2 + imDeductR; 
+          pole1 = engData.w1; pole2 = engData.w2; pole3 = engData.w3;
+          wall1 = pole1 - mDeduct1 - imDeductL; 
+          wall2 = pole2 - mDeduct1 - mDeduct2; 
+          wall3 = pole3 - mDeduct2 - imDeductR; 
       }
       sawAngle1 = engData.a1 === 180 ? 0 : 90 - (engData.a1 / 2); sawAngle2 = engData.a2 === 180 ? 0 : 90 - (engData.a2 / 2);
   } else if (engData.shape === 'BOW') {
+      // Bow math remaining consistent
       if (engData.bowDepth > 0) {
           const rW_px = bowR * S; const rH_px = bowHW_R * S; bowCX = 500; bowCY = P2.y + rW_px - engData.bowDepth * S;
           bowStartAngle = Math.atan2(P2.y - bowCY, P2.x - bowCX); bowEndAngle = Math.atan2(P3.y - bowCY, P3.x - bowCX);
