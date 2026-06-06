@@ -11,6 +11,7 @@ const VisualAssemblyTab = lazy(() => import('./VisualAssemblyTab'));
 const NodeClusterTab = lazy(() => import('./NodeClusterTab')); 
 const BOMTab = lazy(() => import('./BOMTab')); 
 const LibraryTab = lazy(() => import('./LibraryTab')); 
+const LibraryMassUpdateTab = lazy(() => import('./LibraryMassUpdateTab')); 
 const InstructionsTab = lazy(() => import('./InstructionsTab'));
 const PackagingTab = lazy(() => import('./PackagingTab'));
 const CPQTab = lazy(() => import('./CPQTab'));
@@ -36,7 +37,7 @@ const BRANDS = [
 ];
 
 const TABS = [
-  '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library',
+  '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update',
   '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
   '9. Client Vision', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', 'ERP_WRITE_BACK'
@@ -270,21 +271,22 @@ function HQ() {
             {activeTab === TABS[2] && <VisualAssemblyTab currentUser={user.name} activeBrand={activeBrand.id} onProceed={() => setActiveTab(TABS[3])} />}
             {activeTab === TABS[3] && <BOMTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[4] && <LibraryTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[6] && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[7] && <PackagingTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[8] && <CPQTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[9] && <ClientVisionTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[10] && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[11] && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[5] && <LibraryMassUpdateTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[7] && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[8] && <PackagingTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[9] && <CPQTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[10] && <ClientVisionTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[11] && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[12] && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
             
-            {activeTab === TABS[12] && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={null} />}
-            {activeTab === TABS[13] && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} />}
-            {activeTab === TABS[14] && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[15] && <StockViewTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[16] && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[17] && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[18] && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[19] && <BatchTextureProcessor currentUser={user.name} />}
+            {activeTab === TABS[13] && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={null} />}
+            {activeTab === TABS[14] && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} />}
+            {activeTab === TABS[15] && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[16] && <StockViewTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[17] && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[18] && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[19] && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[20] && <BatchTextureProcessor currentUser={user.name} />}
           </Suspense>
 
         </div>
