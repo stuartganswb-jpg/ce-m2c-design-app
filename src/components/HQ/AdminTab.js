@@ -205,6 +205,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   };
 
   const executeSuiteQL = async (queryStr) => {
+      // The stable URL. Do not append limits/offsets here to protect the OAuth signature.
       const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`;
 
       const response = await fetch(FIREBASE_FUNCTION_URL, {
@@ -421,37 +422,67 @@ const handleSyncAddresses = async () => {
 
       try {
           const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
-          const q = `
-              SELECT 
-                  item.id, 
-                  item.itemid, 
-                  item.displayname,
-                  BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
-                  BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
-                  BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
-                  BUILTIN.DF(item.stockunit) AS uom,
-                  item.custitem9 AS baseprice,
-                  Vendor.companyname AS vendor_name,
-                  ItemVendor.vendorcode AS vendor_part_number,
-                  ItemVendor.purchaseprice AS lastpurchaseprice,
-                  ItemVendor.preferredvendor
-              FROM 
-                  item
-              LEFT JOIN 
-                  ItemVendor ON ItemVendor.item = item.id
-              LEFT JOIN
-                  Vendor ON ItemVendor.vendor = Vendor.id
-              WHERE 
-                  item.custitem_sync_to_cpq = 'T' 
-                  AND item.isinactive = 'F' 
-                  AND ${typeFilter}
-          `;
           
-          const result = await executeSuiteQL(q);
-          const rawRecords = result.items || [];
+          let allRawRecords = [];
+          let lastId = 0;
+          let hasMore = true;
+          let pageCount = 1;
+
+          // 🚀 INFINITE PAGINATION: Loops safely without breaking proxy authentication
+          while (hasMore) {
+              addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
+              
+              // NOTE: Change 'custitem_script_id_here' once you find the text-based Script ID.
+              const q = `
+                  SELECT 
+                      item.id, 
+                      item.itemid, 
+                      item.displayname,
+                      BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
+                      BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
+                      BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
+                      BUILTIN.DF(item.custitem_script_id_here) AS bracket_projection,
+                      BUILTIN.DF(item.stockunit) AS uom,
+                      item.custitem9 AS baseprice,
+                      Vendor.companyname AS vendor_name,
+                      ItemVendor.vendorcode AS vendor_part_number,
+                      ItemVendor.purchaseprice AS lastpurchaseprice,
+                      ItemVendor.preferredvendor
+                  FROM 
+                      item
+                  LEFT JOIN 
+                      ItemVendor ON ItemVendor.item = item.id
+                  LEFT JOIN
+                      Vendor ON ItemVendor.vendor = Vendor.id
+                  WHERE 
+                      item.custitem_sync_to_cpq = 'T' 
+                      AND item.isinactive = 'F' 
+                      AND ${typeFilter}
+                      AND item.id > ${lastId}
+                  ORDER BY 
+                      item.id ASC
+              `;
+              
+              const result = await executeSuiteQL(q);
+              const batch = result.items || [];
+              allRawRecords = allRawRecords.concat(batch);
+              
+              if (batch.length > 0) {
+                  lastId = batch[batch.length - 1].id; // Update marker to the highest ID in this batch
+                  if (batch.length < 1000) {
+                      hasMore = false; // We pulled less than 1000, meaning we hit the end of the database
+                  } else {
+                      pageCount++;
+                  }
+              } else {
+                  hasMore = false;
+              }
+          }
           
+          addLog(`Downloaded ${allRawRecords.length} total items across all pages. Processing deduplication...`, 'success');
+
           const uniqueRecordsMap = {};
-          for (const row of rawRecords) {
+          for (const row of allRawRecords) {
               const itemId = row.id;
               if (!uniqueRecordsMap[itemId]) {
                   uniqueRecordsMap[itemId] = row;
@@ -470,8 +501,6 @@ const handleSyncAddresses = async () => {
           }
           const records = Object.values(uniqueRecordsMap);
           
-          addLog(`Downloaded ${records.length} unique items with enriched metadata. Updating Library...`, 'success');
-
           let successCount = 0;
           for (const item of records) {
               const newId = `${activeBrand.toUpperCase()}-${itemType === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
@@ -487,6 +516,27 @@ const handleSyncAddresses = async () => {
               const autoIsCutToSize = isPoleOrLinear; 
               
               const hasVendor = item.vendor_name && item.vendor_name.trim() !== '';
+
+              // --- 🚀 AUTO-FORMATTING LOGIC ---
+              
+              // 1. Plating logic
+              let parsedOutsourceAction = '';
+              if (/EP\d{2}/i.test(item.itemid) || /EP\d{2}/i.test(item.displayname)) {
+                  parsedOutsourceAction = 'PLATING';
+              }
+
+              // 2. Collection logic
+              let parsedCollection = item.collection || '';
+              let collectionsArray = [];
+              if (/^H1/i.test(item.itemid) || /^H1/i.test(item.displayname)) {
+                  parsedCollection = 'Fabricut H1';
+                  collectionsArray = ['FABRICUT H1'];
+              } else if (item.collection) {
+                  collectionsArray = [item.collection.toUpperCase()];
+              }
+
+              // 3. Bracket Projection Extraction
+              let parsedProjection = item.bracket_projection || '';
 
               const payload = {
                   id: targetDocId,
@@ -508,13 +558,16 @@ const handleSyncAddresses = async () => {
                       productType: item.product_type || 'Uncategorized',
                       uom: item.uom || 'EA',
                       binNumber: 'Pending Map',
-                      partHandling: autoPartHandling, 
+                      partHandling: autoPartHandling,
+                      outsourceAction: parsedOutsourceAction, 
+                      collections: collectionsArray, 
                       parametric: { isCutToSize: autoIsCutToSize }, 
                       vendorName: item.vendor_name || '', 
                       vendorId: item.vendor_part_number || '', 
                       customData: {
-                          collection: item.collection || '',
-                          watchlist: item.watchlist || ''
+                          collection: parsedCollection, 
+                          watchlist: item.watchlist || '',
+                          projection: parsedProjection 
                       },
                       dynamicDicts: {}
                   };
@@ -528,6 +581,8 @@ const handleSyncAddresses = async () => {
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
                       partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
+                      outsourceAction: parsedOutsourceAction || existingMatch.manufacturingSpecs?.outsourceAction || '', 
+                      collections: collectionsArray.length > 0 ? collectionsArray : (existingMatch.manufacturingSpecs?.collections || []), 
                       vendorName: item.vendor_name || existingMatch.manufacturingSpecs?.vendorName || '',
                       vendorId: item.vendor_part_number || existingMatch.manufacturingSpecs?.vendorId || '',
                       parametric: {
@@ -538,8 +593,9 @@ const handleSyncAddresses = async () => {
                       },
                       customData: {
                           ...(existingMatch.manufacturingSpecs?.customData || {}),
-                          collection: item.collection || existingMatch.manufacturingSpecs?.customData?.collection || '',
-                          watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || ''
+                          collection: parsedCollection || existingMatch.manufacturingSpecs?.customData?.collection || '',
+                          watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || '',
+                          projection: parsedProjection || existingMatch.manufacturingSpecs?.customData?.projection || '' 
                       }
                   };
                   payload.updatedAt = new Date().toISOString();
