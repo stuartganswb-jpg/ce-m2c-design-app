@@ -16,6 +16,7 @@ const InstructionsTab = lazy(() => import('./InstructionsTab'));
 const PackagingTab = lazy(() => import('./PackagingTab'));
 const CPQTab = lazy(() => import('./CPQTab'));
 const ClientVisionTab = lazy(() => import('./ClientVisionTab')); 
+const UPSShippingCalculator = lazy(() => import('./UPSShippingCalculator')); // 🚀 NEW IMPORT
 const ExternalCoopTab = lazy(() => import('./ExternalCoopTab'));
 const ProjectManagementTab = lazy(() => import('./ProjectManagementTab')); 
 const AdminTab = lazy(() => import('./AdminTab')); 
@@ -36,14 +37,14 @@ const BRANDS = [
   { id: 'leyla', name: 'Leyla Gans LLC', focus: 'Fine Jewelry', color: '#C5A880' } 
 ];
 
+// 🚀 UPDATED TABS ARRAY
 const TABS = [
   '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update',
   '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
-  '9. Client Vision', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
+  '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', 'ERP_WRITE_BACK'
 ];
 
-// Reusable Theme Dictionary based on prototype.html
 const theme = {
   paper: '#faf8f4',
   paper2: '#f2efe8',
@@ -64,7 +65,6 @@ function HQ() {
   const [activeBrand, setActiveBrand] = useState(null);
   const [activeTab, setActiveTab] = useState(TABS[0]);
 
-  // --- NEW: Lifted Cart State ---
   const [globalCart, setGlobalCart] = useState(() => {
     try {
         const savedCart = localStorage.getItem('hq_global_cart');
@@ -140,7 +140,6 @@ function HQ() {
     auth.signOut(); 
   };
 
-  // --- VIEW: LOGIN ---
   if (!user) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.paper, fontFamily: theme.sans }}>
@@ -179,7 +178,6 @@ function HQ() {
     );
   }
 
-  // --- VIEW: BRAND SELECTOR ---
   if (user && !activeBrand) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.paper, fontFamily: theme.sans }}>
@@ -217,11 +215,9 @@ function HQ() {
   const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';
   const myTabs = user?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
-  // --- VIEW: MAIN APPLICATION ---
   return (
     <div className="App" style={{ minHeight: '100vh', backgroundColor: theme.paper, fontFamily: theme.sans, display: 'flex', flexDirection: 'column' }}>
       
-      {/* HEADER */}
       <header style={{ backgroundColor: '#fff', borderTop: `4px solid ${activeBrand.color}`, borderBottom: `1px solid ${theme.line}`, padding: '18px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontFamily: theme.serif, margin: 0, fontSize: '1.6rem', fontWeight: 500, color: theme.ink, letterSpacing: '0.05em' }}>
@@ -256,7 +252,6 @@ function HQ() {
         </div>
       </header>
 
-      {/* NAVIGATION TABS */}
       <nav style={{ display: 'flex', backgroundColor: theme.paper, borderBottom: `1px solid ${theme.line}`, overflowX: 'auto', padding: '0 20px' }}>
         {TABS.filter(t => myTabs.includes(t) && t !== 'ERP_WRITE_BACK').map((tab) => {
           const isActive = activeTab === tab;
@@ -280,7 +275,6 @@ function HQ() {
         })}
       </nav>
 
-      {/* MAIN CONTENT AREA */}
       <main style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         <div style={{ backgroundColor: '#fff', border: `1px solid ${theme.line}`, flex: 1, overflow: 'hidden', position: 'relative', padding: '30px', borderRadius: '2px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
           
@@ -289,6 +283,7 @@ function HQ() {
               <div style={{ fontFamily: theme.serif, fontSize: '2rem', color: theme.brass, fontStyle: 'italic' }}>Loading Module...</div>
             </div>
           }>
+            {/* 🚀 The array indices have been safely shifted here */}
             {activeTab === TABS[0] && <InceptionTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[1] && <NodeClusterTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[2] && <VisualAssemblyTab currentUser={user.name} activeBrand={activeBrand.id} onProceed={() => setActiveTab(TABS[3])} />}
@@ -299,17 +294,17 @@ function HQ() {
             {activeTab === TABS[8] && <PackagingTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[9] && <CPQTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} setCart={setGlobalCart} />}
             {activeTab === TABS[10] && <ClientVisionTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[11] && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[12] && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            
-            {activeTab === TABS[13] && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={null} />}
-            {activeTab === TABS[14] && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} />}
-            {activeTab === TABS[15] && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[16] && <StockViewTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[17] && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[18] && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[19] && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[20] && <BatchTextureProcessor currentUser={user.name} />}
+            {activeTab === TABS[11] && <UPSShippingCalculator currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[12] && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[13] && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[14] && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={null} />}
+            {activeTab === TABS[15] && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} />}
+            {activeTab === TABS[16] && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[17] && <StockViewTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[18] && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[19] && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[20] && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[21] && <BatchTextureProcessor currentUser={user.name} />}
           </Suspense>
 
         </div>
