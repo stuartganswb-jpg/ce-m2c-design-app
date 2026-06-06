@@ -980,9 +980,15 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                     </button>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button onClick={handleSyncShopRoutings} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Sync Shop Routings</button>
-                <button onClick={() => { setShowFinishForm(!showFinishForm); setEditingGlobalFinish(null); setNewFinishConfig({name: '', code: '', type: '', textureUrl: '', clientMapping: []}); }} style={{ flex: 1, background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showFinishForm && !editingGlobalFinish ? 'Close' : 'Add Finish'}</button>
+             <div style={{ marginTop: '20px' }}>
+                <button 
+                    onClick={handleSyncShopRoutings} 
+                    style={{ width: '100%', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}
+                    onMouseOver={e => { e.currentTarget.style.background = 'var(--paper-2)'; }} 
+                    onMouseOut={e => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                    Sync Shop Routings
+                </button>
               </div>
 
             </div>
