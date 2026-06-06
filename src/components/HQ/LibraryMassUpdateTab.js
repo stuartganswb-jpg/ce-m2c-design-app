@@ -58,7 +58,16 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         flangeStyle: { active: false, value: "" },
         stitchType: { active: false, value: "" },
         seamCount: { active: false, value: "" },
-        projection: { active: false, value: "" }
+        projection: { active: false, value: "" },
+        // NEW ADDITIONS
+        basePrice: { active: false, value: "" },
+        cost: { active: false, value: "" },
+        weight: { active: false, value: "" },
+        programNum: { active: false, value: "" },
+        material: { active: false, value: "" },
+        moq: { active: false, value: "" },
+        leadTime: { active: false, value: "" },
+        reorderPoint: { active: false, value: "" }
     });
 
     // --- SYSTEM DICTIONARY STATE ---
@@ -204,6 +213,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             payload.partClass = val ? "Inventory" : "Inventory"; 
                         } else if (fieldKey === 'projection') {
                             payload[`manufacturingSpecs.customData.${fieldKey}`] = val;
+                        } else if (['basePrice', 'cost', 'weight', 'moq', 'leadTime', 'reorderPoint'].includes(fieldKey)) {
+                            payload[`manufacturingSpecs.${fieldKey}`] = val === "" ? "" : parseFloat(val);
                         } else {
                             payload[`manufacturingSpecs.${fieldKey}`] = val;
                         }
@@ -627,6 +638,90 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
+                        {/* PROGRAM # */}
+                        <div style={{ background: updates.programNum.active ? theme.paper : 'transparent', border: `1px solid ${updates.programNum.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.programNum.active} onChange={(e) => handleUpdateChange('programNum', 'active', e.target.checked)} />
+                                Overwrite Program #
+                            </label>
+                            <input type="text" disabled={!updates.programNum.active} value={updates.programNum.value} onChange={(e) => handleUpdateChange('programNum', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.programNum.active ? 1 : 0.5 }} placeholder="e.g. 1234" />
+                        </div>
+
+                        {/* RAW MATERIAL */}
+                        <div style={{ background: updates.material.active ? theme.paper : 'transparent', border: `1px solid ${updates.material.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.material.active} onChange={(e) => handleUpdateChange('material', 'active', e.target.checked)} />
+                                Overwrite Raw Material
+                            </label>
+                            <input type="text" disabled={!updates.material.active} value={updates.material.value} onChange={(e) => handleUpdateChange('material', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.material.active ? 1 : 0.5 }} placeholder="e.g. Steel" />
+                        </div>
+
+                        {/* WEIGHT */}
+                        <div style={{ background: updates.weight.active ? theme.paper : 'transparent', border: `1px solid ${updates.weight.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.weight.active} onChange={(e) => handleUpdateChange('weight', 'active', e.target.checked)} />
+                                Overwrite Weight (lbs)
+                            </label>
+                            <input type="number" step="0.01" disabled={!updates.weight.active} value={updates.weight.value} onChange={(e) => handleUpdateChange('weight', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.weight.active ? 1 : 0.5 }} placeholder="0.00" />
+                        </div>
+
+                        {/* BASE PRICE */}
+                        <div style={{ background: updates.basePrice.active ? theme.paper : 'transparent', border: `1px solid ${updates.basePrice.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.basePrice.active} onChange={(e) => handleUpdateChange('basePrice', 'active', e.target.checked)} />
+                                Overwrite Base Price ($)
+                            </label>
+                            <input type="number" step="0.01" disabled={!updates.basePrice.active} value={updates.basePrice.value} onChange={(e) => handleUpdateChange('basePrice', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.basePrice.active ? 1 : 0.5 }} placeholder="0.00" />
+                        </div>
+
+                        {/* COST */}
+                        <div style={{ background: updates.cost.active ? theme.paper : 'transparent', border: `1px solid ${updates.cost.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.cost.active} onChange={(e) => handleUpdateChange('cost', 'active', e.target.checked)} />
+                                Overwrite Base Cost ($)
+                            </label>
+                            <input type="number" step="0.01" disabled={!updates.cost.active} value={updates.cost.value} onChange={(e) => handleUpdateChange('cost', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.cost.active ? 1 : 0.5 }} placeholder="0.00" />
+                        </div>
+                        
+                        {/* MOQ */}
+                        <div style={{ background: updates.moq.active ? theme.paper : 'transparent', border: `1px solid ${updates.moq.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.moq.active} onChange={(e) => handleUpdateChange('moq', 'active', e.target.checked)} />
+                                Overwrite MOQ
+                            </label>
+                            <input type="number" disabled={!updates.moq.active} value={updates.moq.value} onChange={(e) => handleUpdateChange('moq', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.moq.active ? 1 : 0.5 }} placeholder="0" />
+                        </div>
+
+                        {/* LEAD TIME */}
+                        <div style={{ background: updates.leadTime.active ? theme.paper : 'transparent', border: `1px solid ${updates.leadTime.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.leadTime.active} onChange={(e) => handleUpdateChange('leadTime', 'active', e.target.checked)} />
+                                Overwrite Lead Time (Days)
+                            </label>
+                            <input type="number" disabled={!updates.leadTime.active} value={updates.leadTime.value} onChange={(e) => handleUpdateChange('leadTime', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.leadTime.active ? 1 : 0.5 }} placeholder="0" />
+                        </div>
+
+                        {/* REORDER POINT */}
+                        <div style={{ background: updates.reorderPoint.active ? theme.paper : 'transparent', border: `1px solid ${updates.reorderPoint.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.reorderPoint.active} onChange={(e) => handleUpdateChange('reorderPoint', 'active', e.target.checked)} />
+                                Overwrite Reorder Pt (ROP)
+                            </label>
+                            <input type="number" disabled={!updates.reorderPoint.active} value={updates.reorderPoint.value} onChange={(e) => handleUpdateChange('reorderPoint', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.reorderPoint.active ? 1 : 0.5 }} placeholder="0" />
+                        </div>
+
+                        {/* SOURCING FLAG */}
+                        <div style={{ background: updates.isInHouse.active ? theme.paper : 'transparent', border: `1px solid ${updates.isInHouse.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.isInHouse.active} onChange={(e) => handleUpdateChange('isInHouse', 'active', e.target.checked)} />
+                                Set Sourcing (In-House vs Outsourced)
+                            </label>
+                            <select disabled={!updates.isInHouse.active} value={updates.isInHouse.value.toString()} onChange={(e) => handleUpdateChange('isInHouse', 'value', e.target.value === 'true')} style={{ ...fieldStyle, opacity: updates.isInHouse.active ? 1 : 0.5 }}>
+                                <option value="true">Manufactured In-House</option>
+                                <option value="false">Outsourced / Purchased</option>
+                            </select>
+                        </div>
+
                         {/* OUTSOURCE ACTIONS */}
                         {windowConfig.system.outsourceActions?.includes(activeBrand) && (
                             <div style={{ background: updates.outsourceAction.active ? theme.paper : 'transparent', border: `1px solid ${updates.outsourceAction.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
@@ -724,18 +819,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </select>
                             </div>
                         )}
-
-                        {/* SOURCING FLAG */}
-                        <div style={{ background: updates.isInHouse.active ? theme.paper : 'transparent', border: `1px solid ${updates.isInHouse.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
-                                <input type="checkbox" checked={updates.isInHouse.active} onChange={(e) => handleUpdateChange('isInHouse', 'active', e.target.checked)} />
-                                Set Sourcing (In-House vs Outsourced)
-                            </label>
-                            <select disabled={!updates.isInHouse.active} value={updates.isInHouse.value.toString()} onChange={(e) => handleUpdateChange('isInHouse', 'value', e.target.value === 'true')} style={{ ...fieldStyle, opacity: updates.isInHouse.active ? 1 : 0.5 }}>
-                                <option value="true">Manufactured In-House</option>
-                                <option value="false">Outsourced / Purchased</option>
-                            </select>
-                        </div>
                         
                         {/* COLLECTIONS (APPEND) */}
                         {windowConfig.system.collections?.includes(activeBrand) && (
