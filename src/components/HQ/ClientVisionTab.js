@@ -19,6 +19,7 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
   // SHARED GLOBAL STATE
   const [visionConfigs, setVisionConfigs] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
+  const [liveCustomers, setLiveCustomers] = useState([]);
   const [globalLists, setGlobalLists] = useState({ 
       pillowSizes: ['12x20 Lumbar', '18x18 Square', '22x22 Square'], 
       fillTypes: ['DOWN', 'POLY'], 
@@ -29,6 +30,11 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
+
+  // --- MASTER SESSION CONTROLLER ---
+  const [sessionCustomerId, setSessionCustomerId] = useState('');
+  const [sessionJobName, setSessionJobName] = useState('');
+  const [sessionQuoteId, setSessionQuoteId] = useState(null);
 
   useEffect(() => {
       const allowed = CATEGORIES_BY_BRAND[activeBrand] || [{ id: 'HARDWARE', label: 'Drapery Hardware' }];
@@ -62,8 +68,32 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
 
-      return () => { unsubParts(); unsubLists(); unsubFinishes(); unsubOutsource(); unsubDynamic(); };
+      const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
+          const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER');
+          setLiveCustomers(customers);
+      });
+
+      return () => { unsubParts(); unsubLists(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); };
   }, [activeBrand]);
+
+  // Derive queued lines for the active session to display the count
+  const queuedLines = visionConfigs.filter(c => c.masterQuoteId === sessionQuoteId);
+
+  const handlePushToCPQ = () => {
+      if (!sessionQuoteId) return;
+      
+      // 1. Set the handoff protocol in local storage for CPQTab to catch on mount
+      localStorage.setItem('hq_active_quote_session', sessionQuoteId);
+      
+      // 2. Dispatch event to parent router to switch tabs automatically
+      window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'CPQ' }));
+  };
+
+  const activeSession = {
+      quoteId: sessionQuoteId,
+      customerId: sessionCustomerId,
+      jobName: sessionJobName
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
@@ -85,13 +115,71 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
         </div>
       </div>
 
-      {/* RENDER ACTIVE MODULE */}
+      {/* SESSION CONTROLLER (THE MULTI-ROOM CART INITIATOR) */}
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px 24px', display: 'flex', alignItems: 'flex-end', gap: '20px', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
+          <div style={{ flex: 1 }}>
+              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' }}>1. Select Customer (Initializes Session)</label>
+              <select
+                  value={sessionCustomerId}
+                  onChange={e => {
+                      setSessionCustomerId(e.target.value);
+                      // Generate a new global quote ID the moment a customer is picked
+                      if (!sessionQuoteId && e.target.value) setSessionQuoteId(`QUOTE-${Date.now()}`);
+                      // Clear session if deselected
+                      if (!e.target.value) setSessionQuoteId(null); 
+                  }}
+                  style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper)', cursor: 'pointer' }}
+              >
+                  <option value="">-- Choose Customer --</option>
+                  {liveCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
+              </select>
+          </div>
+          <div style={{ flex: 1 }}>
+              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' }}>2. Project / Job Name (Optional)</label>
+              <input
+                  type="text"
+                  placeholder="e.g. Master Suite Reno"
+                  value={sessionJobName}
+                  onChange={e => setSessionJobName(e.target.value)}
+                  disabled={!sessionQuoteId}
+                  style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', boxSizing: 'border-box', background: !sessionQuoteId ? 'transparent' : '#fff', cursor: !sessionQuoteId ? 'not-allowed' : 'text' }}
+              />
+          </div>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '220px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px dashed var(--line)', paddingBottom: '6px' }}>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Lines Queued:</span>
+                  <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: queuedLines.length > 0 ? 'var(--brass)' : 'var(--ink-soft)' }}>{queuedLines.length}</span>
+              </div>
+              <button
+                  onClick={handlePushToCPQ}
+                  disabled={queuedLines.length === 0}
+                  style={{ padding: '12px 16px', background: queuedLines.length > 0 ? 'var(--ink)' : 'var(--paper)', color: queuedLines.length > 0 ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: queuedLines.length > 0 ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}
+              >
+                  Push Configs to CPQ 
+              </button>
+          </div>
+      </div>
+
+      {/* RENDER ACTIVE MODULE - PASSING DOWN THE SESSION STATE */}
       {visionCategory === 'HARDWARE' && (
-          <VisionHardware currentUser={currentUser} activeBrand={activeBrand} visionConfigs={visionConfigs.filter(c => c.category === 'HARDWARE')} />
+          <VisionHardware 
+              currentUser={currentUser} 
+              activeBrand={activeBrand} 
+              visionConfigs={visionConfigs.filter(c => c.category === 'HARDWARE')} 
+              activeSession={activeSession}
+          />
       )}
 
       {visionCategory === 'PILLOW' && (
-          <VisionPillow currentUser={currentUser} activeBrand={activeBrand} visionConfigs={visionConfigs.filter(c => c.category === 'PILLOW')} libraryParts={libraryParts} globalLists={globalLists} />
+          <VisionPillow 
+              currentUser={currentUser} 
+              activeBrand={activeBrand} 
+              visionConfigs={visionConfigs.filter(c => c.category === 'PILLOW')} 
+              libraryParts={libraryParts} 
+              globalLists={globalLists} 
+              activeSession={activeSession}
+          />
       )}
 
       {visionCategory === 'LIGHTING' && (
@@ -101,6 +189,7 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
               globalFinishes={globalFinishes}
               outsourceFinishes={outsourceFinishes}
               dynamicAssets={dynamicAssets}
+              activeSession={activeSession}
           />
       )}
     </div>

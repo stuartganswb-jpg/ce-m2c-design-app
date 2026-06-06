@@ -3,20 +3,13 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { UncontrolledReactSVGPanZoom, TOOL_PAN, TOOL_ZOOM_IN, TOOL_ZOOM_OUT, TOOL_NONE } from 'react-svg-pan-zoom'; 
 
-const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
+const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
   const [viewMode, setViewMode] = useState('ENGINEERING');
   const [showQuotePanel, setShowQuotePanel] = useState(false);
   const [isPushingToCPQ, setIsPushingToCPQ] = useState(false);
 
-  // --- GLOBAL JOB CONTEXT ---
-  const [activeQuoteId, setActiveQuoteId] = useState(null);
-  const [liveCustomers, setLiveCustomers] = useState([]);
-  const [globalLists, setGlobalLists] = useState({});
-  const [jobData, setJobData] = useState({ 
-      customerId: '', jobName: '', sidemark: '', 
-      shippingMethod: 'SAVED', shippingAddressId: '', 
-      customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' }
-  });
+  // --- LINE ITEM CONTEXT ---
+  const [sidemark, setSidemark] = useState('');
 
   const [activeBg, setActiveBg] = useState(null); 
   const [visualTool, setVisualTool] = useState("pan"); 
@@ -56,13 +49,15 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
   const [flowPins, setFlowPins] = useState([]);
 
-  const [engData, setEngData] = useState({
+  const defaultEngData = {
     shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
     endStyle: 'FINIAL', proj: "", bracketId: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
-  });
+  };
+
+  const [engData, setEngData] = useState(defaultEngData);
 
   const [isCustomProj, setIsCustomProj] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
@@ -85,53 +80,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
         setCpqFlows(flows);
     });
     const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
-    const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { if (docSnap.exists()) setGlobalLists(docSnap.data()); });
-    
-    const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
-        const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER');
-        setLiveCustomers(customers);
-    });
 
-    return () => { unsubParts(); unsubFinishes(); unsubOutsource(); unsubCollections(); unsubFlows(); unsubDynamic(); unsubLists(); unsubCrm(); };
+    return () => { unsubParts(); unsubFinishes(); unsubOutsource(); unsubCollections(); unsubFlows(); unsubDynamic(); };
   }, [activeBrand]);
-
-  const combinedCustomers = useMemo(() => {
-      const merged = [...liveCustomers];
-      (globalLists.customers || []).forEach(cName => {
-          if (!merged.some(c => c.name === cName || c.id === cName)) {
-              merged.push({ id: cName, name: cName });
-          }
-      });
-      return merged;
-  }, [liveCustomers, globalLists.customers]);
 
   const activeFlow = useMemo(() => {
       return cpqFlows.find(f => f.id === quoteFlowId);
   }, [quoteFlowId, cpqFlows]);
-
-  const handleInitializeQuote = async () => {
-      if (!jobData.customerId || !jobData.sidemark) return alert("Please select a Customer and enter a Sidemark to begin.");
-      
-      const newQuoteId = `QUOTE-${Date.now()}`;
-      const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
-
-      const payload = {
-          jobId: newQuoteId, brandId: activeBrand, status: 'BUILDING_CART',
-          customer: { id: jobData.customerId, name: customerName },
-          jobName: jobData.jobName, sidemark: jobData.sidemark,
-          shippingMethod: jobData.shippingMethod, shippingAddressId: jobData.shippingAddressId,
-          customShippingAddress: jobData.customShippingAddress,
-          dateSaved: new Date().toISOString().split('T')[0], author: currentUser, createdAt: serverTimestamp()
-      };
-
-      try {
-          await setDoc(doc(db, "jobs", newQuoteId), payload);
-          setActiveQuoteId(newQuoteId);
-      } catch (e) {
-          console.error(e);
-          alert("Failed to initialize global quote.");
-      }
-  };
 
   const getStepCategory = (step) => {
       if (!step) return '';
@@ -602,13 +557,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   };
 
   const handlePushToCPQ = async () => {
-      if (!activeQuoteId) return alert("Please Initialize Quote ID in Step 1 first.");
-      if (!jobData.sidemark) return alert("Please enter a Sidemark for this specific item.");
+      if (!activeSession?.quoteId) return alert("Please select a customer in the main header to initialize a session.");
+      if (!sidemark) return alert("Please enter a Sidemark for this specific item.");
       if (!quoteFlowId) return alert("Please select a CPQ Flow in Step 1.");
       if (engData.proj > 0 && !engData.bracketId) return alert("Please select a Bracket in the Fabrication Settings to proceed.");
 
       setIsPushingToCPQ(true);
-      const draftId = `QUOTE-${Date.now()}`;
+      const draftId = `DRAFT-${Date.now()}`;
 
       let capturedSvg = "";
       if (svgRef.current) {
@@ -632,12 +587,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
       const payload = { 
           id: draftId, brandId: activeBrand, category: 'HARDWARE', status: 'DRAFT_FROM_VISION', 
-          jobName: jobData.jobName, sidemark: jobData.sidemark, 
+          jobName: activeSession.jobName, 
+          sidemark: sidemark,
+          customerId: activeSession.customerId, 
           linkedAssemblyId: activeFlow?.linkedAssemblyId || null,
           linkedCpqFlowId: activeFlow?.id || null, 
           flowId: activeFlow?.id || null,          
           cpqFlowId: activeFlow?.id || null, 
-          masterQuoteId: activeQuoteId,      
+          masterQuoteId: activeSession.quoteId,      
           specs: {
               collection: quoteSelections.collection,
               bracketId: engData.bracketId,
@@ -667,13 +624,19 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       
       try { 
           await setDoc(doc(db, "cpq_drafts", draftId), payload); 
-          alert("✅ Draft sent to CPQ! Sidemark cleared for your next item."); 
-          setJobData(prev => ({ ...prev, sidemark: '' })); 
+          alert(`✅ "${sidemark}" line saved to session! Canvas cleared for the next line.`); 
+          
+          // Clear line-item context for the next drawing
+          setSidemark(''); 
           setAttachments([]);
           setShopNotes([]);
+          setQuoteFlowId('');
+          setDynamicConfigParams({});
+          setQuoteSelections({ collection: '' });
+          setEngData(defaultEngData);
           setShowQuotePanel(false); 
       } 
-      catch (e) { console.error(e); alert("Error pushing to CPQ."); } 
+      catch (e) { console.error(e); alert("Error saving line to session."); } 
       finally { setIsPushingToCPQ(false); }
   };
 
@@ -683,48 +646,26 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh', overflow: 'hidden' }}>
       
-      {/* 1. NEW GLOBAL JOB CONTEXT PANEL */}
-      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>1. Global Job Context</h3>
-              {activeQuoteId && <span style={{ background: 'var(--paper-2)', padding: '6px 12px', border: '1px solid var(--brass)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Active Quote: {activeQuoteId}</span>}
-          </div>
-          
-          <div style={{ display: 'flex', gap: '16px', opacity: activeQuoteId ? 0.6 : 1, pointerEvents: activeQuoteId ? 'none' : 'auto' }}>
-              <div style={{ flex: 1.5 }}>
-                  <label style={labelStyle}>* Customer</label>
-                  <select value={jobData.customerId} onChange={e => setJobData({...jobData, customerId: e.target.value})} style={{ width: '100%', padding: '12px', fontSize: '0.95rem', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: 'var(--paper)' }}>
-                      <option value="">-- Choose Customer --</option>
-                      {combinedCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
-                  </select>
-              </div>
-              <div style={{ flex: 1 }}>
-                  <label style={labelStyle}>Job Name (Optional)</label>
-                  <input type="text" placeholder="e.g. Smith Reno" value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={fieldStyle} />
-              </div>
-          </div>
-          <div style={{ flex: 1, marginTop: '8px' }}>
-              <label style={labelStyle}>* Sidemark (Line Item Specific)</label>
-              <input type="text" placeholder="e.g. Master Bath" value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})} style={{...fieldStyle, border: '1px solid var(--brass)'}} />
-          </div>
-          {!activeQuoteId && (
-              <button onClick={handleInitializeQuote} style={{ width: '200px', padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '8px' }}>Initialize Quote ID</button>
-          )}
-      </div>
-
-      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1, opacity: activeQuoteId ? 1 : 0.4, pointerEvents: activeQuoteId ? 'auto' : 'none' }}>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1, opacity: activeSession?.quoteId ? 1 : 0.4, pointerEvents: activeSession?.quoteId ? 'auto' : 'none' }}>
           
           {!showQuotePanel && (
             <div style={{ width: viewMode === 'VISUAL' ? '340px' : '480px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '24px' }}>
                 
                 {viewMode === 'ENGINEERING' && (
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>System Architecture (CPQ Flow)</div>
-                        <div style={{ padding: '24px' }}>
-                            <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); }} style={fieldStyle}>
-                                <option value="">-- SELECT MATCHING CPQ FLOW --</option>
-                                {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                            </select>
+                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>1. Line Item Details & CPQ Flow</div>
+                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            <div>
+                                <label style={labelStyle}>* Line Item Sidemark</label>
+                                <input type="text" placeholder="e.g. Master Bath Window" value={sidemark} onChange={e => setSidemark(e.target.value)} style={{...fieldStyle, border: '1px solid var(--brass)'}} />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>* Assign Hardware Collection (CPQ)</label>
+                                <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); }} style={fieldStyle}>
+                                    <option value="">-- SELECT MATCHING CPQ FLOW --</option>
+                                    {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                                </select>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -897,10 +838,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   <div style={{ padding: '16px 20px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <button onClick={() => setShowQuotePanel(!showQuotePanel)} style={{ padding: '8px 16px', background: showQuotePanel ? 'var(--ink)' : 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
-                            {showQuotePanel ? "Back to Drawing" : "Configure & Quote"}
-                        </button>
-                        <button onClick={() => window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'CPQ' }))} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
-                            Drawings Complete Push to CPQ
+                            {showQuotePanel ? "Back to Drawing" : "Configure Item Parameters"}
                         </button>
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
@@ -1063,7 +1001,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           {showQuotePanel && (
               <div style={{ width: '450px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', zIndex: 100 }}>
                   <div style={{ padding: '24px 30px', background: 'var(--paper-2)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>CPQ Quoting Engine</h3>
+                      <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Item Configuration Check</h3>
                   </div>
 
                   <div style={{ flex: 1, overflowY: 'auto', padding: '30px', display: 'flex', flexDirection: 'column', gap: '30px', background: '#fff' }}>
@@ -1082,7 +1020,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                       </div>
 
                       <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '24px' }}>
-                          <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Engineering Export (To Cart)</h4>
+                          <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Engineering Export (To CPQ)</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '0.9rem', color: 'var(--ink)' }}>
                               
                               {!activeFlow ? (
@@ -1117,7 +1055,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   
                   <div style={{ padding: '30px', background: 'var(--paper-2)', borderTop: '1px solid var(--line)' }}>
                       <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeFlow || !engData.bracketId} style={{ width: '100%', padding: '16px', background: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? 'var(--paper)' : 'var(--ink)', color: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
-                          {isPushingToCPQ ? 'Saving Draft...' : 'Send to CPQ Cart'}
+                          {isPushingToCPQ ? 'Saving Draft...' : 'Save Line & Draw Next'}
                       </button>
                   </div>
               </div>

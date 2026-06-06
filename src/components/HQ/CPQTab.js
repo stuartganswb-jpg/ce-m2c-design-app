@@ -196,7 +196,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [jobData, setJobData] = useState({ 
       customerId: '', 
       jobName: '', 
-      sidemark: '',
       shippingMethod: 'SAVED', 
       shippingAddressId: '', 
       customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' }
@@ -215,6 +214,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [activeDraftSvg, setActiveDraftSvg] = useState(null);
 
   const [viewMode, setViewMode] = useState("3D");
+
+  // Handoff Listener: Catch active session from Vision Tab
+  useEffect(() => {
+      const sessionStr = localStorage.getItem('hq_active_quote_session');
+      if (sessionStr) {
+          setActiveMasterQuoteId(sessionStr);
+      }
+  }, []);
 
   useEffect(() => {
       if (!activeBrand) return;
@@ -357,8 +364,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       
       setJobData(prev => ({
           ...prev,
+          customerId: draft.customerId || prev.customerId, 
           jobName: draft.jobName || prev.jobName,
-          sidemark: draft.sidemark || prev.sidemark
       }));
       
       const translatedParams = {};
@@ -636,11 +643,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   };
 
   const handleAddToCart = () => {
+      const activeDraft = previousDrafts.find(d => d.id === activeDraftId);
       const item = {
           id: Date.now().toString(),
           masterQuoteId: activeMasterQuoteId,
           assemblyId: activeAssemblyId,
           assemblyName: activeAssembly?.itemName || activeFlow?.name || 'Configured Item',
+          sidemark: activeDraft?.sidemark || 'No Sidemark', 
           flowId: activeFlowId,
           qty: assemblyQty,
           pricing: { ...pricing },
@@ -648,7 +657,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           dynamicConfigParams: { ...dynamicConfigParams },
           stepQuantities: { ...stepQuantities },
           dimensionInputs: { ...dimensionInputs },
-          engineeringNotes: activeDraftId ? previousDrafts.find(d => d.id === activeDraftId)?.specs?.engineeringNotes : null,
+          engineeringNotes: activeDraft ? activeDraft.specs?.engineeringNotes : null,
           draftSvg: activeDraftSvg
       };
       setCart([...cart, item]);
@@ -667,7 +676,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   };
 
   const handleFinalizeQuote = async () => {
-      if (!jobData.customerId || !jobData.sidemark) return alert("Please select a Customer and enter a Sidemark.");
+      if (!jobData.customerId) return alert("Please select a Customer.");
       if (cart.length === 0) return alert("Your cart is empty. Please add an assembly first.");
 
       const targetJobId = cart[0].masterQuoteId || activeMasterQuoteId || `QUOTE-${Date.now()}`;
@@ -682,7 +691,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           grandTotal += item.pricing.finalPrice * item.qty;
           
           mergedBreakdown.push({
-              name: `▶ ${item.assemblyName}`,
+              name: `▶ ${item.assemblyName} [${item.sidemark}]`,
               qty: item.qty,
               total: item.pricing.finalPrice * item.qty,
               isHeader: true
@@ -704,7 +713,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const payload = {
           jobId: targetJobId, brandId: activeBrand, status: 'CONFIGURED',
           customer: { id: jobData.customerId, name: customerName },
-          jobName: jobData.jobName, sidemark: jobData.sidemark,
+          jobName: jobData.jobName, 
+          sidemark: jobData.jobName || 'Multi-Room Project',
           flowId: cart[0].flowId || null, 
           linkedAssemblyId: cart[0].assemblyId || null,
           isProjectManaged: activeAssembly?.manufacturingSpecs?.isProjectManaged || false, 
@@ -731,7 +741,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               await setDoc(doc(db, "crm_files", `DRAWING-${Date.now()}`), {
                   customerId: jobData.customerId,
                   jobId: targetJobId,
-                  sidemark: jobData.sidemark,
+                  sidemark: jobData.jobName || 'Multi-Room Project',
                   dateSaved: new Date().toISOString(),
                   type: 'VISION_DRAWING',
                   svgData: mergedDraftSvg
@@ -752,8 +762,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           
           setCart([]);
           localStorage.removeItem('hq_global_cart');
+          localStorage.removeItem('hq_active_quote_session');
           setShowCheckoutModal(false);
-          setJobData({ customerId: '', jobName: '', sidemark: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
+          setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
           setActiveMasterQuoteId(null);
 
       } catch (err) { 
@@ -1043,7 +1054,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 Checkout ({cart.length} Items)
             </button>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume Draft</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_global_cart'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', sidemark: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_global_cart'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
         </div>
       </div>
 
@@ -1069,6 +1080,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           
           <div style={{ width: '400px', display: 'flex', flexDirection: 'column', gap: '24px', flexShrink: 0 }}>
               
+              {/* QUEUED LINES PANEL */}
+              {activeMasterQuoteId && previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).length > 0 && (
+                  <div style={{ background: '#fff', border: '1px solid var(--brass)', padding: '20px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                      <h3 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', color: 'var(--ink)' }}>Lines Awaiting Configuration</h3>
+                      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                          {previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).map(draft => (
+                              <div key={draft.id} style={{ border: '1px solid var(--line)', padding: '12px', background: 'var(--paper-2)', flex: 1, minWidth: '140px' }}>
+                                  <div style={{ fontWeight: 500, marginBottom: '8px', fontSize: '0.9rem' }}>{draft.sidemark || 'Unnamed Line'}</div>
+                                  <button onClick={() => handleResumeDraft(draft.id)} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', width: '100%' }}>
+                                      Configure
+                                  </button>
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+              )}
+
               <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                  <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', borderBottom: '1px solid var(--line)' }}>Step 1: Select Flow</div>
                  <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -1538,12 +1566,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                     )}
 
                     <div>
-                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Job Name (Optional)</label>
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Project / Job Name (Optional)</label>
                         <input type="text" placeholder="e.g. Master Suite Reno" disabled={!!activeMasterQuoteId} value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: activeMasterQuoteId ? 'transparent' : '#fff', cursor: activeMasterQuoteId ? 'not-allowed' : 'text' }} />
-                    </div>
-                    <div>
-                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>* Sidemark (Global for Order)</label>
-                        <input type="text" placeholder="e.g. Guest Bedroom 1" disabled={!!activeMasterQuoteId} value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--brass)', outline: 'none', boxSizing: 'border-box', background: activeMasterQuoteId ? 'transparent' : '#fff', cursor: activeMasterQuoteId ? 'not-allowed' : 'text' }} />
                     </div>
 
                     <button onClick={handleFinalizeQuote} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
