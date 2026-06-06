@@ -601,7 +601,24 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (svgRef.current) {
           const clone = svgRef.current.cloneNode(true);
           clone.style.backgroundColor = "#ffffff";
-          capturedSvg = new XMLSerializer().serializeToString(clone);
+          
+          let svgStr = new XMLSerializer().serializeToString(clone);
+          
+          // Replace CSS vars with hard hex values so PDFs render them correctly
+          svgStr = svgStr.replace(/var\(--brass\)/g, '#c5a059')
+                         .replace(/var\(--ink\)/g, '#1c1a16')
+                         .replace(/var\(--ink-soft\)/g, '#524e46')
+                         .replace(/var\(--line\)/g, '#e2ded5')
+                         .replace(/var\(--paper\)/g, '#f4f0e6')
+                         .replace(/var\(--paper-2\)/g, '#faf8f4')
+                         .replace(/var\(--dark\)/g, '#2a2a2a');
+          
+          // Normalize pan/zoom transform back to a centered standard scale (1.7) so it doesn't render as a dot or off-screen
+          svgStr = svgStr.replace(/transform="[^"]*"/i, 'transform="translate(0, 0) translate(500, 300) scale(1.7) translate(-500, -300)"');
+
+          // Remove foreignObjects (inputs and textareas that break PDF)
+          svgStr = svgStr.replace(/<foreignObject[\s\S]*?<\/foreignObject>/g, '');
+          capturedSvg = svgStr;
       }
 
       const payload = { 

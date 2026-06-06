@@ -7,7 +7,6 @@ import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } fro
 
 const globalTextureCache = {};
 
-// Searchable Customer Dropdown Component
 const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, style }) => {
     const [search, setSearch] = useState('');
     const [isOpen, setIsOpen] = useState(false);
@@ -85,7 +84,6 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                 if (child.isMesh && child.userData.originalMaterial) {
                     const meshName = child.name.toLowerCase();
 
-                    // --- VISIBILITY LOGIC ---
                     let isVis = child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
@@ -97,7 +95,6 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     }
                     child.visible = isVis;
 
-                    // --- TEXTURE LOGIC ---
                     let matchedTexUrl = null;
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
                         for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
@@ -205,6 +202,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' }
   });
   
+  const [cart, setCart] = useState([]);
+  const [assemblyQty, setAssemblyQty] = useState(1);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
 
@@ -368,6 +367,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               if (step.title.toLowerCase().includes("seam") && draft.specs?.seamCount) translatedParams[step.id] = draft.specs.seamCount;
           }
       });
+
+      if (draft.category === 'HARDWARE' || !draft.category) {
+          Object.assign(translatedParams, draft.specs);
+      }
 
       setDynamicConfigParams(translatedParams);
       setShowCloneModal(false);
@@ -593,20 +596,77 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (nextIndex < activeFlow.steps.length) setCurrentStepIndex(nextIndex);
   };
 
+  const handleAddToCart = () => {
+      const item = {
+          id: Date.now().toString(),
+          assemblyId: activeAssemblyId,
+          assemblyName: activeAssembly?.itemName || activeFlow?.name || 'Configured Item',
+          flowId: activeFlowId,
+          qty: assemblyQty,
+          pricing: { ...pricing },
+          pricingBreakdown: [...pricingBreakdown],
+          dynamicConfigParams: { ...dynamicConfigParams },
+          stepQuantities: { ...stepQuantities },
+          dimensionInputs: { ...dimensionInputs },
+          engineeringNotes: activeDraftId ? previousDrafts.find(d => d.id === activeDraftId)?.specs?.engineeringNotes : null,
+          draftSvg: activeDraftSvg
+      };
+      setCart([...cart, item]);
+      
+      setActiveFlowId("");
+      setDynamicConfigParams({});
+      setStepQuantities({});
+      setDimensionInputs({});
+      setCurrentStepIndex(0);
+      setActiveAssemblyId("");
+      setActiveDraftId(null);
+      setActiveDraftSvg(null);
+      setAssemblyQty(1);
+
+      alert("Assembly added to Cart! You can now select another product to configure, or proceed to Checkout via the top right button.");
+  };
+
   const handleFinalizeQuote = async () => {
       if (!jobData.customerId || !jobData.sidemark) return alert("Please select a Customer and enter a Sidemark.");
+      if (cart.length === 0) return alert("Your cart is empty. Please add an assembly first.");
+
       const jobId = `QUOTE-${Date.now()}`;
       const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
       
-      const draftObj = activeDraftId ? previousDrafts.find(d => d.id === activeDraftId) : null;
-      const engineeringNotes = draftObj ? draftObj.specs?.engineeringNotes : null;
+      let grandTotal = 0;
+      let mergedBreakdown = [];
+      let mergedNotesObj = null; 
+      let mergedDraftSvg = null; 
+
+      cart.forEach((item) => {
+          grandTotal += item.pricing.finalPrice * item.qty;
+          
+          mergedBreakdown.push({
+              name: `▶ ${item.assemblyName}`,
+              qty: item.qty,
+              total: item.pricing.finalPrice * item.qty,
+              isHeader: true
+          });
+
+          item.pricingBreakdown.forEach(line => {
+              mergedBreakdown.push({
+                  name: `  - ${line.name}`,
+                  qty: line.qty * item.qty,
+                  price: line.price,
+                  total: line.total * item.qty
+              });
+          });
+
+          if (!mergedNotesObj && item.engineeringNotes) mergedNotesObj = item.engineeringNotes;
+          if (!mergedDraftSvg && item.draftSvg) mergedDraftSvg = item.draftSvg;
+      });
 
       const payload = {
           jobId: jobId, brandId: activeBrand, status: 'CONFIGURED',
           customer: { id: jobData.customerId, name: customerName },
           jobName: jobData.jobName, sidemark: jobData.sidemark,
-          flowId: activeFlow?.id || null, 
-          linkedAssemblyId: activeAssemblyId || null,
+          flowId: cart[0].flowId || null, 
+          linkedAssemblyId: cart[0].assemblyId || null,
           isProjectManaged: activeAssembly?.manufacturingSpecs?.isProjectManaged || false, 
           
           shippingMethod: jobData.shippingMethod || 'SAVED',
@@ -614,14 +674,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           customShippingAddress: jobData.shippingMethod === 'CUSTOM' ? jobData.customShippingAddress : null,
 
           cpqData: { 
-              totalPrice: pricing.finalPrice, 
-              configuration: dynamicConfigParams,
-              quantities: stepQuantities, 
-              dimensions: dimensionInputs,
+              totalPrice: grandTotal, 
               appliedRules: engineFlags.warnings,
-              breakdown: pricingBreakdown 
+              breakdown: mergedBreakdown,
+              cartItems: cart 
           },
-          engineeringNotes: engineeringNotes, 
+          engineeringNotes: mergedNotesObj, 
           dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, sewing: false, packing: false },
           dateSaved: new Date().toISOString().split('T')[0], author: currentUser, createdAt: serverTimestamp()
       };
@@ -629,14 +687,14 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       try {
           await setDoc(doc(db, "jobs", jobId), payload);
           
-          if (activeDraftSvg) {
+          if (mergedDraftSvg) {
               await setDoc(doc(db, "crm_files", `DRAWING-${Date.now()}`), {
                   customerId: jobData.customerId,
                   jobId: jobId,
                   sidemark: jobData.sidemark,
                   dateSaved: new Date().toISOString(),
                   type: 'VISION_DRAWING',
-                  svgData: activeDraftSvg
+                  svgData: mergedDraftSvg
               });
           }
           
@@ -644,7 +702,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               await deleteDoc(doc(db, "cpq_drafts", activeDraftId));
           }
 
-          await generateOrderDocuments(payload, activeDraftSvg);
+          await generateOrderDocuments(payload, mergedDraftSvg);
 
           if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
               alert(`✅ Quote Generated!\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
@@ -652,10 +710,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               alert(`✅ Quote Generated!\nRouted to Tab 10 (External Coop) for standard approval.`);
           }
           
-          setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); 
-          setCurrentStepIndex(0); setActiveAssemblyId(""); setShowCheckoutModal(false); 
+          setCart([]);
+          setShowCheckoutModal(false);
           setJobData({ customerId: '', jobName: '', sidemark: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
-          setActiveDraftId(null); setActiveDraftSvg(null);
 
       } catch (err) { 
           console.error(err); 
@@ -670,8 +727,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       if (job.engineeringNotes) {
           const notes = job.engineeringNotes;
           mathSection = `
-              <div style="background: var(--paper-2); border: 1px dashed rgba(28,26,22,.14); padding: 20px;">
-                  <h4 style="margin:0 0 15px 0; color: var(--ink); font-family: Georgia, serif; text-transform: uppercase;">Engineering Dimensions</h4>
+              <div style="background: #faf8f4; border: 1px dashed rgba(28,26,22,.14); padding: 20px;">
+                  <h4 style="margin:0 0 15px 0; color: #1c1a16; font-family: Georgia, serif; text-transform: uppercase;">Engineering Dimensions</h4>
                   <table style="width: 100%; border-collapse: collapse; font-size: 14px; font-family: sans-serif;">
                       <tr>
                           <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">System O2O:</td>
@@ -756,9 +813,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                         <div class="section-box">
                             <div class="section-header">Configuration Details</div>
                             ${job.cpqData?.breakdown?.map(item => `
-                                <div class="row">
+                                <div class="row" style="${item.isHeader ? 'font-weight: bold; background: #f4f0e6; padding: 8px;' : ''}">
                                     <span style="flex: 3;">${item.name}</span>
-                                    <span style="flex: 1; text-align: center; color: #524e46;">Qty: ${item.qty}</span>
+                                    <span style="flex: 1; text-align: center; color: #524e46;">${item.isHeader ? '' : `Qty: ${item.qty}`}</span>
                                     <span style="flex: 1; text-align: right;">$${item.total.toFixed(2)}</span>
                                 </div>
                             `).join('')}
@@ -799,9 +856,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                 <span style="flex: 1; text-align: right;">Req. Qty</span>
                             </div>
                             ${job.cpqData?.breakdown?.map(item => `
-                                <div class="row">
+                                <div class="row" style="${item.isHeader ? 'font-weight: bold; background: #f4f0e6; padding: 8px;' : ''}">
                                     <span style="flex: 3; font-weight: 500;">${item.name}</span>
-                                    <span style="flex: 1; text-align: right; font-size: 14px; font-weight: 500;">${item.qty}</span>
+                                    <span style="flex: 1; text-align: right; font-size: 14px; font-weight: 500;">${item.isHeader ? '' : item.qty}</span>
                                 </div>
                             `).join('')}
                         </div>
@@ -938,10 +995,13 @@ const CPQTab = ({ currentUser, activeBrand }) => {
         </div>
         <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
             <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, background: 'var(--paper-2)', padding: '12px 24px', border: '1px solid var(--line)', color: 'var(--ink)' }}>
-                MSRP: ${pricing.finalPrice.toFixed(2)}
+                Config Total: ${(pricing.finalPrice * assemblyQty).toFixed(2)}
             </div>
+            <button onClick={() => setShowCheckoutModal(true)} disabled={cart.length === 0} style={{ padding: '16px 24px', background: cart.length > 0 ? 'var(--brass)' : 'var(--paper)', color: cart.length > 0 ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: cart.length > 0 ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                Checkout ({cart.length} Items)
+            </button>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume Draft</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); setAssemblyQty(1); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
         </div>
       </div>
 
@@ -967,7 +1027,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                  <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     
                     {cpqFlows.length > 0 && (
-                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); setActiveDraftSvg(null); }} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); setActiveDraftSvg(null); setAssemblyQty(1); }} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
                             <option value="">-- Launch Custom CPQ Flow --</option>
                             {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                         </select>
@@ -1137,7 +1197,11 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           {currentStepIndex < activeFlow.steps.length - 1 ? (
                               <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE'} style={{ padding: '12px 24px', border: 'none', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'var(--line)' : 'var(--ink)', color: '#fff', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>Next Step</button>
                           ) : (
-                              <button onClick={() => setShowCheckoutModal(true)} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE'} style={{ padding: '12px 24px', border: 'none', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'var(--line)' : 'var(--brass)', color: '#fff', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>Finalize Cart</button>
+                              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                                  <span style={{ fontSize: '10px', fontFamily: 'var(--mono)', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Total QTY:</span>
+                                  <input type="number" min="1" value={assemblyQty} onChange={e => setAssemblyQty(parseInt(e.target.value)||1)} style={{ width: '60px', padding: '8px', border: '1px solid var(--line)', outline: 'none' }} />
+                                  <button onClick={handleAddToCart} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE'} style={{ padding: '12px 24px', border: 'none', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'var(--line)' : 'var(--brass)', color: '#fff', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>Add to Quote Cart</button>
+                              </div>
                           )}
                       </div>
                   </div>
@@ -1312,8 +1376,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                 <div style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column', gap: '24px', maxHeight: '80vh', overflowY: 'auto' }}>
                     
                     <div style={{ padding: '24px', background: 'var(--paper)', border: '1px solid var(--line)', textAlign: 'center' }}>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px' }}>Final Configured Price</div>
-                        <div style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', fontWeight: 500, color: 'var(--ink)' }}>${pricing.finalPrice.toFixed(2)}</div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px' }}>Cart Total ({cart.length} Items)</div>
+                        <div style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', fontWeight: 500, color: 'var(--ink)' }}>
+                            ${cart.reduce((sum, item) => sum + (item.pricing.finalPrice * item.qty), 0).toFixed(2)}
+                        </div>
                     </div>
 
                     <div>
@@ -1399,7 +1465,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                         <input type="text" placeholder="e.g. Master Suite Reno" value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box' }} />
                     </div>
                     <div>
-                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>* Sidemark</label>
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>* Sidemark (Global for Order)</label>
                         <input type="text" placeholder="e.g. Guest Bedroom 1" value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--brass)', outline: 'none', boxSizing: 'border-box' }} />
                     </div>
 
