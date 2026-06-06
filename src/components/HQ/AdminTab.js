@@ -228,6 +228,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       return data;
   };
 
+      const data = await response.json();
+      if (!response.ok) throw new Error(`NetSuite Error: ${JSON.stringify(data)}`);
+      return data;
+  };
+
   const handleUpdateMasterPin = async () => {
       if (!newMasterPin || newMasterPin.length !== 4) return alert("Master PIN must be exactly 4 digits.");
       if (!currentActiveUser) return alert("Error locating your user profile.");
