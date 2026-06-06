@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, query, where, doc, updateDoc, setDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
 import { ref, deleteObject } from "firebase/storage";
 
 const printStyles = `
@@ -59,6 +59,10 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [draftDrawings, setDraftDrawings] = useState([]); 
 
   const [expandedSections, setExpandedSections] = useState({ active: true, archive: false });
+
+  // --- JOB MODIFICATION STATE ---
+  const [showEditJobModal, setShowEditJobModal] = useState(false);
+  const [editJobForm, setEditJobForm] = useState({ id: '', jobName: '', sidemark: '', status: '' });
 
   useEffect(() => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { 
@@ -131,6 +135,42 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       } catch (err) {
           console.error("Error updating status:", err);
           alert("Failed to update status.");
+      }
+  };
+
+  // --- DELETE & EDIT HANDLERS ---
+  const handleDeleteJob = async (jobId) => {
+      if (window.confirm("WARNING: Are you sure you want to permanently delete this quote/job? This action cannot be undone.")) {
+          try {
+              await deleteDoc(doc(db, "jobs", jobId));
+          } catch (err) {
+              console.error("Error deleting job:", err);
+              alert("Failed to delete job from the pipeline.");
+          }
+      }
+  };
+
+  const openEditJobModal = (job) => {
+      setEditJobForm({
+          id: job.id,
+          jobName: job.jobName || '',
+          sidemark: job.sidemark || '',
+          status: job.status || ''
+      });
+      setShowEditJobModal(true);
+  };
+
+  const handleSaveJobEdit = async () => {
+      try {
+          await updateDoc(doc(db, "jobs", editJobForm.id), {
+              jobName: editJobForm.jobName,
+              sidemark: editJobForm.sidemark,
+              status: editJobForm.status
+          });
+          setShowEditJobModal(false);
+      } catch (err) {
+          console.error("Error updating job:", err);
+          alert("Failed to update job details.");
       }
   };
 
@@ -677,6 +717,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                           )}
                                                           <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${job.jobId || job.id} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Email</button>
                                                           <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
+                                                          <button onClick={() => openEditJobModal(job)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Modify</button>
+                                                          <button onClick={() => handleDeleteJob(job.id)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
                                                       </div>
                                                   </div>
                                               ))}
@@ -706,6 +748,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                       
                                                       <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
                                                           <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
+                                                          <button onClick={() => openEditJobModal(job)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Modify</button>
+                                                          <button onClick={() => handleDeleteJob(job.id)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
                                                       </div>
                                                   </div>
                                               ))}
@@ -779,9 +823,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                               </td>
                                               <td style={{ padding: '16px 20px', textAlign: 'right' }}>
                                                   {job.status === 'CONFIGURED' && (
-                                                      <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px' }}>Approve</button>
+                                                      <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Approve</button>
                                                   )}
-                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Docs</button>
+                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Docs</button>
+                                                  <button onClick={() => openEditJobModal(job)} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Modify</button>
+                                                  <button onClick={() => handleDeleteJob(job.id)} style={{ padding: '8px 16px', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Delete</button>
                                               </td>
                                           </tr>
                                       ))
@@ -818,6 +864,44 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                       </div>
                       <button onClick={handleCreateNewCrm} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                           Create Profile
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* --- EDIT JOB MODAL --- */}
+      {showEditJobModal && (
+          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+              <div style={{ background: '#fff', border: '1px solid var(--line)', width: '400px', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', borderRadius: '2px' }}>
+                  <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                      <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Modify Quote / Job</h2>
+                      <button onClick={() => setShowEditJobModal(false)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+                  </div>
+                  <div style={{ padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      <div>
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Project / Job Name</label>
+                          <input value={editJobForm.jobName} onChange={e => setEditJobForm({...editJobForm, jobName: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                      </div>
+                      <div>
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Global Sidemark</label>
+                          <input value={editJobForm.sidemark} onChange={e => setEditJobForm({...editJobForm, sidemark: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                      </div>
+                      <div>
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Pipeline Status</label>
+                          <select value={editJobForm.status} onChange={e => setEditJobForm({...editJobForm, status: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
+                              <option value="CONFIGURED">Configured (Pending Review)</option>
+                              <option value="SENT_TO_CLIENT">Sent To Client</option>
+                              <option value="REVISION_REQUESTED">Revision Requested</option>
+                              <option value="APPROVED">Approved</option>
+                              <option value="IN_PRODUCTION">In Production</option>
+                              <option value="COMPLETED">Completed</option>
+                              <option value="SHIPPED">Shipped</option>
+                              <option value="CANCELLED">Cancelled</option>
+                          </select>
+                      </div>
+                      <button onClick={handleSaveJobEdit} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                          Save Changes
                       </button>
                   </div>
               </div>
