@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
 const AVAILABLE_BRANDS = [
@@ -23,34 +23,19 @@ const DEFAULT_SYSTEM_WINDOWS = {
   projections: ['ce', 'm2c', 'uniquity', 'leyla'] 
 };
 
-const LIST_LABELS = {
-    prodTypes: 'PRODUCT TYPES', uom: 'UOMs',
-    watchLists: 'WATCHLISTS', vendors: 'APPROVED VENDORS', outsourceActions: 'OUTSOURCE ACTIONS',
-    pillowSizes: 'PILLOW SIZES', fillTypes: 'FILL TYPES', flangeStyles: 'EDGE / FLANGE STYLES', 
-    stitchTypes: 'STITCH ROUTING', seamCounts: 'SEAM COUNTS / UPCHARGES', assemblyTypes: 'ASSEMBLY TYPES',
-    customers: 'CUSTOMERS / DEALERS (Format: Name - ID)', 
-    partHandling: 'PART HANDLING & ROUTING', 
-    inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS',
-    projections: 'BRACKET PROJECTIONS' 
-};
-
 const LibraryTab = ({ currentUser, activeBrand }) => {
-  const [isAdmin, setIsAdmin] = useState(true);
-  const [adminBrandFilter, setAdminBrandFilter] = useState(activeBrand);
-  const [showAdminDashboard, setShowAdminDashboard] = useState(false);
+  const [isAdmin] = useState(true); // Retained for ERP permissions
 
   const [inventory, setInventory] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [partClassFilter, setPartClassFilter] = useState("ALL"); 
   const [collectionFilter, setCollectionFilter] = useState(""); 
+  const [watchlistFilter, setWatchlistFilter] = useState(""); 
   
   const [customSchema, setCustomSchema] = useState([]);
-  const [globalFinishes, setGlobalFinishes] = useState([]);
-  const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [collectionsData, setCollectionsData] = useState([]); 
-  
   const [liveVendors, setLiveVendors] = useState([]); 
   const [liveCustomers, setLiveCustomers] = useState([]); 
   
@@ -61,35 +46,9 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   });
   
   const [windowConfig, setWindowConfig] = useState({ system: DEFAULT_SYSTEM_WINDOWS, custom: [] });
-  const [newListItems, setNewListItems] = useState({});
-  const [activeRecipes, setActiveRecipes] = useState([]); 
-  const [floorRecipeData, setFloorRecipeData] = useState([]); 
-
-  const [showSchemaForm, setShowSchemaForm] = useState(false);
-  const [showFinishForm, setShowFinishForm] = useState(false);
-  const [showOutsourceFinishForm, setShowOutsourceFinishForm] = useState(false);
-  const [showWindowManager, setShowWindowManager] = useState(false);
-  const [showCollectionForm, setShowCollectionForm] = useState(false); 
-
-  const [newFieldConfig, setNewFieldConfig] = useState({ key: '', label: '', type: 'text', options: '' });
-  const [newCollection, setNewCollection] = useState({ name: '', allowedCustomers: [], allowedFinishes: [] }); 
-  const [newCustomWindow, setNewCustomWindow] = useState({ name: '', brands: [activeBrand], hasImage: true, hasCode: true, hasVendor: false, hasMultiplier: true });
-  
-  const [editingGlobalFinish, setEditingGlobalFinish] = useState(null);
-  const [editingOutsourceFinish, setEditingOutsourceFinish] = useState(null);
-  const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '', clientMapping: [] });
-  const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] });
-  const [newFinishClientMapping, setNewFinishClientMapping] = useState({ customerId: '', clientFinishName: '' });
-  
-  const [finishUploadProgress, setFinishUploadProgress] = useState(0);
-  const [inlineTextureProgress, setInlineTextureProgress] = useState({});
-
-  const [activeDictForms, setActiveDictForms] = useState({});
-  const [newAssetForms, setNewAssetForms] = useState({});
-  const [assetUploadProgress, setAssetUploadProgress] = useState({});
+  const [activeBomPins, setActiveBomPins] = useState([]); 
 
   const [activePart, setActivePart] = useState(null);
-  const [activeBomPins, setActiveBomPins] = useState([]); 
   const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, clientPricing: [], collections: [] }); 
   const [isSaving, setIsSaving] = useState(false);
   
@@ -99,7 +58,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [cadFile, setCadFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [cadUploadProgress, setCadUploadProgress] = useState(0); 
-  
   const [dynamicUploadProgress, setDynamicUploadProgress] = useState({});
   const [cloneSourceId, setCloneSourceId] = useState("");
 
@@ -115,9 +73,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
           
           if (me && me.role) {
               onSnapshot(doc(db, "hq_config", "permissions"), (permSnap) => {
-                  if (permSnap.exists()) {
-                      setUserPerms(permSnap.data()[me.role] || []);
-                  }
+                  if (permSnap.exists()) setUserPerms(permSnap.data()[me.role] || []);
               });
           }
       });
@@ -126,12 +82,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 
   const hasErpWriteAccess = isAdmin || userPerms.includes("ERP_WRITE_BACK");
 
-  useEffect(() => { setAdminBrandFilter(activeBrand); }, [activeBrand]);
-
   useEffect(() => {
     const unsubSchema = onSnapshot(doc(db, "system", "master_schema"), (docSnap) => { if (docSnap.exists() && docSnap.data().inventoryFields) setCustomSchema(docSnap.data().inventoryFields); });
-    const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (docSnap) => { if (docSnap.exists() && docSnap.data().finishes) setGlobalFinishes(docSnap.data().finishes); });
-    const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); 
     const unsubVendors = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "VENDOR")), snap => setLiveVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))));
@@ -145,22 +97,18 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               watchLists: data.watchLists || [], vendors: data.vendors || [], outsourceActions: data.outsourceActions || [],
               pillowSizes: data.pillowSizes || [], fillTypes: data.fillTypes || [], flangeStyles: data.flangeStyles || [], 
               stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || ['0 Seams', '1 Seam', '2 Seams', '3 Seams', '4 Seams'],
-              assemblyTypes: data.assemblyTypes || [], 
-              cpqRoutingTypes: data.cpqRoutingTypes || [],
-              customers: data.customers || [],
-              partHandling: data.partHandling || ['Small Parts', 'Custom'], 
-              inventoryTypes: data.inventoryTypes || [],
-              projections: data.projections || [] 
+              assemblyTypes: data.assemblyTypes || [], cpqRoutingTypes: data.cpqRoutingTypes || [],
+              customers: data.customers || [], partHandling: data.partHandling || ['Small Parts', 'Custom'], 
+              inventoryTypes: data.inventoryTypes || [], projections: data.projections || [] 
           });
       }
     });
 
-    const unsubRecipes = onSnapshot(collection(db, "fin_recipes"), (snap) => { setActiveRecipes(snap.docs.map(d => d.id)); setFloorRecipeData(snap.docs.map(d => ({ id: d.id, ...d.data() }))); });
     const unsubWindowConfig = onSnapshot(doc(db, "system", "window_config"), (docSnap) => {
       if (docSnap.exists()) setWindowConfig({ system: { ...DEFAULT_SYSTEM_WINDOWS, ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
     });
 
-    return () => { unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubCollections(); unsubLists(); unsubRecipes(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); };
+    return () => { unsubSchema(); unsubAssets(); unsubCollections(); unsubLists(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); };
   }, []);
 
   useEffect(() => {
@@ -209,8 +157,12 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
         else if (partClassFilter === "UNASSIGNED") matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && (!part.routingType || part.routingType === "UNASSIGNED");
         else matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && part.routingType?.toUpperCase() === partClassFilter.toUpperCase();
     }
+
+    const nsWatchlist = specs.customData?.watchlist && specs.customData.watchlist !== 'N/A' ? specs.customData.watchlist.toUpperCase() : "NONE";
+    const currentWatchList = specs.watchList ? specs.watchList.toUpperCase() : nsWatchlist;
+    let matchesWatchlist = watchlistFilter === "" || currentWatchList === watchlistFilter.toUpperCase();
     
-    return matchesSearch && matchesType && matchesCollection && matchesClass;
+    return matchesSearch && matchesType && matchesCollection && matchesClass && matchesWatchlist;
   });
 
   const openPartDetails = (part) => {
@@ -263,18 +215,9 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     clonedSpecs.collections = clonedSpecs.collections || legacyCollection;
 
     setEditSpecs(prev => ({ 
-        ...prev, 
-        ...clonedSpecs, 
-        tempName: prev.tempName, 
-        tempLegacyId: prev.tempLegacyId, 
-        clientPricing: prev.clientPricing, 
-        binLocation: prev.binLocation, 
-        pdfUrl: prev.pdfUrl, 
-        cadUrl: prev.cadUrl,
-        partHandling: prev.partHandling,
-        project: prev.project,
-        routingType: prev.routingType,
-        productType: prev.productType
+        ...prev, ...clonedSpecs, tempName: prev.tempName, tempLegacyId: prev.tempLegacyId, clientPricing: prev.clientPricing, 
+        binLocation: prev.binLocation, pdfUrl: prev.pdfUrl, cadUrl: prev.cadUrl, partHandling: prev.partHandling,
+        project: prev.project, routingType: prev.routingType, productType: prev.productType
     }));
     setCloneSourceId("");
   };
@@ -293,16 +236,11 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 
   const handleAddClientPricing = () => {
       if (!newClientPricing.customerId) return alert("Select a customer from the dropdown.");
-      setEditSpecs(prev => ({
-          ...prev,
-          clientPricing: [...(prev.clientPricing || []), { ...newClientPricing }]
-      }));
+      setEditSpecs(prev => ({ ...prev, clientPricing: [...(prev.clientPricing || []), { ...newClientPricing }] }));
       setNewClientPricing({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' });
   };
 
-  const handleRemoveClientPricing = (idx) => {
-      setEditSpecs(prev => ({ ...prev, clientPricing: prev.clientPricing.filter((_, i) => i !== idx) }));
-  };
+  const handleRemoveClientPricing = (idx) => setEditSpecs(prev => ({ ...prev, clientPricing: prev.clientPricing.filter((_, i) => i !== idx) }));
 
   const handleDynamicFileUpload = async (key, file) => {
       if (!file) return;
@@ -313,10 +251,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       uploadTask.on("state_changed", 
           (snap) => setDynamicUploadProgress(prev => ({ ...prev, [key]: Math.round((snap.bytesTransferred / snap.totalBytes) * 100) })),
           (err) => { console.error(err); alert("Upload failed"); },
-          async () => { 
-              const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-              handleCustomFieldChange(key, downloadURL); setDynamicUploadProgress(prev => ({ ...prev, [key]: 0 }));
-          }
+          async () => { const downloadURL = await getDownloadURL(uploadTask.snapshot.ref); handleCustomFieldChange(key, downloadURL); setDynamicUploadProgress(prev => ({ ...prev, [key]: 0 })); }
       );
   };
 
@@ -362,15 +297,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
 
     try {
       const payload = { 
-          itemName: finalName, 
-          legacyErpId: finalLegacyId, 
-          clientPricing: editSpecs.clientPricing || [], 
-          sharedBrands: editSpecs.sharedBrands || [activePart.brandId || activeBrand], 
-          project: editSpecs.project || "",
-          routingType: editSpecs.routingType || "",
-          productType: editSpecs.productType || "",
-          manufacturingSpecs: compiledSpecs, 
-          updatedAt: new Date().toISOString() 
+          itemName: finalName, legacyErpId: finalLegacyId, clientPricing: editSpecs.clientPricing || [], sharedBrands: editSpecs.sharedBrands || [activePart.brandId || activeBrand], project: editSpecs.project || "", routingType: editSpecs.routingType || "", productType: editSpecs.productType || "", manufacturingSpecs: compiledSpecs, updatedAt: new Date().toISOString() 
       };
 
       if (activePart.isNew) payload.createdAt = new Date().toISOString();
@@ -380,289 +307,24 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   };
 
   const handlePushUpdatesToNetSuite = async () => {
-      if (!activePart || activePart.legacyErpId === "PENDING" || !activePart.netSuiteInternalId) {
-          return alert("This item is not mapped to a NetSuite Internal ID yet. Sync it from ERP first.");
-      }
+      if (!activePart || activePart.legacyErpId === "PENDING" || !activePart.netSuiteInternalId) return alert("This item is not mapped to a NetSuite Internal ID yet. Sync it from ERP first.");
       if (!window.confirm(`Push current local updates for ${activePart.legacyErpId} directly to NetSuite?`)) return;
 
       setIsPushingErp(true);
       try {
           const nsId = activePart.netSuiteInternalId;
           const recordType = activePart.partClass === 'Inventory' ? 'inventoryitem' : 'assemblyitem';
-
-          const payload = {
-              itemid: editSpecs.tempLegacyId || activePart.legacyErpId,
-              displayname: editSpecs.tempName || activePart.itemName,
-              cost: parseFloat(editSpecs.cost) || 0,
-              custitem9: parseFloat(editSpecs.basePrice) || 0
-          };
-
+          const payload = { itemid: editSpecs.tempLegacyId || activePart.legacyErpId, displayname: editSpecs.tempName || activePart.itemName, cost: parseFloat(editSpecs.cost) || 0, custitem9: parseFloat(editSpecs.basePrice) || 0 };
           const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${recordType}/${nsId}`;
 
-          const response = await fetch(FIREBASE_FUNCTION_URL, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                  targetUrl: targetUrl,
-                  method: 'PATCH',
-                  payload: payload
-              })
-          });
-
+          const response = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUrl: targetUrl, method: 'PATCH', payload: payload }) });
           const result = await response.json();
           if (!response.ok) throw new Error(JSON.stringify(result));
-
           alert("✅ Successfully updated NetSuite ERP record!");
-      } catch (error) {
-          console.error("NetSuite Push Error:", error);
-          alert(`❌ Failed to push to NetSuite. Check console for details.`);
-      }
+      } catch (error) { console.error("NetSuite Push Error:", error); alert(`❌ Failed to push to NetSuite. Check console for details.`); }
       setIsPushingErp(false);
   };
 
-  const toggleSystemWindowBrand = async (windowKey, brandId) => {
-      const current = windowConfig.system[windowKey] || [];
-      const updated = current.includes(brandId) ? current.filter(b => b !== brandId) : [...current, brandId];
-      await setDoc(doc(db, "system", "window_config"), { system: { ...windowConfig.system, [windowKey]: updated }, custom: windowConfig.custom }, { merge: true });
-  };
-  
-  const handleCreateCustomWindow = async () => {
-      if (!newCustomWindow.name.trim()) return alert("Dictionary Name is required.");
-      const newId = `dict_${Date.now()}`;
-      const newWin = { id: newId, ...newCustomWindow, name: newCustomWindow.name.toUpperCase() };
-      await setDoc(doc(db, "system", "window_config"), { system: windowConfig.system, custom: [...windowConfig.custom, newWin] }, { merge: true });
-      setNewCustomWindow({ name: '', brands: [activeBrand], hasImage: true, hasCode: true, hasVendor: false, hasMultiplier: true });
-      alert("✅ Custom CPQ Dictionary Created Successfully!");
-  };
-
-  const toggleCustomWindowBrand = async (windowId, brandId) => {
-      const updatedWindows = windowConfig.custom.map(w => {
-          if (w.id !== windowId) return w;
-          const currentBrands = w.brands || [];
-          return { ...w, brands: currentBrands.includes(brandId) ? currentBrands.filter(b => b !== brandId) : [...currentBrands, brandId] };
-      });
-      await setDoc(doc(db, "system", "window_config"), { system: windowConfig.system, custom: updatedWindows }, { merge: true });
-  };
-
-  const handleDeleteCustomWindow = async (windowId) => {
-      if (!window.confirm("Delete this custom dictionary? Data items will be orphaned.")) return;
-      await setDoc(doc(db, "system", "window_config"), { system: windowConfig.system, custom: windowConfig.custom.filter(w => w.id !== windowId) }, { merge: true });
-  };
-
-  const handleAddSchemaField = async () => {
-      if (!newFieldConfig.label) return alert("Label is required.");
-      const key = newFieldConfig.key || newFieldConfig.label.toLowerCase().replace(/[^a-zA-Z0-9]+(.)/g, (m, chr) => chr.toUpperCase()).replace(/[^a-zA-Z0-9]/g, '');
-      const updatedSchema = [...customSchema, { ...newFieldConfig, key }];
-      await setDoc(doc(db, "system", "master_schema"), { inventoryFields: updatedSchema }, { merge: true });
-      setNewFieldConfig({ key: '', label: '', type: 'text', options: '' }); setShowSchemaForm(false);
-  };
-
-  const handleRemoveSchemaField = async (keyToRemove) => {
-      if (!window.confirm("Remove this attribute?")) return;
-      await setDoc(doc(db, "system", "master_schema"), { inventoryFields: customSchema.filter(f => f.key !== keyToRemove) }, { merge: true });
-  };
-
-  const toggleCollectionCustomer = (cust) => {
-      setNewCollection(prev => ({ ...prev, allowedCustomers: prev.allowedCustomers.includes(cust) ? prev.allowedCustomers.filter(c => c !== cust) : [...prev.allowedCustomers, cust] }));
-  };
-  const toggleCollectionFinish = (finishName) => {
-      setNewCollection(prev => ({ ...prev, allowedFinishes: prev.allowedFinishes.includes(finishName) ? prev.allowedFinishes.filter(f => f !== finishName) : [...prev.allowedFinishes, finishName] }));
-  };
-  const handleAddCollection = async () => {
-      if (!newCollection.name) return alert("Collection name is required.");
-      const safeId = `COL_${Date.now()}`;
-      await setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: newCollection.name, allowedCustomers: newCollection.allowedCustomers, allowedFinishes: newCollection.allowedFinishes });
-      setNewCollection({ name: '', allowedCustomers: [], allowedFinishes: [] });
-      setShowCollectionForm(false);
-  };
-  const handleDeleteCollection = async (id) => {
-      if (!window.confirm("Delete this Collection?")) return;
-      await deleteDoc(doc(db, "hq_collections", id));
-  };
-
-  const handleSyncFloorRecipes = async () => {
-      if (!window.confirm("Scan the Finishing Floor database and import missing recipes to HQ?")) return;
-      let currentFinishes = [...globalFinishes]; let addedCount = 0;
-      floorRecipeData.forEach(recipe => {
-          if (!currentFinishes.find(f => f.name.toUpperCase() === recipe.id.toUpperCase() || (f.code && f.code.toUpperCase() === recipe.id.toUpperCase()))) {
-              currentFinishes.push({ id: `FIN-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`, name: recipe.id.toUpperCase(), code: recipe.id.substring(0, 5).toUpperCase(), type: 'MIXED', textureUrl: '', status: 'Production Ready', clientMapping: [] });
-              addedCount++;
-          }
-      });
-      if (addedCount > 0) { await setDoc(doc(db, "system", "master_finishes"), { finishes: currentFinishes }, { merge: true }); alert(`Successfully synced ${addedCount} recipes!`); } else alert("HQ is in sync with floor database!");
-  };
-
-  const handleAddGlobalFinish = async () => {
-      if (!newFinishConfig.name) return alert("Finish name required.");
-      let updatedFinishes;
-      
-      if (editingGlobalFinish) {
-          updatedFinishes = globalFinishes.map(f => f.id === editingGlobalFinish ? { 
-              ...f, 
-              name: newFinishConfig.name.toUpperCase(), 
-              code: newFinishConfig.code.toUpperCase(), 
-              type: newFinishConfig.type.toUpperCase(), 
-              textureUrl: newFinishConfig.textureUrl,
-              clientMapping: newFinishConfig.clientMapping || [] 
-          } : f);
-      } else {
-          const newFinish = { id: `FIN-${Date.now()}`, name: newFinishConfig.name.toUpperCase(), code: newFinishConfig.code.toUpperCase(), type: newFinishConfig.type.toUpperCase(), textureUrl: newFinishConfig.textureUrl, status: 'Working', clientMapping: newFinishConfig.clientMapping || [] };
-          updatedFinishes = [...globalFinishes, newFinish];
-      }
-
-      await setDoc(doc(db, "system", "master_finishes"), { finishes: updatedFinishes }, { merge: true });
-      setNewFinishConfig({ name: '', code: '', type: '', textureUrl: '', clientMapping: [] }); 
-      setShowFinishForm(false);
-      setEditingGlobalFinish(null);
-  };
-
-  const handleEditGlobalFinish = (finish) => {
-      setNewFinishConfig({
-          name: finish.name,
-          code: finish.code || '',
-          type: finish.type || '',
-          textureUrl: finish.textureUrl || '',
-          clientMapping: finish.clientMapping || []
-      });
-      setEditingGlobalFinish(finish.id);
-      setShowFinishForm(true);
-  };
-  
-  const handleFinishTextureUpload = async (file, isOutsource = false) => {
-      if (!file) return;
-      const storageRef = ref(storage, `system_textures/TEX_${Date.now()}_${file.name}`);
-      const uploadTask = uploadBytesResumable(storageRef, file);
-      uploadTask.on("state_changed", (snap) => setFinishUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)), (err) => console.error(err),
-          async () => { 
-              const url = await getDownloadURL(uploadTask.snapshot.ref); 
-              if (isOutsource) {
-                  setNewOutsourceFinishConfig({ ...newOutsourceFinishConfig, textureUrl: url }); 
-              } else {
-                  setNewFinishConfig({ ...newFinishConfig, textureUrl: url }); 
-              }
-              setFinishUploadProgress(0); 
-          }
-      );
-  };
-
-  const handleUpdateExistingFinishTexture = async (finishId, file, isOutsource = false) => {
-      if (!file) return;
-      const storageRef = ref(storage, `system_textures/TEX_${Date.now()}_${file.name}`);
-      const uploadTask = uploadBytesResumable(storageRef, file);
-      
-      uploadTask.on("state_changed", 
-          (snap) => setInlineTextureProgress(prev => ({ ...prev, [finishId]: Math.round((snap.bytesTransferred / snap.totalBytes) * 100) })), 
-          (err) => console.error(err),
-          async () => { 
-              const url = await getDownloadURL(uploadTask.snapshot.ref); 
-              if (isOutsource) {
-                  await updateDoc(doc(db, "hq_outsource_finishes", finishId), { textureUrl: url });
-              } else {
-                  const updated = globalFinishes.map(f => f.id === finishId ? { ...f, textureUrl: url } : f);
-                  await setDoc(doc(db, "system", "master_finishes"), { finishes: updated }, { merge: true });
-              }
-              setInlineTextureProgress(prev => ({ ...prev, [finishId]: 0 })); 
-          }
-      );
-  };
-
-  const handleRemoveFinish = async (idToRemove) => {
-      if (!window.confirm("Delete this Master Finish?")) return;
-      await setDoc(doc(db, "system", "master_finishes"), { finishes: globalFinishes.filter(f => f.id !== idToRemove) }, { merge: true });
-  };
-
-  const handleAddOutsourceFinish = async () => {
-      if (!newOutsourceFinishConfig.name) return alert("Finish name required.");
-      const safeId = editingOutsourceFinish || `FIN-${newOutsourceFinishConfig.name.toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
-      await setDoc(doc(db, "hq_outsource_finishes", safeId), { 
-          id: safeId, 
-          legacyErpId: "PENDING", 
-          name: newOutsourceFinishConfig.name.toUpperCase(), 
-          description: newOutsourceFinishConfig.description || "", 
-          multiplier: parseFloat(newOutsourceFinishConfig.multiplier) || 1.0, 
-          vendor: newOutsourceFinishConfig.vendor || "",
-          textureUrl: newOutsourceFinishConfig.textureUrl || "",
-          clientMapping: newOutsourceFinishConfig.clientMapping || []
-      }, { merge: true });
-
-      setNewOutsourceFinishConfig({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] }); 
-      setShowOutsourceFinishForm(false);
-      setEditingOutsourceFinish(null);
-  };
-
-  const handleEditOutsourceFinish = (finish) => {
-      setNewOutsourceFinishConfig({
-          name: finish.name,
-          description: finish.description || '',
-          multiplier: finish.multiplier || 1.0,
-          vendor: finish.vendor || '',
-          textureUrl: finish.textureUrl || '',
-          clientMapping: finish.clientMapping || []
-      });
-      setEditingOutsourceFinish(finish.id);
-      setShowOutsourceFinishForm(true);
-  };
-  
-  const handleRemoveOutsourceFinish = async (id) => { if (!window.confirm("Delete this Outsourced Finish?")) return; await deleteDoc(doc(db, "hq_outsource_finishes", id)); };
-
-  const handleAddNewListCategory = async () => {
-      const name = window.prompt("Enter the name for the new List Category (e.g., 'Packaging Types'):");
-      if (!name) return;
-      const key = name.replace(/[^a-zA-Z0-9]/g, '');
-      if (globalLists[key]) return alert("List category already exists.");
-      try { await setDoc(doc(db, "system", "master_lists"), { ...globalLists, [key]: [] }); } 
-      catch(err) { console.error(err); }
-  };
-  
-  const handleAddListItem = async (listKey) => {
-      const val = (newListItems[listKey] || '').toUpperCase().trim(); if (!val) return;
-      const updated = { ...globalLists, [listKey]: [...(globalLists[listKey] || []), val] };
-      await setDoc(doc(db, "system", "master_lists"), updated);
-      setNewListItems({ ...newListItems, [listKey]: '' });
-  };
-  
-  const handleRemoveListItem = async (listKey, itemVal) => {
-      if (!window.confirm(`Remove ${itemVal}?`)) return;
-      await setDoc(doc(db, "system", "master_lists"), { ...globalLists, [listKey]: globalLists[listKey].filter(v => v !== itemVal) });
-  };
-
-  const handleDeleteListCategory = async (listKey) => {
-      const label = LIST_LABELS[listKey] || listKey;
-      if (!window.confirm(`Are you sure you want to permanently delete the entire "${label}" category?`)) return;
-      const updatedLists = { ...globalLists };
-      delete updatedLists[listKey];
-      await setDoc(doc(db, "system", "master_lists"), updatedLists);
-  };
-
-  const handleAddDynamicAsset = async (windowConfig) => {
-      const form = newAssetForms[windowConfig.id] || {};
-      if (!form.name) return alert("Name is required.");
-      const safeId = `ASSET-${Date.now()}`;
-      await setDoc(doc(db, "hq_dynamic_data", safeId), { id: safeId, windowId: windowConfig.id, name: form.name.toUpperCase(), code: (form.code || '').toUpperCase(), vendor: form.vendor || '', multiplier: parseFloat(form.multiplier) || 1.0, textureUrl: form.textureUrl || '', legacyErpId: 'PENDING' });
-      setNewAssetForms({ ...newAssetForms, [windowConfig.id]: {} }); setActiveDictForms({ ...activeDictForms, [windowConfig.id]: false });
-  };
-  
-  const handleRemoveDynamicAsset = async (assetId) => {
-      if(!window.confirm("Delete this asset?")) return;
-      await deleteDoc(doc(db, "hq_dynamic_data", assetId));
-  };
-  
-  const handleDynamicAssetTextureUpload = async (windowId, file) => {
-      if (!file) return;
-      const storageRef = ref(storage, `system_textures/TEX_${Date.now()}_${file.name}`);
-      const uploadTask = uploadBytesResumable(storageRef, file);
-      uploadTask.on("state_changed", (snap) => setAssetUploadProgress({ ...assetUploadProgress, [windowId]: Math.round((snap.bytesTransferred / snap.totalBytes) * 100) }), (err) => console.error(err),
-          async () => { const url = await getDownloadURL(uploadTask.snapshot.ref); setNewAssetForms(prev => ({ ...prev, [windowId]: { ...(prev[windowId]||{}), textureUrl: url } })); setAssetUploadProgress({ ...assetUploadProgress, [windowId]: 0 }); }
-      );
-  };
-
-  const handleToggleCpqRouting = async (item, isChecked) => {
-      const current = globalLists.cpqRoutingTypes || [];
-      const updated = isChecked ? [...current, item] : current.filter(i => i !== item);
-      await setDoc(doc(db, "system", "master_lists"), { ...globalLists, cpqRoutingTypes: updated });
-  };
-
-  // Reusable styling objects
   const fieldStyle = { width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' };
   const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
   const sectionHeaderStyle = { margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' };
@@ -671,14 +333,14 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
       {/* HEADER WITH TIERED INVENTORY TOGGLE */}
-      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
-        <div>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>{inventory.length} Approved Records</span>
-            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Master Library & Data Rules</h2>
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Master Library</h2>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', paddingLeft: '16px', borderLeft: '1px solid var(--line)' }}>{inventory.length} Approved Records</span>
         </div>
-        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
           
-          <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper-2)', minWidth: '150px' }}>
+          <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none', background: 'var(--paper-2)', minWidth: '150px' }}>
               <option value="ALL">All Classes</option>
               <option value="INVENTORY">Raw Mat / Components (In-House)</option>
               <option value="OUTSOURCED">Outsourced Components</option>
@@ -690,27 +352,31 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               </optgroup>
           </select>
           
-          <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--paper-2)', padding: '12px 16px', border: '1px solid var(--line)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={isAdmin} onChange={() => setIsAdmin(!isAdmin)} /> Simulate Admin
-          </label>
-          
-          <button onClick={handleCreateNewPart} style={{ padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>+ New Record</button>
+          <button onClick={handleCreateNewPart} style={{ padding: '10px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>+ New Record</button>
           
           {windowConfig.system.prodTypes?.includes(activeBrand) && (
-              <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+              <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }}>
                   <option value="">All Categories</option>
                   {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}
               </select>
           )}
 
           {windowConfig.system.collections?.includes(activeBrand) && (
-              <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+              <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }}>
                   <option value="">All Collections</option>
                   {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
               </select>
           )}
 
-          <input placeholder="Search Name, ERP, Bin..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '250px', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+          {windowConfig.system.watchLists?.includes(activeBrand) && (
+              <select value={watchlistFilter} onChange={(e) => setWatchlistFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }}>
+                  <option value="">All Watchlists</option>
+                  <option value="NONE">None / Unassigned</option>
+                  {(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
+              </select>
+          )}
+
+          <input placeholder="Search Name, ERP, Bin..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '200px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }} />
         </div>
       </div>
 
@@ -1191,7 +857,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                     </button>
                 )}
                 
-  {!activePart.isNew && (
+                {!activePart.isNew && (
                     <button onClick={handleDeletePart} style={{ flex: 1, padding: '16px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => { e.currentTarget.style.background = '#d9534f'; e.currentTarget.style.color = '#fff'; }} onMouseOut={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#d9534f'; }}>
                         Delete
                     </button>
