@@ -206,6 +206,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
   const [assemblyQty, setAssemblyQty] = useState(1);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
+  const [showCartSuccessModal, setShowCartSuccessModal] = useState(false);
 
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
   const [activeAssembly, setActiveAssembly] = useState(null);
@@ -623,7 +624,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       setActiveDraftSvg(null);
       setAssemblyQty(1);
 
-      alert("Assembly added to Cart! You can now select another product to configure, or proceed to Checkout via the top right button.");
+      setShowCartSuccessModal(true);
   };
 
   const handleFinalizeQuote = async () => {
@@ -731,12 +732,12 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                   <h4 style="margin:0 0 15px 0; color: #1c1a16; font-family: Georgia, serif; text-transform: uppercase;">Engineering Dimensions</h4>
                   <table style="width: 100%; border-collapse: collapse; font-size: 14px; font-family: sans-serif;">
                       <tr>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">System O2O:</td>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.systemO2O ? notes.systemO2O.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">Pole O2O (Edge-to-Edge):</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.poleO2O ? notes.poleO2O.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       <tr>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">System C2C:</td>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.systemC2C ? notes.systemC2C.toFixed(2) + '"' : 'N/A'}</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">Total System O2O (+ Brackets):</td>
+                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.totalSystemO2O ? notes.totalSystemO2O.toFixed(2) + '"' : 'N/A'}</td>
                       </tr>
                       ${notes.shape === 'MITERED' ? `
                       <tr>
@@ -1303,8 +1304,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                           <div style={{ background: '#fff', padding: '12px', border: '1px solid var(--line)', marginTop: '8px' }}>
                                               
                                               <div style={{ color: 'var(--ink)', fontSize: '0.85rem', marginBottom: '12px', borderBottom: '1px dashed var(--line)', paddingBottom: '10px' }}>
-                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>System O2O:</span> <span>{notes.systemO2O?.toFixed(2)}"</span></div>
-                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>System C2C:</span> <span>{notes.systemC2C?.toFixed(2)}"</span></div>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>Pole O2O (Edge-to-Edge):</span> <span>{notes.poleO2O?.toFixed(2)}"</span></div>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>Total System O2O:</span> <span>{notes.totalSystemO2O?.toFixed(2)}"</span></div>
                                                   
                                                   {notes.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>Left Wall C2C:</span> <span>{notes.pole1?.toFixed(2)}"</span></div>}
                                                   
@@ -1364,6 +1365,33 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               </div>
           </div>
       </div>
+
+      {showCartSuccessModal && (
+          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000 }}>
+              <div style={{ background: '#fff', width: '450px', padding: '30px', borderRadius: '4px', boxShadow: '0 12px 48px rgba(0,0,0,0.2)', textAlign: 'center' }}>
+                  <div style={{ fontSize: '3rem', marginBottom: '16px' }}>✅</div>
+                  <h2 style={{ margin: '0 0 12px 0', fontFamily: 'var(--serif)', fontSize: '1.8rem', color: 'var(--ink)' }}>Added to Quote Cart</h2>
+                  <p style={{ fontSize: '1rem', color: 'var(--ink-soft)', marginBottom: '30px', lineHeight: '1.5' }}>
+                      Your configured assembly has been saved to the cart. What would you like to do next?
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <button onClick={() => setShowCartSuccessModal(false)} style={{ padding: '16px', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                          Configure Another Item Here
+                      </button>
+                      <button onClick={() => {
+                          setShowCartSuccessModal(false);
+                          window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'VISION' }));
+                          alert("Please select the 'Vision System' or 'Draw' tab at the top of your screen to sketch the next item.");
+                      }} style={{ padding: '16px', background: 'var(--ink)', border: 'none', color: '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                          Draw Next Item in Vision Tool
+                      </button>
+                      <button onClick={() => { setShowCartSuccessModal(false); setShowCheckoutModal(true); }} style={{ padding: '16px', background: 'var(--brass)', border: 'none', color: '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s', marginTop: '12px' }}>
+                          Proceed to Checkout
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
 
       {showCheckoutModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>

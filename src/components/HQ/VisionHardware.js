@@ -132,11 +132,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const finialStep = getStepForCategory('FINIAL');
   const ringStep = getStepForCategory('RING');
 
-  const poleFinishStep = getFinishStep('pole');
-  const bracketFinishStep = getFinishStep('bracket');
-  const finialFinishStep = getFinishStep('finial');
-  const ringFinishStep = getFinishStep('ring');
-
   useEffect(() => {
       if (!activeFlow?.linkedAssemblyId) { setFlowPins([]); return; }
       const linkedAsm = libraryParts.find(p => p.id === activeFlow.linkedAssemblyId);
@@ -209,41 +204,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
   const safeProj = parseFloat(engData.proj) || 0;
 
-  const getNativeOptions = (categoryString) => {
-      const step = getStepForCategory(categoryString);
-
-      return libraryParts.filter(p => {
-          if (p.manufacturingSpecs?.customData?.feeType) return false;
-          
-          const pType = (p.manufacturingSpecs?.productType || p.productType || '').toUpperCase();
-          if (!pType.includes(categoryString)) return false;
-
-          const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
-          const upperCollections = collectionsArray.map(c => c.toUpperCase());
-          const selCollection = (quoteSelections.collection || "").toUpperCase();
-          
-          if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
-              if (!upperCollections.includes('N/A')) return false; 
-          }
-
-          if (step && step.allowedOptions?.length > 0) {
-              if (!step.allowedOptions.includes(p.id)) return false;
-          }
-
-          return true;
-      });
-  };
-
-  const getFinishOptions = (compName) => {
-      const step = getFinishStep(compName);
-      const allF = [...globalFinishes, ...outsourceFinishes].map(f => ({ id: f.id, name: f.name, code: f.code }));
-      
-      if (step && step.allowedOptions?.length > 0) {
-          return allF.filter(f => step.allowedOptions.includes(f.id));
-      }
-      return allF;
-  };
-
   const allBrackets = useMemo(() => {
       const step = getStepForCategory('BRACKET');
       return libraryParts.filter(p => {
@@ -302,21 +262,16 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       }
   }
 
-  const addL_TOL = isLeftInside ? 0 : (engData.endStyle === 'FINIAL' ? engData.finialW : (engData.endStyle.includes('RETURN') ? Math.max(0, (engData.bracketW - engData.poleDiameter) / 2) : 0));
-  const addR_TOL = isRightInside ? 0 : addL_TOL;
-  const addL_RAW = isLeftInside ? 0 : (engData.endStyle === 'RETURN_BEND' ? engData.gripAllowance : 0);
-  const addR_RAW = isRightInside ? 0 : addL_RAW;
-  const orderL = pole1 + bendDeductL + imDeductL; const orderR = pole3 + bendDeductR + imDeductR;
-  const orderC = engData.shape === 'STRAIGHT' ? (pole2 + bendDeductL + bendDeductR + imDeductL + imDeductR) : (engData.shape === 'BOW' ? pole2 + imDeductL + imDeductR : pole2);
-  const tolLeft = engData.shape === 'MITERED' ? orderL + addL_TOL : 0; const tolRight = engData.shape === 'MITERED' ? orderR + addR_TOL : 0;
-  const tolCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? orderC + addL_TOL + addR_TOL : orderC;
-  const rawLeft = engData.shape === 'MITERED' ? pole1 + addL_RAW : 0; const rawRight = engData.shape === 'MITERED' ? pole3 + addR_RAW : 0;
-  const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 + addL_RAW + addR_RAW : pole2;
+  const rawLeft = engData.shape === 'MITERED' ? pole1 : 0; 
+  const rawRight = engData.shape === 'MITERED' ? pole3 : 0;
+  const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 : pole2;
   
-  const systemC2C = orderL + orderC + orderR;
-  const systemO2O = tolLeft + tolCenter + tolRight;
   const totalPoleRawInches = rawLeft + rawCenter + rawRight;
   
+  // NEW MATH LOGIC
+  const poleO2O = totalPoleRawInches;
+  const totalSystemO2O = poleO2O + (engData.bracketW * 2);
+
   const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
   const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;
   const qtySplices = attachments.filter(a => a.type === 'splice').length;
@@ -325,8 +280,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const qtyMiterReturns = engData.endStyle === 'RETURN_MITER' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
   const qtyCustomProjBrackets = isCustomProj ? qtyBrackets : 0;
   const qtyFinials = engData.endStyle === 'FINIAL' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
-  const disableFinials = engData.endStyle === 'RETURN_BEND' || engData.endStyle === 'RETURN_MITER';
-  const recRings = Math.ceil(systemO2O / 12) * 4;
+  const recRings = Math.ceil(totalSystemO2O / 12) * 4;
 
   const P2 = { x: 500 - (wall2 * S)/2, y: 250 }; const P3 = { x: 500 + (wall2 * S)/2, y: 250 };
   let P1 = P2, P4 = P3, HS = {x: 0, y: 0}, HE = {x: 0, y: 0}, HC1 = {x: 0, y: 0}, HC2 = {x: 0, y: 0}, nL = {x: 0, y: -1}, nR = {x: 0, y: -1}; 
@@ -357,13 +311,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       if (!isLeftInside) {
           let inVec = {x: 1, y: 0};
           if (engData.shape === 'MITERED') { const dx = HC1.x - HS.x; const dy = HC1.y - HS.y; const len = Math.sqrt(dx*dx + dy*dy) || 1; inVec = {x: dx/len, y: dy/len}; } 
-          else if (engData.shape === 'BOW') { const angleShift = r / (bowHW_R * S); bowStartAngle += angleShift; drawHS = { x: bowCX + (bowHW_R*S) * Math.cos(bowStartAngle), y: bowCY + (bowHW_R*S) * Math.sin(bowStartAngle) }; bowHWPath = `M ${drawHS.x} ${drawHS.y} A ${bowHW_R*S} ${bowHW_R*S} 0 0 1 ${drawHE.x} ${drawHE.y}`; }
           if (engData.shape !== 'BOW') drawHS = { x: HS.x + inVec.x * r, y: HS.y + inVec.y * r };
       }
       if (!isRightInside) {
           let inVec = {x: -1, y: 0};
           if (engData.shape === 'MITERED') { const dx = HC2.x - HE.x; const dy = HC2.y - HE.y; const len = Math.sqrt(dx*dx + dy*dy) || 1; inVec = {x: dx/len, y: dy/len}; } 
-          else if (engData.shape === 'BOW') { const angleShift = r / (bowHW_R * S); bowEndAngle -= angleShift; drawHE = { x: bowCX + (bowHW_R*S) * Math.cos(bowEndAngle), y: bowCY + (bowHW_R*S) * Math.sin(bowEndAngle) }; bowHWPath = `M ${drawHS.x} ${drawHS.y} A ${bowHW_R*S} ${bowHW_R*S} 0 0 1 ${drawHE.x} ${drawHE.y}`; }
           if (engData.shape !== 'BOW') drawHE = { x: HE.x + inVec.x * r, y: HE.y + inVec.y * r };
       }
   }
@@ -613,7 +565,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                          .replace(/var\(--paper-2\)/g, '#faf8f4')
                          .replace(/var\(--dark\)/g, '#2a2a2a');
           
-          // Normalize pan/zoom transform back to a centered standard scale (1.7) so it doesn't render as a dot or off-screen
+          // Normalize pan/zoom transform back to a centered standard scale (1.7)
           svgStr = svgStr.replace(/transform="[^"]*"/i, 'transform="translate(0, 0) translate(500, 300) scale(1.7) translate(-500, -300)"');
 
           // Remove foreignObjects (inputs and textareas that break PDF)
@@ -642,8 +594,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                   qtyMiterReturns,
                   qtyCustomProjBrackets,
                   shape: engData.shape,
-                  systemO2O,
-                  systemC2C,
+                  poleO2O,
+                  totalSystemO2O,
                   pole1,
                   pole2,
                   pole3,
@@ -662,7 +614,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
 
   const fieldStyle = { width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' };
   const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
-  const btnStyle = { padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh', overflow: 'hidden' }}>
@@ -1002,8 +953,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
                       <div style={{ flex: 1, padding: '24px', borderRight: '1px solid var(--line)' }}>
                           <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Client Details & Ordering</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.9rem', fontFamily: 'var(--sans)' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>System O2O (Outside-to-Outside):</span><strong style={{ fontWeight: 500 }}>{systemO2O.toFixed(2)}"</strong></div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>System C2C (Center-to-Center):</span><strong style={{ fontWeight: 500 }}>{systemC2C.toFixed(2)}"</strong></div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>Pole O2O (Edge-to-Edge):</span><strong style={{ fontWeight: 500 }}>{poleO2O.toFixed(2)}"</strong></div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>Total System O2O (+ Brackets):</span><strong style={{ fontWeight: 500 }}>{totalSystemO2O.toFixed(2)}"</strong></div>
                               {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px' }}><span style={{ color: 'var(--ink-soft)' }}>Left Wall C2C:</span><strong style={{ fontWeight: 500 }}>{pole1.toFixed(2)}"</strong></div>}
                               <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{engData.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</span><strong style={{ fontWeight: 500 }}>{pole2.toFixed(2)}"</strong></div>
                               {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Right Wall C2C:</span><strong style={{ fontWeight: 500 }}>{pole3.toFixed(2)}"</strong></div>}
