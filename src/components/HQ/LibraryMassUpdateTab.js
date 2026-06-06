@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../../firebase';
-import { collection, onSnapshot, query, writeBatch, doc } from "firebase/firestore";
+import { db, storage } from '../../firebase';
+import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where } from "firebase/firestore";
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+
+const AVAILABLE_BRANDS = [
+  { id: 'm2c', name: 'M2C Studio' },
+  { id: 'uniquity', name: 'Uniquity' }, 
+  { id: 'ce', name: 'Classical Elements' }, 
+  { id: 'leyla', name: 'Leyla Gans' }
+];
 
 const DEFAULT_SYSTEM_WINDOWS = {
   inHouseFinishes: ['ce', 'm2c'], outsourceFinishes: ['ce', 'm2c'],
@@ -15,24 +23,25 @@ const DEFAULT_SYSTEM_WINDOWS = {
   projections: ['ce', 'm2c', 'uniquity', 'leyla'] 
 };
 
+const LIST_LABELS = {
+    prodTypes: 'PRODUCT TYPES', uom: 'UOMs',
+    watchLists: 'WATCHLISTS', vendors: 'APPROVED VENDORS', outsourceActions: 'OUTSOURCE ACTIONS',
+    pillowSizes: 'PILLOW SIZES', fillTypes: 'FILL TYPES', flangeStyles: 'EDGE / FLANGE STYLES', 
+    stitchTypes: 'STITCH ROUTING', seamCounts: 'SEAM COUNTS / UPCHARGES', assemblyTypes: 'ASSEMBLY TYPES',
+    customers: 'CUSTOMERS / DEALERS (Format: Name - ID)', 
+    partHandling: 'PART HANDLING & ROUTING', 
+    inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS',
+    projections: 'BRACKET PROJECTIONS' 
+};
+
 const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
+    // --- MASS UPDATE STATE ---
     const [inventory, setInventory] = useState([]);
     const [searchTerm, setSearchTerm] = useState("");
     const [selectedIds, setSelectedIds] = useState(new Set());
-    
-    const [globalLists, setGlobalLists] = useState({ 
-        prodTypes: [], uom: [], watchLists: [], assemblyTypes: [], inventoryTypes: [], 
-        partHandling: [], collections: [], vendors: [], outsourceActions: [],
-        pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [],
-        projections: []
-    });
-    const [collectionsData, setCollectionsData] = useState([]);
-    const [windowConfig, setWindowConfig] = useState({ system: DEFAULT_SYSTEM_WINDOWS });
-
     const [isUpdating, setIsUpdating] = useState(false);
     const [progress, setProgress] = useState(0);
 
-    // Track which fields the user wants to update, and their new values
     const [updates, setUpdates] = useState({
         productType: { active: false, value: "" },
         routingType: { active: false, value: "" },
@@ -42,8 +51,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         isInHouse: { active: false, value: true },
         partHandling: { active: false, value: "" },
         collection: { active: false, value: "" },
-        
-        // Added Simple Dropdowns
         vendorName: { active: false, value: "" },
         outsourceAction: { active: false, value: "" },
         pillowSize: { active: false, value: "" },
@@ -54,7 +61,55 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         projection: { active: false, value: "" }
     });
 
+    // --- SYSTEM DICTIONARY STATE ---
+    const [adminBrandFilter, setAdminBrandFilter] = useState(activeBrand);
+    const [showAdminDashboard, setShowAdminDashboard] = useState(false);
+    
+    const [globalLists, setGlobalLists] = useState({ 
+        prodTypes: [], uom: [], watchLists: [], assemblyTypes: [], inventoryTypes: [], 
+        partHandling: [], collections: [], vendors: [], outsourceActions: [],
+        pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [],
+        projections: [], cpqRoutingTypes: [], customers: []
+    });
+    
+    const [collectionsData, setCollectionsData] = useState([]);
+    const [windowConfig, setWindowConfig] = useState({ system: DEFAULT_SYSTEM_WINDOWS, custom: [] });
+    const [customSchema, setCustomSchema] = useState([]);
+    const [globalFinishes, setGlobalFinishes] = useState([]);
+    const [outsourceFinishes, setOutsourceFinishes] = useState([]);
+    const [dynamicAssets, setDynamicAssets] = useState([]);
+    const [liveVendors, setLiveVendors] = useState([]); 
+    const [liveCustomers, setLiveCustomers] = useState([]); 
+    const [activeRecipes, setActiveRecipes] = useState([]); 
+    const [floorRecipeData, setFloorRecipeData] = useState([]); 
+
+    const [newListItems, setNewListItems] = useState({});
+    const [showSchemaForm, setShowSchemaForm] = useState(false);
+    const [showFinishForm, setShowFinishForm] = useState(false);
+    const [showOutsourceFinishForm, setShowOutsourceFinishForm] = useState(false);
+    const [showWindowManager, setShowWindowManager] = useState(false);
+    const [showCollectionForm, setShowCollectionForm] = useState(false); 
+
+    const [newFieldConfig, setNewFieldConfig] = useState({ key: '', label: '', type: 'text', options: '' });
+    const [newCollection, setNewCollection] = useState({ name: '', allowedCustomers: [], allowedFinishes: [] }); 
+    const [newCustomWindow, setNewCustomWindow] = useState({ name: '', brands: [activeBrand], hasImage: true, hasCode: true, hasVendor: false, hasMultiplier: true });
+    
+    const [editingGlobalFinish, setEditingGlobalFinish] = useState(null);
+    const [editingOutsourceFinish, setEditingOutsourceFinish] = useState(null);
+    const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '', clientMapping: [] });
+    const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] });
+    const [newFinishClientMapping, setNewFinishClientMapping] = useState({ customerId: '', clientFinishName: '' });
+    
+    const [finishUploadProgress, setFinishUploadProgress] = useState(0);
+    const [inlineTextureProgress, setInlineTextureProgress] = useState({});
+
+    const [activeDictForms, setActiveDictForms] = useState({});
+    const [newAssetForms, setNewAssetForms] = useState({});
+    const [assetUploadProgress, setAssetUploadProgress] = useState({});
+
     // --- DATA FETCHING ---
+    useEffect(() => { setAdminBrandFilter(activeBrand); }, [activeBrand]);
+
     useEffect(() => {
         if (!activeBrand) return;
         const q = query(collection(db, "Approved_Designs"));
@@ -71,16 +126,22 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
             if (docSnap.exists()) setGlobalLists(prev => ({ ...prev, ...docSnap.data() }));
         });
-        const unsubCols = onSnapshot(collection(db, "hq_collections"), snap => {
-            setCollectionsData(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        });
+        const unsubCols = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
         const unsubWin = onSnapshot(doc(db, "system", "window_config"), (docSnap) => {
-            if (docSnap.exists()) setWindowConfig({ system: { ...DEFAULT_SYSTEM_WINDOWS, ...(docSnap.data().system || {}) } });
+            if (docSnap.exists()) setWindowConfig({ system: { ...DEFAULT_SYSTEM_WINDOWS, ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
         });
-        return () => { unsubLists(); unsubCols(); unsubWin(); };
+        const unsubSchema = onSnapshot(doc(db, "system", "master_schema"), (docSnap) => { if (docSnap.exists() && docSnap.data().inventoryFields) setCustomSchema(docSnap.data().inventoryFields); });
+        const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (docSnap) => { if (docSnap.exists() && docSnap.data().finishes) setGlobalFinishes(docSnap.data().finishes); });
+        const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+        const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+        const unsubVendors = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "VENDOR")), snap => setLiveVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+        const unsubCustomers = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "CUSTOMER")), snap => setLiveCustomers(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+        const unsubRecipes = onSnapshot(collection(db, "fin_recipes"), (snap) => { setActiveRecipes(snap.docs.map(d => d.id)); setFloorRecipeData(snap.docs.map(d => ({ id: d.id, ...d.data() }))); });
+
+        return () => { unsubLists(); unsubCols(); unsubWin(); unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubVendors(); unsubCustomers(); unsubRecipes(); };
     }, []);
 
-    // --- FILTERING & SELECTION ---
+    // --- MASS UPDATE LOGIC ---
     const filteredInventory = inventory.filter(part => {
         if (!searchTerm) return false; 
         const term = searchTerm.toLowerCase();
@@ -97,9 +158,9 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
     const handleSelectAll = () => {
         if (selectedIds.size === filteredInventory.length) {
-            setSelectedIds(new Set()); // Deselect all
+            setSelectedIds(new Set());
         } else {
-            setSelectedIds(new Set(filteredInventory.map(item => item.id))); // Select all
+            setSelectedIds(new Set(filteredInventory.map(item => item.id)));
         }
     };
 
@@ -107,7 +168,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         setUpdates(prev => ({ ...prev, [field]: { ...prev[field], [key]: val } }));
     };
 
-    // --- BATCH EXECUTION ---
     const executeMassUpdate = async () => {
         const activeUpdates = Object.entries(updates).filter(([k, v]) => v.active);
         if (selectedIds.size === 0) return alert("Please select at least one item to update.");
@@ -120,7 +180,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
         try {
             const idsArray = Array.from(selectedIds);
-            const chunkSize = 400; // Firestore limit is 500 writes per batch
+            const chunkSize = 400; 
             
             for (let i = 0; i < idsArray.length; i += chunkSize) {
                 const chunk = idsArray.slice(i, i + chunkSize);
@@ -133,25 +193,18 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
                     activeUpdates.forEach(([fieldKey, config]) => {
                         const val = config.value;
-                        
-                        // Handle Root Level Fields & Spec Level Fields
                         if (fieldKey === 'productType' || fieldKey === 'routingType' || fieldKey === 'project') {
                             payload[fieldKey] = val;
                             payload[`manufacturingSpecs.${fieldKey}`] = val;
                         } else if (fieldKey === 'collection') {
-                            // Ensure collections array exists and push the new collection
                             const currentCols = targetPart?.manufacturingSpecs?.collections || [];
-                            if (!currentCols.includes(val)) {
-                                payload['manufacturingSpecs.collections'] = [...currentCols, val];
-                            }
+                            if (!currentCols.includes(val)) payload['manufacturingSpecs.collections'] = [...currentCols, val];
                         } else if (fieldKey === 'isInHouse') {
                             payload['manufacturingSpecs.isInHouse'] = val;
                             payload.partClass = val ? "Inventory" : "Inventory"; 
                         } else if (fieldKey === 'projection') {
-                            // Route directly into customData metadata for CPQ rules
                             payload[`manufacturingSpecs.customData.${fieldKey}`] = val;
                         } else {
-                            // Standard manufacturingSpecs injection
                             payload[`manufacturingSpecs.${fieldKey}`] = val;
                         }
                     });
@@ -167,9 +220,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             }
 
             alert("✅ Mass update completed successfully!");
-            setSelectedIds(new Set()); // Clear selection
+            setSelectedIds(new Set()); 
             
-            // Reset active toggles
             const resetUpdates = { ...updates };
             Object.keys(resetUpdates).forEach(k => resetUpdates[k].active = false);
             setUpdates(resetUpdates);
@@ -183,9 +235,250 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         setProgress(0);
     };
 
+    // --- DICTIONARY MANAGERS ---
+    const toggleSystemWindowBrand = async (windowKey, brandId) => {
+        const current = windowConfig.system[windowKey] || [];
+        const updated = current.includes(brandId) ? current.filter(b => b !== brandId) : [...current, brandId];
+        await setDoc(doc(db, "system", "window_config"), { system: { ...windowConfig.system, [windowKey]: updated }, custom: windowConfig.custom }, { merge: true });
+    };
+    
+    const handleCreateCustomWindow = async () => {
+        if (!newCustomWindow.name.trim()) return alert("Dictionary Name is required.");
+        const newId = `dict_${Date.now()}`;
+        const newWin = { id: newId, ...newCustomWindow, name: newCustomWindow.name.toUpperCase() };
+        await setDoc(doc(db, "system", "window_config"), { system: windowConfig.system, custom: [...windowConfig.custom, newWin] }, { merge: true });
+        setNewCustomWindow({ name: '', brands: [activeBrand], hasImage: true, hasCode: true, hasVendor: false, hasMultiplier: true });
+        alert("✅ Custom CPQ Dictionary Created Successfully!");
+    };
+
+    const toggleCustomWindowBrand = async (windowId, brandId) => {
+        const updatedWindows = windowConfig.custom.map(w => {
+            if (w.id !== windowId) return w;
+            const currentBrands = w.brands || [];
+            return { ...w, brands: currentBrands.includes(brandId) ? currentBrands.filter(b => b !== brandId) : [...currentBrands, brandId] };
+        });
+        await setDoc(doc(db, "system", "window_config"), { system: windowConfig.system, custom: updatedWindows }, { merge: true });
+    };
+
+    const handleDeleteCustomWindow = async (windowId) => {
+        if (!window.confirm("Delete this custom dictionary? Data items will be orphaned.")) return;
+        await setDoc(doc(db, "system", "window_config"), { system: windowConfig.system, custom: windowConfig.custom.filter(w => w.id !== windowId) }, { merge: true });
+    };
+
+    const handleAddSchemaField = async () => {
+        if (!newFieldConfig.label) return alert("Label is required.");
+        const key = newFieldConfig.key || newFieldConfig.label.toLowerCase().replace(/[^a-zA-Z0-9]+(.)/g, (m, chr) => chr.toUpperCase()).replace(/[^a-zA-Z0-9]/g, '');
+        const updatedSchema = [...customSchema, { ...newFieldConfig, key }];
+        await setDoc(doc(db, "system", "master_schema"), { inventoryFields: updatedSchema }, { merge: true });
+        setNewFieldConfig({ key: '', label: '', type: 'text', options: '' }); setShowSchemaForm(false);
+    };
+
+    const handleRemoveSchemaField = async (keyToRemove) => {
+        if (!window.confirm("Remove this attribute?")) return;
+        await setDoc(doc(db, "system", "master_schema"), { inventoryFields: customSchema.filter(f => f.key !== keyToRemove) }, { merge: true });
+    };
+
+    const toggleCollectionCustomer = (cust) => {
+        setNewCollection(prev => ({ ...prev, allowedCustomers: prev.allowedCustomers.includes(cust) ? prev.allowedCustomers.filter(c => c !== cust) : [...prev.allowedCustomers, cust] }));
+    };
+    const toggleCollectionFinish = (finishName) => {
+        setNewCollection(prev => ({ ...prev, allowedFinishes: prev.allowedFinishes.includes(finishName) ? prev.allowedFinishes.filter(f => f !== finishName) : [...prev.allowedFinishes, finishName] }));
+    };
+    const handleAddCollection = async () => {
+        if (!newCollection.name) return alert("Collection name is required.");
+        const safeId = `COL_${Date.now()}`;
+        await setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: newCollection.name, allowedCustomers: newCollection.allowedCustomers, allowedFinishes: newCollection.allowedFinishes });
+        setNewCollection({ name: '', allowedCustomers: [], allowedFinishes: [] });
+        setShowCollectionForm(false);
+    };
+    const handleDeleteCollection = async (id) => {
+        if (!window.confirm("Delete this Collection?")) return;
+        await deleteDoc(doc(db, "hq_collections", id));
+    };
+
+    const handleSyncFloorRecipes = async () => {
+        if (!window.confirm("Scan the Finishing Floor database and import missing recipes to HQ?")) return;
+        let currentFinishes = [...globalFinishes]; let addedCount = 0;
+        floorRecipeData.forEach(recipe => {
+            if (!currentFinishes.find(f => f.name.toUpperCase() === recipe.id.toUpperCase() || (f.code && f.code.toUpperCase() === recipe.id.toUpperCase()))) {
+                currentFinishes.push({ id: `FIN-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`, name: recipe.id.toUpperCase(), code: recipe.id.substring(0, 5).toUpperCase(), type: 'MIXED', textureUrl: '', status: 'Production Ready', clientMapping: [] });
+                addedCount++;
+            }
+        });
+        if (addedCount > 0) { await setDoc(doc(db, "system", "master_finishes"), { finishes: currentFinishes }, { merge: true }); alert(`Successfully synced ${addedCount} recipes!`); } else alert("HQ is in sync with floor database!");
+    };
+
+    const handleAddGlobalFinish = async () => {
+        if (!newFinishConfig.name) return alert("Finish name required.");
+        let updatedFinishes;
+        
+        if (editingGlobalFinish) {
+            updatedFinishes = globalFinishes.map(f => f.id === editingGlobalFinish ? { 
+                ...f, 
+                name: newFinishConfig.name.toUpperCase(), 
+                code: newFinishConfig.code.toUpperCase(), 
+                type: newFinishConfig.type.toUpperCase(), 
+                textureUrl: newFinishConfig.textureUrl,
+                clientMapping: newFinishConfig.clientMapping || [] 
+            } : f);
+        } else {
+            const newFinish = { id: `FIN-${Date.now()}`, name: newFinishConfig.name.toUpperCase(), code: newFinishConfig.code.toUpperCase(), type: newFinishConfig.type.toUpperCase(), textureUrl: newFinishConfig.textureUrl, status: 'Working', clientMapping: newFinishConfig.clientMapping || [] };
+            updatedFinishes = [...globalFinishes, newFinish];
+        }
+
+        await setDoc(doc(db, "system", "master_finishes"), { finishes: updatedFinishes }, { merge: true });
+        setNewFinishConfig({ name: '', code: '', type: '', textureUrl: '', clientMapping: [] }); 
+        setShowFinishForm(false);
+        setEditingGlobalFinish(null);
+    };
+
+    const handleEditGlobalFinish = (finish) => {
+        setNewFinishConfig({
+            name: finish.name,
+            code: finish.code || '',
+            type: finish.type || '',
+            textureUrl: finish.textureUrl || '',
+            clientMapping: finish.clientMapping || []
+        });
+        setEditingGlobalFinish(finish.id);
+        setShowFinishForm(true);
+    };
+    
+    const handleFinishTextureUpload = async (file, isOutsource = false) => {
+        if (!file) return;
+        const storageRef = ref(storage, `system_textures/TEX_${Date.now()}_${file.name}`);
+        const uploadTask = uploadBytesResumable(storageRef, file);
+        uploadTask.on("state_changed", (snap) => setFinishUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)), (err) => console.error(err),
+            async () => { 
+                const url = await getDownloadURL(uploadTask.snapshot.ref); 
+                if (isOutsource) setNewOutsourceFinishConfig({ ...newOutsourceFinishConfig, textureUrl: url }); 
+                else setNewFinishConfig({ ...newFinishConfig, textureUrl: url }); 
+                setFinishUploadProgress(0); 
+            }
+        );
+    };
+
+    const handleUpdateExistingFinishTexture = async (finishId, file, isOutsource = false) => {
+        if (!file) return;
+        const storageRef = ref(storage, `system_textures/TEX_${Date.now()}_${file.name}`);
+        const uploadTask = uploadBytesResumable(storageRef, file);
+        
+        uploadTask.on("state_changed", 
+            (snap) => setInlineTextureProgress(prev => ({ ...prev, [finishId]: Math.round((snap.bytesTransferred / snap.totalBytes) * 100) })), 
+            (err) => console.error(err),
+            async () => { 
+                const url = await getDownloadURL(uploadTask.snapshot.ref); 
+                if (isOutsource) {
+                    await updateDoc(doc(db, "hq_outsource_finishes", finishId), { textureUrl: url });
+                } else {
+                    const updated = globalFinishes.map(f => f.id === finishId ? { ...f, textureUrl: url } : f);
+                    await setDoc(doc(db, "system", "master_finishes"), { finishes: updated }, { merge: true });
+                }
+                setInlineTextureProgress(prev => ({ ...prev, [finishId]: 0 })); 
+            }
+        );
+    };
+
+    const handleRemoveFinish = async (idToRemove) => {
+        if (!window.confirm("Delete this Master Finish?")) return;
+        await setDoc(doc(db, "system", "master_finishes"), { finishes: globalFinishes.filter(f => f.id !== idToRemove) }, { merge: true });
+    };
+
+    const handleAddOutsourceFinish = async () => {
+        if (!newOutsourceFinishConfig.name) return alert("Finish name required.");
+        const safeId = editingOutsourceFinish || `FIN-${newOutsourceFinishConfig.name.toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
+        await setDoc(doc(db, "hq_outsource_finishes", safeId), { 
+            id: safeId, 
+            legacyErpId: "PENDING", 
+            name: newOutsourceFinishConfig.name.toUpperCase(), 
+            description: newOutsourceFinishConfig.description || "", 
+            multiplier: parseFloat(newOutsourceFinishConfig.multiplier) || 1.0, 
+            vendor: newOutsourceFinishConfig.vendor || "",
+            textureUrl: newOutsourceFinishConfig.textureUrl || "",
+            clientMapping: newOutsourceFinishConfig.clientMapping || []
+        }, { merge: true });
+
+        setNewOutsourceFinishConfig({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] }); 
+        setShowOutsourceFinishForm(false);
+        setEditingOutsourceFinish(null);
+    };
+
+    const handleEditOutsourceFinish = (finish) => {
+        setNewOutsourceFinishConfig({
+            name: finish.name,
+            description: finish.description || '',
+            multiplier: finish.multiplier || 1.0,
+            vendor: finish.vendor || '',
+            textureUrl: finish.textureUrl || '',
+            clientMapping: finish.clientMapping || []
+        });
+        setEditingOutsourceFinish(finish.id);
+        setShowOutsourceFinishForm(true);
+    };
+    
+    const handleRemoveOutsourceFinish = async (id) => { if (!window.confirm("Delete this Outsourced Finish?")) return; await deleteDoc(doc(db, "hq_outsource_finishes", id)); };
+
+    const handleAddNewListCategory = async () => {
+        const name = window.prompt("Enter the name for the new List Category (e.g., 'Packaging Types'):");
+        if (!name) return;
+        const key = name.replace(/[^a-zA-Z0-9]/g, '');
+        if (globalLists[key]) return alert("List category already exists.");
+        try { await setDoc(doc(db, "system", "master_lists"), { ...globalLists, [key]: [] }); } 
+        catch(err) { console.error(err); }
+    };
+    
+    const handleAddListItem = async (listKey) => {
+        const val = (newListItems[listKey] || '').toUpperCase().trim(); if (!val) return;
+        const updated = { ...globalLists, [listKey]: [...(globalLists[listKey] || []), val] };
+        await setDoc(doc(db, "system", "master_lists"), updated);
+        setNewListItems({ ...newListItems, [listKey]: '' });
+    };
+    
+    const handleRemoveListItem = async (listKey, itemVal) => {
+        if (!window.confirm(`Remove ${itemVal}?`)) return;
+        await setDoc(doc(db, "system", "master_lists"), { ...globalLists, [listKey]: globalLists[listKey].filter(v => v !== itemVal) });
+    };
+
+    const handleDeleteListCategory = async (listKey) => {
+        const label = LIST_LABELS[listKey] || listKey;
+        if (!window.confirm(`Are you sure you want to permanently delete the entire "${label}" category?`)) return;
+        const updatedLists = { ...globalLists };
+        delete updatedLists[listKey];
+        await setDoc(doc(db, "system", "master_lists"), updatedLists);
+    };
+
+    const handleAddDynamicAsset = async (windowConfig) => {
+        const form = newAssetForms[windowConfig.id] || {};
+        if (!form.name) return alert("Name is required.");
+        const safeId = `ASSET-${Date.now()}`;
+        await setDoc(doc(db, "hq_dynamic_data", safeId), { id: safeId, windowId: windowConfig.id, name: form.name.toUpperCase(), code: (form.code || '').toUpperCase(), vendor: form.vendor || '', multiplier: parseFloat(form.multiplier) || 1.0, textureUrl: form.textureUrl || '', legacyErpId: 'PENDING' });
+        setNewAssetForms({ ...newAssetForms, [windowConfig.id]: {} }); setActiveDictForms({ ...activeDictForms, [windowConfig.id]: false });
+    };
+    
+    const handleRemoveDynamicAsset = async (assetId) => {
+        if(!window.confirm("Delete this asset?")) return;
+        await deleteDoc(doc(db, "hq_dynamic_data", assetId));
+    };
+    
+    const handleDynamicAssetTextureUpload = async (windowId, file) => {
+        if (!file) return;
+        const storageRef = ref(storage, `system_textures/TEX_${Date.now()}_${file.name}`);
+        const uploadTask = uploadBytesResumable(storageRef, file);
+        uploadTask.on("state_changed", (snap) => setAssetUploadProgress({ ...assetUploadProgress, [windowId]: Math.round((snap.bytesTransferred / snap.totalBytes) * 100) }), (err) => console.error(err),
+            async () => { const url = await getDownloadURL(uploadTask.snapshot.ref); setNewAssetForms(prev => ({ ...prev, [windowId]: { ...(prev[windowId]||{}), textureUrl: url } })); setAssetUploadProgress({ ...assetUploadProgress, [windowId]: 0 }); }
+        );
+    };
+
+    const handleToggleCpqRouting = async (item, isChecked) => {
+        const current = globalLists.cpqRoutingTypes || [];
+        const updated = isChecked ? [...current, item] : current.filter(i => i !== item);
+        await setDoc(doc(db, "system", "master_lists"), { ...globalLists, cpqRoutingTypes: updated });
+    };
+
     // Styling constants
     const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)' };
     const fieldStyle = { width: '100%', padding: '10px', border: `1px solid ${theme.line}`, fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' };
+    const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
@@ -478,6 +771,404 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
                 </div>
             </div>
+
+            {/* --- SYSTEM DATA & DICTIONARIES MOVED FROM LIBRARY TAB --- */}
+            <div style={{ marginTop: '50px' }}>
+                <button 
+                    onClick={() => setShowAdminDashboard(!showAdminDashboard)} 
+                    style={{ width: '100%', padding: '20px 24px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}
+                >
+                    {showAdminDashboard ? 'Hide System Data & Master Dictionaries' : 'Expand System Data & Master Dictionaries'}
+                </button>
+
+                {showAdminDashboard && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', marginTop: '30px' }}>
+                        
+                        <div style={{ padding: '24px', background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', alignItems: 'center', gap: '24px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                            <strong style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink }}>Admin Brand Master Switch:</strong>
+                            <div style={{ display: 'flex', gap: '20px' }}>
+                                {AVAILABLE_BRANDS.map(b => (
+                                    <label key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: adminBrandFilter === b.id ? theme.ink : theme.inkSoft }}>
+                                        <input type="radio" checked={adminBrandFilter === b.id} onChange={() => setAdminBrandFilter(b.id)} style={{ cursor: 'pointer' }} />
+                                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500 }}>{b.name}</span>
+                                    </label>
+                                ))}
+                            </div>
+                            <button onClick={() => setShowWindowManager(true)} style={{ marginLeft: 'auto', padding: '12px 24px', background: theme.paper2, color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Manage Brand Windows</button>
+                        </div>
+                        
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
+                            
+                            {windowConfig.system.inHouseFinishes?.includes(adminBrandFilter) && (
+                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                    <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
+                                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>In-House Master Finishes</span>
+                                        <div style={{ display: 'flex', gap: '12px' }}>
+                                            <button onClick={handleSyncFloorRecipes} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Sync Floor Recipes</button>
+                                            <button onClick={() => { setShowFinishForm(!showFinishForm); setEditingGlobalFinish(null); setNewFinishConfig({name: '', code: '', type: '', textureUrl: '', clientMapping: []}); }} style={{ background: theme.ink, color: '#fff', border: 'none', padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showFinishForm && !editingGlobalFinish ? 'Close' : 'Add Finish'}</button>
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                        {showFinishForm && (
+                                            <div style={{ padding: '30px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px', marginBottom: '10px' }}>
+                                                    {editingGlobalFinish ? `Editing: ${newFinishConfig.name}` : 'New In-House Finish'}
+                                                </div>
+                                                <div><label style={labelStyle}>Finish Name</label><input value={newFinishConfig.name} onChange={(e) => setNewFinishConfig({...newFinishConfig, name: e.target.value})} placeholder="e.g. Matte Brass" style={fieldStyle} /></div>
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                                    <div><label style={labelStyle}>Code</label><input value={newFinishConfig.code} onChange={(e) => setNewFinishConfig({...newFinishConfig, code: e.target.value})} placeholder="MB" style={fieldStyle} /></div>
+                                                    <div><label style={labelStyle}>Category / Type</label><input value={newFinishConfig.type} onChange={(e) => setNewFinishConfig({...newFinishConfig, type: e.target.value})} placeholder="e.g. METAL, WOOD" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                                </div>
+                                                <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>
+                                                    <label style={labelStyle}>Seamless Texture Map (JPG/PNG)</label>
+                                                    {newFinishConfig.textureUrl && <div style={{ color: theme.inkSoft, fontSize: '0.85rem', marginBottom: '8px' }}>Asset Ready</div>}
+                                                    <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', width: '100%', cursor: 'pointer' }} />
+                                                    {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
+                                                </div>
+
+                                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px', marginTop: '10px' }}>
+                                                    <label style={labelStyle}>Client-Specific Finish Names (CPQ Mapping)</label>
+                                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                                                        <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={fieldStyle}>
+                                                            <option value="">Select Customer...</option>
+                                                            {liveCustomers.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                                                        </select>
+                                                        <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={fieldStyle} />
+                                                        <button onClick={() => {
+                                                            if(!newFinishClientMapping.customerId || !newFinishClientMapping.clientFinishName) return alert("Select customer and enter finish name.");
+                                                            setNewFinishConfig(prev => ({...prev, clientMapping: [...(prev.clientMapping || []), newFinishClientMapping]}));
+                                                            setNewFinishClientMapping({customerId: '', clientFinishName: ''});
+                                                        }} style={{ padding: '0 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Map</button>
+                                                    </div>
+                                                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                        {(newFinishConfig.clientMapping || []).map((mapping, idx) => (
+                                                            <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: theme.paper2, padding: '10px 16px', border: `1px solid ${theme.line}`, fontSize: '0.9rem' }}>
+                                                                <span><strong style={{ color: theme.ink }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
+                                                                <span style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                <button onClick={handleAddGlobalFinish} style={{ padding: '16px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                    {editingGlobalFinish ? 'Save Changes' : 'Save New Finish'}
+                                                </button>
+                                            </div>
+                                        )}
+                                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                            {globalFinishes.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No finishes added yet.</span>}
+                                            {globalFinishes.map(finish => {
+                                                const hasRecipe = activeRecipes.includes(finish.code) || activeRecipes.includes(finish.name);
+                                                return (
+                                                    <div key={finish.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.paper, padding: '20px', border: `1px solid ${theme.line}`, borderLeft: `2px solid ${theme.brass}` }}>
+                                                        <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                                                            <div style={{ width: '48px', height: '48px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : theme.paper2, borderRadius: '50%', border: `1px solid ${theme.line}` }} />
+                                                            <div>
+                                                                <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.name} {finish.code && `(${finish.code})`}</div>
+                                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Status: {hasRecipe ? 'Production Ready' : 'Working / R&D'}</div>
+                                                                {finish.clientMapping && finish.clientMapping.length > 0 && (
+                                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink, marginTop: '4px' }}>{finish.clientMapping.length} Client Map(s) Active</div>
+                                                                )}
+                                                                <div style={{ marginTop: '10px' }}>
+                                                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '2px', display: 'inline-block' }}>
+                                                                        {inlineTextureProgress[finish.id] > 0 ? `Uploading ${inlineTextureProgress[finish.id]}%` : (finish.textureUrl ? 'Replace Texture Map' : 'Upload Texture Map')}
+                                                                        <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleUpdateExistingFinishTexture(finish.id, e.target.files[0])} />
+                                                                    </label>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <div style={{ display: 'flex', gap: '12px' }}>
+                                                            <button onClick={() => handleEditGlobalFinish(finish)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1rem', cursor: 'pointer' }} title="Edit Finish">Edit</button>
+                                                            <button onClick={() => handleRemoveFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }} title="Delete Finish">Del</button>
+                                                        </div>
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Master Collections</span>
+                                    <button onClick={() => setShowCollectionForm(!showCollectionForm)} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showCollectionForm ? 'Close' : 'Add Collection'}</button>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                    {showCollectionForm && (
+                                        <div style={{ padding: '30px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                            <div>
+                                                <label style={labelStyle}>Collection Name</label>
+                                                <input value={newCollection.name} onChange={(e) => setNewCollection({...newCollection, name: e.target.value})} placeholder="e.g. Modern Industrial" style={fieldStyle} />
+                                            </div>
+                                            
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '16px', maxHeight: '250px', overflowY: 'auto' }}>
+                                                   <label style={labelStyle}>Restrict to Customers (Optional)</label>
+                                                    {liveCustomers.length === 0 && <span style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No customers in database.</span>}
+                                                    {liveCustomers.map(c => (
+                                                        <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', marginBottom: '8px', cursor: 'pointer', color: theme.ink }}>
+                                                            <input type="checkbox" checked={newCollection.allowedCustomers.includes(c.name)} onChange={() => toggleCollectionCustomer(c.name)} /> {c.name}
+                                                        </label>
+                                                    ))}
+                                                </div>
+
+                                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '16px', maxHeight: '250px', overflowY: 'auto' }}>
+                                                    <label style={labelStyle}>Allowed Finishes (Optional)</label>
+                                                    
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, background: theme.paper2, padding: '6px', marginBottom: '10px' }}>In-House Finishes</div>
+                                                    {globalFinishes.length === 0 && <span style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic', display: 'block', padding: '5px' }}>No in-house finishes.</span>}
+                                                    {globalFinishes.map(f => (
+                                                        <label key={`inhouse-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', marginBottom: '8px', cursor: 'pointer', color: theme.ink }}>
+                                                            <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name} {f.code && `(${f.code})`}
+                                                        </label>
+                                                    ))}
+
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, background: theme.paper2, padding: '6px', marginTop: '20px', marginBottom: '10px' }}>Outsourced Finishes</div>
+                                                    {outsourceFinishes.length === 0 && <span style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic', display: 'block', padding: '5px' }}>No outsourced finishes.</span>}
+                                                    {outsourceFinishes.map(f => (
+                                                        <label key={`outsource-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', marginBottom: '8px', cursor: 'pointer', color: theme.ink }}>
+                                                            <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name}
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <button onClick={handleAddCollection} style={{ padding: '16px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Collection</button>
+                                        </div>
+                                    )}
+                                    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                        {collectionsData.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No collections mapped yet.</span>}
+                                        {collectionsData.map(col => (
+                                            <div key={col.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: theme.paper, padding: '20px', border: `1px solid ${theme.line}`, borderLeft: `2px solid ${theme.brass}` }}>
+                                                <div>
+                                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: theme.ink }}>{col.name}</div>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '8px' }}>Customers: <span style={{color: theme.ink}}>{col.allowedCustomers?.length > 0 ? col.allowedCustomers.join(', ') : 'All (Unrestricted)'}</span></div>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '4px' }}>Finishes: <span style={{color: theme.ink}}>{col.allowedFinishes?.length > 0 ? col.allowedFinishes.join(', ') : 'All (Unrestricted)'}</span></div>
+                                                </div>
+                                                <button onClick={() => handleDeleteCollection(col.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {windowConfig.system.outsourceFinishes?.includes(adminBrandFilter) && (
+                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                    <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
+                                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Outsourced Master Finishes</span>
+                                        <button onClick={() => { setShowOutsourceFinishForm(!showOutsourceFinishForm); setEditingOutsourceFinish(null); setNewOutsourceFinishConfig({name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: []}); }} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showOutsourceFinishForm && !editingOutsourceFinish ? 'Close' : 'Add Finish'}</button>
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                        {showOutsourceFinishForm && (
+                                            <div style={{ padding: '30px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px', marginBottom: '10px' }}>
+                                                    {editingOutsourceFinish ? `Editing: ${newOutsourceFinishConfig.name}` : 'New Outsourced Finish'}
+                                                </div>
+                                                <div><label style={labelStyle}>Finish Name</label><input value={newOutsourceFinishConfig.name} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, name: e.target.value})} style={fieldStyle} /></div>
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                                    <div><label style={labelStyle}>Approved Vendor</label><select value={newOutsourceFinishConfig.vendor} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, vendor: e.target.value})} style={fieldStyle}><option value="">Select...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
+                                                    <div><label style={labelStyle}>Price Multiplier (x)</label><input type="number" step="0.1" value={newOutsourceFinishConfig.multiplier} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, multiplier: e.target.value})} style={fieldStyle} /></div>
+                                                </div>
+                                                
+                                                <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>
+                                                    <label style={labelStyle}>Seamless Texture Map (JPG/PNG)</label>
+                                                    {newOutsourceFinishConfig.textureUrl && <div style={{ color: theme.inkSoft, fontSize: '0.85rem', marginBottom: '8px' }}>Asset Ready</div>}
+                                                    <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0], true)} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', width: '100%', cursor: 'pointer' }} />
+                                                    {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
+                                                </div>
+
+                                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px', marginTop: '10px' }}>
+                                                    <label style={labelStyle}>Client-Specific Finish Names (CPQ Mapping)</label>
+                                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                                                        <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={fieldStyle}>
+                                                            <option value="">Select Customer...</option>
+                                                            {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                                        </select>
+                                                        <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={fieldStyle} />
+                                                        <button onClick={() => {
+                                                            if(!newFinishClientMapping.customerId || !newFinishClientMapping.clientFinishName) return alert("Select customer and enter finish name.");
+                                                            setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: [...(prev.clientMapping || []), newFinishClientMapping]}));
+                                                            setNewFinishClientMapping({customerId: '', clientFinishName: ''});
+                                                        }} style={{ padding: '0 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Map</button>
+                                                    </div>
+                                                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                        {(newOutsourceFinishConfig.clientMapping || []).map((mapping, idx) => (
+                                                            <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: theme.paper2, padding: '10px 16px', border: `1px solid ${theme.line}`, fontSize: '0.9rem' }}>
+                                                                <span><strong style={{ color: theme.ink }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
+                                                                <span style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                
+                                                <button onClick={handleAddOutsourceFinish} style={{ padding: '16px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                    {editingOutsourceFinish ? 'Save Changes' : 'Save Outsourced Finish'}
+                                                </button>
+                                            </div>
+                                        )}
+                                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                            {outsourceFinishes.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No outsourced finishes added yet.</span>}
+                                            {outsourceFinishes.map(finish => (
+                                                <div key={finish.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.paper, padding: '20px', border: `1px solid ${theme.line}`, borderLeft: `2px solid ${theme.brass}` }}>
+                                                    <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                                                        <div style={{ width: '48px', height: '48px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : theme.paper2, borderRadius: '50%', border: `1px solid ${theme.line}` }} />
+                                                        <div>
+                                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.name}</div>
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Vendor: <span style={{color: theme.ink}}>{finish.vendor || 'Unassigned'}</span> | Mult: <span style={{color: theme.ink}}>x{finish.multiplier}</span></div>
+                                                            {finish.clientMapping && finish.clientMapping.length > 0 && (
+                                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink, marginTop: '4px' }}>{finish.clientMapping.length} Client Map(s) Active</div>
+                                                            )}
+                                                            <div style={{ marginTop: '10px' }}>
+                                                                <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '2px', display: 'inline-block' }}>
+                                                                    {inlineTextureProgress[finish.id] > 0 ? `Uploading ${inlineTextureProgress[finish.id]}%` : (finish.textureUrl ? 'Replace Texture Map' : 'Upload Texture Map')}
+                                                                    <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleUpdateExistingFinishTexture(finish.id, e.target.files[0], true)} />
+                                                                </label>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                                        <button onClick={() => handleEditOutsourceFinish(finish)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1rem', cursor: 'pointer' }} title="Edit Finish">Edit</button>
+                                                        <button onClick={() => handleRemoveOutsourceFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }} title="Delete Finish">Del</button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {windowConfig.custom.filter(w => (w.brands || []).includes(adminBrandFilter)).map(w => {
+                                const myData = dynamicAssets.filter(d => d.windowId === w.id);
+                                const myForm = newAssetForms[w.id] || {};
+                                const isFormOpen = activeDictForms[w.id];
+
+                                return (
+                                    <div key={w.id} style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                        <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
+                                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>CPQ Asset Dictionary: {w.name}</span>
+                                            <button onClick={() => setActiveDictForms(prev => ({ ...prev, [w.id]: !isFormOpen }))} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{isFormOpen ? 'Close' : 'Add Item'}</button>
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                            {isFormOpen && (
+                                                <div style={{ padding: '30px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                                    <div><label style={labelStyle}>Item Name</label><input value={myForm.name || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, name: e.target.value}})} style={fieldStyle} /></div>
+                                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                                        {w.hasCode && <div><label style={labelStyle}>Code</label><input value={myForm.code || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, code: e.target.value}})} style={fieldStyle} /></div>}
+                                                        {w.hasMultiplier && <div><label style={labelStyle}>Mult (x)</label><input type="number" step="0.1" value={myForm.multiplier || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, multiplier: e.target.value}})} style={fieldStyle} /></div>}
+                                                    </div>
+                                                    {w.hasVendor && <div><label style={labelStyle}>Vendor</label><select value={myForm.vendor || ''} onChange={(e) => setNewAssetForms({...newAssetForms, [w.id]: {...myForm, vendor: e.target.value}})} style={fieldStyle}><option value="">Select...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>}
+                                                    {w.hasImage && (
+                                                        <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>
+                                                            <label style={labelStyle}>Asset (Image/Texture)</label>
+                                                            {myForm.textureUrl && <span style={{ color: theme.inkSoft, fontSize: '0.85rem', marginBottom: '8px', display: 'block' }}>Asset Ready</span>}
+                                                            <input type="file" accept="image/*" onChange={e => handleDynamicAssetTextureUpload(w.id, e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', width: '100%' }} />
+                                                        </div>
+                                                    )}
+                                                    <button onClick={() => handleAddDynamicAsset(w)} style={{ padding: '16px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Item</button>
+                                                </div>
+                                            )}
+                                            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                                {myData.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No items added yet.</span>}
+                                                {myData.map(item => (
+                                                    <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.paper, padding: '20px', border: `1px solid ${theme.line}`, borderLeft: `2px solid ${theme.brass}` }}>
+                                                        <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                                                            {w.hasImage && <div style={{ width: '40px', height: '40px', background: item.textureUrl ? `url(${item.textureUrl}) center/cover` : theme.paper2, borderRadius: '50%', border: `1px solid ${theme.line}` }} />}
+                                                            <div>
+                                                                <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{item.name} {item.code && <span style={{ color: theme.inkSoft }}>({item.code})</span>}</div>
+                                                                {w.hasVendor && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Vendor: <span style={{ color: theme.ink }}>{item.vendor || 'N/A'}</span></div>}
+                                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '4px' }}>ERP ID: <span style={{ color: theme.ink }}>{item.legacyErpId || 'Pending'}</span> {w.hasMultiplier && `| Mult: x${item.multiplier}`}</div>
+                                                            </div>
+                                                        </div>
+                                                        <button onClick={() => handleRemoveDynamicAsset(item.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+
+                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Static Part Attributes</span>
+                                    <button onClick={() => setShowSchemaForm(!showSchemaForm)} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                        {showSchemaForm ? 'Close' : 'Add Attribute'}
+                                    </button>
+                                </div>
+                                
+                                <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                    {showSchemaForm && (
+                                        <div style={{ padding: '30px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                            <div><label style={labelStyle}>New Attribute Label</label><input value={newFieldConfig.label} onChange={(e) => setNewFieldConfig({...newFieldConfig, label: e.target.value})} placeholder="e.g. Weight Class" style={fieldStyle} /></div>
+                                            <div><label style={labelStyle}>Data Type</label><select value={newFieldConfig.type} onChange={(e) => setNewFieldConfig({...newFieldConfig, type: e.target.value})} style={fieldStyle}><option value="text">Text (String)</option><option value="number">Number</option><option value="dropdown">Dropdown</option><option value="file">File Upload (PNG, PDF)</option></select></div>
+                                            {newFieldConfig.type === 'dropdown' && <div><label style={labelStyle}>Options (Comma Separated)</label><input value={newFieldConfig.options} onChange={(e) => setNewFieldConfig({...newFieldConfig, options: e.target.value})} placeholder="A, B, C" style={fieldStyle} /></div>}
+                                            <button onClick={handleAddSchemaField} style={{ padding: '16px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Attribute</button>
+                                        </div>
+                                    )}
+                                    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                        {customSchema.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No custom attributes mapped.</span>}
+                                        {customSchema.map(field => (
+                                            <div key={field.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.paper, padding: '20px', border: `1px solid ${theme.line}` }}>
+                                                <div>
+                                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{field.label}</div>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Type: <span style={{ color: theme.ink }}>{field.type}</span> | ID: <span style={{ color: theme.ink }}>{field.key}</span></div>
+                                                </div>
+                                                <button onClick={() => handleRemoveSchemaField(field.key)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Simple Dropdown Lists</span>
+                                    <button onClick={handleAddNewListCategory} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                        Add Category
+                                    </button>
+                                </div>
+                                
+                                <div style={{ padding: '30px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '30px', background: '#fff', maxHeight: '600px', overflowY: 'auto' }}>
+                                    {Object.keys(globalLists).filter(k => windowConfig.system[k]?.includes(adminBrandFilter) && k !== 'cpqRoutingTypes' && k !== 'collections').map(listKey => {
+                                        return (
+                                            <div key={listKey} style={{ background: theme.paper, border: `1px solid ${theme.line}`, padding: '24px', display: 'flex', flexDirection: 'column' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: `1px solid ${theme.line}`, paddingBottom: '12px', marginBottom: '20px' }}>
+                                                    <h4 style={{ margin: 0, fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: theme.ink }}>{LIST_LABELS[listKey] || listKey.replace(/([A-Z])/g, ' $1').trim()}</h4>
+                                                    <button onClick={() => handleDeleteListCategory(listKey)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.1rem', cursor: 'pointer' }} title="Delete Category">×</button>
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+                                                    <input value={newListItems[listKey] || ''} onChange={(e) => setNewListItems({...newListItems, [listKey]: e.target.value})} style={{ flex: 1, padding: '10px', border: `1px solid ${theme.line}`, outline: 'none', fontFamily: 'var(--sans)' }} placeholder="Add item..." />
+                                                    <button onClick={() => handleAddListItem(listKey)} style={{ background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', padding: '0 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
+                                                </div>
+                                                <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                    {(globalLists[listKey] || []).length === 0 && <div style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>List is empty.</div>}
+                                                    {(globalLists[listKey] || []).map(item => (
+                                                        <div key={item} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem', background: '#fff', padding: '12px 16px', border: `1px solid ${theme.line}`, color: theme.ink }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                                {listKey === 'assemblyTypes' && (
+                                                                    <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: theme.inkSoft }}>
+                                                                        <input type="checkbox" checked={globalLists.cpqRoutingTypes?.includes(item) || false} onChange={(e) => handleToggleCpqRouting(item, e.target.checked)} />
+                                                                        CPQ Enabled
+                                                                    </label>
+                                                                )}
+                                                                <span>{item}</span>
+                                                            </div>
+                                                            <span onClick={() => handleRemoveListItem(listKey, item)} style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem', opacity: 0.7 }}>×</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                )}
+            </div>
+
         </div>
     );
 };
