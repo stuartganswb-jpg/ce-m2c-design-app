@@ -421,6 +421,8 @@ const handleSyncAddresses = async () => {
 
       try {
           const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
+          
+          // Updated query with custitem8249 for Bracket Projection
           const q = `
               SELECT 
                   item.id, 
@@ -429,6 +431,7 @@ const handleSyncAddresses = async () => {
                   BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
                   BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
                   BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
+                  BUILTIN.DF(item.custitem8249) AS bracket_projection,
                   BUILTIN.DF(item.stockunit) AS uom,
                   item.custitem9 AS baseprice,
                   Vendor.companyname AS vendor_name,
@@ -488,6 +491,27 @@ const handleSyncAddresses = async () => {
               
               const hasVendor = item.vendor_name && item.vendor_name.trim() !== '';
 
+              // --- 🚀 NEW AUTO-FORMATTING LOGIC ---
+              
+              // 1. Plating logic: If item ID or name has EP followed by 2 digits
+              let parsedOutsourceAction = '';
+              if (/EP\d{2}/i.test(item.itemid) || /EP\d{2}/i.test(item.displayname)) {
+                  parsedOutsourceAction = 'PLATING';
+              }
+
+              // 2. Collection logic: If item starts with H1
+              let parsedCollection = item.collection || '';
+              let collectionsArray = [];
+              if (/^H1/i.test(item.itemid) || /^H1/i.test(item.displayname)) {
+                  parsedCollection = 'Fabricut H1';
+                  collectionsArray = ['FABRICUT H1'];
+              } else if (item.collection) {
+                  collectionsArray = [item.collection.toUpperCase()];
+              }
+
+              // 3. Bracket Projection Extraction
+              let parsedProjection = item.bracket_projection || '';
+
               const payload = {
                   id: targetDocId,
                   itemId: targetDocId,
@@ -508,13 +532,16 @@ const handleSyncAddresses = async () => {
                       productType: item.product_type || 'Uncategorized',
                       uom: item.uom || 'EA',
                       binNumber: 'Pending Map',
-                      partHandling: autoPartHandling, 
+                      partHandling: autoPartHandling,
+                      outsourceAction: parsedOutsourceAction, // Injected
+                      collections: collectionsArray, // Injected
                       parametric: { isCutToSize: autoIsCutToSize }, 
                       vendorName: item.vendor_name || '', 
                       vendorId: item.vendor_part_number || '', 
                       customData: {
-                          collection: item.collection || '',
-                          watchlist: item.watchlist || ''
+                          collection: parsedCollection, // Legacy reference mapped
+                          watchlist: item.watchlist || '',
+                          projection: parsedProjection // Injected
                       },
                       dynamicDicts: {}
                   };
@@ -528,6 +555,8 @@ const handleSyncAddresses = async () => {
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
                       partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
+                      outsourceAction: parsedOutsourceAction || existingMatch.manufacturingSpecs?.outsourceAction || '', // Injected
+                      collections: collectionsArray.length > 0 ? collectionsArray : (existingMatch.manufacturingSpecs?.collections || []), // Injected
                       vendorName: item.vendor_name || existingMatch.manufacturingSpecs?.vendorName || '',
                       vendorId: item.vendor_part_number || existingMatch.manufacturingSpecs?.vendorId || '',
                       parametric: {
@@ -538,8 +567,9 @@ const handleSyncAddresses = async () => {
                       },
                       customData: {
                           ...(existingMatch.manufacturingSpecs?.customData || {}),
-                          collection: item.collection || existingMatch.manufacturingSpecs?.customData?.collection || '',
-                          watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || ''
+                          collection: parsedCollection || existingMatch.manufacturingSpecs?.customData?.collection || '',
+                          watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || '',
+                          projection: parsedProjection || existingMatch.manufacturingSpecs?.customData?.projection || '' // Injected
                       }
                   };
                   payload.updatedAt = new Date().toISOString();
