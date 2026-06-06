@@ -8,6 +8,16 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   const [showQuotePanel, setShowQuotePanel] = useState(false);
   const [isPushingToCPQ, setIsPushingToCPQ] = useState(false);
 
+  // --- NEW: Global Job Context State ---
+  const [activeQuoteId, setActiveQuoteId] = useState(null);
+  const [liveCustomers, setLiveCustomers] = useState([]);
+  const [globalLists, setGlobalLists] = useState({});
+  const [jobData, setJobData] = useState({ 
+      customerId: '', jobName: '', sidemark: '', 
+      shippingMethod: 'SAVED', shippingAddressId: '', 
+      customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' }
+  });
+
   const [activeBg, setActiveBg] = useState(null); 
   const [visualTool, setVisualTool] = useState("pan"); 
   const fileInputRef = useRef(null);
@@ -40,7 +50,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   
   const [cpqFlows, setCpqFlows] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
-  const [globalLists, setGlobalLists] = useState({});
 
   const [quoteFlowId, setQuoteFlowId] = useState("");
   const [quoteSelections, setQuoteSelections] = useState({ collection: '' });
@@ -77,13 +86,52 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
     });
     const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { if (docSnap.exists()) setGlobalLists(docSnap.data()); });
+    
+    const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
+        const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER');
+        setLiveCustomers(customers);
+    });
 
-    return () => { unsubParts(); unsubFinishes(); unsubOutsource(); unsubCollections(); unsubFlows(); unsubDynamic(); unsubLists(); };
+    return () => { unsubParts(); unsubFinishes(); unsubOutsource(); unsubCollections(); unsubFlows(); unsubDynamic(); unsubLists(); unsubCrm(); };
   }, [activeBrand]);
+
+  const combinedCustomers = useMemo(() => {
+      const merged = [...liveCustomers];
+      (globalLists.customers || []).forEach(cName => {
+          if (!merged.some(c => c.name === cName || c.id === cName)) {
+              merged.push({ id: cName, name: cName });
+          }
+      });
+      return merged;
+  }, [liveCustomers, globalLists.customers]);
 
   const activeFlow = useMemo(() => {
       return cpqFlows.find(f => f.id === quoteFlowId);
   }, [quoteFlowId, cpqFlows]);
+
+  const handleInitializeQuote = async () => {
+      if (!jobData.customerId || !jobData.sidemark) return alert("Please select a Customer and enter a Sidemark to begin.");
+      
+      const newQuoteId = `QUOTE-${Date.now()}`;
+      const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
+
+      const payload = {
+          jobId: newQuoteId, brandId: activeBrand, status: 'BUILDING_CART',
+          customer: { id: jobData.customerId, name: customerName },
+          jobName: jobData.jobName, sidemark: jobData.sidemark,
+          shippingMethod: jobData.shippingMethod, shippingAddressId: jobData.shippingAddressId,
+          customShippingAddress: jobData.customShippingAddress,
+          dateSaved: new Date().toISOString().split('T')[0], author: currentUser, createdAt: serverTimestamp()
+      };
+
+      try {
+          await setDoc(doc(db, "jobs", newQuoteId), payload);
+          setActiveQuoteId(newQuoteId);
+      } catch (e) {
+          console.error(e);
+          alert("Failed to initialize global quote.");
+      }
+  };
 
   const getStepCategory = (step) => {
       if (!step) return '';
@@ -127,10 +175,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
       return generic || finishSteps[0];
   };
 
-  const poleStep = getStepForCategory('POLE');
   const bracketStep = getStepForCategory('BRACKET');
-  const finialStep = getStepForCategory('FINIAL');
-  const ringStep = getStepForCategory('RING');
 
   useEffect(() => {
       if (!activeFlow?.linkedAssemblyId) { setFlowPins([]); return; }
@@ -268,8 +313,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   
   const totalPoleRawInches = rawLeft + rawCenter + rawRight;
   
-  // MATH LOGIC FIX
-  const poleO2O = totalPoleRawInches;
+  // EXACT MATCH MATH LOGIC
+  const exactOrderLength = engData.shape === 'MITERED' ? (engData.w1 + engData.w2 + engData.w3) : engData.w2;
+  const poleO2O = exactOrderLength;
   const totalSystemO2O = poleO2O + engData.bracketW;
 
   const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
@@ -579,7 +625,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           linkedAssemblyId: activeFlow?.linkedAssemblyId || null,
           linkedCpqFlowId: activeFlow?.id || null, 
           flowId: activeFlow?.id || null,          
-          cpqFlowId: activeFlow?.id || null,       
+          cpqFlowId: activeFlow?.id || null, 
+          masterQuoteId: activeQuoteId,      
           specs: {
               collection: quoteSelections.collection,
               bracketId: engData.bracketId,
@@ -607,7 +654,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
           author: currentUser, createdAt: serverTimestamp() 
       };
       
-      try { await setDoc(doc(db, "cpq_drafts", draftId), payload); alert("✅ Configuration pushed to CPQ Cart!"); setShowQuotePanel(false); } 
+      try { await setDoc(doc(db, "cpq_drafts", draftId), payload); alert("✅ Draft sent! Switch to the CPQ Tab and hit 'Resume Draft' to price this item."); setShowQuotePanel(false); } 
       catch (e) { console.error(e); alert("Error pushing to CPQ."); } 
       finally { setIsPushingToCPQ(false); }
   };
@@ -618,21 +665,36 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh', overflow: 'hidden' }}>
       
-      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
-        <div>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Drapery Hardware Engine</span>
-            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Client Vision System</h2>
-        </div>
-        <div style={{ display: 'flex', gap: '16px', background: 'var(--paper-2)', padding: '8px', border: '1px solid var(--line)', borderRadius: '2px' }}>
-          <button onClick={() => { setViewMode('VISUAL'); setShowQuotePanel(false); }} style={{ padding: '10px 20px', background: viewMode === 'VISUAL' && !showQuotePanel ? 'var(--ink)' : 'transparent', color: viewMode === 'VISUAL' && !showQuotePanel ? '#fff' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}>Visual Overlay</button>
-          <button onClick={() => { setViewMode('ENGINEERING'); setShowQuotePanel(false); }} style={{ padding: '10px 20px', background: viewMode === 'ENGINEERING' && !showQuotePanel ? 'var(--ink)' : 'transparent', color: viewMode === 'ENGINEERING' && !showQuotePanel ? '#fff' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}>Top-Down BOM</button>
-        </div>
-        <button onClick={() => setShowQuotePanel(!showQuotePanel)} style={{ padding: '16px 24px', background: showQuotePanel ? 'var(--ink)' : 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
-            {showQuotePanel ? "Back to Drawing" : "Configure & Quote"}
-        </button>
+      {/* 1. NEW GLOBAL JOB CONTEXT PANEL */}
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>1. Global Job Context</h3>
+              {activeQuoteId && <span style={{ background: 'var(--paper-2)', padding: '6px 12px', border: '1px solid var(--brass)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Active Quote: {activeQuoteId}</span>}
+          </div>
+          
+          <div style={{ display: 'flex', gap: '16px', opacity: activeQuoteId ? 0.6 : 1, pointerEvents: activeQuoteId ? 'none' : 'auto' }}>
+              <div style={{ flex: 1.5 }}>
+                  <label style={labelStyle}>* Customer</label>
+                  <select value={jobData.customerId} onChange={e => setJobData({...jobData, customerId: e.target.value})} style={{ width: '100%', padding: '12px', fontSize: '0.95rem', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: 'var(--paper)' }}>
+                      <option value="">-- Choose Customer --</option>
+                      {combinedCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
+                  </select>
+              </div>
+              <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>* Sidemark</label>
+                  <input type="text" placeholder="e.g. Master Bath" value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})} style={fieldStyle} />
+              </div>
+              <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Job Name (Optional)</label>
+                  <input type="text" placeholder="e.g. Smith Reno" value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={fieldStyle} />
+              </div>
+          </div>
+          {!activeQuoteId && (
+              <button onClick={handleInitializeQuote} style={{ width: '200px', padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '8px' }}>Initialize Quote ID</button>
+          )}
       </div>
 
-      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1 }}>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1, opacity: activeQuoteId ? 1 : 0.4, pointerEvents: activeQuoteId ? 'auto' : 'none' }}>
           
           {!showQuotePanel && (
             <div style={{ width: viewMode === 'VISUAL' ? '340px' : '480px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -816,8 +878,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
               ) : (
                   <div style={{ padding: '16px 20px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Job:</label><input type="text" value={engData.jobName} onChange={e => setEngData({...engData, jobName: e.target.value})} style={{ width: '150px', padding: '8px', fontFamily: 'var(--sans)', fontSize: '0.9rem', border: '1px solid var(--line)', outline: 'none' }} /></div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Sidemark:</label><input type="text" value={engData.sidemark} onChange={e => setEngData({...engData, sidemark: e.target.value})} style={{ width: '150px', padding: '8px', fontFamily: 'var(--sans)', fontSize: '0.9rem', border: '1px solid var(--line)', outline: 'none' }} /></div>
+                        <button onClick={() => setShowQuotePanel(!showQuotePanel)} style={{ padding: '8px 16px', background: showQuotePanel ? 'var(--ink)' : 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
+                            {showQuotePanel ? "Back to Drawing" : "Configure & Quote"}
+                        </button>
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
                         <button onClick={() => setEngTool("pan")} style={{ padding: '8px 16px', background: engTool === "pan" ? 'var(--ink)' : '#fff', color: engTool === "pan" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Pan</button>

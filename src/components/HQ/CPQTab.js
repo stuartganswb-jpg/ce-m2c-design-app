@@ -209,6 +209,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
   const [activeAssembly, setActiveAssembly] = useState(null);
+  
+  // NEW: Store masterQuoteId to ensure we append to the right parent Job
+  const [activeMasterQuoteId, setActiveMasterQuoteId] = useState(null);
   const [activeDraftId, setActiveDraftId] = useState(null);
   const [activeDraftSvg, setActiveDraftSvg] = useState(null);
 
@@ -343,6 +346,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setActiveFlowId(targetFlow.id);
       setActiveDraftId(draft.id);
       
+      if (draft.masterQuoteId) {
+          setActiveMasterQuoteId(draft.masterQuoteId);
+      }
+
       if (draft.specs?.engineeringNotes?.svgString) {
           setActiveDraftSvg(draft.specs.engineeringNotes.svgString);
       } else {
@@ -619,6 +626,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const handleAddToCart = () => {
       const item = {
           id: Date.now().toString(),
+          masterQuoteId: activeMasterQuoteId,
           assemblyId: activeAssemblyId,
           assemblyName: activeAssembly?.itemName || activeFlow?.name || 'Configured Item',
           flowId: activeFlowId,
@@ -650,7 +658,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (!jobData.customerId || !jobData.sidemark) return alert("Please select a Customer and enter a Sidemark.");
       if (cart.length === 0) return alert("Your cart is empty. Please add an assembly first.");
 
-      const jobId = `QUOTE-${Date.now()}`;
+      // If a masterQuoteId exists in the cart, use it. Otherwise, fallback to a new ID.
+      const targetJobId = cart[0].masterQuoteId || activeMasterQuoteId || `QUOTE-${Date.now()}`;
       const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
       
       let grandTotal = 0;
@@ -682,7 +691,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       });
 
       const payload = {
-          jobId: jobId, brandId: activeBrand, status: 'CONFIGURED',
+          jobId: targetJobId, brandId: activeBrand, status: 'CONFIGURED',
           customer: { id: jobData.customerId, name: customerName },
           jobName: jobData.jobName, sidemark: jobData.sidemark,
           flowId: cart[0].flowId || null, 
@@ -705,12 +714,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       };
       
       try {
-          await setDoc(doc(db, "jobs", jobId), payload);
+          // Use merge: true so if the quote was initialized in Vision, we append the configuration to it.
+          await setDoc(doc(db, "jobs", targetJobId), payload, { merge: true });
           
           if (mergedDraftSvg) {
               await setDoc(doc(db, "crm_files", `DRAWING-${Date.now()}`), {
                   customerId: jobData.customerId,
-                  jobId: jobId,
+                  jobId: targetJobId,
                   sidemark: jobData.sidemark,
                   dateSaved: new Date().toISOString(),
                   type: 'VISION_DRAWING',
@@ -734,6 +744,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           localStorage.removeItem('hq_global_cart');
           setShowCheckoutModal(false);
           setJobData({ customerId: '', jobName: '', sidemark: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
+          setActiveMasterQuoteId(null);
 
       } catch (err) { 
           console.error(err); 
@@ -1022,21 +1033,26 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 Checkout ({cart.length} Items)
             </button>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume Draft</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_global_cart'); setAssemblyQty(1); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_global_cart'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', sidemark: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
         </div>
       </div>
 
-      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', gap: '20px', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', gap: '20px', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)', opacity: activeMasterQuoteId ? 0.6 : 1, pointerEvents: activeMasterQuoteId ? 'none' : 'auto' }}>
           <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>Active Customer:</div>
           <select 
               value={jobData.customerId} 
               onChange={e => setJobData({...jobData, customerId: e.target.value})} 
-              style={{ flex: 1, padding: '12px', fontSize: '0.95rem', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: 'var(--paper)' }}
+              style={{ flex: 1, padding: '12px', fontSize: '0.95rem', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: activeMasterQuoteId ? 'transparent' : 'var(--paper)', cursor: activeMasterQuoteId ? 'not-allowed' : 'pointer' }}
+              disabled={!!activeMasterQuoteId}
           >
               <option value="">-- Select Customer to Activate Live Client Pricing --</option>
               {combinedCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
           </select>
-          {!jobData.customerId && <span style={{ fontSize: '0.85rem', color: 'var(--brass)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>Base MSRP will be shown until customer is selected.</span>}
+          {activeMasterQuoteId ? (
+              <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>Locked by active Global Job: {activeMasterQuoteId}</span>
+          ) : (
+              !jobData.customerId && <span style={{ fontSize: '0.85rem', color: 'var(--brass)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>Base MSRP will be shown until customer is selected.</span>
+          )}
       </div>
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch' }}>
@@ -1111,7 +1127,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           )}
 
                           {(currentStep.calculatorTemplate || currentStep.type === 'DIMENSIONS' || currentStep.type === 'VISUAL_DIMENSIONS') && (
-                              <div style={{ padding: '20px', background: 'var(--paper-2)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', marginBottom: '20px', opacity: activeDraftSvg ? 0.5 : 1 }}>
+                              <div style={{ padding: '20px', background: activeDraftSvg ? '#eef0f2' : 'var(--paper-2)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', marginBottom: '20px', opacity: activeDraftSvg ? 0.7 : 1 }}>
                                   <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Dimensional Input</h4>
                                   {activeDraftSvg && <div style={{ fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--brass)', textTransform: 'uppercase', marginBottom: '12px' }}>Locked (Controlled by Vision Tool)</div>}
                                   
@@ -1124,7 +1140,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                                       value={dimensionInputs[currentStep.id]?.type || 'O2O'} 
                                                       onChange={(e) => handleDimensionChange(currentStep.id, 'type', e.target.value, currentStep.calculatorTemplate)}
                                                       disabled={!!activeDraftSvg}
-                                                      style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', cursor: activeDraftSvg ? 'not-allowed' : 'pointer' }}
+                                                      style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', cursor: activeDraftSvg ? 'not-allowed' : 'pointer', background: activeDraftSvg ? 'transparent' : '#fff' }}
                                                   >
                                                       <option value="O2O">A. Outside Edge to Outside Edge (O2O)</option>
                                                       <option value="C2C">B. Center to Center (C2C)</option>
@@ -1138,7 +1154,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                                   value={dimensionInputs[currentStep.id]?.length || ''} 
                                                   onChange={(e) => handleDimensionChange(currentStep.id, 'length', e.target.value, currentStep.calculatorTemplate)}
                                                   disabled={!!activeDraftSvg}
-                                                  style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', fontFamily: 'var(--sans)', cursor: activeDraftSvg ? 'not-allowed' : 'text' }}
+                                                  style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', fontFamily: 'var(--sans)', cursor: activeDraftSvg ? 'not-allowed' : 'text', background: activeDraftSvg ? 'transparent' : '#fff' }}
                                               />
                                           </div>
                                       </div>
@@ -1148,15 +1164,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                                           <div>
                                               <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Wall A (Left)</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallA || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallA', e.target.value, currentStep.calculatorTemplate)} disabled={!!activeDraftSvg} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', cursor: activeDraftSvg ? 'not-allowed' : 'text' }} />
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallA || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallA', e.target.value, currentStep.calculatorTemplate)} disabled={!!activeDraftSvg} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', cursor: activeDraftSvg ? 'not-allowed' : 'text', background: activeDraftSvg ? 'transparent' : '#fff' }} />
                                           </div>
                                           <div>
                                               <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Wall B (Center)</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallB || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallB', e.target.value, currentStep.calculatorTemplate)} disabled={!!activeDraftSvg} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', cursor: activeDraftSvg ? 'not-allowed' : 'text' }} />
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallB || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallB', e.target.value, currentStep.calculatorTemplate)} disabled={!!activeDraftSvg} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', cursor: activeDraftSvg ? 'not-allowed' : 'text', background: activeDraftSvg ? 'transparent' : '#fff' }} />
                                           </div>
                                           <div>
                                               <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Wall C (Right)</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallC || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallC', e.target.value, currentStep.calculatorTemplate)} disabled={!!activeDraftSvg} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', cursor: activeDraftSvg ? 'not-allowed' : 'text' }} />
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallC || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallC', e.target.value, currentStep.calculatorTemplate)} disabled={!!activeDraftSvg} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', cursor: activeDraftSvg ? 'not-allowed' : 'text', background: activeDraftSvg ? 'transparent' : '#fff' }} />
                                           </div>
                                       </div>
                                   )}
@@ -1404,7 +1420,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       <button onClick={() => {
                           setShowCartSuccessModal(false);
                           window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'VISION' }));
-                          alert("Please select the 'Vision System' or 'Draw' tab at the top of your screen to sketch the next item.");
                       }} style={{ padding: '16px', background: 'var(--ink)', border: 'none', color: '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
                           Draw Next Item in Vision Tool
                       </button>
@@ -1435,7 +1450,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
                     <div>
                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>* Verify Customer</label>
-                        <select value={jobData.customerId} onChange={e => setJobData({...jobData, customerId: e.target.value})} style={{ width: '100%', padding: '12px', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', background: '#fff', fontFamily: 'var(--sans)' }}>
+                        <select value={jobData.customerId} onChange={e => setJobData({...jobData, customerId: e.target.value})} disabled={!!activeMasterQuoteId} style={{ width: '100%', padding: '12px', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff', fontFamily: 'var(--sans)', cursor: activeMasterQuoteId ? 'not-allowed' : 'pointer' }}>
                             <option value="">-- Choose Customer --</option>
                             {combinedCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
                         </select>
@@ -1445,7 +1460,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                         <div style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)' }}>
                             <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Shipping Destination</h4>
                             
-                            <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
+                            <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', pointerEvents: activeMasterQuoteId ? 'none' : 'auto', opacity: activeMasterQuoteId ? 0.6 : 1 }}>
                                 <button 
                                     onClick={() => {
                                         const cust = combinedCustomers.find(c => c.id === jobData.customerId);
@@ -1474,7 +1489,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                         <select 
                                             value={jobData.shippingAddressId} 
                                             onChange={e => setJobData({...jobData, shippingAddressId: e.target.value})}
-                                            style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}
+                                            disabled={!!activeMasterQuoteId}
+                                            style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff', cursor: activeMasterQuoteId ? 'not-allowed' : 'pointer' }}
                                         >
                                             <option value="">-- Select Saved Address --</option>
                                             {combinedCustomers.find(c => c.id === jobData.customerId)?.shippingAddresses.map(addr => (
@@ -1486,25 +1502,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                     )}
                                 </div>
                             ) : (
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', opacity: activeMasterQuoteId ? 0.6 : 1 }}>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input placeholder="Attention / Contact Name" value={jobData.customShippingAddress.attention} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, attention: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
+                                        <input disabled={!!activeMasterQuoteId} placeholder="Attention / Contact Name" value={jobData.customShippingAddress.attention} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, attention: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
                                     </div>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input placeholder="Addressee / Company Name" value={jobData.customShippingAddress.addressee} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addressee: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
+                                        <input disabled={!!activeMasterQuoteId} placeholder="Addressee / Company Name" value={jobData.customShippingAddress.addressee} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addressee: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
                                     </div>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input placeholder="Street Address 1" value={jobData.customShippingAddress.addr1} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr1: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
+                                        <input disabled={!!activeMasterQuoteId} placeholder="Street Address 1" value={jobData.customShippingAddress.addr1} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr1: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
                                     </div>
                                     <div style={{ gridColumn: 'span 2' }}>
-                                        <input placeholder="Street Address 2 (Suite, Unit, etc.)" value={jobData.customShippingAddress.addr2} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr2: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
+                                        <input disabled={!!activeMasterQuoteId} placeholder="Street Address 2 (Suite, Unit, etc.)" value={jobData.customShippingAddress.addr2} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, addr2: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
                                     </div>
                                     <div>
-                                        <input placeholder="City" value={jobData.customShippingAddress.city} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, city: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
+                                        <input disabled={!!activeMasterQuoteId} placeholder="City" value={jobData.customShippingAddress.city} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, city: e.target.value}})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
                                     </div>
                                     <div style={{ display: 'flex', gap: '12px' }}>
-                                        <input placeholder="State" value={jobData.customShippingAddress.state} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, state: e.target.value}})} style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
-                                        <input placeholder="Zip" value={jobData.customShippingAddress.zip} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, zip: e.target.value}})} style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none' }} />
+                                        <input disabled={!!activeMasterQuoteId} placeholder="State" value={jobData.customShippingAddress.state} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, state: e.target.value}})} style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
+                                        <input disabled={!!activeMasterQuoteId} placeholder="Zip" value={jobData.customShippingAddress.zip} onChange={e => setJobData({...jobData, customShippingAddress: {...jobData.customShippingAddress, zip: e.target.value}})} style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff' }} />
                                     </div>
                                 </div>
                             )}
@@ -1513,11 +1529,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
                     <div>
                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Job Name (Optional)</label>
-                        <input type="text" placeholder="e.g. Master Suite Reno" value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box' }} />
+                        <input type="text" placeholder="e.g. Master Suite Reno" disabled={!!activeMasterQuoteId} value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: activeMasterQuoteId ? 'transparent' : '#fff', cursor: activeMasterQuoteId ? 'not-allowed' : 'text' }} />
                     </div>
                     <div>
                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>* Sidemark (Global for Order)</label>
-                        <input type="text" placeholder="e.g. Guest Bedroom 1" value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--brass)', outline: 'none', boxSizing: 'border-box' }} />
+                        <input type="text" placeholder="e.g. Guest Bedroom 1" disabled={!!activeMasterQuoteId} value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--brass)', outline: 'none', boxSizing: 'border-box', background: activeMasterQuoteId ? 'transparent' : '#fff', cursor: activeMasterQuoteId ? 'not-allowed' : 'text' }} />
                     </div>
 
                     <button onClick={handleFinalizeQuote} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
