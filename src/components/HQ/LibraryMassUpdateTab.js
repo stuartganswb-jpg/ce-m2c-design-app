@@ -3,11 +3,15 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, writeBatch, doc } from "firebase/firestore";
 
 const DEFAULT_SYSTEM_WINDOWS = {
+  inHouseFinishes: ['ce', 'm2c'], outsourceFinishes: ['ce', 'm2c'],
   prodTypes: ['ce', 'm2c', 'uniquity', 'leyla'], uom: ['ce', 'm2c', 'uniquity', 'leyla'],
   collections: ['ce', 'm2c', 'uniquity', 'leyla'], watchLists: ['ce', 'm2c', 'uniquity', 'leyla'],
+  vendors: ['ce', 'm2c', 'uniquity', 'leyla'], outsourceActions: ['ce', 'm2c', 'uniquity', 'leyla'],
   pillowSizes: ['uniquity'], fillTypes: ['uniquity'], flangeStyles: ['uniquity'], stitchTypes: ['uniquity'],
   seamCounts: ['uniquity'], assemblyTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
-  partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
+  customers: ['ce', 'm2c', 'uniquity', 'leyla'],
+  partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], 
+  inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
   projections: ['ce', 'm2c', 'uniquity', 'leyla'] 
 };
 
@@ -16,7 +20,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const [searchTerm, setSearchTerm] = useState("");
     const [selectedIds, setSelectedIds] = useState(new Set());
     
-    const [globalLists, setGlobalLists] = useState({ prodTypes: [], uom: [], watchLists: [], assemblyTypes: [], inventoryTypes: [], partHandling: [], collections: [] });
+    const [globalLists, setGlobalLists] = useState({ 
+        prodTypes: [], uom: [], watchLists: [], assemblyTypes: [], inventoryTypes: [], 
+        partHandling: [], collections: [], vendors: [], outsourceActions: [],
+        pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [],
+        projections: []
+    });
     const [collectionsData, setCollectionsData] = useState([]);
     const [windowConfig, setWindowConfig] = useState({ system: DEFAULT_SYSTEM_WINDOWS });
 
@@ -32,7 +41,17 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         project: { active: false, value: "" },
         isInHouse: { active: false, value: true },
         partHandling: { active: false, value: "" },
-        collection: { active: false, value: "" } // We will append/replace this in the array
+        collection: { active: false, value: "" },
+        
+        // Added Simple Dropdowns
+        vendorName: { active: false, value: "" },
+        outsourceAction: { active: false, value: "" },
+        pillowSize: { active: false, value: "" },
+        fillType: { active: false, value: "" },
+        flangeStyle: { active: false, value: "" },
+        stitchType: { active: false, value: "" },
+        seamCount: { active: false, value: "" },
+        projection: { active: false, value: "" }
     });
 
     // --- DATA FETCHING ---
@@ -63,7 +82,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
     // --- FILTERING & SELECTION ---
     const filteredInventory = inventory.filter(part => {
-        if (!searchTerm) return false; // Force them to search to see items to prevent accidental mass selections
+        if (!searchTerm) return false; 
         const term = searchTerm.toLowerCase();
         return part.itemName?.toLowerCase().includes(term) || 
                (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term)) || 
@@ -127,7 +146,10 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             }
                         } else if (fieldKey === 'isInHouse') {
                             payload['manufacturingSpecs.isInHouse'] = val;
-                            payload.partClass = val ? "Inventory" : "Inventory"; // Adjust as needed based on your logic
+                            payload.partClass = val ? "Inventory" : "Inventory"; 
+                        } else if (fieldKey === 'projection') {
+                            // Route directly into customData metadata for CPQ rules
+                            payload[`manufacturingSpecs.customData.${fieldKey}`] = val;
                         } else {
                             // Standard manufacturingSpecs injection
                             payload[`manufacturingSpecs.${fieldKey}`] = val;
@@ -256,16 +278,30 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </select>
                         </div>
 
-                        {/* COLLECTIONS (APPEND) */}
-                        {windowConfig.system.collections?.includes(activeBrand) && (
-                            <div style={{ background: updates.collection.active ? theme.paper : 'transparent', border: `1px solid ${updates.collection.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s', gridColumn: 'span 2' }}>
+                        {/* UOM */}
+                        {windowConfig.system.uom?.includes(activeBrand) && (
+                            <div style={{ background: updates.uom.active ? theme.paper : 'transparent', border: `1px solid ${updates.uom.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
-                                    <input type="checkbox" checked={updates.collection.active} onChange={(e) => handleUpdateChange('collection', 'active', e.target.checked)} />
-                                    Add to Collection (Appends to existing array)
+                                    <input type="checkbox" checked={updates.uom.active} onChange={(e) => handleUpdateChange('uom', 'active', e.target.checked)} />
+                                    Overwrite UOM
                                 </label>
-                                <select disabled={!updates.collection.active} value={updates.collection.value} onChange={(e) => handleUpdateChange('collection', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.collection.active ? 1 : 0.5 }}>
-                                    <option value="">Select Collection...</option>
-                                    {collectionsData.map(c => <option key={c.id} value={c.name.toUpperCase()}>{c.name}</option>)}
+                                <select disabled={!updates.uom.active} value={updates.uom.value} onChange={(e) => handleUpdateChange('uom', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.uom.active ? 1 : 0.5 }}>
+                                    <option value="">Select UOM...</option>
+                                    {(globalLists.uom || []).map(u => <option key={u} value={u.toUpperCase()}>{u}</option>)}
+                                </select>
+                            </div>
+                        )}
+
+                        {/* VENDOR */}
+                        {windowConfig.system.vendors?.includes(activeBrand) && (
+                            <div style={{ background: updates.vendorName.active ? theme.paper : 'transparent', border: `1px solid ${updates.vendorName.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                    <input type="checkbox" checked={updates.vendorName.active} onChange={(e) => handleUpdateChange('vendorName', 'active', e.target.checked)} />
+                                    Overwrite Approved Vendor
+                                </label>
+                                <select disabled={!updates.vendorName.active} value={updates.vendorName.value} onChange={(e) => handleUpdateChange('vendorName', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.vendorName.active ? 1 : 0.5 }}>
+                                    <option value="">Select Vendor...</option>
+                                    {(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}
                                 </select>
                             </div>
                         )}
@@ -298,6 +334,104 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
+                        {/* OUTSOURCE ACTIONS */}
+                        {windowConfig.system.outsourceActions?.includes(activeBrand) && (
+                            <div style={{ background: updates.outsourceAction.active ? theme.paper : 'transparent', border: `1px solid ${updates.outsourceAction.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                    <input type="checkbox" checked={updates.outsourceAction.active} onChange={(e) => handleUpdateChange('outsourceAction', 'active', e.target.checked)} />
+                                    Overwrite Outsource Action
+                                </label>
+                                <select disabled={!updates.outsourceAction.active} value={updates.outsourceAction.value} onChange={(e) => handleUpdateChange('outsourceAction', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.outsourceAction.active ? 1 : 0.5 }}>
+                                    <option value="">Select Action...</option>
+                                    {(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                </select>
+                            </div>
+                        )}
+
+                        {/* PILLOW SIZES */}
+                        {windowConfig.system.pillowSizes?.includes(activeBrand) && (
+                            <div style={{ background: updates.pillowSize.active ? theme.paper : 'transparent', border: `1px solid ${updates.pillowSize.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                    <input type="checkbox" checked={updates.pillowSize.active} onChange={(e) => handleUpdateChange('pillowSize', 'active', e.target.checked)} />
+                                    Overwrite Pillow Size
+                                </label>
+                                <select disabled={!updates.pillowSize.active} value={updates.pillowSize.value} onChange={(e) => handleUpdateChange('pillowSize', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.pillowSize.active ? 1 : 0.5 }}>
+                                    <option value="">Select Size...</option>
+                                    {(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                </select>
+                            </div>
+                        )}
+
+                        {/* FILL TYPES */}
+                        {windowConfig.system.fillTypes?.includes(activeBrand) && (
+                            <div style={{ background: updates.fillType.active ? theme.paper : 'transparent', border: `1px solid ${updates.fillType.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                    <input type="checkbox" checked={updates.fillType.active} onChange={(e) => handleUpdateChange('fillType', 'active', e.target.checked)} />
+                                    Overwrite Fill Type
+                                </label>
+                                <select disabled={!updates.fillType.active} value={updates.fillType.value} onChange={(e) => handleUpdateChange('fillType', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.fillType.active ? 1 : 0.5 }}>
+                                    <option value="">Select Fill...</option>
+                                    {(globalLists.fillTypes || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                </select>
+                            </div>
+                        )}
+
+                        {/* FLANGE STYLES */}
+                        {windowConfig.system.flangeStyles?.includes(activeBrand) && (
+                            <div style={{ background: updates.flangeStyle.active ? theme.paper : 'transparent', border: `1px solid ${updates.flangeStyle.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                    <input type="checkbox" checked={updates.flangeStyle.active} onChange={(e) => handleUpdateChange('flangeStyle', 'active', e.target.checked)} />
+                                    Overwrite Flange / Edge Style
+                                </label>
+                                <select disabled={!updates.flangeStyle.active} value={updates.flangeStyle.value} onChange={(e) => handleUpdateChange('flangeStyle', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.flangeStyle.active ? 1 : 0.5 }}>
+                                    <option value="">Select Style...</option>
+                                    {(globalLists.flangeStyles || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                </select>
+                            </div>
+                        )}
+
+                        {/* STITCH TYPES */}
+                        {windowConfig.system.stitchTypes?.includes(activeBrand) && (
+                            <div style={{ background: updates.stitchType.active ? theme.paper : 'transparent', border: `1px solid ${updates.stitchType.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                    <input type="checkbox" checked={updates.stitchType.active} onChange={(e) => handleUpdateChange('stitchType', 'active', e.target.checked)} />
+                                    Overwrite Stitch Routing
+                                </label>
+                                <select disabled={!updates.stitchType.active} value={updates.stitchType.value} onChange={(e) => handleUpdateChange('stitchType', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.stitchType.active ? 1 : 0.5 }}>
+                                    <option value="">Select Routing...</option>
+                                    {(globalLists.stitchTypes || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                </select>
+                            </div>
+                        )}
+
+                        {/* SEAM COUNTS */}
+                        {windowConfig.system.seamCounts?.includes(activeBrand) && (
+                            <div style={{ background: updates.seamCount.active ? theme.paper : 'transparent', border: `1px solid ${updates.seamCount.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                    <input type="checkbox" checked={updates.seamCount.active} onChange={(e) => handleUpdateChange('seamCount', 'active', e.target.checked)} />
+                                    Overwrite Seam Count
+                                </label>
+                                <select disabled={!updates.seamCount.active} value={updates.seamCount.value} onChange={(e) => handleUpdateChange('seamCount', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.seamCount.active ? 1 : 0.5 }}>
+                                    <option value="">Select Seam Count...</option>
+                                    {(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                </select>
+                            </div>
+                        )}
+
+                        {/* BRACKET PROJECTIONS */}
+                        {windowConfig.system.projections?.includes(activeBrand) && (
+                            <div style={{ background: updates.projection.active ? theme.paper : 'transparent', border: `1px solid ${updates.projection.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                    <input type="checkbox" checked={updates.projection.active} onChange={(e) => handleUpdateChange('projection', 'active', e.target.checked)} />
+                                    Overwrite Bracket Projection
+                                </label>
+                                <select disabled={!updates.projection.active} value={updates.projection.value} onChange={(e) => handleUpdateChange('projection', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.projection.active ? 1 : 0.5 }}>
+                                    <option value="">Select Projection...</option>
+                                    {(globalLists.projections || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                </select>
+                            </div>
+                        )}
+
                         {/* SOURCING FLAG */}
                         <div style={{ background: updates.isInHouse.active ? theme.paper : 'transparent', border: `1px solid ${updates.isInHouse.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -309,6 +443,20 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 <option value="false">Outsourced / Purchased</option>
                             </select>
                         </div>
+                        
+                        {/* COLLECTIONS (APPEND) */}
+                        {windowConfig.system.collections?.includes(activeBrand) && (
+                            <div style={{ background: updates.collection.active ? theme.paper : 'transparent', border: `1px solid ${updates.collection.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s', gridColumn: 'span 2' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                    <input type="checkbox" checked={updates.collection.active} onChange={(e) => handleUpdateChange('collection', 'active', e.target.checked)} />
+                                    Add to Collection (Appends to existing array)
+                                </label>
+                                <select disabled={!updates.collection.active} value={updates.collection.value} onChange={(e) => handleUpdateChange('collection', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.collection.active ? 1 : 0.5 }}>
+                                    <option value="">Select Collection...</option>
+                                    {collectionsData.map(c => <option key={c.id} value={c.name.toUpperCase()}>{c.name}</option>)}
+                                </select>
+                            </div>
+                        )}
                     </div>
 
                     <div style={{ marginTop: 'auto', paddingTop: '20px' }}>
