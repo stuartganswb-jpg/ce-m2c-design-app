@@ -446,13 +446,18 @@ const handleSyncAddresses = async () => {
                       Vendor.companyname AS vendor_name,
                       ItemVendor.vendorcode AS vendor_part_number,
                       ItemVendor.purchaseprice AS lastpurchaseprice,
-                      ItemVendor.preferredvendor
+                      ItemVendor.preferredvendor,
+                      Bin.binnumber AS preferred_bin
                   FROM 
                       item
                   LEFT JOIN 
                       ItemVendor ON ItemVendor.item = item.id
                   LEFT JOIN
                       Vendor ON ItemVendor.vendor = Vendor.id
+                  LEFT JOIN 
+                      ItemBinNumber ON ItemBinNumber.item = item.id AND ItemBinNumber.preferredbin = 'T'
+                  LEFT JOIN 
+                      Bin ON ItemBinNumber.bin = Bin.id
                   WHERE 
                       item.custitem_sync_to_cpq = 'T' 
                       AND item.isinactive = 'F' 
@@ -556,7 +561,7 @@ const handleSyncAddresses = async () => {
                       status: "IMPORTED_FROM_ERP",
                       productType: item.product_type || 'Uncategorized',
                       uom: item.uom || 'EA',
-                      binNumber: 'Pending Map',
+                      binLocation: item.preferred_bin || '',
                       partHandling: autoPartHandling,
                       outsourceAction: parsedOutsourceAction, 
                       collections: collectionsArray, 
@@ -579,6 +584,7 @@ const handleSyncAddresses = async () => {
                       isInHouse: hasVendor ? false : (existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : true),
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
+                      binLocation: item.preferred_bin || existingMatch.manufacturingSpecs?.binLocation || '',
                       partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
                       outsourceAction: parsedOutsourceAction || existingMatch.manufacturingSpecs?.outsourceAction || '', 
                       collections: collectionsArray.length > 0 ? collectionsArray : (existingMatch.manufacturingSpecs?.collections || []), 
