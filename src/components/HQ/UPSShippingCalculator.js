@@ -35,9 +35,17 @@ const ZONE_NAMES = {
 
 // ---------------------------------------------------------------------------
 // DATA: Net rate tables (already include 7% discount from Small Business Rates)
+// Residential tables already include the discounted surcharge:
+//   Ground residential: +$3.55 flat vs commercial (per contract slide)
+//   Air residential: +$4.00 flat vs commercial (per contract slide)
+// Keyed as: RATES[serviceKey][weightLbs][zoneNumber]
+// Weight 151 = per-lb overage rate applied on top of the 150lb rate.
 // ---------------------------------------------------------------------------
+
+// Ground Commercial — full 1-150 lb table, per-lb rate for 151+
 const GC = {"1":{"2":10.12,"3":10.17,"4":10.22,"5":10.24,"6":10.41,"7":11.18,"8":11.23,"44":31.3,"45":37.55,"46":48.4},"2":{"2":10.21,"3":10.28,"4":10.33,"5":10.36,"6":10.84,"7":11.64,"8":11.73,"44":33.07,"45":39.67,"46":50.58},"3":{"2":10.32,"3":10.38,"4":10.43,"5":10.45,"6":11.29,"7":12.11,"8":12.25,"44":34.84,"45":41.78,"46":52.76},"4":{"2":10.42,"3":10.48,"4":10.55,"5":10.64,"6":11.71,"7":12.56,"8":12.75,"44":36.6,"45":43.89,"46":54.94},"5":{"2":10.53,"3":10.58,"4":10.64,"5":10.99,"6":12.16,"7":13.04,"8":13.26,"44":38.36,"45":46.01,"46":57.12},"6":{"2":10.63,"3":10.69,"4":10.81,"5":11.35,"6":12.58,"7":13.49,"8":13.78,"44":40.13,"45":48.12,"46":59.3},"7":{"2":10.73,"3":10.8,"4":11.09,"5":11.7,"6":13.03,"7":13.97,"8":14.29,"44":41.9,"45":50.23,"46":61.48},"8":{"2":10.83,"3":10.9,"4":11.36,"5":12.06,"6":13.47,"7":14.42,"8":14.8,"44":43.66,"45":52.35,"46":63.66},"9":{"2":10.95,"3":10.99,"4":11.63,"5":12.41,"6":13.89,"7":14.88,"8":15.31,"44":45.43,"45":54.45,"46":65.86},"10":{"2":11.04,"3":11.16,"4":11.9,"5":12.78,"6":14.34,"7":15.35,"8":15.81,"44":47.2,"45":56.57,"46":68.04},"11":{"2":11.15,"3":11.35,"4":12.18,"5":13.13,"6":14.79,"7":15.81,"8":16.31,"44":48.96,"45":58.68,"46":70.22},"12":{"2":11.25,"3":11.53,"4":12.47,"5":13.49,"6":15.21,"7":16.27,"8":16.82,"44":50.72,"45":60.79,"46":72.4},"13":{"2":11.36,"3":11.71,"4":12.74,"5":13.84,"6":15.66,"7":16.74,"8":17.34,"44":52.49,"45":62.91,"46":74.58},"14":{"2":11.47,"3":11.89,"4":13.03,"5":14.2,"6":16.08,"7":17.2,"8":17.86,"44":54.26,"45":65.01,"46":76.75},"15":{"2":11.56,"3":12.08,"4":13.3,"5":14.55,"6":16.52,"7":17.67,"8":18.36,"44":56.02,"45":67.13,"46":78.95},"16":{"2":11.67,"3":12.28,"4":13.57,"5":14.91,"6":16.96,"7":18.14,"8":18.87,"44":57.79,"45":69.25,"46":81.12},"17":{"2":11.78,"3":12.45,"4":13.85,"5":15.26,"6":17.39,"7":18.59,"8":19.38,"44":59.56,"45":71.37,"46":83.3},"18":{"2":11.88,"3":12.65,"4":14.13,"5":15.63,"6":17.84,"7":19.06,"8":19.89,"44":61.31,"45":73.47,"46":85.49},"19":{"2":11.98,"3":12.83,"4":14.4,"5":15.98,"6":18.26,"7":19.52,"8":20.39,"44":63.08,"45":75.58,"46":87.66},"20":{"2":12.08,"3":13.01,"4":14.68,"5":16.33,"6":18.7,"7":19.98,"8":20.9,"44":64.87,"45":77.68,"46":89.84},"21":{"2":12.18,"3":13.19,"4":14.96,"5":16.69,"6":19.15,"7":20.43,"8":21.41,"44":66.63,"45":79.79,"46":92.02},"22":{"2":12.3,"3":13.37,"4":15.23,"5":17.05,"6":19.59,"7":20.9,"8":21.91,"44":68.39,"45":81.91,"46":94.21},"23":{"2":12.39,"3":13.56,"4":15.51,"5":17.4,"6":20.02,"7":21.36,"8":22.43,"44":70.16,"45":84.03,"46":96.39},"24":{"2":12.51,"3":13.75,"4":15.79,"5":17.75,"6":20.46,"7":21.83,"8":22.94,"44":71.93,"45":86.14,"46":98.58},"25":{"2":12.59,"3":13.93,"4":16.06,"5":18.14,"6":20.89,"7":22.29,"8":23.46,"44":73.68,"45":88.25,"46":100.76},"26":{"2":12.7,"3":14.12,"4":16.36,"5":18.47,"6":21.33,"7":22.76,"8":23.97,"44":75.46,"45":90.36,"46":102.93},"27":{"2":12.81,"3":14.3,"4":16.63,"5":18.84,"6":21.76,"7":23.21,"8":24.47,"44":77.23,"45":92.48,"46":105.12},"28":{"2":12.91,"3":14.49,"4":16.9,"5":19.2,"6":22.21,"7":23.69,"8":24.98,"44":78.98,"45":94.6,"46":107.29},"29":{"2":13.03,"3":14.68,"4":17.18,"5":19.56,"6":22.64,"7":24.15,"8":25.49,"44":80.75,"45":96.69,"46":109.48},"30":{"2":13.12,"3":14.85,"4":17.46,"5":19.9,"6":23.07,"7":24.61,"8":25.99,"44":82.52,"45":98.81,"46":111.67},"31":{"2":13.23,"3":15.04,"4":17.73,"5":20.26,"6":23.51,"7":25.07,"8":26.51,"44":84.29,"45":100.93,"46":113.84},"32":{"2":13.33,"3":15.22,"4":18.0,"5":20.63,"6":23.97,"7":25.53,"8":27.03,"44":86.04,"45":103.03,"46":116.02},"33":{"2":13.43,"3":15.41,"4":18.27,"5":20.98,"6":24.39,"7":25.99,"8":27.53,"44":87.82,"45":105.15,"46":118.2},"34":{"2":13.54,"3":15.59,"4":18.56,"5":21.33,"6":24.83,"7":26.47,"8":28.04,"44":89.59,"45":107.27,"46":120.38},"35":{"2":13.64,"3":15.78,"4":18.84,"5":21.7,"6":25.26,"7":26.91,"8":28.54,"44":91.34,"45":109.38,"46":122.56},"36":{"2":13.75,"3":15.97,"4":19.12,"5":22.04,"6":25.7,"7":27.39,"8":29.05,"44":93.11,"45":111.49,"46":124.75},"37":{"2":13.85,"3":16.15,"4":19.39,"5":22.39,"6":26.14,"7":27.85,"8":29.56,"44":94.88,"45":113.61,"46":126.93},"38":{"2":13.96,"3":16.32,"4":19.67,"5":22.76,"6":26.57,"7":28.32,"8":30.07,"44":96.65,"45":115.71,"46":129.1},"39":{"2":14.06,"3":16.51,"4":19.94,"5":23.11,"6":27.02,"7":28.77,"8":30.58,"44":98.41,"45":117.81,"46":131.3},"40":{"2":14.15,"3":16.69,"4":20.21,"5":23.47,"6":27.44,"7":29.24,"8":31.09,"44":100.18,"45":119.92,"46":133.47},"41":{"2":14.27,"3":16.89,"4":20.51,"5":23.83,"6":27.88,"7":29.7,"8":31.59,"44":101.95,"45":122.04,"46":135.65},"42":{"2":14.36,"3":17.07,"4":20.78,"5":24.19,"6":28.32,"7":30.18,"8":32.11,"44":103.7,"45":124.16,"46":137.84},"43":{"2":14.48,"3":17.25,"4":21.06,"5":24.53,"6":28.76,"7":30.62,"8":32.62,"44":105.47,"45":126.26,"46":140.02},"44":{"2":14.57,"3":17.44,"4":21.33,"5":24.9,"6":29.2,"7":31.09,"8":33.12,"44":107.24,"45":128.38,"46":142.2},"45":{"2":14.68,"3":17.63,"4":21.59,"5":25.25,"6":29.64,"7":31.55,"8":33.63,"44":109.01,"45":130.5,"46":144.38},"46":{"2":14.8,"3":17.82,"4":21.88,"5":25.6,"6":30.07,"7":32.01,"8":34.15,"44":110.77,"45":132.61,"46":146.56},"47":{"2":14.88,"3":18.0,"4":22.15,"5":25.97,"6":30.51,"7":32.48,"8":34.66,"44":112.54,"45":134.72,"46":148.73},"48":{"2":15.0,"3":18.18,"4":22.44,"5":26.33,"6":30.94,"7":32.93,"8":35.16,"44":114.31,"45":136.83,"46":150.92},"49":{"2":15.08,"3":18.37,"4":22.72,"5":26.68,"6":31.39,"7":33.41,"8":35.67,"44":116.06,"45":138.94,"46":153.11},"50":{"2":15.21,"3":18.55,"4":23.0,"5":27.04,"6":31.82,"7":33.87,"8":36.19,"44":117.83,"45":141.05,"46":155.28},"51":{"2":15.31,"3":18.73,"4":23.27,"5":27.39,"6":32.24,"7":34.34,"8":36.71,"44":119.6,"45":143.17,"46":157.47},"52":{"2":15.41,"3":18.92,"4":23.54,"5":27.75,"6":32.69,"7":34.79,"8":37.2,"44":121.37,"45":145.28,"46":159.64},"53":{"2":15.51,"3":19.1,"4":23.83,"5":28.1,"6":33.12,"7":35.26,"8":37.71,"44":123.12,"45":147.4,"46":161.82},"54":{"2":15.61,"3":19.3,"4":24.09,"5":28.45,"6":33.57,"7":35.71,"8":38.22,"44":124.9,"45":149.51,"46":164.01},"55":{"2":15.72,"3":19.47,"4":24.38,"5":28.82,"6":34.0,"7":36.19,"8":38.73,"44":126.66,"45":151.62,"46":166.2},"56":{"2":15.83,"3":19.65,"4":24.65,"5":29.17,"6":34.44,"7":36.63,"8":39.24,"44":128.41,"45":153.74,"46":168.38},"57":{"2":15.92,"3":19.84,"4":24.92,"5":29.53,"6":34.88,"7":37.11,"8":39.75,"44":130.21,"45":155.85,"46":170.56},"58":{"2":16.03,"3":20.02,"4":25.21,"5":29.88,"6":35.32,"7":37.57,"8":40.26,"44":131.98,"45":157.94,"46":172.74},"59":{"2":16.14,"3":20.2,"4":25.48,"5":30.24,"6":35.75,"7":38.04,"8":40.76,"44":133.72,"45":160.06,"46":174.91},"60":{"2":16.24,"3":20.39,"4":25.76,"5":30.59,"6":36.19,"7":38.5,"8":41.26,"44":135.49,"45":162.18,"46":177.1},"61":{"2":16.36,"3":20.57,"4":26.04,"5":30.95,"6":36.61,"7":38.96,"8":41.78,"44":137.26,"45":164.28,"46":179.28},"62":{"2":16.45,"3":20.76,"4":26.33,"5":31.31,"6":37.06,"7":39.42,"8":42.3,"44":139.03,"45":166.4,"46":181.47},"63":{"2":16.55,"3":20.93,"4":26.59,"5":31.67,"6":37.5,"7":39.9,"8":42.8,"44":140.78,"45":168.51,"46":183.65},"64":{"2":16.66,"3":21.14,"4":26.87,"5":32.02,"6":37.93,"7":40.35,"8":43.31,"44":142.56,"45":170.62,"46":185.82},"65":{"2":16.76,"3":21.32,"4":27.16,"5":32.38,"6":38.37,"7":40.83,"8":43.83,"44":144.33,"45":172.74,"46":188.01},"66":{"2":16.86,"3":21.51,"4":27.42,"5":32.74,"6":38.82,"7":41.26,"8":44.33,"44":146.08,"45":174.85,"46":190.19},"67":{"2":16.97,"3":21.7,"4":27.7,"5":33.09,"6":39.25,"7":41.74,"8":44.84,"44":147.85,"45":176.97,"46":192.36},"68":{"2":17.07,"3":21.87,"4":27.98,"5":33.44,"6":39.68,"7":42.2,"8":45.36,"44":149.62,"45":179.07,"46":194.57},"69":{"2":17.18,"3":22.06,"4":28.25,"5":33.81,"6":40.12,"7":42.67,"8":45.86,"44":151.39,"45":181.18,"46":196.74},"70":{"2":17.27,"3":22.25,"4":28.53,"5":34.16,"6":40.55,"7":43.12,"8":46.36,"44":153.14,"45":183.3,"46":198.92},"71":{"2":17.67,"3":22.76,"4":29.01,"5":34.61,"6":40.99,"7":43.59,"8":46.88,"44":155.27,"45":185.83,"46":201.68},"72":{"2":18.06,"3":23.28,"4":29.49,"5":35.06,"6":41.42,"7":44.05,"8":47.39,"44":157.4,"45":188.39,"46":204.43},"73":{"2":18.45,"3":23.81,"4":29.95,"5":35.52,"6":41.87,"7":44.52,"8":47.9,"44":159.52,"45":190.92,"46":207.19},"74":{"2":18.85,"3":24.32,"4":30.43,"5":35.94,"6":42.3,"7":44.97,"8":48.41,"44":161.63,"45":193.46,"46":209.96},"75":{"2":19.23,"3":24.85,"4":30.9,"5":36.4,"6":42.73,"7":45.44,"8":48.92,"44":163.76,"45":196.0,"46":212.7},"76":{"2":19.63,"3":25.36,"4":31.37,"5":36.85,"6":43.18,"7":45.91,"8":49.43,"44":165.89,"45":198.54,"46":215.47},"77":{"2":20.02,"3":25.87,"4":31.84,"5":37.29,"6":43.62,"7":46.36,"8":49.92,"44":168.02,"45":201.08,"46":218.23},"78":{"2":20.4,"3":26.39,"4":32.32,"5":37.76,"6":44.05,"7":46.83,"8":50.43,"44":170.13,"45":203.62,"46":220.99},"79":{"2":20.81,"3":26.91,"4":32.78,"5":38.2,"6":44.5,"7":47.29,"8":50.95,"44":172.27,"45":206.15,"46":223.75},"80":{"2":21.2,"3":27.43,"4":33.26,"5":38.66,"6":44.92,"7":47.76,"8":51.46,"44":174.38,"45":208.7,"46":226.5},"81":{"2":21.59,"3":27.95,"4":33.73,"5":39.09,"6":45.37,"7":48.22,"8":51.97,"44":176.51,"45":211.23,"46":229.26},"82":{"2":21.99,"3":28.49,"4":34.21,"5":39.54,"6":45.79,"7":48.69,"8":52.48,"44":178.64,"45":213.78,"46":232.03},"83":{"2":22.38,"3":29.0,"4":34.68,"5":39.99,"6":46.24,"7":49.14,"8":52.99,"44":180.76,"45":216.32,"46":234.77},"84":{"2":22.77,"3":29.52,"4":35.16,"5":40.44,"6":46.68,"7":49.62,"8":53.51,"44":182.89,"45":218.86,"46":237.54},"85":{"2":23.17,"3":30.04,"4":35.63,"5":40.89,"6":47.1,"7":50.07,"8":54.01,"44":185.01,"45":221.39,"46":240.28},"86":{"2":23.55,"3":30.55,"4":36.1,"5":41.35,"6":47.54,"7":50.55,"8":54.52,"44":187.14,"45":223.94,"46":243.06},"87":{"2":23.94,"3":31.07,"4":36.58,"5":41.78,"6":47.98,"7":51.01,"8":55.03,"44":189.26,"45":226.47,"46":245.83},"88":{"2":24.34,"3":31.58,"4":37.05,"5":42.23,"6":48.43,"7":51.46,"8":55.53,"44":191.38,"45":229.02,"46":248.57},"89":{"2":24.73,"3":32.11,"4":37.53,"5":42.68,"6":48.86,"7":51.92,"8":56.04,"44":193.51,"45":231.55,"46":251.34},"90":{"2":25.13,"3":32.64,"4":38.0,"5":43.12,"6":49.3,"7":52.39,"8":56.56,"44":195.63,"45":234.09,"46":254.09},"91":{"2":25.51,"3":33.15,"4":38.48,"5":43.58,"6":49.73,"7":52.85,"8":57.07,"44":197.76,"45":236.64,"46":256.85},"92":{"2":25.91,"3":33.67,"4":38.94,"5":44.04,"6":50.17,"7":53.32,"8":57.58,"44":199.88,"45":239.17,"46":259.61},"93":{"2":26.31,"3":34.19,"4":39.41,"5":44.49,"6":50.6,"7":53.77,"8":58.09,"44":202.01,"45":241.71,"46":262.36},"94":{"2":26.69,"3":34.7,"4":39.9,"5":44.92,"6":51.05,"7":54.25,"8":58.59,"44":204.13,"45":244.24,"46":265.12},"95":{"2":27.08,"3":35.22,"4":40.36,"5":45.37,"6":51.48,"7":54.7,"8":59.1,"44":206.26,"45":246.78,"46":267.88},"96":{"2":27.47,"3":35.75,"4":40.85,"5":45.81,"6":51.91,"7":55.16,"8":59.6,"44":208.37,"45":249.31,"46":270.63},"97":{"2":27.87,"3":36.26,"4":41.32,"5":46.27,"6":52.35,"7":55.63,"8":60.12,"44":210.5,"45":251.86,"46":273.41},"98":{"2":28.26,"3":36.78,"4":41.78,"5":46.71,"6":52.8,"7":56.09,"8":60.63,"44":212.63,"45":254.39,"46":276.15},"99":{"2":28.65,"3":37.3,"4":42.25,"5":47.18,"6":53.23,"7":56.56,"8":61.13,"44":214.75,"45":256.93,"46":278.93},"100":{"2":29.05,"3":37.82,"4":42.72,"5":47.62,"6":53.68,"7":57.0,"8":61.65,"44":216.87,"45":259.47,"46":281.67},"101":{"2":29.45,"3":38.34,"4":43.2,"5":48.06,"6":54.1,"7":57.47,"8":62.16},"102":{"2":29.84,"3":38.86,"4":43.67,"5":48.51,"6":54.54,"7":57.94,"8":62.67},"103":{"2":30.23,"3":39.39,"4":44.15,"5":48.96,"6":54.97,"7":58.4,"8":63.17},"104":{"2":30.62,"3":39.91,"4":44.61,"5":49.4,"6":55.41,"7":58.87,"8":63.68},"105":{"2":31.02,"3":40.43,"4":45.1,"5":49.86,"6":55.86,"7":59.33,"8":64.2},"106":{"2":31.42,"3":40.94,"4":45.57,"5":50.31,"6":56.27,"7":59.79,"8":64.71},"107":{"2":31.81,"3":41.46,"4":46.04,"5":50.76,"6":56.72,"7":60.26,"8":65.21},"108":{"2":32.2,"3":41.97,"4":46.52,"5":51.21,"6":57.15,"7":60.72,"8":65.72},"109":{"2":32.59,"3":42.49,"4":46.98,"5":51.64,"6":57.59,"7":61.19,"8":66.23},"110":{"2":32.99,"3":43.02,"4":47.47,"5":52.1,"6":58.04,"7":61.65,"8":66.75},"115":{"2":34.94,"3":45.61,"4":49.84,"5":54.34,"6":60.23,"7":63.97,"8":69.29},"120":{"2":36.9,"3":48.21,"4":52.2,"5":56.59,"6":62.4,"7":66.28,"8":71.83},"125":{"2":38.86,"3":50.81,"4":54.56,"5":58.82,"6":64.59,"7":68.59,"8":74.38},"130":{"2":40.84,"3":53.41,"4":56.93,"5":61.06,"6":66.77,"7":70.91,"8":76.93},"135":{"2":42.79,"3":56.0,"4":59.29,"5":63.31,"6":68.96,"7":73.22,"8":79.48},"140":{"2":44.75,"3":58.61,"4":61.66,"5":65.57,"6":71.14,"7":75.54,"8":82.02},"145":{"2":46.71,"3":61.2,"4":64.02,"5":67.8,"6":73.33,"7":77.84,"8":84.56},"150":{"2":48.68,"3":63.79,"4":66.39,"5":70.04,"6":75.51,"7":80.16,"8":87.12,"44":323.04,"45":386.44,"46":419.61},"151":{"2":0.33,"3":0.43,"4":0.45,"5":0.47,"6":0.5,"7":0.53,"8":0.58,"44":2.16,"45":2.58,"46":2.8}};
 
+// Residential = Commercial + $3.55 (Ground) or $4.00 (Air) flat on every weight/zone
 function addSurcharge(table, surcharge) {
   const out = {};
   for (const [w, zones] of Object.entries(table)) {
@@ -180,15 +188,50 @@ export default function UPSShippingCalculator() {
       ? (selectedService === 'gr' || selectedService === '3ds-r' ? 3.55 : 4.00)
       : 0;
 
+    // --- Additional Handling surcharges (contract rates from slide 4) ---
+    // AH Weight: actual weight > 70 lbs → $27.75
+    const ahWeight = wt > 70 ? 27.75 : 0;
+
+    // AH Other (size): longest side > 48" → $17.50
+    // Only applies when dimensions are provided
+    const longestSide = Math.max(l, w2, h);
+    const secondLongest = [l, w2, h].sort((a, b) => b - a)[1];
+    const hasDims = l > 0 && w2 > 0 && h > 0;
+    const ahOther = hasDims && longestSide > 48 ? 17.50 : 0;
+
+    // LPS (Large Package Surcharge): longest side > 96" OR length + girth > 130" → $105.50
+    // Girth = 2 × (second longest + shortest)
+    const shortestSide = Math.min(l, w2, h);
+    const girth = hasDims ? 2 * (secondLongest + shortestSide) : 0;
+    const lps = hasDims && (longestSide > 96 || (longestSide + girth) > 130) ? 105.50 : 0;
+
+    // AH Other and LPS are mutually exclusive — LPS supersedes AH Other per UPS rules
+    const ahOtherFinal = lps > 0 ? 0 : ahOther;
+
+    const surchargesPerPkg = resSurcharge + ahWeight + ahOtherFinal + lps;
+    const totalPerPkg = +(rate + surchargesPerPkg).toFixed(2);
+    const grandTotal = +(totalPerPkg * quantity).toFixed(2);
+
+    const surchargeLines = [
+      resSurcharge > 0 && { label: 'Residential surcharge', amount: resSurcharge, note: selectedService === 'gr' || selectedService === '3ds-r' ? 'Ground discounted rate' : 'Air discounted rate' },
+      ahWeight > 0  && { label: 'Additional Handling – Weight', amount: ahWeight, note: `Actual weight ${wt} lbs > 70 lbs threshold` },
+      ahOtherFinal > 0 && { label: 'Additional Handling – Size', amount: ahOtherFinal, note: `Longest side ${longestSide}" > 48"` },
+      lps > 0       && { label: 'Large Package Surcharge', amount: lps, note: longestSide > 96 ? `Longest side ${longestSide}" > 96"` : `Length + girth ${(longestSide + girth).toFixed(0)}" > 130"` },
+    ].filter(Boolean);
+
     setResult({
       rate,
-      totalRate: +(rate * quantity).toFixed(2),
+      totalPerPkg,
+      grandTotal,
+      surchargesPerPkg,
+      surchargeLines,
       quantity,
       billableWeight,
       totalCombinedWeight,
       actualWeight: wt,
       dimWeight,
       dimApplied,
+      longestSide: hasDims ? longestSide : null,
       hwtEligible,
       groundZone,
       serviceZone,
@@ -197,13 +240,14 @@ export default function UPSShippingCalculator() {
       isResidential,
       resSurcharge,
     });
-  }, [weight, zip, dimL, dimW, dimH, selectedService, qty]);
+  }, [weight, zip, qty, dimL, dimW, dimH, selectedService]);
 
   const handleKeyDown = (e) => { if (e.key === 'Enter') calculate(); };
 
   return (
     <div style={{ maxWidth: '900px', margin: '0 auto', padding: '10px 20px', fontFamily: theme.sans, color: theme.ink }}>
       
+      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '30px', paddingBottom: '20px', borderBottom: `1px solid ${theme.line}` }}>
         <div style={{ backgroundColor: theme.ink, color: '#fff', fontSize: '11px', fontWeight: 600, padding: '4px 10px', borderRadius: '2px', letterSpacing: '0.1em', fontFamily: theme.mono }}>
           UPS
@@ -218,6 +262,7 @@ export default function UPSShippingCalculator() {
         </div>
       </div>
 
+      {/* Service Selection */}
       <p style={{ fontSize: '10px', fontWeight: 600, color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '12px', fontFamily: theme.mono }}>
         Service Level
       </p>
@@ -248,6 +293,7 @@ export default function UPSShippingCalculator() {
         })}
       </div>
 
+      {/* Package Details Inputs */}
       <p style={{ fontSize: '10px', fontWeight: 600, color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '12px', fontFamily: theme.mono }}>
         Package Details
       </p>
@@ -307,6 +353,7 @@ export default function UPSShippingCalculator() {
         </div>
       </div>
 
+      {/* Dimension Inputs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '8px' }}>
         {[['dimL', dimL, setDimL, 'Length (in)'], ['dimW', dimW, setDimW, 'Width (in)'], ['dimH', dimH, setDimH, 'Height (in)']].map(([id, val, setter, lbl]) => (
           <div key={id}>
@@ -321,9 +368,10 @@ export default function UPSShippingCalculator() {
         ))}
       </div>
       <p style={{ fontSize: '0.75rem', color: theme.inkSoft, marginBottom: '30px' }}>
-        DIM divisor: <strong style={{ color: theme.ink }}>166</strong> (Contract rate). Leave blank to skip.
+        DIM divisor: <strong style={{ color: theme.ink }}>166</strong> (Contract rate). Leave blank to skip dimensional / large package checks.
       </p>
 
+      {/* Calculate Button */}
       <button
         onClick={calculate}
         style={{ width: '100%', padding: '16px', background: theme.ink, color: '#fff', fontSize: '11px', letterSpacing: '0.15em', textTransform: 'uppercase', fontFamily: theme.mono, border: 'none', cursor: 'pointer', transition: 'background 0.2s', borderRadius: '2px' }}
@@ -339,6 +387,7 @@ export default function UPSShippingCalculator() {
         </div>
       )}
 
+      {/* Results Box */}
       {result && (
         <div style={{ marginTop: '30px', padding: '30px', backgroundColor: '#fff', border: `1px solid ${theme.line}`, borderRadius: '2px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
           <p style={{ fontSize: '0.85rem', color: theme.inkSoft, margin: '0 0 10px 0', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -348,14 +397,14 @@ export default function UPSShippingCalculator() {
           <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginBottom: '10px', flexWrap: 'wrap' }}>
             {result.quantity > 1 ? (
               <>
-                <span style={{ fontSize: '2.5rem', fontFamily: theme.serif, color: theme.ink, lineHeight: 1 }}>${result.totalRate.toFixed(2)}</span>
+                <span style={{ fontSize: '2.5rem', fontFamily: theme.serif, color: theme.ink, lineHeight: 1 }}>${result.grandTotal.toFixed(2)}</span>
                 <span style={{ fontSize: '0.9rem', color: theme.inkSoft }}>total ({result.quantity} pkgs)</span>
-                <span style={{ fontSize: '1.2rem', color: theme.inkSoft, marginLeft: 'auto' }}>${result.rate.toFixed(2)} <span style={{ fontSize: '0.8rem' }}>/ea</span></span>
+                <span style={{ fontSize: '1.2rem', color: theme.inkSoft, marginLeft: 'auto' }}>${result.totalPerPkg.toFixed(2)} <span style={{ fontSize: '0.8rem' }}>/ea</span></span>
               </>
             ) : (
               <>
-                <span style={{ fontSize: '2.5rem', fontFamily: theme.serif, color: theme.ink, lineHeight: 1 }}>${result.rate.toFixed(2)}</span>
-                <span style={{ fontSize: '0.9rem', color: theme.inkSoft }}>net shipping</span>
+                <span style={{ fontSize: '2.5rem', fontFamily: theme.serif, color: theme.ink, lineHeight: 1 }}>${result.totalPerPkg.toFixed(2)}</span>
+                <span style={{ fontSize: '0.9rem', color: theme.inkSoft }}>net cost per package</span>
               </>
             )}
           </div>
@@ -364,6 +413,41 @@ export default function UPSShippingCalculator() {
             Includes 7% discount from Small Business Rates {result.quantity > 1 && ` · Each package rated individually`}
           </p>
 
+          {/* Detailed Breakdown if Surcharges Exist */}
+          {result.surchargesPerPkg > 0 && (
+            <div style={{ marginBottom: '20px', backgroundColor: '#fff', border: `1px solid ${theme.line}`, borderRadius: '2px', overflow: 'hidden' }}>
+              <div style={{ padding: '8px 16px', backgroundColor: theme.paper2, borderBottom: `1px solid ${theme.line}` }}>
+                <span style={{ fontSize: '0.7rem', fontWeight: 600, color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', fontFamily: theme.mono }}>Cost breakdown per package</span>
+              </div>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 16px', fontSize: '0.85rem', borderBottom: `1px solid ${theme.paper2}` }}>
+                  <span style={{ color: theme.inkSoft }}>Base transportation rate</span>
+                  <span style={{ fontWeight: 500, color: theme.ink }}>${result.rate.toFixed(2)}</span>
+                </div>
+                {result.surchargeLines.map(({ label, amount, note }) => (
+                  <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '10px 16px', fontSize: '0.85rem', borderBottom: `1px solid ${theme.paper2}` }}>
+                    <div>
+                      <span style={{ color: theme.inkSoft }}>{label}</span>
+                      {note && <div style={{ fontSize: '0.75rem', color: theme.brass, marginTop: '2px' }}>{note}</div>}
+                    </div>
+                    <span style={{ fontWeight: 500, color: theme.ink, marginLeft: '16px', flexShrink: 0 }}>+${amount.toFixed(2)}</span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 16px', fontSize: '0.85rem', fontWeight: 600, backgroundColor: theme.paper2 }}>
+                  <span style={{ color: theme.ink }}>Total per package</span>
+                  <span style={{ color: theme.ink }}>${result.totalPerPkg.toFixed(2)}</span>
+                </div>
+                {result.quantity > 1 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 16px', fontSize: '0.85rem', fontWeight: 600, borderTop: `2px solid ${theme.line}` }}>
+                    <span style={{ color: theme.ink }}>Total × {result.quantity} packages</span>
+                    <span style={{ color: theme.ink }}>${result.grandTotal.toFixed(2)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Conditional Alerts */}
           {result.dimApplied && (
             <div style={{ marginBottom: '16px', padding: '12px 16px', backgroundColor: theme.paper2, borderLeft: `3px solid ${theme.brass}`, fontSize: '0.8rem', color: theme.ink }}>
               <strong>Note:</strong> Dimensional weight ({result.dimWeight.toFixed(1)} lbs) exceeds actual weight ({result.actualWeight} lbs). Billed at DIM weight.
@@ -376,12 +460,13 @@ export default function UPSShippingCalculator() {
             </div>
           )}
 
+          {/* Data Grid */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '16px', marginTop: '20px', paddingTop: '20px', borderTop: `1px solid ${theme.line}` }}>
             {[
               ['Billable Wt', `${result.billableWeight.toFixed(1)} lbs`],
               result.quantity > 1 ? ['Total Wt', `${result.totalCombinedWeight.toFixed(0)} lbs`] : ['Zone Code', result.zoneName],
               ['Service Zone', `Zone ${result.serviceZone}`],
-              result.resSurcharge > 0 ? ['Res. Surcharge', `$${result.resSurcharge.toFixed(2)} (incl)`] : ['Fuel Surcharge', 'Waived']
+              ['Fuel Surcharge', 'Waived']
             ].map(([label, value], idx) => (
               <div key={idx}>
                 <p style={{ margin: '0 0 4px 0', fontSize: '0.7rem', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '0.05em', fontFamily: theme.mono }}>{label}</p>
@@ -391,7 +476,9 @@ export default function UPSShippingCalculator() {
           </div>
 
           <div style={{ marginTop: '24px', paddingTop: '16px', borderTop: `1px dotted ${theme.line}`, fontSize: '0.75rem', color: theme.inkSoft, lineHeight: 1.5 }}>
-            <span style={{ color: theme.ink, fontWeight: 500 }}>Waived Surcharges:</span> Fuel Surcharge · Delivery Area Surcharge (DAS) · Address Correction · 3rd-Party Billing · 2 lb Weight Variance
+            <span style={{ color: theme.ink, fontWeight: 500 }}>Contract surcharges applied when triggered:</span> Residential ($3.55 Ground / $4.00 Air) · Additional Handling – Weight $27.75 (actual wt &gt; 70 lbs) · Additional Handling – Size $17.50 (longest side &gt; 48") · Large Package $105.50 (longest side &gt; 96" or L+girth &gt; 130")
+            <br /><br />
+            <span style={{ color: theme.ink, fontWeight: 500 }}>Permanently Waived Surcharges:</span> Fuel Surcharge · Delivery Area Surcharge (DAS) · Address Correction · 3rd-Party Billing · 2 lb Weight Variance
           </div>
         </div>
       )}
