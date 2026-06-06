@@ -268,9 +268,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs }) => {
   
   const totalPoleRawInches = rawLeft + rawCenter + rawRight;
   
-  // NEW MATH LOGIC
+  // MATH LOGIC FIX
   const poleO2O = totalPoleRawInches;
-  const totalSystemO2O = poleO2O + (engData.bracketW * 2);
+  const totalSystemO2O = poleO2O + engData.bracketW;
 
   const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
   const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;

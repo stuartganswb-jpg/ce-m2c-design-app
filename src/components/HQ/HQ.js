@@ -72,6 +72,16 @@ function HQ() {
     }
   }, []);
 
+  // --- NEW: Global Tab Navigation Listener ---
+  useEffect(() => {
+    const handleTabNavigation = (e) => {
+      if (e.detail === 'VISION') setActiveTab('9. Client Vision');
+      if (e.detail === 'CPQ') setActiveTab('8. CPQ Configurator');
+    };
+    window.addEventListener('NAVIGATE_TAB', handleTabNavigation);
+    return () => window.removeEventListener('NAVIGATE_TAB', handleTabNavigation);
+  }, []);
+
   const attemptLogin = async (e) => {
     e.preventDefault();
     if (!pinInput) return;
