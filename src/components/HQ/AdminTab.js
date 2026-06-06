@@ -432,7 +432,7 @@ const handleSyncAddresses = async () => {
           while (hasMore) {
               addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
               
-              // NOTE: Change 'custitem_script_id_here' once you find the text-based Script ID.
+              // Bracket Projection line temporarily removed so the query runs successfully
               const q = `
                   SELECT 
                       item.id, 
@@ -441,7 +441,6 @@ const handleSyncAddresses = async () => {
                       BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
                       BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
                       BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
-                      BUILTIN.DF(item.custitem_script_id_here) AS bracket_projection,
                       BUILTIN.DF(item.stockunit) AS uom,
                       item.custitem9 AS baseprice,
                       Vendor.companyname AS vendor_name,
@@ -535,8 +534,8 @@ const handleSyncAddresses = async () => {
                   collectionsArray = [item.collection.toUpperCase()];
               }
 
-              // 3. Bracket Projection Extraction
-              let parsedProjection = item.bracket_projection || '';
+              // 3. Bracket Projection Extraction (Safely empty for now)
+              let parsedProjection = '';
 
               const payload = {
                   id: targetDocId,
