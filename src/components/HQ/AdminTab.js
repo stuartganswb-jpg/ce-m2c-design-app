@@ -204,9 +204,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       setSyncLog(prev => [{ time, msg, type }, ...prev]);
   };
 
-  const executeSuiteQL = async (queryStr, offset = 0) => {
-      // We append ?limit=1000&offset=X to instruct NetSuite to paginate
-      const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql?limit=1000&offset=${offset}`;
+  const executeSuiteQL = async (queryStr) => {
+      const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`;
 
       const response = await fetch(FIREBASE_FUNCTION_URL, {
           method: 'POST',
@@ -422,8 +421,6 @@ const handleSyncAddresses = async () => {
 
       try {
           const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
-          
-          // NOTE: Bracket Projection is still temporarily removed until we get the exact Script ID (e.g., custitem_bracket_proj)
           const q = `
               SELECT 
                   item.id, 
@@ -450,29 +447,11 @@ const handleSyncAddresses = async () => {
                   AND ${typeFilter}
           `;
           
-          let allRawRecords = [];
-          let currentOffset = 0;
-          let hasMore = true;
-
-          // 🚀 AUTO-PAGINATION LOOP: Fetches 1000 items at a time until finished
-          while (hasMore) {
-              addLog(`Fetching items ${currentOffset + 1} to ${currentOffset + 1000}...`, 'info');
-              const result = await executeSuiteQL(q, currentOffset);
-              const batch = result.items || [];
-              
-              allRawRecords = allRawRecords.concat(batch);
-
-              if (batch.length === 1000) {
-                  currentOffset += 1000; // There's more data, shift the offset
-              } else {
-                  hasMore = false; // We hit the end of the list
-              }
-          }
+          const result = await executeSuiteQL(q);
+          const rawRecords = result.items || [];
           
-          addLog(`Downloaded a total of ${allRawRecords.length} records. Filtering and updating Library...`, 'success');
-
           const uniqueRecordsMap = {};
-          for (const row of allRawRecords) {
+          for (const row of rawRecords) {
               const itemId = row.id;
               if (!uniqueRecordsMap[itemId]) {
                   uniqueRecordsMap[itemId] = row;
@@ -490,6 +469,8 @@ const handleSyncAddresses = async () => {
               }
           }
           const records = Object.values(uniqueRecordsMap);
+          
+          addLog(`Downloaded ${records.length} unique items with enriched metadata. Updating Library...`, 'success');
 
           let successCount = 0;
           for (const item of records) {
@@ -506,25 +487,6 @@ const handleSyncAddresses = async () => {
               const autoIsCutToSize = isPoleOrLinear; 
               
               const hasVendor = item.vendor_name && item.vendor_name.trim() !== '';
-
-              // 1. Plating logic
-              let parsedOutsourceAction = '';
-              if (/EP\d{2}/i.test(item.itemid) || /EP\d{2}/i.test(item.displayname)) {
-                  parsedOutsourceAction = 'PLATING';
-              }
-
-              // 2. Collection logic
-              let parsedCollection = item.collection || '';
-              let collectionsArray = [];
-              if (/^H1/i.test(item.itemid) || /^H1/i.test(item.displayname)) {
-                  parsedCollection = 'Fabricut H1';
-                  collectionsArray = ['FABRICUT H1'];
-              } else if (item.collection) {
-                  collectionsArray = [item.collection.toUpperCase()];
-              }
-
-              // 3. Bracket Projection Extraction (Safely empty for now)
-              let parsedProjection = '';
 
               const payload = {
                   id: targetDocId,
@@ -546,16 +508,13 @@ const handleSyncAddresses = async () => {
                       productType: item.product_type || 'Uncategorized',
                       uom: item.uom || 'EA',
                       binNumber: 'Pending Map',
-                      partHandling: autoPartHandling,
-                      outsourceAction: parsedOutsourceAction, 
-                      collections: collectionsArray, 
+                      partHandling: autoPartHandling, 
                       parametric: { isCutToSize: autoIsCutToSize }, 
                       vendorName: item.vendor_name || '', 
                       vendorId: item.vendor_part_number || '', 
                       customData: {
-                          collection: parsedCollection, 
-                          watchlist: item.watchlist || '',
-                          projection: parsedProjection 
+                          collection: item.collection || '',
+                          watchlist: item.watchlist || ''
                       },
                       dynamicDicts: {}
                   };
@@ -569,8 +528,6 @@ const handleSyncAddresses = async () => {
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
                       partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
-                      outsourceAction: parsedOutsourceAction || existingMatch.manufacturingSpecs?.outsourceAction || '', 
-                      collections: collectionsArray.length > 0 ? collectionsArray : (existingMatch.manufacturingSpecs?.collections || []), 
                       vendorName: item.vendor_name || existingMatch.manufacturingSpecs?.vendorName || '',
                       vendorId: item.vendor_part_number || existingMatch.manufacturingSpecs?.vendorId || '',
                       parametric: {
@@ -581,9 +538,8 @@ const handleSyncAddresses = async () => {
                       },
                       customData: {
                           ...(existingMatch.manufacturingSpecs?.customData || {}),
-                          collection: parsedCollection || existingMatch.manufacturingSpecs?.customData?.collection || '',
-                          watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || '',
-                          projection: parsedProjection || existingMatch.manufacturingSpecs?.customData?.projection || '' 
+                          collection: item.collection || existingMatch.manufacturingSpecs?.customData?.collection || '',
+                          watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || ''
                       }
                   };
                   payload.updatedAt = new Date().toISOString();
