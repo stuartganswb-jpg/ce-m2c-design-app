@@ -64,6 +64,20 @@ function HQ() {
   const [activeBrand, setActiveBrand] = useState(null);
   const [activeTab, setActiveTab] = useState(TABS[0]);
 
+  // --- NEW: Lifted Cart State ---
+  const [globalCart, setGlobalCart] = useState(() => {
+    try {
+        const savedCart = localStorage.getItem('hq_global_cart');
+        return savedCart ? JSON.parse(savedCart) : [];
+    } catch (e) {
+        return [];
+    }
+  });
+
+  useEffect(() => {
+      localStorage.setItem('hq_global_cart', JSON.stringify(globalCart));
+  }, [globalCart]);
+
   useEffect(() => {
     const savedBrandId = localStorage.getItem('m2c_brand');
     if (savedBrandId) {
@@ -72,7 +86,6 @@ function HQ() {
     }
   }, []);
 
-  // --- NEW: Global Tab Navigation Listener ---
   useEffect(() => {
     const handleTabNavigation = (e) => {
       if (e.detail === 'VISION') setActiveTab('9. Client Vision');
@@ -284,7 +297,7 @@ function HQ() {
             {activeTab === TABS[5] && <LibraryMassUpdateTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[7] && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[8] && <PackagingTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[9] && <CPQTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === TABS[9] && <CPQTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} setCart={setGlobalCart} />}
             {activeTab === TABS[10] && <ClientVisionTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[11] && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === TABS[12] && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}

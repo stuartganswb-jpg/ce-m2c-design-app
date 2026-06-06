@@ -165,7 +165,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
     return <primitive object={clonedScene} />;
 };
 
-const CPQTab = ({ currentUser, activeBrand }) => {
+const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [liveAssemblies, setLiveAssemblies] = useState([]);
   const [liveCustomers, setLiveCustomers] = useState([]); 
   const [previousDrafts, setPreviousDrafts] = useState([]); 
@@ -202,19 +202,6 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' }
   });
   
-  const [cart, setCart] = useState(() => {
-      try {
-          const savedCart = localStorage.getItem('hq_cpq_cart');
-          return savedCart ? JSON.parse(savedCart) : [];
-      } catch (e) {
-          return [];
-      }
-  });
-
-  useEffect(() => {
-      localStorage.setItem('hq_cpq_cart', JSON.stringify(cart));
-  }, [cart]);
-
   const [assemblyQty, setAssemblyQty] = useState(1);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
@@ -369,6 +356,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       }));
       
       const translatedParams = {};
+      const newStepQuantities = {};
+      const engineeringNotes = draft.specs?.engineeringNotes;
+
       targetFlow.steps.forEach(step => {
           if (draft.category === 'PILLOW') {
               if (step.title.toLowerCase().includes("size")) translatedParams[step.id] = draft.specs?.size;
@@ -379,6 +369,22 @@ const CPQTab = ({ currentUser, activeBrand }) => {
               if (step.title.toLowerCase().includes("stitch")) translatedParams[step.id] = draft.specs?.stitch;
               if (step.title.toLowerCase().includes("seam") && draft.specs?.seamCount) translatedParams[step.id] = draft.specs.seamCount;
           }
+          
+          if (engineeringNotes) {
+              const lowerTitle = step.title.toLowerCase();
+              if (lowerTitle.includes("bracket")) {
+                  newStepQuantities[step.id] = engineeringNotes.qtyBrackets !== undefined ? engineeringNotes.qtyBrackets : 0;
+              }
+              if (lowerTitle.includes("ring")) {
+                  newStepQuantities[step.id] = engineeringNotes.recRings !== undefined ? engineeringNotes.recRings : 0;
+              }
+              if (lowerTitle.includes("finial") || lowerTitle.includes("endcap")) {
+                  newStepQuantities[step.id] = engineeringNotes.qtyFinials !== undefined ? engineeringNotes.qtyFinials : 0;
+              }
+              if (lowerTitle.includes("splice") || lowerTitle.includes("connector")) {
+                  newStepQuantities[step.id] = engineeringNotes.qtySplices !== undefined ? engineeringNotes.qtySplices : 0;
+              }
+          }
       });
 
       if (draft.category === 'HARDWARE' || !draft.category) {
@@ -386,6 +392,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
       }
 
       setDynamicConfigParams(translatedParams);
+      setStepQuantities(prev => ({...prev, ...newStepQuantities}));
       setShowCloneModal(false);
       setCurrentStepIndex(0);
       
@@ -522,10 +529,10 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           
           let rawQty = stepQuantities[step.id];
           let qty = 1;
-          if (rawQty === undefined || rawQty === '') {
-              qty = activeBomPins.find(p => p.partId === step.linkedPinId)?.defaultQty || 1;
-          } else {
+          if (rawQty !== undefined && rawQty !== '') {
               qty = parseInt(rawQty) || 0; 
+          } else {
+              qty = activeBomPins.find(p => p.partId === step.linkedPinId)?.defaultQty || 1;
           }
 
           const hasBasePrice = step.basePrice !== undefined && step.basePrice !== null && step.basePrice !== '';
@@ -724,7 +731,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
           }
           
           setCart([]);
-          localStorage.removeItem('hq_cpq_cart');
+          localStorage.removeItem('hq_global_cart');
           setShowCheckoutModal(false);
           setJobData({ customerId: '', jobName: '', sidemark: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
 
@@ -1015,7 +1022,7 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                 Checkout ({cart.length} Items)
             </button>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume Draft</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_cpq_cart'); setAssemblyQty(1); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_global_cart'); setAssemblyQty(1); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
         </div>
       </div>
 
@@ -1104,8 +1111,9 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                           )}
 
                           {(currentStep.calculatorTemplate || currentStep.type === 'DIMENSIONS' || currentStep.type === 'VISUAL_DIMENSIONS') && (
-                              <div style={{ padding: '20px', background: 'var(--paper-2)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', marginBottom: '20px' }}>
+                              <div style={{ padding: '20px', background: 'var(--paper-2)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', marginBottom: '20px', opacity: activeDraftSvg ? 0.5 : 1 }}>
                                   <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Dimensional Input</h4>
+                                  {activeDraftSvg && <div style={{ fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--brass)', textTransform: 'uppercase', marginBottom: '12px' }}>Locked (Controlled by Vision Tool)</div>}
                                   
                                   {(currentStep.calculatorTemplate === 'calc_french_return_1in' || currentStep.calculatorTemplate === 'calc_straight_pole' || currentStep.calculatorTemplate === 'calc_curved_bay') && (
                                       <div style={{ display: 'flex', gap: '16px' }}>
@@ -1115,7 +1123,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                                   <select 
                                                       value={dimensionInputs[currentStep.id]?.type || 'O2O'} 
                                                       onChange={(e) => handleDimensionChange(currentStep.id, 'type', e.target.value, currentStep.calculatorTemplate)}
-                                                      style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}
+                                                      disabled={!!activeDraftSvg}
+                                                      style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', cursor: activeDraftSvg ? 'not-allowed' : 'pointer' }}
                                                   >
                                                       <option value="O2O">A. Outside Edge to Outside Edge (O2O)</option>
                                                       <option value="C2C">B. Center to Center (C2C)</option>
@@ -1128,7 +1137,8 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                                   type="number" min="0" placeholder="e.g. 84"
                                                   value={dimensionInputs[currentStep.id]?.length || ''} 
                                                   onChange={(e) => handleDimensionChange(currentStep.id, 'length', e.target.value, currentStep.calculatorTemplate)}
-                                                  style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', fontFamily: 'var(--sans)' }}
+                                                  disabled={!!activeDraftSvg}
+                                                  style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', fontFamily: 'var(--sans)', cursor: activeDraftSvg ? 'not-allowed' : 'text' }}
                                               />
                                           </div>
                                       </div>
@@ -1138,15 +1148,15 @@ const CPQTab = ({ currentUser, activeBrand }) => {
                                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                                           <div>
                                               <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Wall A (Left)</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallA || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallA', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none' }} />
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallA || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallA', e.target.value, currentStep.calculatorTemplate)} disabled={!!activeDraftSvg} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', cursor: activeDraftSvg ? 'not-allowed' : 'text' }} />
                                           </div>
                                           <div>
                                               <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Wall B (Center)</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallB || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallB', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none' }} />
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallB || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallB', e.target.value, currentStep.calculatorTemplate)} disabled={!!activeDraftSvg} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', cursor: activeDraftSvg ? 'not-allowed' : 'text' }} />
                                           </div>
                                           <div>
                                               <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Wall C (Right)</label>
-                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallC || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallC', e.target.value, currentStep.calculatorTemplate)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none' }} />
+                                              <input type="number" min="0" placeholder="Inches" value={dimensionInputs[currentStep.id]?.wallC || ''} onChange={(e) => handleDimensionChange(currentStep.id, 'wallC', e.target.value, currentStep.calculatorTemplate)} disabled={!!activeDraftSvg} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', outline: 'none', cursor: activeDraftSvg ? 'not-allowed' : 'text' }} />
                                           </div>
                                       </div>
                                   )}
