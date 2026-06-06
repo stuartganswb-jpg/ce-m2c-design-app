@@ -38,7 +38,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
   const [assemblyDetails, setAssemblyDetails] = useState({
       itemName: "", legacyErpId: "", productType: "", routingType: "UNASSIGNED", project: "",
-      basePrice: "", cost: "", pdfUrl: "", cadUrl: "",
+      basePrice: "", cost: "", weight: "", pdfUrl: "", cadUrl: "",
       isProjectManaged: false, binLocation: "",
       partHandling: "", uom: "EA", pillowSize: "", fillType: "", flangeStyle: "", stitchType: "", seamCount: "", outsourceAction: "", watchList: "NONE",
       dynamicDicts: {}, customData: {}, collections: [], clientPricing: [], sharedBrands: []
@@ -137,6 +137,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               project: selectedAssemblyData.project || "",
               basePrice: selectedAssemblyData.manufacturingSpecs?.basePrice || "",
               cost: selectedAssemblyData.manufacturingSpecs?.cost || "",
+              weight: selectedAssemblyData.manufacturingSpecs?.weight || "",
               pdfUrl: selectedAssemblyData.manufacturingSpecs?.pdfUrl || "",
               cadUrl: selectedAssemblyData.manufacturingSpecs?.cadUrl || "",
               isProjectManaged: selectedAssemblyData.manufacturingSpecs?.isProjectManaged || false,
@@ -316,6 +317,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                   ...currentSpecs, 
                   basePrice: assemblyDetails.basePrice, 
                   cost: assemblyDetails.cost,
+                  weight: assemblyDetails.weight,
                   pdfUrl: finalPdfUrl,
                   cadUrl: finalCadUrl,
                   isProjectManaged: assemblyDetails.isProjectManaged,
@@ -709,17 +711,22 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     </div>
 
                                     <div>
-                                        <h4 style={sectionHeaderStyle}>Pricing & Documents</h4>
-                                        <div style={{ display: 'flex', gap: '20px', marginBottom: '30px' }}>
-                                            <div style={{ flex: 1 }}>
+                                        <h4 style={sectionHeaderStyle}>Pricing, Logistics & Documents</h4>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', marginBottom: '30px' }}>
+                                            <div>
                                                 <label style={labelStyle}>Assembly Base Price ($)</label>
                                                 <input name="basePrice" type="number" step="0.01" value={assemblyDetails.basePrice} onChange={handleAssemblySpecChange} placeholder="0.00" style={fieldStyle} />
                                                 <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '4px' }}>Standalone CPQ Base Price</span>
                                             </div>
-                                            <div style={{ flex: 1 }}>
+                                            <div>
                                                 <label style={labelStyle}>Assembly Unit Cost ($)</label>
                                                 <input name="cost" type="number" step="0.01" value={assemblyDetails.cost} onChange={handleAssemblySpecChange} placeholder="0.00" style={fieldStyle} />
                                                 <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '4px' }}>Internal Cost (Optional)</span>
+                                            </div>
+                                            <div>
+                                                <label style={labelStyle}>Weight (lbs)</label>
+                                                <input name="weight" type="number" step="0.01" value={assemblyDetails.weight || ""} onChange={handleAssemblySpecChange} placeholder="0.00" style={fieldStyle} />
+                                                <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '4px' }}>Total Assembly Weight</span>
                                             </div>
                                         </div>
                                         
@@ -800,9 +807,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
                             <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
                                 {editSpecs.isInHouse ? (
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '15px' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
                                         <div><label style={labelStyle}>Program #</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                         <div><label style={labelStyle}>Raw Mat</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                        <div><label style={labelStyle}>Weight (lbs)</label><input name="weight" type="number" step="0.01" value={editSpecs.weight || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                         <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                         <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                     </div>
@@ -822,11 +830,13 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                                 <input name="altVendorUrl" value={editSpecs.altVendorUrl || ""} onChange={handleSpecChange} placeholder="https://..." style={fieldStyle} />
                                             </div>
                                         </div>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '15px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '15px' }}>
                                             <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                             <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                            <div><label style={labelStyle}>Weight (lbs)</label><input name="weight" type="number" step="0.01" value={editSpecs.weight || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                             <div><label style={labelStyle}>MOQ</label><input name="moq" type="number" value={editSpecs.moq || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                             <div><label style={labelStyle}>Lead (Days)</label><input name="leadTime" type="number" value={editSpecs.leadTime || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                            <div><label style={labelStyle}>Reorder Pt (ROP)</label><input name="reorderPoint" type="number" value={editSpecs.reorderPoint || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                         </div>
                                     </div>
                                 )}

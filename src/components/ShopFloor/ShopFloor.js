@@ -230,8 +230,11 @@ const ShopFloor = () => {
 
         if(statusType === 'GOOD') {
             if(prog.toolTimes) {
-                for (let [toolId, mins] of Object.entries(prog.toolTimes)) {
-                    await setDoc(doc(shopDb.collection("tooling"), cleanId(prog.machine, toolId)), { currentHours: increment(mins / 60) }, { merge: true });
+                for (let [toolName, minsPerPiece] of Object.entries(prog.toolTimes)) {
+                    // Tool is deducted based on the specific machine running the task
+                    const machineToolId = cleanId(task.mach, toolName);
+                    const totalMinsToDeduct = minsPerPiece * totalPartsRun;
+                    await setDoc(doc(shopDb.collection("tooling"), machineToolId), { currentHours: increment(totalMinsToDeduct / 60) }, { merge: true });
                 }
             }
             const routing = routingsMap[task.routingId];
@@ -526,8 +529,8 @@ const ShopFloor = () => {
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px', alignItems: 'end' }}>
                         <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Req Date</label><input type="date" value={millForm.reqDate} onChange={e => setMillForm({...millForm, reqDate: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} /></div>
-                        <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Print (Opt)</label><input type="file" onChange={e => setMillForm({...millForm, file: e.target.files[0]})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} /></div>
-                        <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Phosphate?</label><select value={millForm.phosphate} onChange={e => setMillForm({...millForm, phosphate: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="No">No</option><option value="Yes">Yes</option></select></div>
+                        <div><label style={labelStyle}>Print (Opt)</label><input type="file" onChange={e => setMillForm({...millForm, file: e.target.files[0]})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} /></div>
+                        <div><label style={labelStyle}>Phosphate?</label><select value={millForm.phosphate} onChange={e => setMillForm({...millForm, phosphate: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="No">No</option><option value="Yes">Yes</option></select></div>
                     </div>
                     <button onClick={handleAddMilling} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', marginTop: '24px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Add to Backlog</button>
                 </div>

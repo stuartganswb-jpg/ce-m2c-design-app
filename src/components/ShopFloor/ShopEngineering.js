@@ -11,17 +11,17 @@ const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
 const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, programsMap, machines, categories, setupCodes, tooling, materials, users, perms, setPerms, writeLog, handleDelete, safeUserRole, TABS }) => {
     
     const [routingForm, setRoutingForm] = useState({ id: null, partId: '', isRawMat: false, matProfile: '', matLength: '', ops: [] });
-    const [progForm, setProgForm] = useState({ id: null, name: '', machine: '', timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} });
-    const [toolForm, setToolForm] = useState({ item: '', desc: '', machine: '', max: '', qty: '', reorder: '' });
+    const [progForm, setProgForm] = useState({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} });
+    const [toolForm, setToolForm] = useState({ item: '', desc: '', machine: '', max: '', qty: '', reorder: '', toolNum: '' });
     const [matForm, setMatForm] = useState({ type: '', thick: '', width: '' });
     
     const [adminForm, setAdminForm] = useState({ catName: '', catType: 'Manual', macName: '', macCat: '', scName: '', uName: '', uPin: '', uRole: 'operator', oldPin: '' });
 
     // ==========================================
-    // 🚀 THE MIGRATION ENGINE (BRIDGES 1 & 2)
+    // 🚀 FORCE SYNC TO HQ LIBRARY
     // ==========================================
-    const handleMigrateToHQ = async () => {
-        if (!window.confirm("⚠️ DEV MIGRATION: This will copy all Shop Routings and Programs into the HQ Master Library. Proceed?")) return;
+    const handleForceSyncToHQ = async () => {
+        if (!window.confirm("⚠️ DEV MIGRATION: This will force-sync all Shop Routings and Programs directly into the HQ Master Library. Proceed?")) return;
         
         try {
             const batch = writeBatch(db);
@@ -60,11 +60,11 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
             }
 
             await batch.commit();
-            writeLog(`Migrated ${count} Routings to HQ`, 'admin');
-            alert(`✅ MIGRATION COMPLETE! Successfully linked ${count} Shop Routings to their HQ Master Assemblies.`);
+            writeLog(`Force Synced ${count} Routings to HQ`, 'admin');
+            alert(`✅ SYNC COMPLETE! Successfully pushed ${count} Shop Routings to their HQ Master Assemblies.`);
         } catch (error) {
             console.error(error);
-            alert("Migration Failed. Check console.");
+            alert("Sync Failed. Check console.");
         }
     };
 
@@ -88,7 +88,7 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
             ops: routingForm.ops
         }, { merge: true });
 
-        // 2. 🚀 BRIDGE 2: Dual-Save directly into HQ Master Library
+        // 2. Dual-Save directly into HQ Master Library
         if (hqPart) {
             const bundledOps = routingForm.ops.map(op => {
                 const prog = programsMap[op.progId] || {};
@@ -116,14 +116,14 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
     };
 
     const handleSaveProgram = async () => {
-        if(!progForm.name || !progForm.machine) return alert("Name & Machine required.");
+        if(!progForm.name || progForm.machines.length === 0) return alert("Name & at least one Compatible Machine required.");
         let drawingUrl = null;
         if(progForm.file) { const fRef = ref(storage, `drawings/${progForm.name}.pdf`); await uploadBytesResumable(fRef, progForm.file); drawingUrl = await getDownloadURL(fRef); }
-        const payload = { name: progForm.name, machine: progForm.machine, timePerPiece: parseFloat(progForm.timePerPiece)||0, setupTime: parseFloat(progForm.setupTime)||0, setupCode: progForm.setupCode, steps: progForm.steps, toolTimes: progForm.toolTimes };
+        const payload = { name: progForm.name, machines: progForm.machines, timePerPiece: parseFloat(progForm.timePerPiece)||0, setupTime: parseFloat(progForm.setupTime)||0, setupCode: progForm.setupCode, steps: progForm.steps, toolTimes: progForm.toolTimes };
         if(drawingUrl) payload.drawingUrl = drawingUrl;
         await setDoc(doc(shopDb.collection("programs"), progForm.id || cleanId(progForm.name, "")), payload, {merge:true});
         writeLog(`Saved Operation Program: ${progForm.name}`, 'engineering');
-        setProgForm({ id: null, name: '', machine: '', timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} });
+        setProgForm({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} });
     };
 
     const handleToolAction = async (action, tool) => {
@@ -195,11 +195,27 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                                 <h4 style={sectionHeaderStyle}>2. Sequential Operations</h4>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                     {routingForm.ops.map((op, index) => (
-                                        <div key={index} style={{ display: 'flex', gap: '16px', alignItems: 'center', background: '#fff', padding: '16px', border: '1px solid var(--line)' }}>
+                                        <div key={index} style={{ display: 'flex', gap: '12px', alignItems: 'center', background: '#fff', padding: '16px', border: '1px solid var(--line)' }}>
                                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', width: '40px' }}>OP {index + 1}</span>
-                                            <select value={op.progId} onChange={e => { const newOps = [...routingForm.ops]; const pData = programsMap[e.target.value]; newOps[index] = { progId: e.target.value, name: pData?.name, machine: pData?.machine, setupCode: pData?.setupCode }; setRoutingForm({...routingForm, ops: newOps}); }} style={{ flex: 1, ...fieldStyle, padding: '8px' }}>
-                                                <option value="">Select Machine Program...</option>{programs.map(p => <option key={p.id} value={p.id}>{p.machine} - {p.name}</option>)}
+                                            
+                                            <select value={op.progId} onChange={e => { 
+                                                const newOps = [...routingForm.ops]; 
+                                                const pData = programsMap[e.target.value]; 
+                                                newOps[index] = { progId: e.target.value, name: pData?.name, machine: pData?.machines?.[0] || '', setupCode: pData?.setupCode }; 
+                                                setRoutingForm({...routingForm, ops: newOps}); 
+                                            }} style={{ flex: 1.5, ...fieldStyle, padding: '8px' }}>
+                                                <option value="">Select Program...</option>{programs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                                             </select>
+
+                                            <select value={op.machine} onChange={e => {
+                                                const newOps = [...routingForm.ops];
+                                                newOps[index].machine = e.target.value;
+                                                setRoutingForm({...routingForm, ops: newOps});
+                                            }} style={{ flex: 1, ...fieldStyle, padding: '8px' }} disabled={!op.progId}>
+                                                <option value="">Route To...</option>
+                                                {(programsMap[op.progId]?.machines || []).map(m => <option key={m} value={m}>{m}</option>)}
+                                            </select>
+
                                             <button onClick={() => { const newOps = routingForm.ops.filter((_, i) => i !== index); setRoutingForm({...routingForm, ops: newOps}); }} style={{ background: 'transparent', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>×</button>
                                         </div>
                                     ))}
@@ -215,26 +231,64 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                 )}
                 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '24px' }}>
-                    {routings.map(r => (
-                        <div key={r.id} style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', padding: '24px', position: 'relative', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                            {['admin', 'programmer'].includes(safeUserRole) && (
-                                <div style={{ position: 'absolute', top: '24px', right: '24px', display: 'flex', gap: '12px' }}>
-                                    <button onClick={() => setRoutingForm(r)} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Edit</button>
-                                    <button onClick={() => handleDelete('routings', r.id)} style={{ background: 'transparent', border: 'none', color: '#d9534f', padding: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Del</button>
-                                </div>
-                            )}
-                            <h3 style={{ margin: '0 0 16px 0', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, paddingRight: '100px' }}>{r.displayName || r.partId}</h3>
-                            {r.isRawMat && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '6px 10px', display: 'inline-block', marginBottom: '16px', color: 'var(--ink)' }}>📦 Mat: {materials.find(m=>m.id===r.matProfile)?.type || 'Unknown'} @ {r.matLength}" / pc</div>}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                {r.ops.map((op, i) => (
-                                    <div key={i} style={{ fontSize: '0.9rem', fontFamily: 'var(--sans)', borderTop: '1px solid var(--line)', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}>
-                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>OP {i+1}</span> 
-                                        <span>{op.machine} - <span style={{ fontWeight: 500 }}>{op.name}</span></span>
+                    {routings.map(r => {
+                        let totalSetupMins = 0;
+                        let totalCycleMins = 0;
+                        
+                        r.ops.forEach(op => {
+                            const prog = programsMap[op.progId];
+                            if (prog) {
+                                totalSetupMins += parseFloat(prog.setupTime) || 0;
+                                totalCycleMins += parseFloat(prog.timePerPiece) || 0;
+                            }
+                        });
+
+                        return (
+                            <div key={r.id} style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', padding: '24px', position: 'relative', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                {['admin', 'programmer'].includes(safeUserRole) && (
+                                    <div style={{ position: 'absolute', top: '24px', right: '24px', display: 'flex', gap: '12px' }}>
+                                        <button onClick={() => setRoutingForm(r)} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Edit</button>
+                                        <button onClick={() => handleDelete('routings', r.id)} style={{ background: 'transparent', border: 'none', color: '#d9534f', padding: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Del</button>
                                     </div>
-                                ))}
+                                )}
+                                
+                                <h3 style={{ margin: '0 0 16px 0', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, paddingRight: '100px' }}>{r.displayName || r.partId}</h3>
+                                
+                                {r.isRawMat && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '6px 10px', display: 'inline-block', marginBottom: '16px', color: 'var(--ink)' }}>📦 Mat: {materials.find(m=>m.id===r.matProfile)?.type || 'Unknown'} @ {r.matLength}" / pc</div>}
+                                
+                                <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '12px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Total Setup</span>
+                                        <span style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: 'var(--ink)' }}>{totalSetupMins.toFixed(1)} mins</span>
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'right' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Run Time (Per Pc)</span>
+                                        <span style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: 'var(--ink)' }}>{totalCycleMins.toFixed(2)} mins</span>
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    {r.ops.map((op, i) => {
+                                        const opProg = programsMap[op.progId];
+                                        return (
+                                            <div key={i} style={{ fontSize: '0.9rem', fontFamily: 'var(--sans)', borderTop: '1px solid var(--line)', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}>
+                                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>OP {i+1}: {op.machine}</span> 
+                                                    <span><span style={{ fontWeight: 500 }}>{op.name}</span></span>
+                                                </div>
+                                                {opProg && (
+                                                    <div style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>
+                                                        {opProg.setupTime}m SU<br/>
+                                                        {opProg.timePerPiece}m /pc
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )
+                                    })}
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        )
+                    })}
                 </div>
             </div>
         );
@@ -251,23 +305,47 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                 
                 {['admin', 'programmer'].includes(safeUserRole) && (
                     <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px', marginBottom: '40px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
-                            <div><label style={labelStyle}>Program ID (Name)</label><input type="text" value={progForm.name} onChange={e => setProgForm({...progForm, name: e.target.value})} disabled={progForm.id !== null} style={fieldStyle} /></div>
-                            <div><label style={labelStyle}>Machine</label><select value={progForm.machine} onChange={e => setProgForm({...progForm, machine: e.target.value})} style={fieldStyle}><option value="">Select Machine...</option>{machines.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
-                            <div><label style={labelStyle}>Time per Piece (Mins)</label><input type="number" step="0.1" value={progForm.timePerPiece} onChange={e => setProgForm({...progForm, timePerPiece: e.target.value})} style={fieldStyle} /></div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '30px', marginBottom: '20px' }}>
+                            <div>
+                                <label style={labelStyle}>Program ID (Name)</label>
+                                <input type="text" value={progForm.name} onChange={e => setProgForm({...progForm, name: e.target.value})} disabled={progForm.id !== null} style={fieldStyle} />
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Compatible Machines</label>
+                                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', padding: '12px', background: '#fff', border: '1px solid var(--line)' }}>
+                                    {machines.map(m => (
+                                        <label key={m.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem', cursor: 'pointer' }}>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={progForm.machines?.includes(m.name)} 
+                                                onChange={(e) => {
+                                                    const newMacs = e.target.checked ? [...(progForm.machines||[]), m.name] : (progForm.machines||[]).filter(x => x !== m.name);
+                                                    setProgForm({...progForm, machines: newMacs});
+                                                }}
+                                            /> 
+                                            {m.name}
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '20px' }}>
+                        
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', marginTop: '20px' }}>
+                            <div><label style={labelStyle}>Time per Piece (Mins)</label><input type="number" step="0.1" value={progForm.timePerPiece} onChange={e => setProgForm({...progForm, timePerPiece: e.target.value})} style={fieldStyle} /></div>
                             <div><label style={labelStyle}>Setup Time (Mins)</label><input type="number" step="0.1" value={progForm.setupTime} onChange={e => setProgForm({...progForm, setupTime: e.target.value})} style={fieldStyle} /></div>
                             <div><label style={labelStyle}>Setup Category</label><select value={progForm.setupCode} onChange={e => setProgForm({...progForm, setupCode: e.target.value})} style={fieldStyle}><option value="">Setup Category...</option>{setupCodes.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div>
                         </div>
-                        {progForm.machine && (
+                        
+                        {progForm.machines?.length > 0 && (
                             <div style={{ marginTop: '24px', background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px' }}>
                                 <h4 style={sectionHeaderStyle}>Assign Cutting Tools</h4>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                    {tooling.filter(t => t.machine === progForm.machine).map(t => (
+                                    {tooling.filter(t => progForm.machines.includes(t.machine)).map(t => (
                                         <div key={t.id} style={{ display: 'flex', gap: '16px', alignItems: 'center', background: 'var(--paper-2)', padding: '12px 16px', border: '1px solid var(--line)' }}>
                                             <input type="checkbox" checked={progForm.toolTimes[t.name] !== undefined} onChange={e => { const newTools = {...progForm.toolTimes}; if(e.target.checked) newTools[t.name] = ''; else delete newTools[t.name]; setProgForm({...progForm, toolTimes: newTools}); }} style={{ cursor: 'pointer' }} />
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 'bold', width: '30px' }}>T{t.toolNum || '-'}</span>
                                             <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500, color: 'var(--ink)', width: '200px' }}>{t.name}</span>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', width: '100px' }}>({t.machine})</span>
                                             {progForm.toolTimes[t.name] !== undefined && <input type="number" placeholder="Mins per cycle" value={progForm.toolTimes[t.name]} onChange={e => setProgForm({...progForm, toolTimes: {...progForm.toolTimes, [t.name]: parseFloat(e.target.value)||0}})} style={{ padding: '8px', width: '120px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />}
                                         </div>
                                     ))}
@@ -282,7 +360,7 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                         
                         <div style={{ display: 'flex', gap: '16px', marginTop: '30px' }}>
                             <button onClick={handleSaveProgram} style={{ flex: 2, ...btnStyle, background: progForm.id ? 'var(--brass)' : 'var(--ink)' }}>{progForm.id ? 'Update Program' : 'Save New Program'}</button>
-                            {progForm.id && <button onClick={() => setProgForm({ id: null, name: '', machine: '', timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} })} style={{ flex: 1, ...btnStyle, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)' }}>Cancel</button>}
+                            {progForm.id && <button onClick={() => setProgForm({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} })} style={{ flex: 1, ...btnStyle, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)' }}>Cancel</button>}
                         </div>
                     </div>
                 )}
@@ -297,9 +375,9 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                                 </div>
                             )}
                             <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', paddingRight: '80px' }}>{p.name}</h4>
-                            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink)', marginBottom: '8px' }}>
-                                Machine: <span style={{ fontWeight: 500 }}>{p.machine}</span>
-                                {p.setupCode && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '4px 8px', marginLeft: '12px' }}>Setup: {p.setupCode}</span>}
+                            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink)', marginBottom: '8px', lineHeight: '1.4' }}>
+                                Machines: <span style={{ fontWeight: 500 }}>{(p.machines || []).join(', ')}</span>
+                                {p.setupCode && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '4px 8px', marginLeft: '12px', display: 'inline-block' }}>Setup: {p.setupCode}</span>}
                             </div>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '20px' }}>
                                 Cycle: {p.timePerPiece}m | Setup: {p.setupTime}m
@@ -327,8 +405,9 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginBottom: '40px' }}>
                         <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px' }}>
                             <h3 style={sectionHeaderStyle}>Add New Tool</h3>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '20px', marginBottom: '20px' }}>
                                 <div><label style={labelStyle}>Tool Name / Item #</label><input type="text" value={toolForm.item} onChange={e => setToolForm({...toolForm, item: e.target.value})} style={fieldStyle} /></div>
+                                <div><label style={labelStyle}>Haas T-#</label><input type="number" placeholder="e.g. 1 for T1" value={toolForm.toolNum} onChange={e => setToolForm({...toolForm, toolNum: e.target.value})} style={fieldStyle} /></div>
                                 <div><label style={labelStyle}>Machine</label><select value={toolForm.machine} onChange={e => setToolForm({...toolForm, machine: e.target.value})} style={fieldStyle}><option value="">Select...</option>{machines.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
                             </div>
                             <div style={{ marginBottom: '20px' }}>
@@ -340,7 +419,7 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                                 <div><label style={labelStyle}>Stock Qty</label><input type="number" value={toolForm.qty} onChange={e => setToolForm({...toolForm, qty: e.target.value})} style={fieldStyle} /></div>
                                 <div><label style={labelStyle}>Reorder Pt</label><input type="number" value={toolForm.reorder} onChange={e => setToolForm({...toolForm, reorder: e.target.value})} style={fieldStyle} /></div>
                             </div>
-                            <button onClick={async () => { if(!toolForm.item || !toolForm.machine) return alert("Item and Machine required"); await setDoc(doc(shopDb.collection("tooling"), cleanId(toolForm.machine, toolForm.item)), { name: toolForm.item, desc: toolForm.desc, machine: toolForm.machine, currentHours: 0, maxHours: parseFloat(toolForm.max||10), qty: parseInt(toolForm.qty||1), reorder: parseInt(toolForm.reorder||0) }, {merge:true}); writeLog(`Registered Tool: ${toolForm.item}`, 'inventory'); setToolForm({ item: '', desc: '', machine: '', max: '', qty: '', reorder: '' }); }} style={{ width: '100%', ...btnStyle }}>Register Tool</button>
+                            <button onClick={async () => { if(!toolForm.item || !toolForm.machine) return alert("Item and Machine required"); await setDoc(doc(shopDb.collection("tooling"), cleanId(toolForm.machine, toolForm.item)), { name: toolForm.item, desc: toolForm.desc, machine: toolForm.machine, toolNum: parseInt(toolForm.toolNum) || null, currentHours: 0, maxHours: parseFloat(toolForm.max||10), qty: parseInt(toolForm.qty||1), reorder: parseInt(toolForm.reorder||0) }, {merge:true}); writeLog(`Registered Tool: ${toolForm.item}`, 'inventory'); setToolForm({ item: '', desc: '', machine: '', max: '', qty: '', reorder: '', toolNum: '' }); }} style={{ width: '100%', ...btnStyle }}>Register Tool</button>
                         </div>
                         
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
@@ -383,8 +462,14 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                         <div key={t.id} style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                             {['admin'].includes(safeUserRole) && <button onClick={() => handleDelete('tooling', t.id)} style={{ float: 'right', background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>×</button>}
                             
-                            <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)', paddingRight: '20px' }}>{t.name}</div>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>{t.machine}</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                {t.toolNum && <div style={{ background: 'var(--ink)', color: '#fff', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 'bold', borderRadius: '2px' }}>T{t.toolNum}</div>}
+                                <div>
+                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)', paddingRight: '20px' }}>{t.name}</div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>{t.machine}</div>
+                                </div>
+                            </div>
+                            
                             {t.desc && <div style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink-soft)', marginTop: '8px', fontStyle: 'italic' }}>{t.desc}</div>}
                             
                             <div style={{ marginTop: '20px' }}>
@@ -435,13 +520,13 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                 {/* 🚀 1. MIGRATION ENGINE (Visible on Admin tab) */}
                 <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px', marginBottom: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div>
-                        <h3 style={{ color: 'var(--ink)', margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Enterprise Migration Engine (Bridge 1 & 2)</h3>
+                        <h3 style={{ color: 'var(--ink)', margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Force Sync: Shop Floor → HQ Library</h3>
                         <p style={{ fontSize: '0.95rem', color: 'var(--ink-soft)', margin: 0, maxWidth: '700px', lineHeight: '1.5' }}>
-                            Safely scan all existing Shop Floor Routings and CNC Programs, find their matching Part ID in the HQ Master Library, and permanently inject the machine instructions into the HQ Database.
+                            Safely scan all existing Shop Floor Routings and CNC Programs, find their matching Part ID in the HQ Master Library, and permanently inject the sequence and run times into the HQ Database.
                         </p>
                     </div>
-                    <button onClick={handleMigrateToHQ} style={{ padding: '16px 32px', background: 'var(--ink)', color: '#fff', fontWeight: 500, fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }}>
-                        Execute HQ Migration
+                    <button onClick={handleForceSyncToHQ} style={{ padding: '16px 32px', background: 'var(--ink)', color: '#fff', fontWeight: 500, fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }}>
+                        Force Sync to HQ
                     </button>
                 </div>
 
