@@ -422,9 +422,6 @@ const handleSyncAddresses = async () => {
 
       try {
           const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
-          
-          // Map the activeBrand to its specific NetSuite Location ID
-          const targetLocation = BRAND_NETSUITE_MAP[activeBrand]?.location || "17"; 
 
           let allRawRecords = [];
           let lastId = 0;
@@ -435,6 +432,7 @@ const handleSyncAddresses = async () => {
           while (hasMore) {
               addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
               
+              // NetSuite Bin tables completely removed from query to prevent 400 Bad Request
               const q = `
                   SELECT 
                       item.id, 
@@ -448,18 +446,13 @@ const handleSyncAddresses = async () => {
                       Vendor.companyname AS vendor_name,
                       ItemVendor.vendorcode AS vendor_part_number,
                       ItemVendor.purchaseprice AS lastpurchaseprice,
-                      ItemVendor.preferredvendor,
-                      Bin.binnumber AS preferred_bin
+                      ItemVendor.preferredvendor
                   FROM 
                       item
                   LEFT JOIN 
                       ItemVendor ON ItemVendor.item = item.id
                   LEFT JOIN
                       Vendor ON ItemVendor.vendor = Vendor.id
-                  LEFT JOIN 
-                      ItemBinNumber ON ItemBinNumber.item = item.id AND ItemBinNumber.location = ${targetLocation} AND ItemBinNumber.preferredbin = 'T'
-                  LEFT JOIN 
-                      Bin ON ItemBinNumber.bin = Bin.id
                   WHERE 
                       item.custitem_sync_to_cpq = 'T' 
                       AND item.isinactive = 'F' 
@@ -558,7 +551,7 @@ const handleSyncAddresses = async () => {
                       status: "IMPORTED_FROM_ERP",
                       productType: item.product_type || 'Uncategorized',
                       uom: item.uom || 'EA',
-                      binLocation: item.preferred_bin || '', 
+                      binLocation: '', // Blank by default, updated via Mass Update tab
                       partHandling: autoPartHandling,
                       outsourceAction: parsedOutsourceAction, 
                       collections: collectionsArray, 
@@ -581,7 +574,7 @@ const handleSyncAddresses = async () => {
                       isInHouse: hasVendor ? false : (existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : true),
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
-                      binLocation: item.preferred_bin || existingMatch.manufacturingSpecs?.binLocation || '', 
+                      binLocation: existingMatch.manufacturingSpecs?.binLocation || '', // Preserves whatever you assign in Mass Update
                       partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
                       outsourceAction: parsedOutsourceAction || existingMatch.manufacturingSpecs?.outsourceAction || '', 
                       collections: collectionsArray.length > 0 ? collectionsArray : (existingMatch.manufacturingSpecs?.collections || []), 
