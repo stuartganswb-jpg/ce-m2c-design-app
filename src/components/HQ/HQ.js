@@ -1,7 +1,7 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth, functions } from '../../firebase'; 
-import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc, addDoc, serverTimestamp } from "firebase/firestore";
 import { signInWithCustomToken } from 'firebase/auth'; 
 import { httpsCallable } from 'firebase/functions'; 
 import '../../App.css';
@@ -20,7 +20,7 @@ const UPSShippingCalculator = lazy(() => import('./UPSShippingCalculator'));
 const ExternalCoopTab = lazy(() => import('./ExternalCoopTab'));
 const ProjectManagementTab = lazy(() => import('./ProjectManagementTab')); 
 const AdminTab = lazy(() => import('./AdminTab')); 
-const NetSuiteSyncTab = lazy(() => import('./NetSuiteSyncTab')); // 🚀 NEW TAB COMPONENT
+const NetSuiteSyncTab = lazy(() => import('./NetSuiteSyncTab')); 
 const ERPPushPullTab = lazy(() => import('./ERPPushPullTab'));
 const StockViewTab = lazy(() => import('./StockViewTab'));
 const RTGDispatchTab = lazy(() => import('./RTGDispatchTab'));
@@ -37,7 +37,6 @@ const BRANDS = [
   { id: 'leyla', name: 'Leyla Gans LLC', focus: 'Fine Jewelry', color: '#C5A880' } 
 ];
 
-// 🚀 UPDATED TABS ARRAY WITH 11.1
 const TABS = [
   '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update',
   '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
@@ -55,6 +54,21 @@ const theme = {
   serif: "'Cormorant Garamond', Georgia, serif",
   sans: "'Inter', -apple-system, sans-serif",
   mono: "'IBM Plex Mono', monospace"
+};
+
+// 🚀 UNIVERSAL HQ LOGGING FUNCTION
+export const logHqAction = async (userName, tabName, actionMessage) => {
+    try {
+        await addDoc(collection(db, "hq_logs"), {
+            t: serverTimestamp(),
+            u: userName,
+            tab: tabName,
+            action: actionMessage,
+            app: "HQ"
+        });
+    } catch (e) {
+        console.error("Failed to write HQ log", e);
+    }
 };
 
 function HQ() { 
@@ -115,6 +129,9 @@ function HQ() {
         setPerms(pSnap.exists() ? pSnap.data() : {});
         setUser(userData);
       }
+
+      // 🚀 Auto-log the login event
+      logHqAction(userData.name, "Authentication", "User authenticated into HQ Portal");
       
     } catch (err) { 
       console.error(err); 
@@ -130,9 +147,15 @@ function HQ() {
     const safeRole = user?.role ? user.role.toLowerCase() : 'operator';
     const authorizedTabs = user?.role === 'admin' ? TABS : (perms[safeRole] || []);
     setActiveTab(authorizedTabs[0] || TABS[0]); 
+
+    // 🚀 Auto-log brand switching
+    logHqAction(user.name, "Navigation", `Switched active division to ${brand.name}`);
   };
 
   const handleLogout = () => {
+    if (user) {
+        logHqAction(user.name, "Authentication", "User logged out of HQ Portal");
+    }
     setActiveBrand(null);
     setUser(null);
     setPinInput("");
@@ -283,7 +306,6 @@ function HQ() {
               <div style={{ fontFamily: theme.serif, fontSize: '2rem', color: theme.brass, fontStyle: 'italic' }}>Loading Module...</div>
             </div>
           }>
-            {/* 🚀 Changed to use exact string matching to prevent index-shifting bugs */}
             {activeTab === '1. Inception & Validation' && <InceptionTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '1.5 Node Grouping' && <NodeClusterTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '2. Visual Assembly' && <VisualAssemblyTab currentUser={user.name} activeBrand={activeBrand.id} onProceed={() => setActiveTab('3. BOM Engine')} />}
@@ -297,12 +319,14 @@ function HQ() {
             {activeTab === '9.5 UPS Shipping' && <UPSShippingCalculator currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '10. External Co-Op' && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '10.5 Project Mgmt' && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === '10.7 OS Comms' && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={null} />}
-            {activeTab === '11. System Admin' && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} />}
             
-            {/* NEW SYNC TAB RENDER */}
+            {/* 🚀 Wired up writeLog to OS Comms */}
+            {activeTab === '10.7 OS Comms' && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={logHqAction} />}
+            
+            {/* 🚀 Wired up writeLog to Admin Tab */}
+            {activeTab === '11. System Admin' && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} writeLog={logHqAction} />}
+            
             {activeTab === '11.1 NetSuite Sync' && <NetSuiteSyncTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            
             {activeTab === '12. ERP Push / Pull' && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '12.5 Stock View' && <StockViewTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '13. RTG Dispatch' && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
