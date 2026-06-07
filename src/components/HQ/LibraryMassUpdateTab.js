@@ -20,7 +20,8 @@ const DEFAULT_SYSTEM_WINDOWS = {
   customers: ['ce', 'm2c', 'uniquity', 'leyla'],
   partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], 
   inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
-  projections: ['ce', 'm2c', 'uniquity', 'leyla'] 
+  projections: ['ce', 'm2c', 'uniquity', 'leyla'],
+  bins: ['ce', 'm2c', 'uniquity', 'leyla'] 
 };
 
 const LIST_LABELS = {
@@ -31,7 +32,8 @@ const LIST_LABELS = {
     customers: 'CUSTOMERS / DEALERS (Format: Name - ID)', 
     partHandling: 'PART HANDLING & ROUTING', 
     inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS',
-    projections: 'BRACKET PROJECTIONS' 
+    projections: 'BRACKET PROJECTIONS',
+    bins: 'WAREHOUSE BIN LOCATIONS'
 };
 
 const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
@@ -41,6 +43,11 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [isUpdating, setIsUpdating] = useState(false);
     const [progress, setProgress] = useState(0);
+
+    // CSV IMPORT STATE
+    const [csvFile, setCsvFile] = useState(null);
+    const [isProcessingCsv, setIsProcessingCsv] = useState(false);
+    const [csvProgress, setCsvProgress] = useState(0);
 
     const [updates, setUpdates] = useState({
         productType: { active: false, value: "" },
@@ -59,7 +66,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         stitchType: { active: false, value: "" },
         seamCount: { active: false, value: "" },
         projection: { active: false, value: "" },
-        // NEW ADDITIONS
         basePrice: { active: false, value: "" },
         cost: { active: false, value: "" },
         weight: { active: false, value: "" },
@@ -79,7 +85,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         prodTypes: [], uom: [], watchLists: [], assemblyTypes: [], inventoryTypes: [], 
         partHandling: [], collections: [], vendors: [], outsourceActions: [],
         pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [],
-        projections: [], cpqRoutingTypes: [], customers: []
+        projections: [], cpqRoutingTypes: [], customers: [], bins: []
     });
     
     const [collectionsData, setCollectionsData] = useState([]);
@@ -150,6 +156,166 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
         return () => { unsubLists(); unsubCols(); unsubWin(); unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubVendors(); unsubCustomers(); unsubRecipes(); };
     }, []);
+
+    // --- CSV BULK UPLOAD & MAPPING LOGIC ---
+
+    const handleDownloadCsvTemplate = () => {
+        const headers = [
+            "ERP Item ID", "NetSuite Internal ID", "Item Name", "Product Type", "Routing Type", "UOM",
+            "Vendor", "Watchlist", "Part Handling", "Program Num", "Material",
+            "Weight", "Base Price", "Cost", "MOQ", "Lead Time", "Reorder Point",
+            "Bin Location", "Is In-House (TRUE/FALSE)", "Outsource Action", "Collection"
+        ];
+
+        let csvContent = headers.join(",") + "\n";
+
+        inventory.forEach(part => {
+            const specs = part.manufacturingSpecs || {};
+            const row = [
+                part.legacyErpId || part.itemId || "",
+                part.netSuiteInternalId || "",
+                part.itemName || "",
+                specs.productType || "",
+                part.routingType || "",
+                specs.uom || "",
+                specs.vendorName || "",
+                specs.watchList || specs.customData?.watchlist || "",
+                specs.partHandling || "",
+                specs.programNum || "",
+                specs.material || "",
+                specs.weight || "",
+                specs.basePrice || "",
+                specs.cost || "",
+                specs.moq || "",
+                specs.leadTime || "",
+                specs.reorderPoint || "",
+                specs.binLocation || "",
+                specs.isInHouse !== false ? "TRUE" : "FALSE",
+                specs.outsourceAction || "",
+                (specs.collections || []).join(";") || specs.customData?.collection || ""
+            ];
+            
+            // Wrap in quotes to prevent commas inside names from breaking columns
+            csvContent += row.map(v => `"${(v || '').toString().replace(/"/g, '""')}"`).join(",") + "\n";
+        });
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `Mass_Update_Template_${activeBrand}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+    };
+
+    const handleProcessCsv = async () => {
+        if (!csvFile) return alert("Please select a CSV file first.");
+        if (!window.confirm("WARNING: This will overwrite data in your database based on the uploaded file. Proceed?")) return;
+
+        setIsProcessingCsv(true);
+        setCsvProgress(0);
+
+        try {
+            const text = await csvFile.text();
+            
+            // Regex handles commas inside quotes correctly
+            const rows = text.split('\n').map(row => {
+                const matches = row.match(/(\\.|[^",\s]+|"(?:\\.|[^\\"])*")/g) || [];
+                return matches.map(m => m.replace(/^"|"$/g, '').replace(/""/g, '"'));
+            });
+
+            if (rows.length < 2) throw new Error("File is empty or invalid.");
+
+            const headers = rows[0].map(h => h.trim());
+            if (!headers.includes("ERP Item ID")) throw new Error("Missing 'ERP Item ID' column.");
+
+            const dataRows = rows.slice(1).filter(r => r.length > 0 && r[0]); 
+            
+            let batch = writeBatch(db);
+            let opCount = 0;
+            let totalUpdated = 0;
+
+            for (let i = 0; i < dataRows.length; i++) {
+                const row = dataRows[i];
+                const erpId = row[headers.indexOf("ERP Item ID")];
+                if (!erpId) continue;
+
+                const targetPart = inventory.find(p => p.legacyErpId === erpId || p.itemId === erpId);
+                if (!targetPart) continue;
+
+                const ref = doc(db, "Approved_Designs", targetPart.id);
+                
+                const getVal = (col) => {
+                    const idx = headers.indexOf(col);
+                    return idx > -1 ? row[idx] : null;
+                };
+
+                const payload = {};
+                
+                // Text Fields
+                const pType = getVal("Product Type"); if(pType !== null) { payload.productType = pType; payload["manufacturingSpecs.productType"] = pType; }
+                const rType = getVal("Routing Type"); if(rType !== null) { payload.routingType = rType; payload["manufacturingSpecs.routingType"] = rType; }
+                const uom = getVal("UOM"); if(uom !== null) { payload["manufacturingSpecs.uom"] = uom.toUpperCase(); }
+                const bin = getVal("Bin Location"); if(bin !== null) { payload["manufacturingSpecs.binLocation"] = bin.toUpperCase(); }
+                const vName = getVal("Vendor"); if(vName !== null) { payload["manufacturingSpecs.vendorName"] = vName; }
+                const wl = getVal("Watchlist"); if(wl !== null) { payload["manufacturingSpecs.watchList"] = wl.toUpperCase(); }
+                const ph = getVal("Part Handling"); if(ph !== null) { payload["manufacturingSpecs.partHandling"] = ph; }
+                const pn = getVal("Program Num"); if(pn !== null) { payload["manufacturingSpecs.programNum"] = pn; }
+                const mat = getVal("Material"); if(mat !== null) { payload["manufacturingSpecs.material"] = mat; }
+                const outAct = getVal("Outsource Action"); if(outAct !== null) { payload["manufacturingSpecs.outsourceAction"] = outAct; }
+                
+                // Number Fields
+                const w = getVal("Weight"); if(w !== null) { payload["manufacturingSpecs.weight"] = w === "" ? "" : parseFloat(w); }
+                const bp = getVal("Base Price"); if(bp !== null) { payload["manufacturingSpecs.basePrice"] = bp === "" ? "" : parseFloat(bp); }
+                const c = getVal("Cost"); if(c !== null) { payload["manufacturingSpecs.cost"] = c === "" ? "" : parseFloat(c); }
+                const moq = getVal("MOQ"); if(moq !== null) { payload["manufacturingSpecs.moq"] = moq === "" ? "" : parseFloat(moq); }
+                const lt = getVal("Lead Time"); if(lt !== null) { payload["manufacturingSpecs.leadTime"] = lt === "" ? "" : parseFloat(lt); }
+                const rop = getVal("Reorder Point"); if(rop !== null) { payload["manufacturingSpecs.reorderPoint"] = rop === "" ? "" : parseFloat(rop); }
+                
+                // Booleans
+                const isInHouse = getVal("Is In-House (TRUE/FALSE)"); 
+                if(isInHouse !== null) { 
+                    payload["manufacturingSpecs.isInHouse"] = isInHouse.toUpperCase() === 'TRUE';
+                    payload.partClass = "Inventory"; 
+                }
+
+                // Arrays
+                const col = getVal("Collection");
+                if (col !== null) {
+                    if (col === "") payload["manufacturingSpecs.collections"] = [];
+                    else payload["manufacturingSpecs.collections"] = col.split(";").map(s => s.trim().toUpperCase()).filter(Boolean);
+                }
+
+                payload.updatedAt = new Date().toISOString();
+                payload.updatedBy = "CSV_IMPORT";
+
+                batch.update(ref, payload);
+                opCount++;
+                totalUpdated++;
+
+                if (opCount >= 400) {
+                    await batch.commit();
+                    batch = writeBatch(db);
+                    opCount = 0;
+                    setCsvProgress(Math.round((i / dataRows.length) * 100));
+                }
+            }
+
+            if (opCount > 0) {
+                await batch.commit();
+            }
+
+            setCsvProgress(100);
+            alert(`✅ CSV Data Mapping Complete! Updated ${totalUpdated} records.`);
+            setCsvFile(null);
+            document.getElementById('csv-upload-input').value = ""; 
+        } catch (err) {
+            console.error(err);
+            alert("Error processing CSV: " + err.message);
+        }
+        setIsProcessingCsv(false);
+    };
 
     // --- MASS UPDATE LOGIC ---
     const filteredInventory = inventory.filter(part => {
@@ -507,6 +673,32 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 </div>
             </div>
 
+            {/* CSV IMPORT TOOL */}
+            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px', marginBottom: '10px', borderRadius: '2px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                    <h3 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>CSV Data Mapping Tool</h3>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: theme.inkSoft }}>Download your current inventory, edit it in Excel, and upload it back to instantly map NetSuite data like Bins, Pricing, and Routing.</span>
+                </div>
+                <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                    <button onClick={handleDownloadCsvTemplate} style={{ padding: '12px 24px', background: 'var(--paper-2)', color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                        1. Download Excel/CSV Template
+                    </button>
+                    <input 
+                        id="csv-upload-input"
+                        type="file" 
+                        accept=".csv" 
+                        onChange={(e) => setCsvFile(e.target.files[0])} 
+                        style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} 
+                    />
+                    <button 
+                        onClick={handleProcessCsv} 
+                        disabled={isProcessingCsv || !csvFile}
+                        style={{ padding: '12px 24px', background: (csvFile && !isProcessingCsv) ? theme.ink : theme.paper2, color: (csvFile && !isProcessingCsv) ? '#fff' : theme.inkSoft, border: 'none', cursor: (csvFile && !isProcessingCsv) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                        {isProcessingCsv ? `Processing... ${csvProgress}%` : '2. Upload & Sync'}
+                    </button>
+                </div>
+            </div>
+
             <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
                 
                 {/* LEFT: SELECTION PANEL */}
@@ -550,7 +742,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 {/* RIGHT: CONFIGURATION PANEL */}
                 <div style={{ flex: 1.2, background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', height: '70vh', overflowY: 'auto' }}>
                     <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>
-                        Metadata Injection Rules
+                        Manual Metadata Injection Rules
                         <span style={{ display: 'block', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: theme.inkSoft, fontWeight: 'normal', marginTop: '4px' }}>
                             Check the box next to a field to enable it. Only enabled fields will be applied to the selected records.
                         </span>
@@ -719,7 +911,10 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 <input type="checkbox" checked={updates.binLocation.active} onChange={(e) => handleUpdateChange('binLocation', 'active', e.target.checked)} />
                                 Overwrite Bin Location
                             </label>
-                            <input type="text" disabled={!updates.binLocation.active} value={updates.binLocation.value} onChange={(e) => handleUpdateChange('binLocation', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.binLocation.active ? 1 : 0.5, textTransform: 'uppercase' }} placeholder="e.g. A1-B2-04" />
+                            <select disabled={!updates.binLocation.active} value={updates.binLocation.value} onChange={(e) => handleUpdateChange('binLocation', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.binLocation.active ? 1 : 0.5, textTransform: 'uppercase' }}>
+                                <option value="">Select Bin...</option>
+                                {(globalLists.bins || []).map(b => <option key={b} value={b}>{b}</option>)}
+                            </select>
                         </div>
 
                         {/* SOURCING FLAG */}
