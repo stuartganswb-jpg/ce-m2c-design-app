@@ -222,6 +222,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       });
   }, [libraryParts, quoteSelections.collection, activeFlow, flowPins]);
 
+  // --- HARDWARE MATH CALCULATIONS (RESTORED) ---
   const rad = (deg) => (deg * Math.PI) / 180;
   const S = 3.5; 
   let mDeduct1=0, mDeduct2=0, wall1=engData.w1, wall2=engData.w2, wall3=engData.w3, pole1=0, pole2=0, pole3=0, sawAngle1=0, sawAngle2=0;
@@ -238,43 +239,50 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   if (engData.shape === 'STRAIGHT') {
       if (engData.inputMode === 'WALL') { 
           wall2 = engData.w2; 
-          pole2 = wall2 + bendDeductL + bendDeductR + imDeductL + imDeductR; 
+          pole2 = wall2 - bendDeductL - bendDeductR - imDeductL - imDeductR; 
       } else { 
-          pole2 = engData.w2; 
-          wall2 = pole2 - bendDeductL - bendDeductR - imDeductL - imDeductR; 
+          pole2 = engData.w2 - bendDeductL - bendDeductR - imDeductL - imDeductR; 
+          wall2 = engData.w2; 
       }
   } else if (engData.shape === 'MITERED') {
       mDeduct1 = engData.a1 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a1) / 2));
       mDeduct2 = engData.a2 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a2) / 2));
       if (engData.inputMode === 'WALL') { 
           wall1 = engData.w1; wall2 = engData.w2; wall3 = engData.w3;
-          pole1 = Math.max(0, wall1 + mDeduct1 + imDeductL); 
-          pole2 = Math.max(0, wall2 + mDeduct1 + mDeduct2); 
-          pole3 = Math.max(0, wall3 + mDeduct2 + imDeductR); 
+          pole1 = Math.max(0, wall1 - mDeduct1 - imDeductL); 
+          pole2 = Math.max(0, wall2 - mDeduct1 - mDeduct2); 
+          pole3 = Math.max(0, wall3 - mDeduct2 - imDeductR); 
       } else { 
-          pole1 = engData.w1; pole2 = engData.w2; pole3 = engData.w3;
-          wall1 = pole1 - mDeduct1 - imDeductL; 
-          wall2 = pole2 - mDeduct1 - mDeduct2; 
-          wall3 = pole3 - mDeduct2 - imDeductR; 
+          pole1 = engData.w1 - bendDeductL - imDeductL; wall1 = pole1 + mDeduct1 + imDeductL; 
+          pole2 = engData.w2; wall2 = pole2 + mDeduct1 + mDeduct2; 
+          pole3 = engData.w3 - bendDeductR - imDeductR; wall3 = pole3 + mDeduct2 + imDeductR; 
       }
       sawAngle1 = engData.a1 === 180 ? 0 : 90 - (engData.a1 / 2); sawAngle2 = engData.a2 === 180 ? 0 : 90 - (engData.a2 / 2);
   } else if (engData.shape === 'BOW') {
-      if (engData.bowDepth > 0) {
-          const rW_px = bowR * S; const rH_px = bowHW_R * S; bowCX = 500; bowCY = P2.y + rW_px - engData.bowDepth * S;
-          bowStartAngle = Math.atan2(P2.y - bowCY, P2.x - bowCX); bowEndAngle = Math.atan2(P3.y - bowCY, P3.x - bowCX);
-          if (bowEndAngle < bowStartAngle) bowEndAngle += 2 * Math.PI;
-          HS = { x: bowCX + rH_px * Math.cos(bowStartAngle), y: bowCY + rH_px * Math.sin(bowStartAngle) }; HE = { x: bowCX + rH_px * Math.cos(bowEndAngle), y: bowCY + rH_px * Math.sin(bowEndAngle) };
-          const ndxL = P2.x - HS.x; const ndyL = P2.y - HS.y; const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1; nL = { x: ndxL/nlenL, y: ndyL/nlenL };
-          const ndxR = P3.x - HE.x; const ndyR = P3.y - HE.y; const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1; nR = { x: ndxR/nlenR, y: ndyR/nlenR };
+      const c = engData.w2; const h = engData.bowDepth;
+      if (h > 0) {
+          const rInput = (h/2) + ((c*c)/(8*h)); const theta = 2 * Math.asin(c / (2 * rInput));
+          if (engData.inputMode === 'WALL') { bowR = rInput; bowHW_R = bowR - safeProj; pole2 = Math.max(0, (bowHW_R * theta) - imDeductL - imDeductR); wall2 = c; }
+          else { bowHW_R = rInput; bowR = bowHW_R + safeProj; pole2 = (bowHW_R * theta) - imDeductL - imDeductR; wall2 = 2 * bowR * Math.sin(theta / 2); }
       }
   }
 
-  const rawLeft = engData.shape === 'MITERED' ? pole1 : 0; 
-  const rawRight = engData.shape === 'MITERED' ? pole3 : 0;
-  const rawCenter = pole2;
-  
+  // --- RAW CUTS & O2O MATH ---
+  let endRawAdd = 0;
+  if (engData.endStyle === 'RETURN_BEND') endRawAdd = engData.gripAllowance;
+  const addL_RAW = isLeftInside ? 0 : endRawAdd;
+  const addR_RAW = isRightInside ? 0 : endRawAdd;
+
+  const orderL = engData.shape === 'MITERED' ? pole1 + bendDeductL + imDeductL : 0;
+  const orderR = engData.shape === 'MITERED' ? pole3 + bendDeductR + imDeductR : 0;
+  const orderC = engData.shape === 'STRAIGHT' ? (pole2 + bendDeductL + bendDeductR + imDeductL + imDeductR) : (engData.shape === 'BOW' ? pole2 + imDeductL + imDeductR : pole2);
+
+  const rawLeft = engData.shape === 'MITERED' ? pole1 + addL_RAW : 0;
+  const rawRight = engData.shape === 'MITERED' ? pole3 + addR_RAW : 0;
+  const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 + addL_RAW + addR_RAW : pole2;
+
   const totalPoleRawInches = rawLeft + rawCenter + rawRight;
-  const poleO2O = totalPoleRawInches;
+  const poleO2O = orderL + orderC + orderR;
   const totalSystemO2O = poleO2O + engData.bracketW;
 
   const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
@@ -570,7 +578,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
     }
   };
 
-  // FLIPPED LOGIC: Inputs as 'ORDERING' so engine calculates deductions perfectly
   const pushMeasurementToEng = (m) => {
       setEngData(prev => ({ ...prev, w2: m.inches, inputMode: 'ORDERING' }));
       setSidemark(m.label);
