@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, doc } from "firebase/firestore";
+import { collection, onSnapshot, query, doc, setDoc } from "firebase/firestore";
 
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
@@ -24,7 +24,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     const [partClassFilter, setPartClassFilter] = useState("ALL");
     const [typeFilter, setTypeFilter] = useState("");
     const [collectionFilter, setCollectionFilter] = useState("");
-    const [watchlistFilter, setWatchlistFilter] = useState(""); // NEW: Watchlist Filter
+    const [watchlistFilter, setWatchlistFilter] = useState(""); 
 
     const addLog = (msg, type = 'info') => {
         const time = new Date().toLocaleTimeString();
@@ -54,48 +54,125 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     const pullNetSuiteStock = async () => {
         setIsSyncing(true);
         setSyncLog([]);
-        addLog("Initiating SuiteQL pull for Item Inventory...", "info");
-
+        
         try {
+            // STEP 1: SYNC STOCK LEVELS (Quantities)
+            addLog("Initiating SuiteQL pull for Item Inventory...", "info");
             const erpIds = hqParts.map(p => p.legacyErpId || p.itemId).filter(Boolean);
-            if (erpIds.length === 0) {
-                addLog("No ERP IDs found in HQ catalog to sync.", "warn");
-                setIsSyncing(false);
-                return;
-            }
-
-            const chunkSize = 500;
-            const chunks = [];
-            for (let i = 0; i < erpIds.length; i += chunkSize) {
-                chunks.push(erpIds.slice(i, i + chunkSize));
-            }
-
-            addLog(`Found ${erpIds.length} tracked items. Splitting into ${chunks.length} batches...`, "info");
-
-            let allResults = [];
             
-            for (let i = 0; i < chunks.length; i++) {
-                const chunk = chunks[i];
-                const idList = chunk.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
+            if (erpIds.length > 0) {
+                const chunkSize = 500;
+                const chunks = [];
+                for (let i = 0; i < erpIds.length; i += chunkSize) {
+                    chunks.push(erpIds.slice(i, i + chunkSize));
+                }
 
-                // ADDED: AggregateItemLocation.quantitycommitted
+                addLog(`Found ${erpIds.length} tracked items. Splitting into ${chunks.length} batches...`, "info");
+
+                let allResults = [];
+                
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunk = chunks[i];
+                    const idList = chunk.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
+
+                    const q = `
+                        SELECT 
+                            Item.itemid AS legacy_id,
+                            SUM(AggregateItemLocation.quantityonhand) AS onhand,
+                            SUM(AggregateItemLocation.quantityavailable) AS available,
+                            SUM(AggregateItemLocation.quantityonorder) AS onorder,
+                            SUM(AggregateItemLocation.quantitycommitted) AS committed,
+                            SUM(AggregateItemLocation.quantitybackordered) AS backordered,
+                            MAX(Item.averagecost) AS averagecost
+                        FROM Item
+                        LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id
+                        WHERE Item.itemid IN (${idList})
+                        GROUP BY Item.itemid
+                    `;
+                    
+                    addLog(`Executing Quantity Query Batch ${i + 1} of ${chunks.length}...`, "info");
+
+                    const response = await fetch(FIREBASE_FUNCTION_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                            method: 'POST',
+                            payload: { q }
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(JSON.stringify(result));
+                    
+                    if (result.items) {
+                        allResults = allResults.concat(result.items);
+                    }
+                }
+                
+                addLog(`NetSuite returned ${allResults.length} total matched items for quantities. Mapping...`, "success");
+
+                const stockMap = {};
+                allResults.forEach(row => {
+                    if (row.legacy_id) {
+                        stockMap[row.legacy_id.toUpperCase()] = {
+                            onHand: parseInt(row.onhand) || 0,
+                            available: parseInt(row.available) || 0,
+                            onOrder: parseInt(row.onorder) || 0,
+                            committed: parseInt(row.committed) || 0,
+                            backorder: parseInt(row.backordered) || 0,
+                            cost: parseFloat(row.averagecost) || 0
+                        };
+                    }
+                });
+                
+                setNsStock(stockMap);
+            } else {
+                addLog("No ERP IDs found in HQ catalog to sync quantities.", "warn");
+            }
+
+            // STEP 2: SYNC ITEM METADATA (Vendors, Watchlists, Collections)
+            addLog("Initiating SuiteQL pull for Item Metadata...", "info");
+            
+            const typeFilter = "item.itemtype IN ('InvtPart', 'Assembly')";
+            let allRawRecords = [];
+            let lastId = 0;
+            let hasMore = true;
+            let pageCount = 1;
+
+            while (hasMore) {
+                addLog(`Fetching metadata batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
+                
+                // NO BIN TABLES HERE TO PREVENT 400 ERROR
                 const q = `
                     SELECT 
-                        Item.itemid AS legacy_id,
-                        SUM(AggregateItemLocation.quantityonhand) AS onhand,
-                        SUM(AggregateItemLocation.quantityavailable) AS available,
-                        SUM(AggregateItemLocation.quantityonorder) AS onorder,
-                        SUM(AggregateItemLocation.quantitycommitted) AS committed,
-                        SUM(AggregateItemLocation.quantitybackordered) AS backordered,
-                        MAX(Item.averagecost) AS averagecost
-                    FROM Item
-                    LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id
-                    WHERE Item.itemid IN (${idList})
-                    GROUP BY Item.itemid
+                        item.id, 
+                        item.itemid, 
+                        item.displayname,
+                        BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
+                        BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
+                        BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
+                        BUILTIN.DF(item.stockunit) AS uom,
+                        item.custitem9 AS baseprice,
+                        Vendor.companyname AS vendor_name,
+                        ItemVendor.vendorcode AS vendor_part_number,
+                        ItemVendor.purchaseprice AS lastpurchaseprice,
+                        ItemVendor.preferredvendor
+                    FROM 
+                        item
+                    LEFT JOIN 
+                        ItemVendor ON ItemVendor.item = item.id
+                    LEFT JOIN
+                        Vendor ON ItemVendor.vendor = Vendor.id
+                    WHERE 
+                        item.custitem_sync_to_cpq = 'T' 
+                        AND item.isinactive = 'F' 
+                        AND ${typeFilter}
+                        AND item.id > ${lastId}
+                    ORDER BY 
+                        item.id ASC
                 `;
                 
-                addLog(`Executing Query Batch ${i + 1} of ${chunks.length}...`, "info");
-
                 const response = await fetch(FIREBASE_FUNCTION_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -108,30 +185,99 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                 
                 const result = await response.json();
                 if (!response.ok) throw new Error(JSON.stringify(result));
+
+                const batch = result.items || [];
+                allRawRecords = allRawRecords.concat(batch);
                 
-                if (result.items) {
-                    allResults = allResults.concat(result.items);
+                if (batch.length > 0) {
+                    lastId = batch[batch.length - 1].id;
+                    if (batch.length < 1000) {
+                        hasMore = false; 
+                    } else {
+                        pageCount++;
+                    }
+                } else {
+                    hasMore = false;
                 }
             }
             
-            addLog(`NetSuite returned ${allResults.length} total matched items. Mapping to HQ catalog...`, "success");
+            addLog(`Downloaded ${allRawRecords.length} total items. Processing deduplication...`, 'success');
 
-            const stockMap = {};
-            allResults.forEach(row => {
-                if (row.legacy_id) {
-                    stockMap[row.legacy_id.toUpperCase()] = {
-                        onHand: parseInt(row.onhand) || 0,
-                        available: parseInt(row.available) || 0,
-                        onOrder: parseInt(row.onorder) || 0,
-                        committed: parseInt(row.committed) || 0, // NEW
-                        backorder: parseInt(row.backordered) || 0,
-                        cost: parseFloat(row.averagecost) || 0
-                    };
+            const uniqueRecordsMap = {};
+            for (const row of allRawRecords) {
+                const itemId = row.id;
+                if (!uniqueRecordsMap[itemId]) {
+                    uniqueRecordsMap[itemId] = row;
+                } else {
+                    const isNewPreferred = row.preferredvendor === 'T';
+                    const isOldPreferred = uniqueRecordsMap[itemId].preferredvendor === 'T';
+                    const oldHasVendor = !!uniqueRecordsMap[itemId].vendor_name;
+                    const newHasVendor = !!row.vendor_name;
+
+                    if (isNewPreferred && !isOldPreferred) {
+                        uniqueRecordsMap[itemId] = row;
+                    } else if (!oldHasVendor && newHasVendor && !isOldPreferred) {
+                        uniqueRecordsMap[itemId] = row;
+                    }
                 }
-            });
+            }
+            const records = Object.values(uniqueRecordsMap);
             
-            setNsStock(stockMap);
-            addLog(`✅ Sync Complete. Inventory matched and updated successfully.`, "success");
+            let successCount = 0;
+            for (const item of records) {
+                const existingMatch = hqParts.find(d => d.legacyErpId === item.itemid);
+                if (!existingMatch) continue; 
+
+                const pTypeClean = (item.product_type || '').toLowerCase().trim();
+                const uomClean = (item.uom || '').toLowerCase().trim();
+                
+                const isPoleOrLinear = pTypeClean === 'pole' || pTypeClean === 'poles' || uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
+                const autoPartHandling = isPoleOrLinear ? 'Custom' : 'Small Parts';
+                
+                const hasVendor = item.vendor_name && item.vendor_name.trim() !== '';
+
+                let parsedOutsourceAction = '';
+                if (/EP\d{2}/i.test(item.itemid) || /EP\d{2}/i.test(item.displayname)) {
+                    parsedOutsourceAction = 'PLATING';
+                }
+
+                let parsedCollection = item.collection || '';
+                let collectionsArray = [];
+                if (/^H1/i.test(item.itemid) || /^H1/i.test(item.displayname)) {
+                    parsedCollection = 'Fabricut H1';
+                    collectionsArray = ['FABRICUT H1'];
+                } else if (item.collection) {
+                    collectionsArray = [item.collection.toUpperCase()];
+                }
+
+                const payload = {
+                    manufacturingSpecs: {
+                        ...existingMatch.manufacturingSpecs,
+                        basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0,
+                        cost: parseFloat(item.lastpurchaseprice) || existingMatch.manufacturingSpecs?.cost || 0,
+                        isInHouse: hasVendor ? false : (existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : true),
+                        productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
+                        uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
+                        binLocation: existingMatch.manufacturingSpecs?.binLocation || '', 
+                        partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
+                        outsourceAction: parsedOutsourceAction || existingMatch.manufacturingSpecs?.outsourceAction || '', 
+                        collections: collectionsArray.length > 0 ? collectionsArray : (existingMatch.manufacturingSpecs?.collections || []), 
+                        vendorName: item.vendor_name || existingMatch.manufacturingSpecs?.vendorName || '',
+                        vendorId: item.vendor_part_number || existingMatch.manufacturingSpecs?.vendorId || '',
+                        customData: {
+                            ...(existingMatch.manufacturingSpecs?.customData || {}),
+                            collection: parsedCollection || existingMatch.manufacturingSpecs?.customData?.collection || '',
+                            watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || ''
+                        }
+                    },
+                    updatedAt: new Date().toISOString()
+                };
+
+                await setDoc(doc(db, "Approved_Designs", existingMatch.id), payload, { merge: true });
+                successCount++;
+            }
+
+            addLog(`✅ Sync Complete. Quantities matched and metadata updated.`, "success");
         } catch (error) {
             console.error("NetSuite Sync Error:", error);
             addLog(`❌ FAILED: ${error.message}`, "error");
@@ -152,7 +298,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     // ALGORITHM: IN-HOUSE PRODUCTION (Factoring in constraints & committed stock)
     const calculateSuggestedWOQty = (available, rop, moq, leadTime, committed, backorder) => {
         if (available > rop && backorder <= 0 && committed <= available) return 0;
-        const productionBuffer = leadTime ? (leadTime * 1.2) : 5; // Simulates capacity constraint/time
+        const productionBuffer = leadTime ? (leadTime * 1.2) : 5; 
         let suggested = (rop - available) + backorder + committed + productionBuffer;
         if (moq && suggested < moq) suggested = moq;
         return Math.max(0, Math.ceil(suggested));
@@ -221,6 +367,15 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         setOrderDrafts({}); 
     };
 
+    const dynamicWatchlists = Array.from(new Set([
+        ...(globalLists.watchLists || []).map(w => w.toUpperCase()),
+        ...hqParts.map(p => {
+            const specs = p.manufacturingSpecs || {};
+            const nsWatchlist = specs.customData?.watchlist && specs.customData.watchlist !== 'N/A' ? specs.customData.watchlist.toUpperCase() : "NONE";
+            return specs.watchList ? specs.watchList.toUpperCase() : nsWatchlist;
+        }).filter(w => w !== "NONE")
+    ])).sort();
+
     const enrichedInventory = hqParts.map(part => {
         const erpId = (part.legacyErpId || part.itemId).toUpperCase();
         const stock = nsStock[erpId] || { onHand: 0, available: 0, onOrder: 0, committed: 0, backorder: 0 };
@@ -262,7 +417,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     if (activeBuilder === 'PO' && activeVendor) {
         displayItems = baseFilteredItems.filter(p => p.manufacturingSpecs?.vendorName === activeVendor && !p.manufacturingSpecs?.isInHouse);
     } else if (activeBuilder === 'WO') {
-        displayItems = baseFilteredItems.filter(p => p.manufacturingSpecs?.isInHouse !== false); // In-House only
+        displayItems = baseFilteredItems.filter(p => p.manufacturingSpecs?.isInHouse !== false); 
     }
 
     return (
@@ -298,11 +453,10 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                         {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                     </select>
 
-                    {/* NEW: WATCHLIST FILTER */}
                     <select value={watchlistFilter} onChange={(e) => setWatchlistFilter(e.target.value)} disabled={activeBuilder === 'PO' && !!activeVendor} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
                         <option value="">All Watchlists</option>
                         <option value="NONE">None / Unassigned</option>
-                        {(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
+                        {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
                     </select>
 
                     <input 
