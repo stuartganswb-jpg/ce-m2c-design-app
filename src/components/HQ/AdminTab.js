@@ -417,55 +417,53 @@ const handleSyncAddresses = async () => {
   const handleSyncItems = async (itemType) => {
       setIsSyncing(true);
       
-      const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
-      addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
-
-      try {
-          const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
-          
-          let allRawRecords = [];
-          let lastId = 0;
-          let hasMore = true;
-          let pageCount = 1;
-
-          // 🚀 INFINITE PAGINATION: Loops safely without breaking proxy authentication
-          while (hasMore) {
-              addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
+      const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
               
-              // Bracket Projection line temporarily removed so the query runs successfully
-              const q = `
-                  SELECT 
-                      item.id, 
-                      item.itemid, 
-                      item.displayname,
-                      BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
-                      BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
-                      BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
-                      BUILTIN.DF(item.stockunit) AS uom,
-                      item.custitem9 AS baseprice,
-                      Vendor.companyname AS vendor_name,
-                      ItemVendor.vendorcode AS vendor_part_number,
-                      ItemVendor.purchaseprice AS lastpurchaseprice,
-                      ItemVendor.preferredvendor,
-                      Bin.binnumber AS preferred_bin
-                  FROM 
-                      item
-                  LEFT JOIN 
-                      ItemVendor ON ItemVendor.item = item.id
-                  LEFT JOIN
-                      Vendor ON ItemVendor.vendor = Vendor.id
-                  LEFT JOIN 
-                      ItemBinNumber ON ItemBinNumber.item = item.id AND ItemBinNumber.preferredbin = 'T'
-                  LEFT JOIN 
-                      Bin ON ItemBinNumber.bin = Bin.id
-                  WHERE 
-                      item.custitem_sync_to_cpq = 'T' 
-                      AND item.isinactive = 'F' 
-                      AND ${typeFilter}
-                      AND item.id > ${lastId}
-                  ORDER BY 
-                      item.id ASC
-              `;
+              // Map the activeBrand to its specific NetSuite Location ID
+              const targetLocation = BRAND_NETSUITE_MAP[activeBrand]?.location || "17"; 
+
+              let allRawRecords = [];
+              let lastId = 0;
+              let hasMore = true;
+              let pageCount = 1;
+
+              // 🚀 INFINITE PAGINATION
+              while (hasMore) {
+                  addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
+                  
+                  const q = `
+                      SELECT 
+                          item.id, 
+                          item.itemid, 
+                          item.displayname,
+                          BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
+                          BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
+                          BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
+                          BUILTIN.DF(item.stockunit) AS uom,
+                          item.custitem9 AS baseprice,
+                          Vendor.companyname AS vendor_name,
+                          ItemVendor.vendorcode AS vendor_part_number,
+                          ItemVendor.purchaseprice AS lastpurchaseprice,
+                          ItemVendor.preferredvendor,
+                          Bin.binnumber AS preferred_bin
+                      FROM 
+                          item
+                      LEFT JOIN 
+                          ItemVendor ON ItemVendor.item = item.id
+                      LEFT JOIN
+                          Vendor ON ItemVendor.vendor = Vendor.id
+                      LEFT JOIN 
+                          ItemBinNumber ON ItemBinNumber.item = item.id AND ItemBinNumber.location = ${targetLocation} AND ItemBinNumber.preferredbin = 'T'
+                      LEFT JOIN 
+                          Bin ON ItemBinNumber.bin = Bin.id
+                      WHERE 
+                          item.custitem_sync_to_cpq = 'T' 
+                          AND item.isinactive = 'F' 
+                          AND ${typeFilter}
+                          AND item.id > ${lastId}
+                      ORDER BY 
+                          item.id ASC
+                  `;
               
               const result = await executeSuiteQL(q);
               const batch = result.items || [];
