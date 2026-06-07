@@ -417,62 +417,66 @@ const handleSyncAddresses = async () => {
   const handleSyncItems = async (itemType) => {
       setIsSyncing(true);
       
-      const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
+      const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
+      addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
+
+      try {
+          const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
+          
+          // Map the activeBrand to its specific NetSuite Location ID
+          const targetLocation = BRAND_NETSUITE_MAP[activeBrand]?.location || "17"; 
+
+          let allRawRecords = [];
+          let lastId = 0;
+          let hasMore = true;
+          let pageCount = 1;
+
+          // 🚀 INFINITE PAGINATION: Loops safely without breaking proxy authentication
+          while (hasMore) {
+              addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
               
-              // Map the activeBrand to its specific NetSuite Location ID
-              const targetLocation = BRAND_NETSUITE_MAP[activeBrand]?.location || "17"; 
-
-              let allRawRecords = [];
-              let lastId = 0;
-              let hasMore = true;
-              let pageCount = 1;
-
-              // 🚀 INFINITE PAGINATION
-              while (hasMore) {
-                  addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
-                  
-                  const q = `
-                      SELECT 
-                          item.id, 
-                          item.itemid, 
-                          item.displayname,
-                          BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
-                          BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
-                          BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
-                          BUILTIN.DF(item.stockunit) AS uom,
-                          item.custitem9 AS baseprice,
-                          Vendor.companyname AS vendor_name,
-                          ItemVendor.vendorcode AS vendor_part_number,
-                          ItemVendor.purchaseprice AS lastpurchaseprice,
-                          ItemVendor.preferredvendor,
-                          Bin.binnumber AS preferred_bin
-                      FROM 
-                          item
-                      LEFT JOIN 
-                          ItemVendor ON ItemVendor.item = item.id
-                      LEFT JOIN
-                          Vendor ON ItemVendor.vendor = Vendor.id
-                      LEFT JOIN 
-                          ItemBinNumber ON ItemBinNumber.item = item.id AND ItemBinNumber.location = ${targetLocation} AND ItemBinNumber.preferredbin = 'T'
-                      LEFT JOIN 
-                          Bin ON ItemBinNumber.bin = Bin.id
-                      WHERE 
-                          item.custitem_sync_to_cpq = 'T' 
-                          AND item.isinactive = 'F' 
-                          AND ${typeFilter}
-                          AND item.id > ${lastId}
-                      ORDER BY 
-                          item.id ASC
-                  `;
+              const q = `
+                  SELECT 
+                      item.id, 
+                      item.itemid, 
+                      item.displayname,
+                      BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
+                      BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
+                      BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
+                      BUILTIN.DF(item.stockunit) AS uom,
+                      item.custitem9 AS baseprice,
+                      Vendor.companyname AS vendor_name,
+                      ItemVendor.vendorcode AS vendor_part_number,
+                      ItemVendor.purchaseprice AS lastpurchaseprice,
+                      ItemVendor.preferredvendor,
+                      Bin.binnumber AS preferred_bin
+                  FROM 
+                      item
+                  LEFT JOIN 
+                      ItemVendor ON ItemVendor.item = item.id
+                  LEFT JOIN
+                      Vendor ON ItemVendor.vendor = Vendor.id
+                  LEFT JOIN 
+                      ItemBinNumber ON ItemBinNumber.item = item.id AND ItemBinNumber.location = ${targetLocation} AND ItemBinNumber.preferredbin = 'T'
+                  LEFT JOIN 
+                      Bin ON ItemBinNumber.bin = Bin.id
+                  WHERE 
+                      item.custitem_sync_to_cpq = 'T' 
+                      AND item.isinactive = 'F' 
+                      AND ${typeFilter}
+                      AND item.id > ${lastId}
+                  ORDER BY 
+                      item.id ASC
+              `;
               
               const result = await executeSuiteQL(q);
               const batch = result.items || [];
               allRawRecords = allRawRecords.concat(batch);
               
               if (batch.length > 0) {
-                  lastId = batch[batch.length - 1].id; // Update marker to the highest ID in this batch
+                  lastId = batch[batch.length - 1].id;
                   if (batch.length < 1000) {
-                      hasMore = false; // We pulled less than 1000, meaning we hit the end of the database
+                      hasMore = false; 
                   } else {
                       pageCount++;
                   }
@@ -519,15 +523,11 @@ const handleSyncAddresses = async () => {
               
               const hasVendor = item.vendor_name && item.vendor_name.trim() !== '';
 
-              // --- 🚀 AUTO-FORMATTING LOGIC ---
-              
-              // 1. Plating logic
               let parsedOutsourceAction = '';
               if (/EP\d{2}/i.test(item.itemid) || /EP\d{2}/i.test(item.displayname)) {
                   parsedOutsourceAction = 'PLATING';
               }
 
-              // 2. Collection logic
               let parsedCollection = item.collection || '';
               let collectionsArray = [];
               if (/^H1/i.test(item.itemid) || /^H1/i.test(item.displayname)) {
@@ -537,7 +537,6 @@ const handleSyncAddresses = async () => {
                   collectionsArray = [item.collection.toUpperCase()];
               }
 
-              // 3. Bracket Projection Extraction (Safely empty for now)
               let parsedProjection = '';
 
               const payload = {
@@ -559,7 +558,7 @@ const handleSyncAddresses = async () => {
                       status: "IMPORTED_FROM_ERP",
                       productType: item.product_type || 'Uncategorized',
                       uom: item.uom || 'EA',
-                      binLocation: item.preferred_bin || '',
+                      binLocation: item.preferred_bin || '', 
                       partHandling: autoPartHandling,
                       outsourceAction: parsedOutsourceAction, 
                       collections: collectionsArray, 
@@ -582,7 +581,7 @@ const handleSyncAddresses = async () => {
                       isInHouse: hasVendor ? false : (existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : true),
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
-                      binLocation: item.preferred_bin || existingMatch.manufacturingSpecs?.binLocation || '',
+                      binLocation: item.preferred_bin || existingMatch.manufacturingSpecs?.binLocation || '', 
                       partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
                       outsourceAction: parsedOutsourceAction || existingMatch.manufacturingSpecs?.outsourceAction || '', 
                       collections: collectionsArray.length > 0 ? collectionsArray : (existingMatch.manufacturingSpecs?.collections || []), 
