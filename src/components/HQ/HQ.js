@@ -16,10 +16,11 @@ const InstructionsTab = lazy(() => import('./InstructionsTab'));
 const PackagingTab = lazy(() => import('./PackagingTab'));
 const CPQTab = lazy(() => import('./CPQTab'));
 const ClientVisionTab = lazy(() => import('./ClientVisionTab')); 
-const UPSShippingCalculator = lazy(() => import('./UPSShippingCalculator')); // 🚀 NEW IMPORT
+const UPSShippingCalculator = lazy(() => import('./UPSShippingCalculator')); 
 const ExternalCoopTab = lazy(() => import('./ExternalCoopTab'));
 const ProjectManagementTab = lazy(() => import('./ProjectManagementTab')); 
 const AdminTab = lazy(() => import('./AdminTab')); 
+const NetSuiteSyncTab = lazy(() => import('./NetSuiteSyncTab')); // 🚀 NEW TAB COMPONENT
 const ERPPushPullTab = lazy(() => import('./ERPPushPullTab'));
 const StockViewTab = lazy(() => import('./StockViewTab'));
 const RTGDispatchTab = lazy(() => import('./RTGDispatchTab'));
@@ -27,7 +28,6 @@ const RTGDispatchTab = lazy(() => import('./RTGDispatchTab'));
 const AssetGalleryTab = lazy(() => import('../Shared/AssetGalleryTab'));
 const BatchImageProcessor = lazy(() => import('../Shared/BatchImageProcessor'));
 const BatchTextureProcessor = lazy(() => import('../Shared/BatchTextureProcessor'));
-
 const SharedMessaging = lazy(() => import('../Shared/SharedMessaging'));
 
 const BRANDS = [
@@ -37,11 +37,11 @@ const BRANDS = [
   { id: 'leyla', name: 'Leyla Gans LLC', focus: 'Fine Jewelry', color: '#C5A880' } 
 ];
 
-// 🚀 UPDATED TABS ARRAY
+// 🚀 UPDATED TABS ARRAY WITH 11.1
 const TABS = [
   '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update',
   '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
-  '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
+  '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '11.1 NetSuite Sync', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', 'ERP_WRITE_BACK'
 ];
 
@@ -283,28 +283,32 @@ function HQ() {
               <div style={{ fontFamily: theme.serif, fontSize: '2rem', color: theme.brass, fontStyle: 'italic' }}>Loading Module...</div>
             </div>
           }>
-            {/* 🚀 The array indices have been safely shifted here */}
-            {activeTab === TABS[0] && <InceptionTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[1] && <NodeClusterTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[2] && <VisualAssemblyTab currentUser={user.name} activeBrand={activeBrand.id} onProceed={() => setActiveTab(TABS[3])} />}
-            {activeTab === TABS[3] && <BOMTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[4] && <LibraryTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[5] && <LibraryMassUpdateTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[7] && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[8] && <PackagingTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[9] && <CPQTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} setCart={setGlobalCart} />}
-            {activeTab === TABS[10] && <ClientVisionTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[11] && <UPSShippingCalculator currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[12] && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[13] && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[14] && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={null} />}
-            {activeTab === TABS[15] && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} />}
-            {activeTab === TABS[16] && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[17] && <StockViewTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[18] && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[19] && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[20] && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === TABS[21] && <BatchTextureProcessor currentUser={user.name} />}
+            {/* 🚀 Changed to use exact string matching to prevent index-shifting bugs */}
+            {activeTab === '1. Inception & Validation' && <InceptionTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '1.5 Node Grouping' && <NodeClusterTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '2. Visual Assembly' && <VisualAssemblyTab currentUser={user.name} activeBrand={activeBrand.id} onProceed={() => setActiveTab('3. BOM Engine')} />}
+            {activeTab === '3. BOM Engine' && <BOMTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '4. Master Library' && <LibraryTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '4.5 Mass Update' && <LibraryMassUpdateTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '6. Instructions' && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '7. Packaging' && <PackagingTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '8. CPQ Configurator' && <CPQTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} setCart={setGlobalCart} />}
+            {activeTab === '9. Client Vision' && <ClientVisionTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '9.5 UPS Shipping' && <UPSShippingCalculator currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '10. External Co-Op' && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '10.5 Project Mgmt' && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '10.7 OS Comms' && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={null} />}
+            {activeTab === '11. System Admin' && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} />}
+            
+            {/* NEW SYNC TAB RENDER */}
+            {activeTab === '11.1 NetSuite Sync' && <NetSuiteSyncTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            
+            {activeTab === '12. ERP Push / Pull' && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '12.5 Stock View' && <StockViewTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '13. RTG Dispatch' && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '14. Asset Gallery' && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '14.5 Batch Processor' && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '14.6 Texture Processor' && <BatchTextureProcessor currentUser={user.name} />}
           </Suspense>
 
         </div>
