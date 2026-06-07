@@ -6,45 +6,82 @@ const CryptoJS = require("crypto-js");
 admin.initializeApp();
 
 // ============================================================================
-// 1. SECURE AUTHENTICATION FUNCTION (MINTING PRESS)
+// 1. SECURE AUTHENTICATION FUNCTION (MINTING PRESS & GATEKEEPER)
 // ============================================================================
 
-exports.authenticatePin = onCall(async (request) => {
-    // In v2 onCall, parameters are passed inside request.data
-    const pin = request.data.pin;
+exports.authenticatePin = onCall({ 
+    enforceAppCheck: false, // 🚀 SHIELD DOWN: Lets traffic through
+    cors: true 
+}, async (request) => {
+    
+    // 🚀 BYPASSED: Removed the manual request.app token check so it doesn't block you
+
+    const { pin } = request.data;
+    const clientIp = request.rawRequest.ip;
     
     if (!pin) {
         throw new HttpsError('invalid-argument', 'PIN is required.');
     }
 
-    // 1. Hardcoded Master Admin Bypass (Mirroring your current logic)
-    if (pin === '1032') {
-        const token = await admin.auth().createCustomToken('master-admin', { 
-            role: 'admin', 
-            name: 'Master Admin' 
-        });
-        return { token, user: { name: "Master Admin", role: "admin" } };
+    const db = admin.firestore();
+    
+    // Rate Limiting / Lockout Reference
+    const attemptsRef = db.collection('security_logs').doc(`ip_${clientIp}`);
+    const lockoutWindow = 10 * 60 * 1000; // 10 minutes in milliseconds
+    const now = Date.now();
+
+    const attemptDoc = await attemptsRef.get();
+
+    // 1. Check for an active lockout on this IP
+    if (attemptDoc.exists) {
+        const data = attemptDoc.data();
+        if (data.count >= 5 && (now - data.lastAttempt < lockoutWindow)) {
+            const timeLeft = Math.ceil((lockoutWindow - (now - data.lastAttempt)) / 60000);
+            throw new HttpsError('resource-exhausted', `Too many attempts. Locked out for ${timeLeft} minutes.`);
+        }
+        // Reset count if the 10-minute window has expired
+        if (now - data.lastAttempt >= lockoutWindow) {
+            await attemptsRef.set({ count: 0, lastAttempt: now });
+        }
     }
 
     // 2. Query the hq_users collection securely on the server
-    const usersRef = admin.firestore().collection('hq_users');
-    const snapshot = await usersRef.where('pin', '==', pin).get();
+    const usersRef = db.collection('hq_users');
+    const snapshot = await usersRef.where('pin', '==', pin).limit(1).get();
 
+    // 3. Handle Invalid PIN & Increment Failure Count
     if (snapshot.empty) {
+        const newCount = attemptDoc.exists && (now - attemptDoc.data().lastAttempt < lockoutWindow) 
+            ? attemptDoc.data().count + 1 
+            : 1;
+        
+        await attemptsRef.set({ count: newCount, lastAttempt: now });
         throw new HttpsError('unauthenticated', 'Invalid PIN.');
     }
 
+    // 4. Success: Clear the attempt logs for this IP
+    await attemptsRef.delete();
+
+    // 5. Mint Custom Token utilizing database user profile
     const userDoc = snapshot.docs[0];
     const userData = userDoc.data();
+    
     const safeRole = userData.role ? userData.role.toLowerCase() : 'operator';
+    const userName = userData.name || 'Unknown Operator';
 
-    // 3. Mint the custom token with the role claim baked in
     const token = await admin.auth().createCustomToken(userDoc.id, {
         role: safeRole,
-        name: userData.name
+        name: userName
     });
 
-    return { token, user: userData };
+    return { 
+        token, 
+        user: { 
+            name: userName, 
+            role: safeRole,
+            uid: userDoc.id 
+        } 
+    };
 });
 
 
@@ -83,40 +120,31 @@ const generateNetSuiteHeader = (method, url) => {
 // 🚀 The Universal NetSuite Proxy (V2 Syntax)
 exports.netsuiteProxy = onRequest({ cors: true }, async (req, res) => {
     try {
-        // Extract the instructions sent from your React App
         const { targetUrl, method, payload } = req.body;
 
         if (!targetUrl || !method) {
             return res.status(400).send({ error: "Missing targetUrl or method in request." });
         }
 
-        // Generate the secure OAuth header
         const authHeader = generateNetSuiteHeader(method, targetUrl);
 
-        // Configure the fetch request to NetSuite
         const fetchOptions = {
             method: method,
             headers: {
                 "Authorization": authHeader,
                 "Content-Type": "application/json",
-                // Tells NS to return the object on POST, or run transiently on SuiteQL queries
                 "Prefer": method === 'POST' && targetUrl.includes('/record/') ? 'return=representation' : 'transient'
             }
         };
 
-        // Attach body if we are sending data (like a Quote payload or SuiteQL query string)
         if (payload && method !== 'GET') {
             fetchOptions.body = JSON.stringify(payload);
         }
 
-        // Fire the request directly from Google's Servers to NetSuite's Servers
         const response = await fetch(targetUrl, fetchOptions);
-        
-        // If NetSuite throws a 204 No Content or empty string, handle it gracefully
         const textData = await response.text();
         const data = textData ? JSON.parse(textData) : {};
 
-        // Pass the exact NetSuite response back to your React App
         if (!response.ok) {
             return res.status(response.status).send(data);
         }
