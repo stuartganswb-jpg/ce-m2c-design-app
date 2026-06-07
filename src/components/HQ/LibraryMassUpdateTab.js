@@ -68,6 +68,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         moq: { active: false, value: "" },
         leadTime: { active: false, value: "" },
         reorderPoint: { active: false, value: "" }
+        reorderPoint: { active: false, value: "" },
+        binLocation: { active: false, value: "" }
     });
 
     // --- SYSTEM DICTIONARY STATE ---
@@ -215,6 +217,14 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             payload[`manufacturingSpecs.customData.${fieldKey}`] = val;
                         } else if (['basePrice', 'cost', 'weight', 'moq', 'leadTime', 'reorderPoint'].includes(fieldKey)) {
                             payload[`manufacturingSpecs.${fieldKey}`] = val === "" ? "" : parseFloat(val);
+                        } else {
+                            payload[`manufacturingSpecs.${fieldKey}`] = val;
+                        }} else if (fieldKey === 'projection') {
+                            payload[`manufacturingSpecs.customData.${fieldKey}`] = val;
+                        } else if (['basePrice', 'cost', 'weight', 'moq', 'leadTime', 'reorderPoint'].includes(fieldKey)) {
+                            payload[`manufacturingSpecs.${fieldKey}`] = val === "" ? "" : parseFloat(val);
+                        } else if (fieldKey === 'binLocation') {
+                            payload[`manufacturingSpecs.${fieldKey}`] = val.toUpperCase();
                         } else {
                             payload[`manufacturingSpecs.${fieldKey}`] = val;
                         }
@@ -637,7 +647,15 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </select>
                             </div>
                         )}
-
+{/* BIN LOCATION */}
+                        <div style={{ background: updates.binLocation.active ? theme.paper : 'transparent', border: `1px solid ${updates.binLocation.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.binLocation.active} onChange={(e) => handleUpdateChange('binLocation', 'active', e.target.checked)} />
+                                Overwrite Bin Location
+                            </label>
+                            <input type="text" disabled={!updates.binLocation.active} value={updates.binLocation.value} onChange={(e) => handleUpdateChange('binLocation', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.binLocation.active ? 1 : 0.5, textTransform: 'uppercase' }} placeholder="e.g. A1-B2-04" />
+                        </div>
+                        
                         {/* PROGRAM # */}
                         <div style={{ background: updates.programNum.active ? theme.paper : 'transparent', border: `1px solid ${updates.programNum.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
