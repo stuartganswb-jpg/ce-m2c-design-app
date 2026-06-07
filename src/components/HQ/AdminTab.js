@@ -417,11 +417,9 @@ const handleSyncAddresses = async () => {
   const handleSyncItems = async (itemType) => {
       setIsSyncing(true);
       
-      const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
-      addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
-
-      try {
-          const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
+      // Map the activeBrand to its specific NetSuite Location and Subsidiary IDs
+          const targetLocation = BRAND_NETSUITE_MAP[activeBrand]?.location || "17"; 
+          const targetSubsidiary = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3"; // Pulls '3' for M2C, '2' for CE
 
           let allRawRecords = [];
           let lastId = 0;
@@ -432,7 +430,7 @@ const handleSyncAddresses = async () => {
           while (hasMore) {
               addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
               
-              // NetSuite Bin tables completely removed from query to prevent 400 Bad Request
+              // Added ItemSubsidiaryMap join to securely segregate items by brand
               const q = `
                   SELECT 
                       item.id, 
@@ -450,12 +448,15 @@ const handleSyncAddresses = async () => {
                   FROM 
                       item
                   LEFT JOIN 
+                      ItemSubsidiaryMap ON ItemSubsidiaryMap.item = item.id
+                  LEFT JOIN 
                       ItemVendor ON ItemVendor.item = item.id
                   LEFT JOIN
                       Vendor ON ItemVendor.vendor = Vendor.id
                   WHERE 
                       item.custitem_sync_to_cpq = 'T' 
                       AND item.isinactive = 'F' 
+                      AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
                       AND ${typeFilter}
                       AND item.id > ${lastId}
                   ORDER BY 
@@ -886,35 +887,35 @@ const handleSyncAddresses = async () => {
   };
 
   const handleNukeJobs = async () => {
-      const promptStr = window.prompt('Type "DELETE ALL JOBS" to confirm this permanent wipeout:');
+      const promptStr = window.prompt(`Type "DELETE ALL JOBS" to confirm wiping ${activeBrand.toUpperCase()} jobs:`);
       if (promptStr === "DELETE ALL JOBS") {
           try {
-              const jobsSnap = await getDocs(collection(db, "jobs"));
-              const draftsSnap = await getDocs(collection(db, "cpq_drafts"));
+              const jobsSnap = await getDocs(query(collection(db, "jobs"), where("brandId", "==", activeBrand)));
+              const draftsSnap = await getDocs(query(collection(db, "cpq_drafts"), where("brandId", "==", activeBrand)));
               await Promise.all([...jobsSnap.docs.map(d => deleteDoc(doc(db, "jobs", d.id))), ...draftsSnap.docs.map(d => deleteDoc(doc(db, "cpq_drafts", d.id)))]);
-              alert("✅ ALL PIPELINE JOBS AND DRAFTS HAVE BEEN NUKED.");
+              alert(`✅ ALL ${activeBrand.toUpperCase()} PIPELINE JOBS AND DRAFTS HAVE BEEN NUKED.`);
           } catch(e) { console.error(e); }
       }
   };
 
   const handleNukeAssemblies = async () => { 
-      const promptStr = window.prompt('Type "DELETE ALL ASSEMBLIES" to confirm:'); 
+      const promptStr = window.prompt(`Type "DELETE ALL ASSEMBLIES" to confirm wiping ${activeBrand.toUpperCase()} assemblies:`); 
       if (promptStr === "DELETE ALL ASSEMBLIES") {
           try {
-              const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "in", ["Assembly", "Master Assembly"])));
+              const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "in", ["Assembly", "Master Assembly"]), where("brandId", "==", activeBrand)));
               await Promise.all(snap.docs.map(d => deleteDoc(doc(db, "Approved_Designs", d.id))));
-              alert("✅ ALL ASSEMBLIES NUKED.");
+              alert(`✅ ALL ${activeBrand.toUpperCase()} ASSEMBLIES NUKED.`);
           } catch(e) { console.error(e); }
       }
   };
   
   const handleNukeLibrary = async () => { 
-      const promptStr = window.prompt('Type "DELETE MASTER LIBRARY" to confirm:'); 
+      const promptStr = window.prompt(`Type "DELETE MASTER LIBRARY" to confirm wiping ${activeBrand.toUpperCase()} inventory:`); 
       if (promptStr === "DELETE MASTER LIBRARY") {
           try {
-              const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "==", "Inventory")));
+              const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "==", "Inventory"), where("brandId", "==", activeBrand)));
               await Promise.all(snap.docs.map(d => deleteDoc(doc(db, "Approved_Designs", d.id))));
-              alert("✅ MASTER INVENTORY NUKED.");
+              alert(`✅ ${activeBrand.toUpperCase()} MASTER INVENTORY NUKED.`);
           } catch(e) { console.error(e); }
       }
   };
