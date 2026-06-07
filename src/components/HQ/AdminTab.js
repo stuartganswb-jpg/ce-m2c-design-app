@@ -945,6 +945,18 @@ const handleSyncAddresses = async () => {
       }
   };
 
+const handleNukeCustomers = async () => { 
+      const promptStr = window.prompt(`Type "DELETE ALL CUSTOMERS" to confirm wiping ${activeBrand.toUpperCase()} customers:`); 
+      if (promptStr === "DELETE ALL CUSTOMERS") {
+          try {
+              // This safely targets ONLY customers for the active brand, protecting your vendors!
+              const snap = await getDocs(query(collection(db, "crm_records"), where("type", "==", "CUSTOMER"), where("brandId", "==", activeBrand)));
+              await Promise.all(snap.docs.map(d => deleteDoc(doc(db, "crm_records", d.id))));
+              alert(`✅ ALL ${activeBrand.toUpperCase()} CUSTOMERS NUKED.`);
+          } catch(e) { console.error(e); }
+      }
+  };
+
   const handleLogoUpload = async (e, brandKey) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -1847,7 +1859,13 @@ const handleSyncAddresses = async () => {
                   </div>
                   <button onClick={handleNukeAssemblies} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Assemblies</button>
                 </div>
-                
+                <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
+                  <div>
+                      <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: '#d9534f' }}>Wipe All Customers</h4>
+                      <div style={{fontSize:'0.9rem', color:'var(--ink-soft)'}}>Deletes all customer records and address books for this brand.</div>
+                  </div>
+                  <button onClick={handleNukeCustomers} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Customers</button>
+                </div>
                 <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
                   <div>
                       <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: '#d9534f' }}>Wipe Master Inventory Library</h4>
