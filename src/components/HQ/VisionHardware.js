@@ -3,7 +3,8 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
-  const [viewMode, setViewMode] = useState('ENGINEERING');
+  // Default to TAKEOFF as Step 1
+  const [viewMode, setViewMode] = useState('TAKEOFF');
   const [showQuotePanel, setShowQuotePanel] = useState(false);
   const [isPushingToCPQ, setIsPushingToCPQ] = useState(false);
 
@@ -569,8 +570,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
     }
   };
 
+  // FLIPPED LOGIC: Inputs as 'ORDERING' so engine calculates deductions perfectly
   const pushMeasurementToEng = (m) => {
-      setEngData(prev => ({ ...prev, w2: m.inches, inputMode: 'WALL' }));
+      setEngData(prev => ({ ...prev, w2: m.inches, inputMode: 'ORDERING' }));
       setSidemark(m.label);
       setViewMode('ENGINEERING');
   };
@@ -680,9 +682,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh', overflow: 'hidden' }}>
       
       <div style={{ display: 'flex', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
-          {['ENGINEERING', 'TAKEOFF', 'VISUAL'].map(mode => (
+          {['TAKEOFF', 'ENGINEERING', 'VISUAL'].map(mode => (
              <button key={mode} onClick={() => setViewMode(mode)} style={{ flex: 1, padding: '16px', background: viewMode === mode ? 'var(--paper-2)' : 'transparent', color: viewMode === mode ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: viewMode === mode ? '2px solid var(--brass)' : '2px solid transparent', fontFamily: 'var(--mono)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', outline: 'none', transition: 'all 0.2s' }}>
-                 {mode === 'ENGINEERING' ? '1. Hardware Engine' : mode === 'TAKEOFF' ? '2. Plan Take-Offs' : '3. Visual Overlay'}
+                 {mode === 'TAKEOFF' ? '1. Plan Take-Offs' : mode === 'ENGINEERING' ? '2. Hardware Engine' : '3. Visual Overlay'}
              </button>
           ))}
       </div>
@@ -811,8 +813,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                         <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>1. Upload Floor Plan</div>
                         <div style={{ padding: '24px' }}>
-                            <input type="file" accept="image/png, image/jpeg" ref={takeoffFileInputRef} onChange={handleTakeoffUpload} style={{ display: 'none' }} />
+                            <input type="file" accept="image/png, image/jpeg, image/webp" ref={takeoffFileInputRef} onChange={handleTakeoffUpload} style={{ display: 'none' }} />
                             <button onClick={() => takeoffFileInputRef.current.click()} style={{ width: '100%', padding: '16px', background: 'transparent', color: 'var(--ink)', border: '1px dashed var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Select Floor Plan</button>
+                            <div style={{ fontSize: '9px', color: 'var(--ink-soft)', marginTop: '8px', textAlign: 'center' }}>*Note: Please convert PDFs to PNG or JPG. Browsers cannot natively draw lines over PDF documents.</div>
                         </div>
                     </div>
                     <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', opacity: takeoffBg ? 1 : 0.5, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
