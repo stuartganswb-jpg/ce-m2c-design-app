@@ -417,7 +417,13 @@ const handleSyncAddresses = async () => {
   const handleSyncItems = async (itemType) => {
       setIsSyncing(true);
       
-      // Map the activeBrand to its specific NetSuite Location and Subsidiary IDs
+      const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
+      addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
+
+      try {
+          const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
+          
+          // Map the activeBrand to its specific NetSuite Location and Subsidiary IDs
           const targetLocation = BRAND_NETSUITE_MAP[activeBrand]?.location || "17"; 
           const targetSubsidiary = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3"; // Pulls '3' for M2C, '2' for CE
 
@@ -462,8 +468,20 @@ const handleSyncAddresses = async () => {
                   ORDER BY 
                       item.id ASC
               `;
+
+              const response = await fetch(FIREBASE_FUNCTION_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                      targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                      method: 'POST',
+                      payload: { q }
+                  })
+              });
               
-              const result = await executeSuiteQL(q);
+              const result = await response.json();
+              if (!response.ok) throw new Error(JSON.stringify(result));
+
               const batch = result.items || [];
               allRawRecords = allRawRecords.concat(batch);
               
@@ -552,7 +570,7 @@ const handleSyncAddresses = async () => {
                       status: "IMPORTED_FROM_ERP",
                       productType: item.product_type || 'Uncategorized',
                       uom: item.uom || 'EA',
-                      binLocation: '', // Blank by default, updated via Mass Update tab
+                      binLocation: '',
                       partHandling: autoPartHandling,
                       outsourceAction: parsedOutsourceAction, 
                       collections: collectionsArray, 
@@ -575,7 +593,7 @@ const handleSyncAddresses = async () => {
                       isInHouse: hasVendor ? false : (existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : true),
                       productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                       uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
-                      binLocation: existingMatch.manufacturingSpecs?.binLocation || '', // Preserves whatever you assign in Mass Update
+                      binLocation: existingMatch.manufacturingSpecs?.binLocation || '',
                       partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
                       outsourceAction: parsedOutsourceAction || existingMatch.manufacturingSpecs?.outsourceAction || '', 
                       collections: collectionsArray.length > 0 ? collectionsArray : (existingMatch.manufacturingSpecs?.collections || []), 
