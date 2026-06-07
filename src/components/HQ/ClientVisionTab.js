@@ -68,8 +68,12 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
 
+      // 🚀 FIX: Brand Isolation Filter applied to the master session dropdown
       const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
-          const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER');
+          const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => 
+              r.type === 'CUSTOMER' && 
+              (r.brandId === activeBrand || (r.sharedBrands && r.sharedBrands.includes(activeBrand)))
+          );
           setLiveCustomers(customers);
       });
 

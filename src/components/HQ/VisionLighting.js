@@ -46,10 +46,21 @@ const VisionLighting = ({ currentUser, activeBrand, activeSession }) => {
             setMasterAssemblies(docs);
         });
 
+        // 🚀 CRITICAL FIX: Enforce brand & subsidiary isolation for CRM lists
         const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
             const records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            setLiveCustomers(records.filter(r => r.type === 'CUSTOMER'));
-            setLiveVendors(records.filter(r => r.type === 'VENDOR'));
+            
+            const filteredCustomers = records.filter(r => 
+                r.type === 'CUSTOMER' && 
+                (r.brandId === activeBrand || (r.sharedBrands && r.sharedBrands.includes(activeBrand)))
+            );
+            const filteredVendors = records.filter(r => 
+                r.type === 'VENDOR' && 
+                (r.brandId === activeBrand || (r.sharedBrands && r.sharedBrands.includes(activeBrand)))
+            );
+
+            setLiveCustomers(filteredCustomers);
+            setLiveVendors(filteredVendors);
         });
 
         return () => { unsubLists(); unsubAsm(); unsubCrm(); };
