@@ -616,6 +616,7 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                )}
             </div>
         </div>
+      </div>
     </div>
   );
 };
