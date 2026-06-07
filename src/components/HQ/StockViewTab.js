@@ -9,6 +9,8 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     const [nsStock, setNsStock] = useState({});
     const [vendors, setVendors] = useState([]);
     
+    // BUILDER STATE
+    const [activeBuilder, setActiveBuilder] = useState("PO"); // 'PO' or 'WO'
     const [activeVendor, setActiveVendor] = useState("");
     const [orderDrafts, setOrderDrafts] = useState({});
     
@@ -16,11 +18,13 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     const [searchQuery, setSearchQuery] = useState("");
     const [syncLog, setSyncLog] = useState([]);
 
+    // FILTER STATE
     const [globalLists, setGlobalLists] = useState({});
     const [collectionsData, setCollectionsData] = useState([]);
     const [partClassFilter, setPartClassFilter] = useState("ALL");
     const [typeFilter, setTypeFilter] = useState("");
     const [collectionFilter, setCollectionFilter] = useState("");
+    const [watchlistFilter, setWatchlistFilter] = useState(""); // NEW: Watchlist Filter
 
     const addLog = (msg, type = 'info') => {
         const time = new Date().toLocaleTimeString();
@@ -74,12 +78,14 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                 const chunk = chunks[i];
                 const idList = chunk.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
 
+                // ADDED: AggregateItemLocation.quantitycommitted
                 const q = `
                     SELECT 
                         Item.itemid AS legacy_id,
                         SUM(AggregateItemLocation.quantityonhand) AS onhand,
                         SUM(AggregateItemLocation.quantityavailable) AS available,
                         SUM(AggregateItemLocation.quantityonorder) AS onorder,
+                        SUM(AggregateItemLocation.quantitycommitted) AS committed,
                         SUM(AggregateItemLocation.quantitybackordered) AS backordered,
                         MAX(Item.averagecost) AS averagecost
                     FROM Item
@@ -117,6 +123,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                         onHand: parseInt(row.onhand) || 0,
                         available: parseInt(row.available) || 0,
                         onOrder: parseInt(row.onorder) || 0,
+                        committed: parseInt(row.committed) || 0, // NEW
                         backorder: parseInt(row.backordered) || 0,
                         cost: parseFloat(row.averagecost) || 0
                     };
@@ -132,15 +139,23 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    const calculateSuggestedQty = (available, rop, moq, leadTime) => {
+    // ALGORITHM: OUTSOURCED PURCHASING
+    const calculateSuggestedPOQty = (available, rop, moq, leadTime) => {
         if (available > rop) return 0;
         const dynamicRateOfSale = 1.5; 
         const leadTimeBuffer = leadTime ? (leadTime * dynamicRateOfSale) : 10; 
-        
         let suggested = (rop - available) + leadTimeBuffer;
         if (moq && suggested < moq) suggested = moq; 
-        
         return Math.ceil(suggested);
+    };
+
+    // ALGORITHM: IN-HOUSE PRODUCTION (Factoring in constraints & committed stock)
+    const calculateSuggestedWOQty = (available, rop, moq, leadTime, committed, backorder) => {
+        if (available > rop && backorder <= 0 && committed <= available) return 0;
+        const productionBuffer = leadTime ? (leadTime * 1.2) : 5; // Simulates capacity constraint/time
+        let suggested = (rop - available) + backorder + committed + productionBuffer;
+        if (moq && suggested < moq) suggested = moq;
+        return Math.max(0, Math.ceil(suggested));
     };
 
     const handleOrderQtyChange = (partId, qty) => {
@@ -162,12 +177,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
 
         if (lineItems.length === 0) return alert("No items have quantities greater than 0.");
 
-        const poPayload = {
-            vendor: activeVendor,
-            subsidiary: "2", 
-            memo: "Auto-Generated via Fab-OS Stock View",
-            items: lineItems
-        };
+        const poPayload = { vendor: activeVendor, subsidiary: "2", memo: "Auto-Generated via Fab-OS Stock View", items: lineItems };
 
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(poPayload, null, 2));
         const downloadAnchorNode = document.createElement('a');
@@ -182,9 +192,38 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         setOrderDrafts({}); 
     };
 
+    const generateWOPayload = () => {
+        const lineItems = Object.entries(orderDrafts).map(([partId, qty]) => {
+            if (qty <= 0) return null;
+            const part = hqParts.find(p => p.id === partId);
+            return {
+                itemId: part.legacyErpId || part.itemId,
+                quantityToBuild: qty,
+                description: part.itemName,
+                routingType: part.routingType || 'Standard'
+            };
+        }).filter(Boolean);
+
+        if (lineItems.length === 0) return alert("No items have quantities greater than 0.");
+
+        const woPayload = { subsidiary: "2", memo: "Auto-Generated via Fab-OS Stock View", department: "Production", items: lineItems };
+
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(woPayload, null, 2));
+        const downloadAnchorNode = document.createElement('a');
+        downloadAnchorNode.setAttribute("href", dataStr);
+        downloadAnchorNode.setAttribute("download", `WO_Export_${Date.now()}.json`);
+        document.body.appendChild(downloadAnchorNode);
+        downloadAnchorNode.click();
+        downloadAnchorNode.remove();
+
+        addLog(`✅ Exported WO Payload (${lineItems.length} jobs)`, "success");
+        alert("✅ Work Order payload generated! Ready to push to NetSuite.");
+        setOrderDrafts({}); 
+    };
+
     const enrichedInventory = hqParts.map(part => {
         const erpId = (part.legacyErpId || part.itemId).toUpperCase();
-        const stock = nsStock[erpId] || { onHand: 0, available: 0, onOrder: 0, backorder: 0 };
+        const stock = nsStock[erpId] || { onHand: 0, available: 0, onOrder: 0, committed: 0, backorder: 0 };
         const specs = part.manufacturingSpecs || {};
         
         const rop = parseInt(specs.reorderPoint) || 0;
@@ -194,30 +233,37 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         return { ...part, stock, rop, moq, leadTime, isLowStock: stock.available <= rop && rop > 0 };
     });
 
-    const displayItems = activeVendor 
-        ? enrichedInventory.filter(p => p.manufacturingSpecs?.vendorName === activeVendor && !p.manufacturingSpecs?.isInHouse)
-        : enrichedInventory.filter(part => {
-            const term = searchQuery.toLowerCase();
-            const specs = part.manufacturingSpecs || {};
+    const baseFilteredItems = enrichedInventory.filter(part => {
+        const term = searchQuery.toLowerCase();
+        const specs = part.manufacturingSpecs || {};
 
-            const matchesSearch = part.itemName?.toLowerCase().includes(term) || 
-                                  (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term));
-            
-            let matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase() || (part.productType || "").toUpperCase() === typeFilter.toUpperCase();
-            
-            const partCollections = specs.collections ? specs.collections.map(c=>c.toUpperCase()) : (specs.customData?.collection ? [specs.customData.collection.toUpperCase()] : []);
-            let matchesCollection = collectionFilter === "" || partCollections.includes(collectionFilter.toUpperCase()); 
-            
-            let matchesClass = true;
-            if (partClassFilter !== "ALL") {
-                if (partClassFilter === "INVENTORY") matchesClass = part.partClass === "Inventory" && specs.isInHouse !== false;
-                else if (partClassFilter === "OUTSOURCED") matchesClass = part.partClass === "Inventory" && specs.isInHouse === false;
-                else if (partClassFilter === "UNASSIGNED") matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && (!part.routingType || part.routingType === "UNASSIGNED");
-                else matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && part.routingType?.toUpperCase() === partClassFilter.toUpperCase();
-            }
-            
-            return matchesSearch && matchesType && matchesCollection && matchesClass;
-        });
+        const matchesSearch = part.itemName?.toLowerCase().includes(term) || (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term));
+        
+        let matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase() || (part.productType || "").toUpperCase() === typeFilter.toUpperCase();
+        
+        const partCollections = specs.collections ? specs.collections.map(c=>c.toUpperCase()) : (specs.customData?.collection ? [specs.customData.collection.toUpperCase()] : []);
+        let matchesCollection = collectionFilter === "" || partCollections.includes(collectionFilter.toUpperCase()); 
+        
+        let matchesClass = true;
+        if (partClassFilter !== "ALL") {
+            if (partClassFilter === "INVENTORY") matchesClass = part.partClass === "Inventory" && specs.isInHouse !== false;
+            else if (partClassFilter === "OUTSOURCED") matchesClass = part.partClass === "Inventory" && specs.isInHouse === false;
+            else if (partClassFilter === "UNASSIGNED") matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && (!part.routingType || part.routingType === "UNASSIGNED");
+            else matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && part.routingType?.toUpperCase() === partClassFilter.toUpperCase();
+        }
+
+        const wl = specs.watchList || specs.customData?.watchlist || "NONE";
+        let matchesWatchlist = watchlistFilter === "" || wl.toUpperCase() === watchlistFilter.toUpperCase();
+        
+        return matchesSearch && matchesType && matchesCollection && matchesClass && matchesWatchlist;
+    });
+
+    let displayItems = baseFilteredItems;
+    if (activeBuilder === 'PO' && activeVendor) {
+        displayItems = baseFilteredItems.filter(p => p.manufacturingSpecs?.vendorName === activeVendor && !p.manufacturingSpecs?.isInHouse);
+    } else if (activeBuilder === 'WO') {
+        displayItems = baseFilteredItems.filter(p => p.manufacturingSpecs?.isInHouse !== false); // In-House only
+    }
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
@@ -232,7 +278,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                 {/* ADVANCED FILTER BAR */}
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                     
-                    <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper-2)', color: 'var(--ink)' }}>
+                    <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} disabled={activeBuilder === 'PO' && !!activeVendor} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper-2)', color: 'var(--ink)' }}>
                         <option value="ALL">All Classes</option>
                         <option value="INVENTORY">Raw Mat / Components</option>
                         <option value="OUTSOURCED">Outsourced Components</option>
@@ -242,22 +288,29 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                         </optgroup>
                     </select>
                     
-                    <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                    <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} disabled={activeBuilder === 'PO' && !!activeVendor} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
                         <option value="">All Categories</option>
                         {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}
                     </select>
 
-                    <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} disabled={!!activeVendor} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                    <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} disabled={activeBuilder === 'PO' && !!activeVendor} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
                         <option value="">All Collections</option>
                         {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                    </select>
+
+                    {/* NEW: WATCHLIST FILTER */}
+                    <select value={watchlistFilter} onChange={(e) => setWatchlistFilter(e.target.value)} disabled={activeBuilder === 'PO' && !!activeVendor} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                        <option value="">All Watchlists</option>
+                        <option value="NONE">None / Unassigned</option>
+                        {(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
                     </select>
 
                     <input 
                         placeholder="Search Global Inventory..." 
                         value={searchQuery} 
                         onChange={(e) => setSearchQuery(e.target.value)} 
-                        disabled={!!activeVendor}
-                        style={{ width: '250px', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} 
+                        disabled={activeBuilder === 'PO' && !!activeVendor}
+                        style={{ width: '200px', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} 
                     />
                     
                     <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '12px 24px', background: isSyncing ? 'var(--paper)' : 'var(--ink)', color: isSyncing ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s', whiteSpace: 'nowrap' }}>
@@ -284,14 +337,16 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Bin</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>On Hand</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Avail</th>
+                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Committed</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>On Order</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Backorder</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>ROP</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {displayItems.length === 0 && <tr><td colSpan="8" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>No inventory items matched.</td></tr>}
-                                {!activeVendor && displayItems.map(item => (
+                                {displayItems.length === 0 && <tr><td colSpan="9" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>No inventory items matched.</td></tr>}
+                                {activeBuilder === 'PO' && activeVendor && <tr><td colSpan="9" style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
+                                {!(activeBuilder === 'PO' && activeVendor) && displayItems.map(item => (
                                     <tr key={item.id} style={{ borderBottom: '1px solid var(--line)', background: item.isLowStock ? '#fdf2f2' : '#fff' }}>
                                         <td style={{ padding: '16px 20px', fontFamily: 'var(--mono)', fontSize: '11px', color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>
                                             {item.legacyErpId || item.itemId}
@@ -301,42 +356,66 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>{item.manufacturingSpecs?.binLocation || '-'}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink)' }}>{item.stock.onHand}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', fontWeight: 500, color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>{item.stock.available}</td>
+                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink-soft)' }}>{item.stock.committed}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink-soft)' }}>{item.stock.onOrder}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.backorder > 0 ? '#d9534f' : 'var(--ink-soft)' }}>{item.stock.backorder}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', color: 'var(--ink-soft)' }}>{item.rop || '-'}</td>
                                     </tr>
                                 ))}
-                                {activeVendor && <tr><td colSpan="8" style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
                             </tbody>
                         </table>
                     </div>
                 </div>
 
-                {/* MIDDLE: VENDOR PO BUILDER */}
+                {/* MIDDLE: PO / WO BUILDER WIDGET */}
                 <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                    <div style={{ padding: '24px', background: 'var(--paper)', borderBottom: '1px solid var(--line)' }}>
-                        <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Vendor PO Builder</h3>
-                    </div>
                     
-                    <div style={{ padding: '24px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
-                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Select Vendor for Restock</label>
-                        <select 
-                            value={activeVendor} 
-                            onChange={(e) => { setActiveVendor(e.target.value); setOrderDrafts({}); }} 
-                            style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' }}
-                        >
-                            <option value="">-- View Global Inventory (No Vendor Selected) --</option>
-                            {vendors.map(v => <option key={v} value={v}>{v}</option>)}
-                        </select>
+                    {/* BUILDER TOGGLE */}
+                    <div style={{ display: 'flex', background: 'var(--paper)', borderBottom: '1px solid var(--line)' }}>
+                        <button 
+                            onClick={() => { setActiveBuilder('PO'); setOrderDrafts({}); }} 
+                            style={{ flex: 1, padding: '16px', background: activeBuilder === 'PO' ? '#fff' : 'transparent', border: 'none', borderBottom: activeBuilder === 'PO' ? '2px solid var(--ink)' : '2px solid transparent', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', color: activeBuilder === 'PO' ? 'var(--ink)' : 'var(--ink-soft)' }}>
+                            Purchasing (PO)
+                        </button>
+                        <button 
+                            onClick={() => { setActiveBuilder('WO'); setOrderDrafts({}); setActiveVendor(""); }} 
+                            style={{ flex: 1, padding: '16px', background: activeBuilder === 'WO' ? '#fff' : 'transparent', border: 'none', borderBottom: activeBuilder === 'WO' ? '2px solid var(--ink)' : '2px solid transparent', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', color: activeBuilder === 'WO' ? 'var(--ink)' : 'var(--ink-soft)' }}>
+                            Production (WO)
+                        </button>
                     </div>
 
+                    {/* DYNAMIC HEADER */}
+                    {activeBuilder === 'PO' ? (
+                        <div style={{ padding: '24px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Select Vendor for Restock</label>
+                            <select 
+                                value={activeVendor} 
+                                onChange={(e) => { setActiveVendor(e.target.value); setOrderDrafts({}); }} 
+                                style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' }}
+                            >
+                                <option value="">-- View Global Inventory (No Vendor Selected) --</option>
+                                {vendors.map(v => <option key={v} value={v}>{v}</option>)}
+                            </select>
+                        </div>
+                    ) : (
+                        <div style={{ padding: '24px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', marginBottom: '8px' }}>In-House Production Queue</div>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Filters on the left control which items appear here. Math is dynamically weighted by Commitments, Backorders, ROP, and Production Capacity buffers.</div>
+                        </div>
+                    )}
+
+                    {/* BUILDER LIST */}
                     <div style={{ flex: 1, padding: '24px', overflowY: 'auto', maxHeight: '55vh', background: '#fff' }}>
-                        {!activeVendor ? (
+                        {activeBuilder === 'PO' && !activeVendor ? (
                             <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', textAlign: 'center', marginTop: '60px', fontFamily: 'var(--serif)', fontSize: '1.2rem', padding: '0 20px' }}>Select a vendor from the dropdown to load their catalog and generate restocking suggestions.</div>
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                                 {displayItems.map(item => {
-                                    const suggested = calculateSuggestedQty(item.stock.available, item.rop, item.moq, item.leadTime);
+                                    // Switch Algorithm based on Mode
+                                    const suggested = activeBuilder === 'PO' 
+                                        ? calculateSuggestedPOQty(item.stock.available, item.rop, item.moq, item.leadTime)
+                                        : calculateSuggestedWOQty(item.stock.available, item.rop, item.moq, item.leadTime, item.stock.committed, item.stock.backorder);
+                                    
                                     const currentDraft = orderDrafts[item.id] !== undefined ? orderDrafts[item.id] : (suggested > 0 ? suggested : 0);
                                     
                                     return (
@@ -344,25 +423,26 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
                                                 <div>
                                                     <div style={{ fontWeight: 500, fontSize: '1.05rem', color: 'var(--ink)' }}>{item.itemName}</div>
-                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px' }}>ERP: {item.legacyErpId} | Vendor SKU: <span style={{color: 'var(--ink)'}}>{item.manufacturingSpecs?.vendorId || 'N/A'}</span></div>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px' }}>ERP: {item.legacyErpId} | {activeBuilder === 'PO' ? 'Vendor SKU:' : 'Routing:'} <span style={{color: 'var(--ink)'}}>{activeBuilder === 'PO' ? (item.manufacturingSpecs?.vendorId || 'N/A') : (item.routingType || 'Standard')}</span></div>
                                                 </div>
                                                 {item.isLowStock && <span style={{ background: '#d9534f', color: '#fff', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', height: 'fit-content' }}>Low Stock</span>}
                                             </div>
                                             
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', background: '#fff', padding: '16px', border: '1px solid var(--line)', textAlign: 'center', marginBottom: '20px' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '8px', background: '#fff', padding: '16px', border: '1px solid var(--line)', textAlign: 'center', marginBottom: '20px' }}>
                                                 <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Avail</div><div style={{ fontSize: '1.1rem', fontWeight: 500, color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>{item.stock.available}</div></div>
+                                                <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Commit</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.stock.committed || 0}</div></div>
                                                 <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>ROP</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.rop || 0}</div></div>
                                                 <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>MOQ</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.moq || 0}</div></div>
-                                                <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Lead</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.leadTime || 0}d</div></div>
+                                                <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>{activeBuilder === 'PO' ? 'Lead' : 'ProdTime'}</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.leadTime || 0}d</div></div>
                                             </div>
 
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
                                                 <div style={{ flex: 1 }}>
-                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '6px' }}>Suggested Reorder</div>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '6px' }}>Suggested {activeBuilder === 'PO' ? 'Order' : 'Build'}</div>
                                                     <div style={{ fontSize: '1.2rem', fontWeight: 500, color: suggested > 0 ? 'var(--ink)' : 'var(--ink-soft)' }}>{suggested} units</div>
                                                 </div>
                                                 <div style={{ flex: 1.5 }}>
-                                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Final Order Qty</label>
+                                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Final {activeBuilder === 'PO' ? 'Order' : 'Build'} Qty</label>
                                                     <input 
                                                         type="number" 
                                                         value={currentDraft} 
@@ -378,13 +458,14 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                         )}
                     </div>
 
-                    {activeVendor && (
+                    {/* DYNAMIC EXPORT BUTTON */}
+                    {(activeBuilder === 'WO' || activeVendor) && (
                         <div style={{ padding: '24px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
                             <button 
-                                onClick={generatePOPayload}
+                                onClick={activeBuilder === 'PO' ? generatePOPayload : generateWOPayload}
                                 style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}
                             >
-                                Export PO Payload to ERP
+                                {activeBuilder === 'PO' ? 'Export PO Payload to ERP' : 'Export Work Order Payload to ERP'}
                             </button>
                         </div>
                     )}
