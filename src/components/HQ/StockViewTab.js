@@ -32,9 +32,14 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     };
 
     useEffect(() => {
+        useEffect(() => {
         const q = query(collection(db, "Approved_Designs"));
         const unsubParts = onSnapshot(q, (snap) => {
-            const parts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            let parts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            
+            // SORT ALPHABETICALLY BY ERP ID (Matches Library Tab)
+            parts.sort((a, b) => (a.legacyErpId || a.itemName).localeCompare(b.legacyErpId || b.itemName));
+
             const uniqueVendors = [...new Set(parts.map(p => p.manufacturingSpecs?.vendorName).filter(Boolean))];
             setVendors(uniqueVendors.sort());
             setHqParts(parts);
