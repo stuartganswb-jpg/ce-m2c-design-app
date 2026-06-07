@@ -67,7 +67,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         material: { active: false, value: "" },
         moq: { active: false, value: "" },
         leadTime: { active: false, value: "" },
-        reorderPoint: { active: false, value: "" }
         reorderPoint: { active: false, value: "" },
         binLocation: { active: false, value: "" }
     });
@@ -655,7 +654,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </label>
                             <input type="text" disabled={!updates.binLocation.active} value={updates.binLocation.value} onChange={(e) => handleUpdateChange('binLocation', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.binLocation.active ? 1 : 0.5, textTransform: 'uppercase' }} placeholder="e.g. A1-B2-04" />
                         </div>
-                        
+
                         {/* PROGRAM # */}
                         <div style={{ background: updates.programNum.active ? theme.paper : 'transparent', border: `1px solid ${updates.programNum.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
