@@ -187,9 +187,19 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
           r.type === (isCust ? 'CUSTOMER' : 'VENDOR') &&
           (r.brandId === activeBrand || (r.sharedBrands && r.sharedBrands.includes(activeBrand))) // Enforce brand isolation
       );
-      if (!crmSearchQuery) return records;
-      const q = crmSearchQuery.toLowerCase();
-      return records.filter(r => (r.name || '').toLowerCase().includes(q) || (r.id || '').toLowerCase().includes(q) || (r.email || '').toLowerCase().includes(q));
+      
+      let filteredRecords = records;
+      
+      if (crmSearchQuery) {
+          const q = crmSearchQuery.toLowerCase();
+          filteredRecords = records.filter(r => 
+              (r.name || '').toLowerCase().includes(q) || 
+              (r.id || '').toLowerCase().includes(q) || 
+              (r.email || '').toLowerCase().includes(q)
+          );
+      }
+
+      return filteredRecords.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   };
 
   const handleCreateNewCrm = async () => {
@@ -206,7 +216,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
           createdAt: new Date().toISOString(),
           ytd: 0, mtd: 0, openOrders: 0
       };
-// ... rest of the function remains the same
 
       try {
           await setDoc(doc(db, "crm_records", newId), payload);
