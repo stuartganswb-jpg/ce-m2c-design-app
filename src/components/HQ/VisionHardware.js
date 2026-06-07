@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { UncontrolledReactSVGPanZoom, TOOL_PAN, TOOL_ZOOM_IN, TOOL_ZOOM_OUT, TOOL_NONE } from 'react-svg-pan-zoom'; 
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
   const [viewMode, setViewMode] = useState('ENGINEERING');
@@ -11,6 +10,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   // --- LINE ITEM CONTEXT ---
   const [sidemark, setSidemark] = useState('');
 
+  // --- VISUAL MODE STATE ---
   const [activeBg, setActiveBg] = useState(null); 
   const [visualTool, setVisualTool] = useState("pan"); 
   const fileInputRef = useRef(null);
@@ -18,18 +18,30 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const [realInches, setRealInches] = useState("60");
   const [pixelsPerInch, setPixelsPerInch] = useState(4.5); 
   const [isCalibrated, setIsCalibrated] = useState(false);
-  
   const [selectedConfigId, setSelectedConfigId] = useState("");
   const [placedItems, setPlacedItems] = useState([]);
   const [activePlacedId, setActivePlacedId] = useState(null);
-
   const [showEngOverlay, setShowEngOverlay] = useState(false);
   const [engOverlayPos, setEngOverlayPos] = useState({ x: 500, y: 400 });
   const [perspectiveStretch, setPerspectiveStretch] = useState({ L: 0, R: 0 }); 
-
   const [visScale, setVisScale] = useState(1.0); 
   const [visPan, setVisPan] = useState({ x: 0, y: 0 });
+
+  // --- TAKEOFF MODE STATE ---
+  const [takeoffBg, setTakeoffBg] = useState(null);
+  const [takeoffTool, setTakeoffTool] = useState("pan");
+  const takeoffFileInputRef = useRef(null);
+  const [takeoffCalPoints, setTakeoffCalPoints] = useState([]);
+  const [takeoffRealInches, setTakeoffRealInches] = useState("60");
+  const [takeoffPPI, setTakeoffPPI] = useState(4.5);
+  const [isTakeoffCalibrated, setIsTakeoffCalibrated] = useState(false);
+  const [takeoffMeasurements, setTakeoffMeasurements] = useState([]);
+  const [takeoffMeasurePoints, setTakeoffMeasurePoints] = useState([]);
+  const [takeoffMousePos, setTakeoffMousePos] = useState(null);
+  const [takeoffScale, setTakeoffScale] = useState(1.0);
+  const [takeoffPan, setTakeoffPan] = useState({ x: 0, y: 0 });
   
+  // --- ENGINEERING MODE STATE ---
   const [engScale, setEngScale] = useState(1.7); 
   const [engPan, setEngPan] = useState({ x: 0, y: 0 });
   const [engTool, setEngTool] = useState("pan"); 
@@ -40,7 +52,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [collectionsData, setCollectionsData] = useState([]);
-  
   const [cpqFlows, setCpqFlows] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
 
@@ -223,9 +234,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const imDeductL = isLeftInside ? engData.insideMountDeduct : 0;
   const imDeductR = isRightInside ? engData.insideMountDeduct : 0;
 
-  // --- MATH CORRECTION ---
-  // If ordering O2O, C2C (Wall) = Pole - Deductions
-  // If Wall C2C, Pole O2O = Wall + Deductions
   if (engData.shape === 'STRAIGHT') {
       if (engData.inputMode === 'WALL') { 
           wall2 = engData.w2; 
@@ -250,7 +258,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       }
       sawAngle1 = engData.a1 === 180 ? 0 : 90 - (engData.a1 / 2); sawAngle2 = engData.a2 === 180 ? 0 : 90 - (engData.a2 / 2);
   } else if (engData.shape === 'BOW') {
-      // Bow math remaining consistent
       if (engData.bowDepth > 0) {
           const rW_px = bowR * S; const rH_px = bowHW_R * S; bowCX = 500; bowCY = P2.y + rW_px - engData.bowDepth * S;
           bowStartAngle = Math.atan2(P2.y - bowCY, P2.x - bowCX); bowEndAngle = Math.atan2(P3.y - bowCY, P3.x - bowCX);
@@ -266,7 +273,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const rawCenter = pole2;
   
   const totalPoleRawInches = rawLeft + rawCenter + rawRight;
-  
   const poleO2O = totalPoleRawInches;
   const totalSystemO2O = poleO2O + engData.bracketW;
 
@@ -435,11 +441,41 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
 
   const onPointerDown = (e) => {
     try { e.target.setPointerCapture(e.pointerId); } catch(err) {}
+    
+    if (viewMode === 'TAKEOFF' && takeoffTool === "pan") { setIsPanning(true); setPanStart({ clientX: e.clientX, clientY: e.clientY }); return; }
     if (viewMode === 'VISUAL' && visualTool === "pan") { setIsPanning(true); setPanStart({ clientX: e.clientX, clientY: e.clientY }); return; }
     if (viewMode === 'ENGINEERING' && engTool === "pan") { setIsPanning(true); setPanStart({ clientX: e.clientX, clientY: e.clientY }); return; }
 
     const pt = getAdjustedSvgPoint(e.clientX, e.clientY);
     if (!pt) return; 
+
+    if (viewMode === 'TAKEOFF' && takeoffTool === "calibrate") {
+      if (takeoffCalPoints.length >= 2) { setTakeoffCalPoints([pt]); setIsTakeoffCalibrated(false); } 
+      else {
+        const updatedPoints = [...takeoffCalPoints, pt]; setTakeoffCalPoints(updatedPoints);
+        if (updatedPoints.length === 2) { 
+           const pxDist = Math.sqrt(Math.pow(updatedPoints[1].x - updatedPoints[0].x, 2) + Math.pow(updatedPoints[1].y - updatedPoints[0].y, 2));
+           const val = parseFloat(takeoffRealInches) || 0;
+           if (val > 0) setTakeoffPPI(pxDist / val);
+           setIsTakeoffCalibrated(true); setTakeoffTool("measure"); 
+        }
+      }
+      return;
+    }
+
+    if (viewMode === 'TAKEOFF' && takeoffTool === "measure") {
+      if (takeoffMeasurePoints.length === 1) {
+          const pt1 = takeoffMeasurePoints[0]; const pt2 = pt;
+          const pxDist = Math.sqrt(Math.pow(pt2.x - pt1.x, 2) + Math.pow(pt2.y - pt1.y, 2));
+          const inches = takeoffPPI > 0 ? (pxDist / takeoffPPI) : 0;
+          const newMeasurement = { id: Date.now(), p1: pt1, p2: pt2, inches: parseFloat(inches.toFixed(2)), label: `Measurement ${takeoffMeasurements.length + 1}` };
+          setTakeoffMeasurements([...takeoffMeasurements, newMeasurement]);
+          setTakeoffMeasurePoints([]);
+      } else {
+          setTakeoffMeasurePoints([pt]);
+      }
+      return;
+    }
 
     if (viewMode === 'VISUAL' && visualTool === "calibrate") {
       if (calPoints.length >= 2) { setCalPoints([pt]); setIsCalibrated(false); } 
@@ -489,6 +525,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   };
 
   const onPointerMove = (e) => {
+    if (viewMode === 'TAKEOFF' && takeoffTool === 'measure' && takeoffMeasurePoints.length === 1) {
+        const pt = getAdjustedSvgPoint(e.clientX, e.clientY);
+        if (pt) setTakeoffMousePos(pt);
+    }
+    
     if (isPanning && panStart) {
       if (!svgRef.current || !innerGroupRef.current) return;
       try {
@@ -500,8 +541,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           const inv = ctm.inverse();
           const dx = ptC.matrixTransform(inv).x - ptS.matrixTransform(inv).x;
           const dy = ptC.matrixTransform(inv).y - ptS.matrixTransform(inv).y;
-          if (viewMode === 'VISUAL') setVisPan(prev => ({ x: prev.x + dx, y: prev.y + dy })); 
+          
+          if (viewMode === 'TAKEOFF') setTakeoffPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+          else if (viewMode === 'VISUAL') setVisPan(prev => ({ x: prev.x + dx, y: prev.y + dy })); 
           else setEngPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+          
           setPanStart({ clientX: e.clientX, clientY: e.clientY });
       } catch(err) {}
     }
@@ -515,6 +559,20 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       setPlacedItems([]); setCalPoints([]); setIsCalibrated(false); 
       setVisScale(1); setVisPan({ x: 0, y: 0 }); setVisualTool("calibrate"); 
     }
+  };
+
+  const handleTakeoffUpload = (e) => {
+    if (e.target.files[0]) {
+      setTakeoffBg({ name: e.target.files[0].name, url: URL.createObjectURL(e.target.files[0]) });
+      setTakeoffMeasurements([]); setTakeoffMeasurePoints([]); setTakeoffCalPoints([]); setIsTakeoffCalibrated(false); 
+      setTakeoffScale(1); setTakeoffPan({ x: 0, y: 0 }); setTakeoffTool("calibrate"); 
+    }
+  };
+
+  const pushMeasurementToEng = (m) => {
+      setEngData(prev => ({ ...prev, w2: m.inches, inputMode: 'WALL' }));
+      setSidemark(m.label);
+      setViewMode('ENGINEERING');
   };
   
   const handleDropConfig = () => {
@@ -583,22 +641,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               collection: quoteSelections.collection,
               bracketId: engData.bracketId,
               engineeringNotes: {
-                  poleFeetQty,
-                  qtyBrackets,
-                  recRings,
-                  qtyFinials,
-                  qtySplices,
-                  qtyMiters,
-                  qtyBends,
-                  qtyMiterReturns,
-                  qtyCustomProjBrackets,
-                  shape: engData.shape,
-                  poleO2O,
-                  totalSystemO2O,
-                  pole1,
-                  pole2,
-                  pole3,
-                  svgString: capturedSvg 
+                  poleFeetQty, qtyBrackets, recRings, qtyFinials, qtySplices, qtyMiters,
+                  qtyBends, qtyMiterReturns, qtyCustomProjBrackets, shape: engData.shape,
+                  poleO2O, totalSystemO2O, pole1, pole2, pole3, svgString: capturedSvg 
               },
               ...dynamicConfigParams
           }, 
@@ -610,7 +655,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           await setDoc(doc(db, "cpq_drafts", draftId), payload); 
           alert(`✅ "${sidemark}" line saved to session! Canvas cleared for the next line.`); 
           
-          // Clear line-item context for the next drawing
           setSidemark(''); 
           setAttachments([]);
           setShopNotes([]);
@@ -627,15 +671,29 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const fieldStyle = { width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' };
   const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
 
+  let currentCursor = 'crosshair';
+  if (viewMode === 'VISUAL') currentCursor = visualTool === 'pan' ? (isPanning ? 'grabbing' : 'grab') : 'crosshair';
+  else if (viewMode === 'TAKEOFF') currentCursor = takeoffTool === 'pan' ? (isPanning ? 'grabbing' : 'grab') : 'crosshair';
+  else if (viewMode === 'ENGINEERING') currentCursor = engTool === 'pan' ? (isPanning ? 'grabbing' : 'grab') : 'crosshair';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh', overflow: 'hidden' }}>
       
+      <div style={{ display: 'flex', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
+          {['ENGINEERING', 'TAKEOFF', 'VISUAL'].map(mode => (
+             <button key={mode} onClick={() => setViewMode(mode)} style={{ flex: 1, padding: '16px', background: viewMode === mode ? 'var(--paper-2)' : 'transparent', color: viewMode === mode ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: viewMode === mode ? '2px solid var(--brass)' : '2px solid transparent', fontFamily: 'var(--mono)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', outline: 'none', transition: 'all 0.2s' }}>
+                 {mode === 'ENGINEERING' ? '1. Hardware Engine' : mode === 'TAKEOFF' ? '2. Plan Take-Offs' : '3. Visual Overlay'}
+             </button>
+          ))}
+      </div>
+
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1, opacity: activeSession?.quoteId ? 1 : 0.4, pointerEvents: activeSession?.quoteId ? 'auto' : 'none' }}>
           
           {!showQuotePanel && (
-            <div style={{ width: viewMode === 'VISUAL' ? '340px' : '480px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div style={{ width: (viewMode === 'VISUAL' || viewMode === 'TAKEOFF') ? '340px' : '480px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '24px' }}>
                 
                 {viewMode === 'ENGINEERING' && (
+                  <>
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                         <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>1. Line Item Details & CPQ Flow</div>
                         <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -652,9 +710,150 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                             </div>
                         </div>
                     </div>
+
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--line)' }}>
+                            <span>2. Spatial Parameters</span>
+                            <select value={engData.inputMode} onChange={e => setEngData({...engData, inputMode: e.target.value})} style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', background: 'transparent', color: 'var(--ink)', border: 'none', outline: 'none', cursor: 'pointer' }}>
+                                <option value="ORDERING">Use Ordering Length (Pole)</option>
+                                <option value="WALL">Use Wall Dimensions</option>
+                            </select>
+                        </div>
+                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                            <div style={{ display: 'flex', gap: '20px' }}>
+                                <div style={{ flex: 1 }}>
+                                    <label style={labelStyle}>Bay Configuration</label>
+                                    <select value={engData.shape} onChange={e => setEngData({...engData, shape: e.target.value})} style={fieldStyle}>
+                                        <option value="STRAIGHT">Straight Pole</option>
+                                        <option value="MITERED">Mitered Bay (3-Seg)</option>
+                                        <option value="BOW">Curved Bow</option>
+                                    </select>
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <label style={labelStyle}>Mount (Wall/Wall)</label>
+                                    {engData.shape === 'STRAIGHT' ? (
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <select value={engData.mountLeft} onChange={e => setEngData({...engData, mountLeft: e.target.value})} style={fieldStyle}>
+                                                <option value="OPEN">L: Open</option><option value="INSIDE">L: Inside</option><option value="CEILING">L: Ceiling</option>
+                                            </select>
+                                            <select value={engData.mountRight} onChange={e => setEngData({...engData, mountRight: e.target.value})} style={fieldStyle}>
+                                                <option value="OPEN">R: Open</option><option value="INSIDE">R: Inside</option><option value="CEILING">R: Ceiling</option>
+                                            </select>
+                                        </div>
+                                    ) : (
+                                        <select value={engData.mountOuter} onChange={e => setEngData({...engData, mountOuter: e.target.value})} style={fieldStyle}>
+                                            <option value="OPEN">Open Ends (Wall)</option><option value="INSIDE">Inside (Wall to Wall)</option><option value="CEILING">Ceiling Mount</option>
+                                        </select>
+                                    )}
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '16px' }}>
+                                {engData.shape === 'MITERED' && <div style={{ flex: 1 }}><label style={labelStyle}>{engData.inputMode === 'ORDERING' ? 'L Ordering (in)' : 'Left Wall (in)'}</label><input type="number" value={engData.w1} onChange={e => setEngData({...engData, w1: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>}
+                                <div style={{ flex: 1 }}><label style={labelStyle}>{engData.shape === 'BOW' ? 'Chord W' : (engData.inputMode === 'ORDERING' ? 'C Ordering (in)' : 'Center Wall (in)')}</label><input type="number" value={engData.w2} onChange={e => setEngData({...engData, w2: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                {engData.shape === 'MITERED' && <div style={{ flex: 1 }}><label style={labelStyle}>{engData.inputMode === 'ORDERING' ? 'R Ordering (in)' : 'Right Wall (in)'}</label><input type="number" value={engData.w3} onChange={e => setEngData({...engData, w3: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>}
+                                {engData.shape === 'BOW' && <div style={{ flex: 1 }}><label style={labelStyle}>Bow Depth</label><input type="number" value={engData.bowDepth} onChange={e => setEngData({...engData, bowDepth: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>}
+                            </div>
+                            {engData.shape === 'MITERED' && (
+                                <div style={{ display: 'flex', gap: '16px' }}>
+                                    <div style={{ flex: 1 }}><label style={labelStyle}>L Angle (deg)</label><input type="number" value={engData.a1} onChange={e => setEngData({...engData, a1: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                    <div style={{ flex: 1 }}><label style={labelStyle}>R Angle (deg)</label><input type="number" value={engData.a2} onChange={e => setEngData({...engData, a2: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>3. Fabrication Settings</div>
+                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                            <div style={{ display: 'flex', gap: '16px' }}>
+                                <div style={{ flex: 1.5 }}>
+                                    <label style={labelStyle}>Select Bracket (Auto-Syncs Dims)</label>
+                                    <select 
+                                        value={engData.bracketId || ''} 
+                                        onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))}
+                                        style={fieldStyle}
+                                    >
+                                        <option value="">{quoteFlowId ? '-- Select Bracket --' : '-- Select CPQ Flow First --'}</option>
+                                        {allBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
+                                    </select>
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <label style={labelStyle}>Projection (in)</label>
+                                    <input type="number" step="0.125" value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={fieldStyle} />
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <label style={labelStyle}>End Style</label>
+                                    <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={fieldStyle}>
+                                        <option value="FLUSH">Flush Cut</option>
+                                        <option value="FINIAL">Finials</option>
+                                        <option value="RETURN_MITER">Miter Return</option>
+                                        <option value="RETURN_BEND">Bent Return (FR)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '16px', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Bracket W. (in)</label><input type="number" step="0.125" value={engData.bracketW} onChange={e => setEngData({...engData, bracketW: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Bracket Thick. (in)</label><input type="number" step="0.125" value={engData.bracketThickness} onChange={e => setEngData({...engData, bracketThickness: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Pole Dia. (in)</label><input type="number" step="0.125" value={engData.poleDiameter} onChange={e => setEngData({...engData, poleDiameter: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '16px', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Bend Radius (in)</label><input type="number" step="0.125" value={engData.returnRadius} onChange={e => setEngData({...engData, returnRadius: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Grip Allowance (in)</label><input type="number" step="0.125" value={engData.gripAllowance} onChange={e => setEngData({...engData, gripAllowance: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>IM Deduct. (in)</label><input type="number" step="0.125" value={engData.insideMountDeduct} onChange={e => setEngData({...engData, insideMountDeduct: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                            </div>
+                        </div>
+                    </div>
+                  </>
                 )}
 
-                {viewMode === 'VISUAL' ? (
+                {viewMode === 'TAKEOFF' && (
+                  <>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>1. Upload Floor Plan</div>
+                        <div style={{ padding: '24px' }}>
+                            <input type="file" accept="image/png, image/jpeg" ref={takeoffFileInputRef} onChange={handleTakeoffUpload} style={{ display: 'none' }} />
+                            <button onClick={() => takeoffFileInputRef.current.click()} style={{ width: '100%', padding: '16px', background: 'transparent', color: 'var(--ink)', border: '1px dashed var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Select Floor Plan</button>
+                        </div>
+                    </div>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', opacity: takeoffBg ? 1 : 0.5, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <div style={{ padding: '16px 20px', background: takeoffTool === 'calibrate' ? 'var(--ink)' : 'var(--paper-2)', color: takeoffTool === 'calibrate' ? '#fff' : 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>2. Calibrate Scale</div>
+                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            <div>
+                                <label style={labelStyle}>Known Dimension (Inches)</label>
+                                <input type="number" value={takeoffRealInches} onChange={(e) => setTakeoffRealInches(e.target.value)} disabled={!takeoffBg} style={{ ...fieldStyle, background: takeoffBg ? '#fff' : 'var(--paper)' }} />
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button onClick={() => { setTakeoffTool("calibrate"); setTakeoffCalPoints([]); setIsTakeoffCalibrated(false); }} disabled={!takeoffBg} style={{ flex: 1, padding: '12px', background: takeoffTool === "calibrate" ? 'var(--ink)' : 'var(--paper-2)', color: takeoffTool === "calibrate" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: takeoffBg ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                    {takeoffCalPoints.length === 1 ? "Click Point 2..." : (isTakeoffCalibrated ? "Re-Calibrate Line" : "Draw Scale Line")}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', opacity: isTakeoffCalibrated ? 1 : 0.5, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', flex: 1 }}>
+                        <div style={{ padding: '16px 20px', background: takeoffTool === 'measure' ? 'var(--ink)' : 'var(--paper-2)', color: takeoffTool === 'measure' ? '#fff' : 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span>3. Take-Off Measurements</span>
+                            <button onClick={() => setTakeoffTool('measure')} disabled={!isTakeoffCalibrated} style={{ background: takeoffTool === 'measure' ? '#fff' : 'var(--ink)', color: takeoffTool === 'measure' ? 'var(--ink)' : '#fff', border: 'none', padding: '6px 12px', fontSize: '10px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Measure</button>
+                        </div>
+                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto' }}>
+                            {takeoffMeasurements.length === 0 && <span style={{ color: 'var(--ink-soft)', fontSize: '0.9rem', fontStyle: 'italic' }}>No measurements captured. Click 'Measure' and draw across openings.</span>}
+                            {takeoffMeasurements.map(m => (
+                                <div key={m.id} style={{ border: '1px solid var(--line)', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', background: 'var(--paper)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <input type="text" value={m.label} onChange={e => { const v = e.target.value; setTakeoffMeasurements(arr => arr.map(x => x.id === m.id ? {...x, label: v} : x)); }} style={{ border: 'none', borderBottom: '1px solid var(--line)', background: 'transparent', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.95rem', width: '140px', color: 'var(--ink)' }} />
+                                        <strong style={{ fontFamily: 'var(--mono)', color: 'var(--brass)', fontSize: '1.1rem' }}>{m.inches.toFixed(1)}"</strong>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                        <button onClick={() => pushMeasurementToEng(m)} style={{ flex: 1, padding: '10px', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>Send to Canvas</button>
+                                        <button onClick={() => setTakeoffMeasurements(arr => arr.filter(x => x.id !== m.id))} style={{ padding: '10px 14px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px' }}>X</button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                  </>
+                )}
+
+                {viewMode === 'VISUAL' && (
                   <>
                     <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                         <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>File Upload</div>
@@ -709,100 +908,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                         </div>
                     )}
                   </>
-                ) : (
-                  <>
-                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--line)' }}>
-                            <span>2. Spatial Parameters</span>
-                            <select value={engData.inputMode} onChange={e => setEngData({...engData, inputMode: e.target.value})} style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', background: 'transparent', color: 'var(--ink)', border: 'none', outline: 'none', cursor: 'pointer' }}>
-                                <option value="ORDERING">Use Ordering Length (Pole)</option>
-                                <option value="WALL">Use Wall Dimensions</option>
-                            </select>
-                        </div>
-                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                            <div style={{ display: 'flex', gap: '20px' }}>
-                                <div style={{ flex: 1 }}>
-                                    <label style={labelStyle}>Bay Configuration</label>
-                                    <select value={engData.shape} onChange={e => setEngData({...engData, shape: e.target.value})} style={fieldStyle}>
-                                        <option value="STRAIGHT">Straight Pole</option>
-                                        <option value="MITERED">Mitered Bay (3-Seg)</option>
-                                        <option value="BOW">Curved Bow</option>
-                                    </select>
-                                </div>
-                                <div style={{ flex: 1 }}>
-                                    <label style={labelStyle}>Mount (Wall/Wall)</label>
-                                    {engData.shape === 'STRAIGHT' ? (
-                                        <div style={{ display: 'flex', gap: '8px' }}>
-                                            <select value={engData.mountLeft} onChange={e => setEngData({...engData, mountLeft: e.target.value})} style={fieldStyle}>
-                                                <option value="OPEN">L: Open</option><option value="INSIDE">L: Inside</option><option value="CEILING">L: Ceiling</option>
-                                            </select>
-                                            <select value={engData.mountRight} onChange={e => setEngData({...engData, mountRight: e.target.value})} style={fieldStyle}>
-                                                <option value="OPEN">R: Open</option><option value="INSIDE">R: Inside</option><option value="CEILING">R: Ceiling</option>
-                                            </select>
-                                        </div>
-                                    ) : (
-                                        <select value={engData.mountOuter} onChange={e => setEngData({...engData, mountOuter: e.target.value})} style={fieldStyle}>
-                                            <option value="OPEN">Open Ends (Wall)</option><option value="INSIDE">Inside (Wall to Wall)</option><option value="CEILING">Ceiling Mount</option>
-                                        </select>
-                                    )}
-                                </div>
-                            </div>
-                            <div style={{ display: 'flex', gap: '16px' }}>
-                                {engData.shape === 'MITERED' && <div style={{ flex: 1 }}><label style={labelStyle}>{engData.inputMode === 'ORDERING' ? 'L Ordering (in)' : 'Left Wall (in)'}</label><input type="number" value={engData.w1} onChange={e => setEngData({...engData, w1: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>}
-                                <div style={{ flex: 1 }}><label style={labelStyle}>{engData.shape === 'BOW' ? 'Chord W' : (engData.inputMode === 'ORDERING' ? 'C Ordering (in)' : 'Center Wall (in)')}</label><input type="number" value={engData.w2} onChange={e => setEngData({...engData, w2: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
-                                {engData.shape === 'MITERED' && <div style={{ flex: 1 }}><label style={labelStyle}>{engData.inputMode === 'ORDERING' ? 'R Ordering (in)' : 'Right Wall (in)'}</label><input type="number" value={engData.w3} onChange={e => setEngData({...engData, w3: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>}
-                                {engData.shape === 'BOW' && <div style={{ flex: 1 }}><label style={labelStyle}>Bow Depth</label><input type="number" value={engData.bowDepth} onChange={e => setEngData({...engData, bowDepth: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>}
-                            </div>
-                            {engData.shape === 'MITERED' && (
-                                <div style={{ display: 'flex', gap: '16px' }}>
-                                    <div style={{ flex: 1 }}><label style={labelStyle}>L Angle (deg)</label><input type="number" value={engData.a1} onChange={e => setEngData({...engData, a1: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
-                                    <div style={{ flex: 1 }}><label style={labelStyle}>R Angle (deg)</label><input type="number" value={engData.a2} onChange={e => setEngData({...engData, a2: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                        <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>3. Fabrication Settings</div>
-                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                            <div style={{ display: 'flex', gap: '16px' }}>
-                                <div style={{ flex: 1.5 }}>
-                                    <label style={labelStyle}>Select Bracket (Auto-Syncs Dims)</label>
-                                    <select 
-                                        value={engData.bracketId || ''} 
-                                        onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))}
-                                        style={fieldStyle}
-                                    >
-                                        <option value="">{quoteFlowId ? '-- Select Bracket --' : '-- Select CPQ Flow First --'}</option>
-                                        {allBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
-                                    </select>
-                                </div>
-                                <div style={{ flex: 1 }}>
-                                    <label style={labelStyle}>Projection (in)</label>
-                                    <input type="number" step="0.125" value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={fieldStyle} />
-                                </div>
-                                <div style={{ flex: 1 }}>
-                                    <label style={labelStyle}>End Style</label>
-                                    <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={fieldStyle}>
-                                        <option value="FLUSH">Flush Cut</option>
-                                        <option value="FINIAL">Finials</option>
-                                        <option value="RETURN_MITER">Miter Return</option>
-                                        <option value="RETURN_BEND">Bent Return (FR)</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div style={{ display: 'flex', gap: '16px', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Bracket W. (in)</label><input type="number" step="0.125" value={engData.bracketW} onChange={e => setEngData({...engData, bracketW: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Bracket Thick. (in)</label><input type="number" step="0.125" value={engData.bracketThickness} onChange={e => setEngData({...engData, bracketThickness: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Pole Dia. (in)</label><input type="number" step="0.125" value={engData.poleDiameter} onChange={e => setEngData({...engData, poleDiameter: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
-                            </div>
-                            <div style={{ display: 'flex', gap: '16px', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Bend Radius (in)</label><input type="number" step="0.125" value={engData.returnRadius} onChange={e => setEngData({...engData, returnRadius: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Grip Allowance (in)</label><input type="number" step="0.125" value={engData.gripAllowance} onChange={e => setEngData({...engData, gripAllowance: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>IM Deduct. (in)</label><input type="number" step="0.125" value={engData.insideMountDeduct} onChange={e => setEngData({...engData, insideMountDeduct: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
-                            </div>
-                        </div>
-                    </div>
-                  </>
                 )}
             </div>
           )}
@@ -816,6 +921,15 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                         <button onClick={() => setVisScale(s => Math.min(s + 0.25, 4))} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>➕</button>
                         <button onClick={() => setVisScale(s => Math.max(s - 0.25, 0.5))} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>➖</button>
                         <button onClick={() => { setVisScale(1); setVisPan({x:0, y:0}); }} style={{ padding: '8px 16px', background: 'var(--paper)', border: '1px solid var(--line)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', letterSpacing: '.1em' }}>Reset</button>
+                    </div>
+                  </div>
+              ) : viewMode === 'TAKEOFF' ? (
+                  <div style={{ padding: '16px 20px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <button onClick={() => setTakeoffTool("pan")} style={{ padding: '8px 16px', background: takeoffTool === "pan" ? 'var(--ink)' : '#fff', color: takeoffTool === "pan" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', letterSpacing: '.1em', transition: 'all 0.2s' }}>Pan Viewport</button>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={() => setTakeoffScale(s => Math.min(s + 0.25, 4))} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>➕</button>
+                        <button onClick={() => setTakeoffScale(s => Math.max(s - 0.25, 0.5))} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>➖</button>
+                        <button onClick={() => { setTakeoffScale(1); setTakeoffPan({x:0, y:0}); }} style={{ padding: '8px 16px', background: 'var(--paper)', border: '1px solid var(--line)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', letterSpacing: '.1em' }}>Reset</button>
                     </div>
                   </div>
               ) : (
@@ -835,13 +949,45 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                   </div>
               )}
 
-              <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: viewMode === 'VISUAL' ? 'var(--dark)' : 'var(--paper)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {viewMode === 'VISUAL' && !activeBg && <div style={{ color: 'var(--ink-soft)', textAlign: 'center' }}><div style={{ fontSize: '3rem', marginBottom: '16px', opacity: 0.5 }}>🖼️</div><h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>No Plan Loaded</h3></div>}
+              <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: (viewMode === 'VISUAL' || viewMode === 'TAKEOFF') ? 'var(--dark)' : 'var(--paper)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {viewMode === 'VISUAL' && !activeBg && <div style={{ color: 'var(--ink-soft)', textAlign: 'center' }}><div style={{ fontSize: '3rem', marginBottom: '16px', opacity: 0.5 }}>🖼️</div><h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>No Elevation Loaded</h3></div>}
+                  {viewMode === 'TAKEOFF' && !takeoffBg && <div style={{ color: 'var(--ink-soft)', textAlign: 'center' }}><div style={{ fontSize: '3rem', marginBottom: '16px', opacity: 0.5 }}>📏</div><h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Upload Floor Plan for Take-Offs</h3></div>}
 
-                  {(viewMode === 'ENGINEERING' || activeBg) && (
-                      <svg ref={svgRef} viewBox="0 0 1000 600" style={{ width: '100%', height: '100%', display: 'block', cursor: (viewMode==='VISUAL'?visualTool:engTool) === 'pan' ? (isPanning?'grabbing':'grab') : 'crosshair', touchAction: 'none' }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
-                          <g ref={innerGroupRef} transform={`translate(${viewMode==='VISUAL'?visPan.x:engPan.x}, ${viewMode==='VISUAL'?visPan.y:engPan.y}) translate(500, 300) scale(${viewMode==='VISUAL'?visScale:engScale}) translate(-500, -300)`}>
+                  {(viewMode === 'ENGINEERING' || (viewMode === 'VISUAL' && activeBg) || (viewMode === 'TAKEOFF' && takeoffBg)) && (
+                      <svg ref={svgRef} viewBox="0 0 1000 600" style={{ width: '100%', height: '100%', display: 'block', cursor: currentCursor, touchAction: 'none' }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
+                          <g ref={innerGroupRef} transform={`translate(${viewMode === 'VISUAL' ? visPan.x : viewMode === 'TAKEOFF' ? takeoffPan.x : engPan.x}, ${viewMode === 'VISUAL' ? visPan.y : viewMode === 'TAKEOFF' ? takeoffPan.y : engPan.y}) translate(500, 300) scale(${viewMode === 'VISUAL' ? visScale : viewMode === 'TAKEOFF' ? takeoffScale : engScale}) translate(-500, -300)`}>
                               
+                              {viewMode === 'TAKEOFF' && takeoffBg && (
+                                  <g>
+                                      <image href={takeoffBg.url} x="0" y="0" width="1000" height="600" preserveAspectRatio="xMidYMid slice" opacity="0.85" />
+                                      {takeoffCalPoints.map((pt, i) => <g key={`tcal-${i}`} transform={`translate(${pt.x}, ${pt.y})`}><circle cx="0" cy="0" r="1.5" fill="var(--brass)" /><line x1="-6" y1="0" x2="-2" y2="0" stroke="var(--brass)" strokeWidth="1.5" /><line x1="2" y1="0" x2="6" y2="0" stroke="var(--brass)" strokeWidth="1.5" /><line x1="0" y1="-6" x2="0" y2="-2" stroke="var(--brass)" strokeWidth="1.5" /><line x1="0" y1="2" x2="0" y2="6" stroke="var(--brass)" strokeWidth="1.5" /></g>)}
+                                      {takeoffCalPoints.length === 2 && (() => {
+                                          const midX = (takeoffCalPoints[0].x + takeoffCalPoints[1].x) / 2; const midY = (takeoffCalPoints[0].y + takeoffCalPoints[1].y) / 2;
+                                          const dx = takeoffCalPoints[1].x - takeoffCalPoints[0].x; const dy = takeoffCalPoints[1].y - takeoffCalPoints[0].y;
+                                          const len = Math.sqrt(dx * dx + dy * dy); const nx = -dy / len; const ny = dx / len;
+                                          const offX = midX + nx * 40; const offY = midY + ny * 40;
+                                          return (<g><line x1={takeoffCalPoints[0].x} y1={takeoffCalPoints[0].y} x2={takeoffCalPoints[1].x} y2={takeoffCalPoints[1].y} stroke="var(--brass)" strokeWidth="2" strokeDasharray="3,3" /><line x1={midX} y1={midY} x2={offX} y2={offY} stroke="var(--brass)" strokeWidth="1.5" /><rect x={offX - 45} y={offY - 12} width="90" height="24" fill="#fff" stroke="var(--line)" strokeWidth="1" /><text x={offX} y={offY + 4} fill="var(--ink)" fontSize="11" fontFamily="var(--mono)" letterSpacing=".05em" textAnchor="middle">{takeoffRealInches}" SPEC</text></g>);
+                                      })()}
+                                      
+                                      {takeoffMeasurements.map(m => (
+                                          <g key={m.id}>
+                                              <line x1={m.p1.x} y1={m.p1.y} x2={m.p2.x} y2={m.p2.y} stroke="var(--brass)" strokeWidth="3" />
+                                              <circle cx={m.p1.x} cy={m.p1.y} r="4" fill="var(--brass)" />
+                                              <circle cx={m.p2.x} cy={m.p2.y} r="4" fill="var(--brass)" />
+                                              <rect x={(m.p1.x+m.p2.x)/2 - 30} y={(m.p1.y+m.p2.y)/2 - 12} width="60" height="24" fill="#fff" stroke="var(--brass)" strokeWidth="1" />
+                                              <text x={(m.p1.x+m.p2.x)/2} y={(m.p1.y+m.p2.y)/2 + 4} fill="var(--ink)" fontSize="10" fontFamily="var(--mono)" textAnchor="middle">{m.inches.toFixed(1)}"</text>
+                                          </g>
+                                      ))}
+
+                                      {takeoffMeasurePoints.length === 1 && takeoffMousePos && (
+                                          <g>
+                                            <line x1={takeoffMeasurePoints[0].x} y1={takeoffMeasurePoints[0].y} x2={takeoffMousePos.x} y2={takeoffMousePos.y} stroke="var(--ink)" strokeWidth="2" strokeDasharray="4,4" />
+                                            <circle cx={takeoffMeasurePoints[0].x} cy={takeoffMeasurePoints[0].y} r="4" fill="var(--brass)" />
+                                          </g>
+                                      )}
+                                  </g>
+                              )}
+
                               {viewMode === 'VISUAL' && activeBg && (
                                   <g>
                                       <image href={activeBg.url} x="0" y="0" width="1000" height="600" preserveAspectRatio="xMidYMid slice" opacity="0.85" />
