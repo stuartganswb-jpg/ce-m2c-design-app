@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, addDoc, serverTimestamp, onSnapshot, query, where, doc, setDoc } from "firebase/firestore";
+import { collection, serverTimestamp, onSnapshot, query, where, doc, setDoc } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
@@ -8,7 +8,7 @@ import { OrbitControls, Box, Cylinder, Plane, Html } from '@react-three/drei';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
-const VisionLighting = ({ currentUser, activeBrand }) => {
+const VisionLighting = ({ currentUser, activeBrand, activeSession }) => {
     // --- Data Hooks ---
     const [masterAssemblies, setMasterAssemblies] = useState([]);
     const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
@@ -19,7 +19,9 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
     const [liveVendors, setLiveVendors] = useState([]);
 
     // --- Application State ---
+    const [sidemark, setSidemark] = useState('');
     const [room, setRoom] = useState({ width: 240, depth: 240, height: 144 }); 
+    const [referenceFurniture, setReferenceFurniture] = useState('DINING_TABLE');
     const [cluster, setCluster] = useState([{
         id: generateId(), x: 0, y: 0, drop: 36, 
         tiers: [{ id: generateId(), diameter: 44, height: 24, zOffset: 0 }]
@@ -94,19 +96,33 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
     };
 
     const pushToCPQ = async () => {
+        if (!activeSession?.quoteId) return alert("Please select a customer in the main header to initialize a session.");
+        if (!sidemark) return alert("Please enter a Sidemark for this specific item.");
         if (!selectedAssemblyId) return alert("Please select a Master Assembly Model first so the CPQ Engine knows what to load!");
+        
         setIsSaving(true);
+        const draftId = `DRAFT-${Date.now()}`;
+
         try {
             const payload = {
+                id: draftId,
                 category: 'LIGHTING',
+                status: 'DRAFT_FROM_VISION',
                 brandId: activeBrand,
                 author: currentUser,
+                jobName: activeSession.jobName,
+                sidemark: sidemark,
+                customerId: activeSession.customerId,
+                masterQuoteId: activeSession.quoteId,
                 linkedAssemblyId: selectedAssemblyId, 
                 specs: { room, cluster },
                 createdAt: serverTimestamp()
             };
-            await addDoc(collection(db, "cpq_drafts"), payload);
-            alert("✅ SCALE MODEL PUSHED TO CPQ DRAFTS!\n\nYou can now resume this configuration in Tab 8 to apply specific textures and pricing.");
+            
+            await setDoc(doc(db, "cpq_drafts", draftId), payload);
+            
+            alert(`✅ "${sidemark}" SCALE MODEL PUSHED TO CPQ DRAFTS!\n\nYou can now resume this configuration in Tab 8 to apply specific textures and pricing.`);
+            setSidemark('');
         } catch (e) {
             console.error(e);
             alert("Error saving draft.");
@@ -170,17 +186,17 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
         return (
             <group position={[fixture.x, 0, fixture.y]}>
                 <Cylinder args={[0.5, 0.5, fixture.drop, 8]} position={[0, mountY - (fixture.drop / 2), 0]}>
-                    <meshStandardMaterial color="#b08d57" />
+                    <meshStandardMaterial color="#c5a059" />
                 </Cylinder>
                 
                 <group position={[0, topOfFixtureY, 0]}>
                     {fixture.tiers.map(tier => (
                         <group key={tier.id} position={[0, tier.zOffset - (tier.height / 2), 0]}>
                             <Cylinder args={[tier.diameter / 2, tier.diameter / 2, tier.height, 32, 1, true]} side={THREE.DoubleSide}>
-                                <meshStandardMaterial color="#b08d57" transparent opacity={0.05} depthWrite={false} />
+                                <meshStandardMaterial color="#c5a059" transparent opacity={0.05} depthWrite={false} />
                             </Cylinder>
                             <Cylinder args={[tier.diameter / 2, tier.diameter / 2, tier.height, 32, 1, true]} side={THREE.DoubleSide} wireframe>
-                                <meshBasicMaterial color="#b08d57" />
+                                <meshBasicMaterial color="#c5a059" />
                             </Cylinder>
                             <Html position={[0, 0, tier.diameter / 2]} center>
                                 <div style={{ color: '#fff', background: 'var(--ink)', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', borderRadius: '2px', whiteSpace: 'nowrap' }}>
@@ -199,7 +215,7 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
     const sectionHeaderStyle = { margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' };
 
     return (
-        <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1, minHeight: '800px', backgroundColor: 'transparent' }}>
+        <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1, minHeight: '800px', backgroundColor: 'transparent', opacity: activeSession?.quoteId ? 1 : 0.4, pointerEvents: activeSession?.quoteId ? 'auto' : 'none' }}>
             
             {/* LEFT: CONTROLS */}
             <div style={{ width: '450px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', overflowY: 'auto' }}>
@@ -207,17 +223,26 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                 
                 {/* Assembly Data Binder */}
                 <div style={{ padding: '24px', borderBottom: '1px solid var(--line)', background: 'var(--paper)' }}>
-                    <h4 style={sectionHeaderStyle}>1. Base Chandelier Model</h4>
-                    <select 
-                        value={selectedAssemblyId} 
-                        onChange={(e) => setSelectedAssemblyId(e.target.value)} 
-                        style={{ ...fieldStyle, background: '#fff' }}
-                    >
-                        <option value="">-- Select Master Assembly --</option>
-                        {validAssemblies.map(a => (
-                            <option key={a.id} value={a.id}>{a.legacyErpId && a.legacyErpId !== "PENDING" ? `[${a.legacyErpId}] ` : ''}{a.itemName}</option>
-                        ))}
-                    </select>
+                    <h4 style={sectionHeaderStyle}>1. Base Configuration</h4>
+                    
+                    <div style={{ marginBottom: '16px' }}>
+                        <label style={labelStyle}>* Line Item Sidemark</label>
+                        <input type="text" placeholder="e.g. Foyer Chandelier" value={sidemark} onChange={e => setSidemark(e.target.value)} style={{...fieldStyle, border: '1px solid var(--brass)'}} />
+                    </div>
+
+                    <div>
+                        <label style={labelStyle}>* Assign Master Assembly</label>
+                        <select 
+                            value={selectedAssemblyId} 
+                            onChange={(e) => setSelectedAssemblyId(e.target.value)} 
+                            style={{ ...fieldStyle, background: '#fff' }}
+                        >
+                            <option value="">-- Select Master Assembly --</option>
+                            {validAssemblies.map(a => (
+                                <option key={a.id} value={a.id}>{a.legacyErpId && a.legacyErpId !== "PENDING" ? `[${a.legacyErpId}] ` : ''}{a.itemName}</option>
+                            ))}
+                        </select>
+                    </div>
                 </div>
 
                 <div style={{ padding: '24px', borderBottom: '1px solid var(--line)', background: '#fff' }}>
@@ -229,9 +254,20 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                     </div>
                 </div>
 
+                {/* Reference Object Toggle */}
+                <div style={{ padding: '24px', borderBottom: '1px solid var(--line)', background: 'var(--paper)' }}>
+                    <h4 style={sectionHeaderStyle}>3. Floor References</h4>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={() => setReferenceFurniture('DINING_TABLE')} style={{ flex: 1, padding: '10px', background: referenceFurniture === 'DINING_TABLE' ? 'var(--ink)' : '#fff', color: referenceFurniture === 'DINING_TABLE' ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Dining Table</button>
+                        <button onClick={() => setReferenceFurniture('COFFEE_TABLE')} style={{ flex: 1, padding: '10px', background: referenceFurniture === 'COFFEE_TABLE' ? 'var(--ink)' : '#fff', color: referenceFurniture === 'COFFEE_TABLE' ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Coffee Table</button>
+                        <button onClick={() => setReferenceFurniture('KING_BED')} style={{ flex: 1, padding: '10px', background: referenceFurniture === 'KING_BED' ? 'var(--ink)' : '#fff', color: referenceFurniture === 'KING_BED' ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>King Bed</button>
+                        <button onClick={() => setReferenceFurniture('NONE')} style={{ flex: 1, padding: '10px', background: referenceFurniture === 'NONE' ? 'var(--ink)' : '#fff', color: referenceFurniture === 'NONE' ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>None</button>
+                    </div>
+                </div>
+
                 <div style={{ padding: '24px', flex: 1, overflowY: 'auto', background: 'var(--paper-2)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                        <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>3. Lighting Cluster ({cluster.length})</h4>
+                        <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>4. Lighting Cluster ({cluster.length})</h4>
                         <button onClick={addFixture} style={{ padding: '8px 16px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Add Fixture</button>
                     </div>
 
@@ -240,7 +276,7 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                             <div key={fix.id} style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '20px' }}>
                                     <strong style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Fixture {idx + 1}</strong>
-                                    <button onClick={() => removeFixture(fix.id)} disabled={cluster.length === 1} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Remove</button>
+                                    <button onClick={() => removeFixture(fix.id)} disabled={cluster.length === 1} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: cluster.length === 1 ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textDecoration: 'underline' }}>Remove</button>
                                 </div>
 
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
@@ -257,7 +293,7 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                                         {fix.tiers.map((tier, tIdx) => (
                                             <div key={tier.id} style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px', position: 'relative' }}>
-                                                <button onClick={() => removeTier(fix.id, tier.id)} disabled={fix.tiers.length === 1} style={{ position: 'absolute', top: '8px', right: '8px', background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }}>×</button>
+                                                <button onClick={() => removeTier(fix.id, tier.id)} disabled={fix.tiers.length === 1} style={{ position: 'absolute', top: '8px', right: '8px', background: 'none', border: 'none', color: 'var(--ink)', cursor: fix.tiers.length === 1 ? 'not-allowed' : 'pointer', fontSize: '1.2rem', fontFamily: 'var(--sans)' }}>×</button>
                                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '12px' }}>Tier {tIdx + 1}</div>
                                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
                                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Diameter (in):</label><input type="number" value={tier.diameter} onChange={e => updateTier(fix.id, tier.id, 'diameter', e.target.value)} style={{ width: '80px', padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--sans)' }} /></div>
@@ -274,10 +310,10 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                 </div>
 
                 <div style={{ display: 'flex', gap: '12px', padding: '20px', background: 'var(--paper)', borderTop: '1px solid var(--line)' }}>
-                    <button onClick={pushToCPQ} disabled={isSaving} style={{ flex: 1, padding: '16px', background: isSaving ? 'var(--paper-2)' : 'var(--ink)', color: isSaving ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: isSaving ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
+                    <button onClick={pushToCPQ} disabled={isSaving || !activeSession?.quoteId} style={{ flex: 1, padding: '16px', background: (isSaving || !activeSession?.quoteId) ? 'var(--paper-2)' : 'var(--ink)', color: (isSaving || !activeSession?.quoteId) ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: (isSaving || !activeSession?.quoteId) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
                         {isSaving ? "Saving..." : "Push to CPQ"}
                     </button>
-                    <button onClick={() => setCoopModalOpen(true)} disabled={isSaving} style={{ flex: 1, padding: '16px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: isSaving ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
+                    <button onClick={() => setCoopModalOpen(true)} disabled={isSaving || !activeSession?.quoteId} style={{ flex: 1, padding: '16px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: (isSaving || !activeSession?.quoteId) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
                         Push to Coop
                     </button>
                 </div>
@@ -296,21 +332,56 @@ const VisionLighting = ({ currentUser, activeBrand }) => {
                     <OrbitControls makeDefault target={[0, room.height / 2, 0]} maxPolarAngle={Math.PI / 2 - 0.05} />
 
                     <Plane args={[room.width, room.depth]} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
-                        <meshStandardMaterial color="#f2efe8" /> {/* var(--paper-2) */}
+                        <meshStandardMaterial color="#f2efe8" />
                     </Plane>
 
                     <Plane args={[room.width, room.depth]} rotation={[Math.PI / 2, 0, 0]} position={[0, room.height, 0]}>
                         <meshStandardMaterial color="#e5e5e5" wireframe />
                     </Plane>
 
-                    <group position={[0, 15, 0]}>
-                        <Box args={[72, 30, 40]}>
-                            <meshStandardMaterial color="#e5e5e5" />
-                        </Box>
-                        <Html position={[0, 20, 0]} center>
-                            <div style={{ color: 'var(--ink-soft)', background: '#fff', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', borderRadius: '2px', whiteSpace: 'nowrap', border: '1px solid var(--line)' }}>72" Reference Table</div>
+                    {/* Permanent 6-Foot Person Reference */}
+                    <group position={[-50, 36, 20]}>
+                        <Cylinder args={[6, 6, 72, 16]}>
+                            <meshStandardMaterial color="var(--ink-soft)" opacity={0.15} transparent depthWrite={false} />
+                        </Cylinder>
+                        <Html position={[0, 42, 0]} center>
+                            <div style={{ color: 'var(--ink-soft)', background: '#fff', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', borderRadius: '2px', whiteSpace: 'nowrap', border: '1px solid var(--line)' }}>6' Person</div>
                         </Html>
                     </group>
+
+                    {/* Toggleable Furniture References */}
+                    {referenceFurniture === 'DINING_TABLE' && (
+                        <group position={[0, 15, 0]}>
+                            <Box args={[72, 30, 40]}>
+                                <meshStandardMaterial color="#e5e5e5" />
+                            </Box>
+                            <Html position={[0, 20, 0]} center>
+                                <div style={{ color: 'var(--ink-soft)', background: '#fff', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', borderRadius: '2px', whiteSpace: 'nowrap', border: '1px solid var(--line)' }}>72"W × 30"H Dining Table</div>
+                            </Html>
+                        </group>
+                    )}
+
+                    {referenceFurniture === 'COFFEE_TABLE' && (
+                        <group position={[0, 9, 0]}>
+                            <Box args={[48, 18, 24]}>
+                                <meshStandardMaterial color="#e5e5e5" />
+                            </Box>
+                            <Html position={[0, 14, 0]} center>
+                                <div style={{ color: 'var(--ink-soft)', background: '#fff', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', borderRadius: '2px', whiteSpace: 'nowrap', border: '1px solid var(--line)' }}>48"W × 18"H Coffee Table</div>
+                            </Html>
+                        </group>
+                    )}
+
+                    {referenceFurniture === 'KING_BED' && (
+                        <group position={[0, 12, 0]}>
+                            <Box args={[76, 24, 80]}>
+                                <meshStandardMaterial color="#e5e5e5" />
+                            </Box>
+                            <Html position={[0, 18, 0]} center>
+                                <div style={{ color: 'var(--ink-soft)', background: '#fff', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', borderRadius: '2px', whiteSpace: 'nowrap', border: '1px solid var(--line)' }}>76"W × 24"H King Bed</div>
+                            </Html>
+                        </group>
+                    )}
 
                     {cluster.map(fixture => (
                         <FixtureGhost key={fixture.id} fixture={fixture} ceilingHeight={room.height} />
