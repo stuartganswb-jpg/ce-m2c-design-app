@@ -175,7 +175,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [libraryParts, setLibraryParts] = useState([]);
   const [activeBomPins, setActiveBomPins] = useState([]); 
 
-  const [globalLists, setGlobalLists] = useState({});
+  const [globalLists, setGlobalLists] = useState({
+      inventoryTypes: [], assemblyTypes: [], prodTypes: [], customers: [], bracketMounts: [], feeTypes: []
+  });
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
@@ -1073,12 +1075,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
         </div>
       </div>
 
-      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', gap: '20px', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)', opacity: activeMasterQuoteId ? 0.6 : 1, pointerEvents: activeMasterQuoteId ? 'none' : 'auto' }}>
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', gap: '20px', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)', opacity: activeMasterQuoteId ? 0.6 : 1, pointerEvents: activeMasterQuoteId ? 'auto' : 'auto' }}>
           <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>Active Customer:</div>
           <select 
               value={jobData.customerId} 
               onChange={e => setJobData({...jobData, customerId: e.target.value})} 
-              style={{ flex: 1, padding: '12px', fontSize: '0.95rem', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: activeMasterQuoteId ? 'transparent' : 'var(--paper)', cursor: activeMasterQuoteId ? 'not-allowed' : 'pointer' }}
+              style={{ flex: 1, padding: '12px', fontSize: '0.95rem', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: activeMasterQuoteId ? 'var(--paper-2)' : '#fff', cursor: activeMasterQuoteId ? 'not-allowed' : 'pointer' }}
               disabled={!!activeMasterQuoteId}
           >
               <option value="">-- Select Customer to Activate Live Client Pricing --</option>
@@ -1312,8 +1314,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                  <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                     <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', borderBottom: '1px solid var(--line)' }}>Step 2: Select Approved Design</div>
                     <div style={{ padding: '24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '16px', maxHeight: '300px', overflowY: 'auto' }}>
-                       {availableAssemblies.length === 0 ? <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No approved assemblies found.</span> : (
-                           availableAssemblies.map(asm => (
+                       {liveAssemblies.filter(a => a.manufacturingSpecs?.productType === productType).length === 0 ? <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No approved assemblies found.</span> : (
+                           liveAssemblies.filter(a => a.manufacturingSpecs?.productType === productType).map(asm => (
                               <button key={asm.id} onClick={() => setActiveAssemblyId(asm.id)} style={{ padding: '16px', background: activeAssemblyId === asm.id ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', border: `1px solid ${activeAssemblyId === asm.id ? 'var(--brass)' : 'var(--line)'}`, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', transition: 'all 0.2s' }}>
                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{asm.legacyErpId !== "PENDING" ? asm.legacyErpId : asm.itemId}</div>
                                  <div style={{ textAlign: 'center', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>{asm.itemName}</div>

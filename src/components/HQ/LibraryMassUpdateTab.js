@@ -21,7 +21,9 @@ const DEFAULT_SYSTEM_WINDOWS = {
   partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], 
   inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
   projections: ['ce', 'm2c', 'uniquity', 'leyla'],
-  bins: ['ce', 'm2c', 'uniquity', 'leyla'] 
+  bins: ['ce', 'm2c', 'uniquity', 'leyla'],
+  bracketMounts: ['ce', 'm2c', 'uniquity', 'leyla'], 
+  feeTypes: ['ce', 'm2c', 'uniquity', 'leyla']       
 };
 
 const LIST_LABELS = {
@@ -33,7 +35,9 @@ const LIST_LABELS = {
     partHandling: 'PART HANDLING & ROUTING', 
     inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS',
     projections: 'BRACKET PROJECTIONS',
-    bins: 'WAREHOUSE BIN LOCATIONS'
+    bins: 'WAREHOUSE BIN LOCATIONS',
+    bracketMounts: 'BRACKET MOUNT TYPES', 
+    feeTypes: 'SERVICE / FEE TYPES'       
 };
 
 const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
@@ -85,7 +89,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         prodTypes: [], uom: [], watchLists: [], assemblyTypes: [], inventoryTypes: [], 
         partHandling: [], collections: [], vendors: [], outsourceActions: [],
         pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [],
-        projections: [], cpqRoutingTypes: [], customers: [], bins: []
+        projections: [], cpqRoutingTypes: [], customers: [], bins: [],
+        bracketMounts: [], feeTypes: [] 
     });
     
     const [collectionsData, setCollectionsData] = useState([]);
@@ -152,7 +157,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
         const unsubVendors = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "VENDOR")), snap => setLiveVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))));
         
-        // NEW: Filtered Customer Fetch
         const unsubCustomers = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "CUSTOMER")), snap => {
             const allCusts = snap.docs.map(d => ({id: d.id, ...d.data()}));
             setLiveCustomers(allCusts.filter(c => c.brandId === activeBrand || (c.sharedBrands && c.sharedBrands.includes(activeBrand))));
@@ -161,10 +165,9 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         const unsubRecipes = onSnapshot(collection(db, "fin_recipes"), (snap) => { setActiveRecipes(snap.docs.map(d => d.id)); setFloorRecipeData(snap.docs.map(d => ({ id: d.id, ...d.data() }))); });
 
         return () => { unsubLists(); unsubCols(); unsubWin(); unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubVendors(); unsubCustomers(); unsubRecipes(); };
-    }, [activeBrand]); // <-- Added activeBrand dependency so it updates when tabs change
+    }, [activeBrand]);
 
     // --- CSV BULK UPLOAD & MAPPING LOGIC ---
-
     const handleDownloadCsvTemplate = () => {
         const headers = [
             "ERP Item ID", "NetSuite Internal ID", "Item Name", "Product Type", "Routing Type", "UOM",
@@ -201,7 +204,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 (specs.collections || []).join(";") || specs.customData?.collection || ""
             ];
             
-            // Wrap in quotes to prevent commas inside names from breaking columns
             csvContent += row.map(v => `"${(v || '').toString().replace(/"/g, '""')}"`).join(",") + "\n";
         });
 
@@ -225,7 +227,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         try {
             const text = await csvFile.text();
             
-            // Regex handles commas inside quotes correctly
             const rows = text.split('\n').map(row => {
                 const matches = row.match(/(\\.|[^",\s]+|"(?:\\.|[^\\"])*")/g) || [];
                 return matches.map(m => m.replace(/^"|"$/g, '').replace(/""/g, '"'));
@@ -259,7 +260,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
                 const payload = {};
                 
-                // Text Fields
                 const pType = getVal("Product Type"); if(pType !== null) { payload.productType = pType; payload["manufacturingSpecs.productType"] = pType; }
                 const rType = getVal("Routing Type"); if(rType !== null) { payload.routingType = rType; payload["manufacturingSpecs.routingType"] = rType; }
                 const uom = getVal("UOM"); if(uom !== null) { payload["manufacturingSpecs.uom"] = uom.toUpperCase(); }
@@ -271,7 +271,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 const mat = getVal("Material"); if(mat !== null) { payload["manufacturingSpecs.material"] = mat; }
                 const outAct = getVal("Outsource Action"); if(outAct !== null) { payload["manufacturingSpecs.outsourceAction"] = outAct; }
                 
-                // Number Fields
                 const w = getVal("Weight"); if(w !== null) { payload["manufacturingSpecs.weight"] = w === "" ? "" : parseFloat(w); }
                 const bp = getVal("Base Price"); if(bp !== null) { payload["manufacturingSpecs.basePrice"] = bp === "" ? "" : parseFloat(bp); }
                 const c = getVal("Cost"); if(c !== null) { payload["manufacturingSpecs.cost"] = c === "" ? "" : parseFloat(c); }
@@ -279,14 +278,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 const lt = getVal("Lead Time"); if(lt !== null) { payload["manufacturingSpecs.leadTime"] = lt === "" ? "" : parseFloat(lt); }
                 const rop = getVal("Reorder Point"); if(rop !== null) { payload["manufacturingSpecs.reorderPoint"] = rop === "" ? "" : parseFloat(rop); }
                 
-                // Booleans
                 const isInHouse = getVal("Is In-House (TRUE/FALSE)"); 
                 if(isInHouse !== null) { 
                     payload["manufacturingSpecs.isInHouse"] = isInHouse.toUpperCase() === 'TRUE';
                     payload.partClass = "Inventory"; 
                 }
 
-                // Arrays
                 const col = getVal("Collection");
                 if (col !== null) {
                     if (col === "") payload["manufacturingSpecs.collections"] = [];
@@ -661,7 +658,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         await setDoc(doc(db, "system", "master_lists"), { ...globalLists, cpqRoutingTypes: updated });
     };
 
-    // Styling constants
     const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)' };
     const fieldStyle = { width: '100%', padding: '10px', border: `1px solid ${theme.line}`, fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' };
     const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
@@ -679,7 +675,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 </div>
             </div>
 
-            {/* CSV IMPORT TOOL */}
             <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px', marginBottom: '10px', borderRadius: '2px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                     <h3 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>CSV Data Mapping Tool</h3>
@@ -707,7 +702,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
             <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
                 
-                {/* LEFT: SELECTION PANEL */}
                 <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', height: '70vh', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                     <div style={{ padding: '20px', background: theme.paper2, borderBottom: `1px solid ${theme.line}` }}>
                         <input 
@@ -745,7 +739,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     </div>
                 </div>
 
-                {/* RIGHT: CONFIGURATION PANEL */}
                 <div style={{ flex: 1.2, background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', height: '70vh', overflowY: 'auto' }}>
                     <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>
                         Manual Metadata Injection Rules
@@ -756,7 +749,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                         
-                        {/* PRODUCT TYPE */}
                         {windowConfig.system.prodTypes?.includes(activeBrand) && (
                             <div style={{ background: updates.productType.active ? theme.paper : 'transparent', border: `1px solid ${updates.productType.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -770,7 +762,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* ROUTING TYPE */}
                         <div style={{ background: updates.routingType.active ? theme.paper : 'transparent', border: `1px solid ${updates.routingType.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.routingType.active} onChange={(e) => handleUpdateChange('routingType', 'active', e.target.checked)} />
@@ -783,7 +774,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </select>
                         </div>
 
-                        {/* UOM */}
                         {windowConfig.system.uom?.includes(activeBrand) && (
                             <div style={{ background: updates.uom.active ? theme.paper : 'transparent', border: `1px solid ${updates.uom.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -797,7 +787,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* VENDOR */}
                         {windowConfig.system.vendors?.includes(activeBrand) && (
                             <div style={{ background: updates.vendorName.active ? theme.paper : 'transparent', border: `1px solid ${updates.vendorName.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -811,7 +800,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* WATCHLIST */}
                         {windowConfig.system.watchLists?.includes(activeBrand) && (
                             <div style={{ background: updates.watchList.active ? theme.paper : 'transparent', border: `1px solid ${updates.watchList.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -825,7 +813,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* PART HANDLING */}
                         {windowConfig.system.partHandling?.includes(activeBrand) && (
                             <div style={{ background: updates.partHandling.active ? theme.paper : 'transparent', border: `1px solid ${updates.partHandling.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -839,7 +826,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* PROGRAM # */}
                         <div style={{ background: updates.programNum.active ? theme.paper : 'transparent', border: `1px solid ${updates.programNum.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.programNum.active} onChange={(e) => handleUpdateChange('programNum', 'active', e.target.checked)} />
@@ -848,7 +834,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <input type="text" disabled={!updates.programNum.active} value={updates.programNum.value} onChange={(e) => handleUpdateChange('programNum', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.programNum.active ? 1 : 0.5 }} placeholder="e.g. 1234" />
                         </div>
 
-                        {/* RAW MATERIAL */}
                         <div style={{ background: updates.material.active ? theme.paper : 'transparent', border: `1px solid ${updates.material.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.material.active} onChange={(e) => handleUpdateChange('material', 'active', e.target.checked)} />
@@ -857,7 +842,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <input type="text" disabled={!updates.material.active} value={updates.material.value} onChange={(e) => handleUpdateChange('material', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.material.active ? 1 : 0.5 }} placeholder="e.g. Steel" />
                         </div>
 
-                        {/* WEIGHT */}
                         <div style={{ background: updates.weight.active ? theme.paper : 'transparent', border: `1px solid ${updates.weight.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.weight.active} onChange={(e) => handleUpdateChange('weight', 'active', e.target.checked)} />
@@ -866,7 +850,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <input type="number" step="0.01" disabled={!updates.weight.active} value={updates.weight.value} onChange={(e) => handleUpdateChange('weight', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.weight.active ? 1 : 0.5 }} placeholder="0.00" />
                         </div>
 
-                        {/* BASE PRICE */}
                         <div style={{ background: updates.basePrice.active ? theme.paper : 'transparent', border: `1px solid ${updates.basePrice.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.basePrice.active} onChange={(e) => handleUpdateChange('basePrice', 'active', e.target.checked)} />
@@ -875,7 +858,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <input type="number" step="0.01" disabled={!updates.basePrice.active} value={updates.basePrice.value} onChange={(e) => handleUpdateChange('basePrice', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.basePrice.active ? 1 : 0.5 }} placeholder="0.00" />
                         </div>
 
-                        {/* COST */}
                         <div style={{ background: updates.cost.active ? theme.paper : 'transparent', border: `1px solid ${updates.cost.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.cost.active} onChange={(e) => handleUpdateChange('cost', 'active', e.target.checked)} />
@@ -884,7 +866,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <input type="number" step="0.01" disabled={!updates.cost.active} value={updates.cost.value} onChange={(e) => handleUpdateChange('cost', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.cost.active ? 1 : 0.5 }} placeholder="0.00" />
                         </div>
                         
-                        {/* MOQ */}
                         <div style={{ background: updates.moq.active ? theme.paper : 'transparent', border: `1px solid ${updates.moq.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.moq.active} onChange={(e) => handleUpdateChange('moq', 'active', e.target.checked)} />
@@ -893,7 +874,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <input type="number" disabled={!updates.moq.active} value={updates.moq.value} onChange={(e) => handleUpdateChange('moq', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.moq.active ? 1 : 0.5 }} placeholder="0" />
                         </div>
 
-                        {/* LEAD TIME */}
                         <div style={{ background: updates.leadTime.active ? theme.paper : 'transparent', border: `1px solid ${updates.leadTime.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.leadTime.active} onChange={(e) => handleUpdateChange('leadTime', 'active', e.target.checked)} />
@@ -902,7 +882,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <input type="number" disabled={!updates.leadTime.active} value={updates.leadTime.value} onChange={(e) => handleUpdateChange('leadTime', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.leadTime.active ? 1 : 0.5 }} placeholder="0" />
                         </div>
 
-                        {/* REORDER POINT */}
                         <div style={{ background: updates.reorderPoint.active ? theme.paper : 'transparent', border: `1px solid ${updates.reorderPoint.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.reorderPoint.active} onChange={(e) => handleUpdateChange('reorderPoint', 'active', e.target.checked)} />
@@ -911,7 +890,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <input type="number" disabled={!updates.reorderPoint.active} value={updates.reorderPoint.value} onChange={(e) => handleUpdateChange('reorderPoint', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.reorderPoint.active ? 1 : 0.5 }} placeholder="0" />
                         </div>
 
-                        {/* BIN LOCATION */}
                         <div style={{ background: updates.binLocation.active ? theme.paper : 'transparent', border: `1px solid ${updates.binLocation.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.binLocation.active} onChange={(e) => handleUpdateChange('binLocation', 'active', e.target.checked)} />
@@ -923,7 +901,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </select>
                         </div>
 
-                        {/* SOURCING FLAG */}
                         <div style={{ background: updates.isInHouse.active ? theme.paper : 'transparent', border: `1px solid ${updates.isInHouse.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.isInHouse.active} onChange={(e) => handleUpdateChange('isInHouse', 'active', e.target.checked)} />
@@ -935,7 +912,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </select>
                         </div>
 
-                        {/* OUTSOURCE ACTIONS */}
                         {windowConfig.system.outsourceActions?.includes(activeBrand) && (
                             <div style={{ background: updates.outsourceAction.active ? theme.paper : 'transparent', border: `1px solid ${updates.outsourceAction.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -949,7 +925,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* PILLOW SIZES */}
                         {windowConfig.system.pillowSizes?.includes(activeBrand) && (
                             <div style={{ background: updates.pillowSize.active ? theme.paper : 'transparent', border: `1px solid ${updates.pillowSize.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -963,7 +938,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* FILL TYPES */}
                         {windowConfig.system.fillTypes?.includes(activeBrand) && (
                             <div style={{ background: updates.fillType.active ? theme.paper : 'transparent', border: `1px solid ${updates.fillType.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -977,7 +951,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* FLANGE STYLES */}
                         {windowConfig.system.flangeStyles?.includes(activeBrand) && (
                             <div style={{ background: updates.flangeStyle.active ? theme.paper : 'transparent', border: `1px solid ${updates.flangeStyle.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -991,7 +964,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* STITCH TYPES */}
                         {windowConfig.system.stitchTypes?.includes(activeBrand) && (
                             <div style={{ background: updates.stitchType.active ? theme.paper : 'transparent', border: `1px solid ${updates.stitchType.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -1005,7 +977,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* SEAM COUNTS */}
                         {windowConfig.system.seamCounts?.includes(activeBrand) && (
                             <div style={{ background: updates.seamCount.active ? theme.paper : 'transparent', border: `1px solid ${updates.seamCount.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -1019,7 +990,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
 
-                        {/* BRACKET PROJECTIONS */}
                         {windowConfig.system.projections?.includes(activeBrand) && (
                             <div style={{ background: updates.projection.active ? theme.paper : 'transparent', border: `1px solid ${updates.projection.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -1033,7 +1003,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </div>
                         )}
                         
-                        {/* COLLECTIONS (APPEND) */}
                         {windowConfig.system.collections?.includes(activeBrand) && (
                             <div style={{ background: updates.collection.active ? theme.paper : 'transparent', border: `1px solid ${updates.collection.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s', gridColumn: 'span 2' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
@@ -1068,7 +1037,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 </div>
             </div>
 
-            {/* --- SYSTEM DATA & DICTIONARIES MOVED FROM LIBRARY TAB --- */}
             <div style={{ marginTop: '50px' }}>
                 <button 
                     onClick={() => setShowAdminDashboard(!showAdminDashboard)} 
@@ -1140,7 +1108,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                         {(newFinishConfig.clientMapping || []).map((mapping, idx) => (
                                                             <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: theme.paper2, padding: '10px 16px', border: `1px solid ${theme.line}`, fontSize: '0.9rem' }}>
                                                                 <span><strong style={{ color: theme.ink }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
-                                                                <span style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
+                                                                <span style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
                                                             </div>
                                                         ))}
                                                     </div>
@@ -1174,8 +1142,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                             </div>
                                                         </div>
                                                         <div style={{ display: 'flex', gap: '12px' }}>
-                                                            <button onClick={() => handleEditGlobalFinish(finish)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1rem', cursor: 'pointer' }} title="Edit Finish">Edit</button>
-                                                            <button onClick={() => handleRemoveFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }} title="Delete Finish">Del</button>
+                                                            <button onClick={() => handleEditGlobalFinish(finish)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Edit Finish">Edit</button>
+                                                            <button onClick={() => handleRemoveFinish(finish.id)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Delete Finish">Del</button>
                                                         </div>
                                                     </div>
                                                 )
@@ -1242,7 +1210,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '8px' }}>Customers: <span style={{color: theme.ink}}>{col.allowedCustomers?.length > 0 ? col.allowedCustomers.join(', ') : 'All (Unrestricted)'}</span></div>
                                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '4px' }}>Finishes: <span style={{color: theme.ink}}>{col.allowedFinishes?.length > 0 ? col.allowedFinishes.join(', ') : 'All (Unrestricted)'}</span></div>
                                                 </div>
-                                                <button onClick={() => handleDeleteCollection(col.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
+                                                <button onClick={() => handleDeleteCollection(col.id)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }}>Del</button>
                                             </div>
                                         ))}
                                     </div>
@@ -1292,7 +1260,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                         {(newOutsourceFinishConfig.clientMapping || []).map((mapping, idx) => (
                                                             <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: theme.paper2, padding: '10px 16px', border: `1px solid ${theme.line}`, fontSize: '0.9rem' }}>
                                                                 <span><strong style={{ color: theme.ink }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
-                                                                <span style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
+                                                                <span style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
                                                             </div>
                                                         ))}
                                                     </div>
@@ -1324,8 +1292,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                         </div>
                                                     </div>
                                                     <div style={{ display: 'flex', gap: '12px' }}>
-                                                        <button onClick={() => handleEditOutsourceFinish(finish)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1rem', cursor: 'pointer' }} title="Edit Finish">Edit</button>
-                                                        <button onClick={() => handleRemoveOutsourceFinish(finish.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }} title="Delete Finish">Del</button>
+                                                        <button onClick={() => handleEditOutsourceFinish(finish)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Edit Finish">Edit</button>
+                                                        <button onClick={() => handleRemoveOutsourceFinish(finish.id)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Delete Finish">Del</button>
                                                     </div>
                                                 </div>
                                             ))}
@@ -1376,7 +1344,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '4px' }}>ERP ID: <span style={{ color: theme.ink }}>{item.legacyErpId || 'Pending'}</span> {w.hasMultiplier && `| Mult: x${item.multiplier}`}</div>
                                                             </div>
                                                         </div>
-                                                        <button onClick={() => handleRemoveDynamicAsset(item.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
+                                                        <button onClick={() => handleRemoveDynamicAsset(item.id)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }}>Del</button>
                                                     </div>
                                                 ))}
                                             </div>
@@ -1410,7 +1378,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                     <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{field.label}</div>
                                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Type: <span style={{ color: theme.ink }}>{field.type}</span> | ID: <span style={{ color: theme.ink }}>{field.key}</span></div>
                                                 </div>
-                                                <button onClick={() => handleRemoveSchemaField(field.key)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
+                                                <button onClick={() => handleRemoveSchemaField(field.key)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }}>Del</button>
                                             </div>
                                         ))}
                                     </div>
@@ -1431,7 +1399,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                             <div key={listKey} style={{ background: theme.paper, border: `1px solid ${theme.line}`, padding: '24px', display: 'flex', flexDirection: 'column' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: `1px solid ${theme.line}`, paddingBottom: '12px', marginBottom: '20px' }}>
                                                     <h4 style={{ margin: 0, fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: theme.ink }}>{LIST_LABELS[listKey] || listKey.replace(/([A-Z])/g, ' $1').trim()}</h4>
-                                                    <button onClick={() => handleDeleteListCategory(listKey)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.1rem', cursor: 'pointer' }} title="Delete Category">×</button>
+                                                    <button onClick={() => handleDeleteListCategory(listKey)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.1rem', cursor: 'pointer' }} title="Delete Category">×</button>
                                                 </div>
                                                 <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
                                                     <input value={newListItems[listKey] || ''} onChange={(e) => setNewListItems({...newListItems, [listKey]: e.target.value})} style={{ flex: 1, padding: '10px', border: `1px solid ${theme.line}`, outline: 'none', fontFamily: 'var(--sans)' }} placeholder="Add item..." />
@@ -1450,7 +1418,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                                 )}
                                                                 <span>{item}</span>
                                                             </div>
-                                                            <span onClick={() => handleRemoveListItem(listKey, item)} style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem', opacity: 0.7 }}>×</span>
+                                                            <span onClick={() => handleRemoveListItem(listKey, item)} style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem', opacity: 0.7 }}>×</span>
                                                         </div>
                                                     ))}
                                                 </div>
@@ -1469,4 +1437,4 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     );
 };
 
-export default LibraryMassUpdateTab;
+export default LibraryTab;

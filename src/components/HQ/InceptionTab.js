@@ -5,7 +5,7 @@ import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { UncontrolledReactSVGPanZoom, TOOL_PAN, TOOL_ZOOM_IN, TOOL_ZOOM_OUT, TOOL_NONE } from 'react-svg-pan-zoom'; 
 
 import * as THREE from 'three';
-import { Canvas, useThree } from '@react-three/fiber';
+import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Html, Bounds } from '@react-three/drei';
 
 class ErrorBoundary extends React.Component {
@@ -27,11 +27,6 @@ class ErrorBoundary extends React.Component {
         return this.props.children; 
     }
 }
-
-const DEFAULT_COLLECTIONS = ["HARLOW", "SIGNATURE", "COASTAL", "MODERN ARCHITECTURAL", "CUSTOM", "N/A"];
-const DEFAULT_PRODUCT_TYPES = ["FINIAL", "BRACKET", "POLE", "RING", "END CAP", "SWIVEL"];
-const VENDORS = ["VEND-101 (Acme Plating)", "VEND-202 (Prime Assembly)", "VEND-303 (Luxury Textiles Co.)", "VEND-404 (Custom Machining)"];
-const CUSTOMERS = ["CUST-882 (Smith Residence)", "CUST-310 (The Harrison Project)", "CUST-105 (Alvarez Villa)"];
 
 const is3DFile = (nameOrUrl) => {
     if (!nameOrUrl) return false;
@@ -61,12 +56,15 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const [assemblies, setAssemblies] = useState([]);
   const [activeAssembly, setActiveAssembly] = useState(null);
   const [bomParts, setBomParts] = useState([]); 
-  const [dynamicCollections, setDynamicCollections] = useState(DEFAULT_COLLECTIONS);
-  const [dynamicProductTypes, setDynamicProductTypes] = useState(DEFAULT_PRODUCT_TYPES);
+  
+  // -- Dynamic HQ Dictionaries --
+  const [dynamicProductTypes, setDynamicProductTypes] = useState([]);
+  const [collectionsData, setCollectionsData] = useState([]);
+
   const [expandedGroups, setExpandedGroups] = useState({});
 
   const [isEditing, setIsEditing] = useState(false);
-  const [formData, setFormData] = useState({ itemName: "", legacyErpId: "", collection: "N/A", productType: "FINIAL", project: "", description: "" });
+  const [formData, setFormData] = useState({ itemName: "", legacyErpId: "", collection: "N/A", productType: "", project: "", description: "" });
   const [imageFile, setImageFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
 
@@ -102,15 +100,17 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       e.stopPropagation();
   };
 
+  // Centralized HQ Listeners
   useEffect(() => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
           if (docSnap.exists()){
             const data = docSnap.data();
-            if (data.collections) setDynamicCollections(data.collections);
             if (data.prodTypes) setDynamicProductTypes(data.prodTypes);
           }
       });
-      return () => unsubLists();
+      const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+
+      return () => { unsubLists(); unsubCollections(); };
   }, []);
 
   useEffect(() => {
@@ -194,12 +194,12 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
     if (assembly) {
       setFormData({
         itemName: assembly.itemName || "", legacyErpId: assembly.legacyErpId === "PENDING" ? "" : (assembly.legacyErpId || ""),
-        collection: assembly.collection || "N/A", productType: assembly.productType || dynamicProductTypes[0] || DEFAULT_PRODUCT_TYPES[0],
+        collection: assembly.collection || "N/A", productType: assembly.productType || (dynamicProductTypes[0] || ""),
         project: assembly.project || "", description: assembly.description || ""
       });
       setActiveAssembly(assembly);
     } else {
-      setFormData({ itemName: "", legacyErpId: "", collection: "N/A", productType: dynamicProductTypes[0] || DEFAULT_PRODUCT_TYPES[0], project: "", description: "" });
+      setFormData({ itemName: "", legacyErpId: "", collection: "N/A", productType: dynamicProductTypes[0] || "", project: "", description: "" });
       setActiveAssembly(null);
     }
     setImageFile(null); setImageMode("UPLOAD"); setSelectedExistingImage(""); setIsEditing(true);
@@ -214,8 +214,8 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
     let finalCollection = formData.collection;
     if (isAddingNewCollection && newCollectionName.trim()) {
         finalCollection = newCollectionName.trim().toUpperCase();
-        const updatedCollections = [...new Set([...dynamicCollections, finalCollection])];
-        setDoc(doc(db, "system", "master_lists"), { collections: updatedCollections }, { merge: true });
+        const safeId = `COL_${Date.now()}`;
+        await setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: finalCollection, allowedCustomers: [], allowedFinishes: [] });
     }
     
     let finalProductType = formData.productType;
@@ -506,7 +506,8 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                     {!isAddingNewCollection ? (
                         <select value={formData.collection} onChange={(e) => { if (e.target.value === "ADD_NEW") { setIsAddingNewCollection(true); setFormData({...formData, collection: ""}); } else { setFormData({...formData, collection: e.target.value}); } }} style={fieldStyle}>
                             <option value="ADD_NEW">+ Add New Collection...</option>
-                            {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
+                            <option value="N/A">N/A</option>
+                            {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                         </select>
                     ) : (
                         <div style={{ display: 'flex', gap: '12px' }}>
@@ -597,7 +598,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1 }}>
         
-        {/* SIDEBAR: GROUPED ASSEMBLIES */}
         {!isCanvasMaximized && (
             <div style={{ width: activeAssembly ? '320px' : '100%', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {assemblies.length === 0 && (
@@ -645,7 +645,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
             </div>
         )}
 
-        {/* MAIN PANEL */}
         {activeAssembly && (
           <div style={{ flex: 1, background: isCanvasMaximized ? 'transparent' : '#fff', border: isCanvasMaximized ? 'none' : '1px solid var(--line)', boxShadow: isCanvasMaximized ? 'none' : '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column', borderRadius: '2px', overflow: 'hidden' }}>
             
@@ -749,7 +748,6 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                  
                  <div ref={viewerContainerRef} onMouseMove={handleMouseMove} style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
                     
-                    {/* CROSSHAIR */}
                     <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 9999, display: isAddingCallout ? 'block' : 'none' }}>
                         <div ref={crosshairHRef} style={{ position: 'absolute', left: 0, width: '100%', height: '1px', background: 'var(--brass)' }} />
                         <div ref={crosshairVRef} style={{ position: 'absolute', top: 0, width: '1px', height: '100%', background: 'var(--brass)' }} />

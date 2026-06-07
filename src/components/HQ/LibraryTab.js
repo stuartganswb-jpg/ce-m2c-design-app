@@ -42,7 +42,8 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
   const [globalLists, setGlobalLists] = useState({ 
       uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [],
       pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], assemblyTypes: [],
-      cpqRoutingTypes: [], customers: [], partHandling: [], inventoryTypes: [], projections: [] 
+      cpqRoutingTypes: [], customers: [], partHandling: [], inventoryTypes: [], projections: [],
+      bracketMounts: [], feeTypes: []
   });
   
   const [windowConfig, setWindowConfig] = useState({ system: DEFAULT_SYSTEM_WINDOWS, custom: [] });
@@ -101,10 +102,10 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               uom: data.uom || [], prodTypes: data.prodTypes || [], 
               watchLists: data.watchLists || [], vendors: data.vendors || [], outsourceActions: data.outsourceActions || [],
               pillowSizes: data.pillowSizes || [], fillTypes: data.fillTypes || [], flangeStyles: data.flangeStyles || [], 
-              stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || ['0 Seams', '1 Seam', '2 Seams', '3 Seams', '4 Seams'],
-              assemblyTypes: data.assemblyTypes || [], cpqRoutingTypes: data.cpqRoutingTypes || [],
-              customers: data.customers || [], partHandling: data.partHandling || ['Small Parts', 'Custom'], 
-              inventoryTypes: data.inventoryTypes || [], projections: data.projections || [], bins: data.bins || []
+              stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || [], assemblyTypes: data.assemblyTypes || [],
+              cpqRoutingTypes: data.cpqRoutingTypes || [], customers: data.customers || [], partHandling: data.partHandling || [], 
+              inventoryTypes: data.inventoryTypes || [], projections: data.projections || [], bins: data.bins || [],
+              bracketMounts: data.bracketMounts || [], feeTypes: data.feeTypes || []
           });
       }
     });
@@ -114,7 +115,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     });
 
     return () => { unsubSchema(); unsubAssets(); unsubCollections(); unsubLists(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); };
-  }, [activeBrand]); // <-- Added activeBrand dependency
+  }, [activeBrand]);
 
   useEffect(() => {
     if (!activeBrand) return;
@@ -164,7 +165,6 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       ...liveVendors.map(v => v.name.toUpperCase()),
       ...inventory.map(p => (p.manufacturingSpecs?.vendorName || "").toUpperCase()).filter(Boolean)
   ])).sort();
-
 
   const filteredInventory = inventory.filter(part => {
     const term = searchTerm.toLowerCase();
@@ -856,19 +856,14 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
                           <label style={labelStyle}>Bracket Mount Type</label>
                           <select value={editSpecs.customData?.bracketType || ""} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={fieldStyle}>
                               <option value="">-- Not a Bracket --</option>
-                              <option value="WALL">Wall Mount</option>
-                              <option value="CEILING">Ceiling Mount</option>
-                              <option value="INSIDE MOUNT">Inside Mount</option>
+                              {(globalLists.bracketMounts || []).map(m => <option key={m} value={m}>{m}</option>)}
                           </select>
                       </div>
                       <div style={{ gridColumn: 'span 2' }}>
                           <label style={labelStyle}>Service / Fee Type (Auto-Append)</label>
                           <select value={editSpecs.customData?.feeType || ""} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
                               <option value="">-- No Special Fee --</option>
-                              <option value="SPLICE">Splice Fee</option>
-                              <option value="MITER_CUT">Miter Cut Fee</option>
-                              <option value="BENT_RETURN">Bent Return (FR) Fee</option>
-                              <option value="MITER_RETURN">Miter Return Fee</option>
+                              {(globalLists.feeTypes || []).map(f => <option key={f} value={f}>{f}</option>)}
                           </select>
                           <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>If selected, the Vision System will automatically bill for this item when triggered.</span>
                       </div>
