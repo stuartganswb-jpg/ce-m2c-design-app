@@ -31,10 +31,12 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         setSyncLog(prev => [{ time, msg, type }, ...prev]);
     };
 
-    useEffect(() => {
+   useEffect(() => {
         const q = query(collection(db, "Approved_Designs"));
         const unsubParts = onSnapshot(q, (snap) => {
-            let parts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            // NEW: Added the filter to block cross-brand inventory
+            let parts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(p => p.brandId === activeBrand || (p.sharedBrands && p.sharedBrands.includes(activeBrand))); 
             
             // SORT ALPHABETICALLY BY ERP ID OR ITEM NAME
             parts.sort((a, b) => {

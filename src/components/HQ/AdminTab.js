@@ -389,6 +389,9 @@ const handleSyncAddresses = async () => {
       addLog(`Initiating Vendor Sync for External Co-Op CRM...`, 'info');
 
       try {
+          // Identify the brand to stamp the vendors with based on the target subsidiary input
+          const targetBrand = Object.keys(BRAND_NETSUITE_MAP).find(key => BRAND_NETSUITE_MAP[key].subsidiary === nsSubsidiaryId?.toString()) || activeBrand;
+
           const q = `SELECT id, companyname, email, phone, terms FROM vendor WHERE isinactive = 'F'`;
           const result = await executeSuiteQL(q);
           const records = result.items || [];
@@ -408,7 +411,9 @@ const handleSyncAddresses = async () => {
                   phone: v.phone || '',
                   terms: v.terms || '',
                   notes: 'Imported from NetSuite',
-                  status: 'ACTIVE'
+                  status: 'ACTIVE',
+                  brandId: targetBrand,          
+                  sharedBrands: [targetBrand]    
               }, { merge: true });
               successCount++;
           }
@@ -949,11 +954,19 @@ const handleNukeCustomers = async () => {
       const promptStr = window.prompt(`Type "DELETE ALL CUSTOMERS" to confirm wiping ${activeBrand.toUpperCase()} customers:`); 
       if (promptStr === "DELETE ALL CUSTOMERS") {
           try {
-              // This safely targets ONLY customers for the active brand, protecting your vendors!
-              const snap = await getDocs(query(collection(db, "crm_records"), where("type", "==", "CUSTOMER"), where("brandId", "==", activeBrand)));
-              await Promise.all(snap.docs.map(d => deleteDoc(doc(db, "crm_records", d.id))));
+              // Fetch all to avoid Firebase composite index requirement, then filter locally
+              const snap = await getDocs(collection(db, "crm_records"));
+              const toDelete = snap.docs.filter(d => {
+                  const data = d.data();
+                  return data.type === "CUSTOMER" && (data.brandId === activeBrand || (data.sharedBrands && data.sharedBrands.includes(activeBrand)));
+              });
+              
+              await Promise.all(toDelete.map(d => deleteDoc(doc(db, "crm_records", d.id))));
               alert(`✅ ALL ${activeBrand.toUpperCase()} CUSTOMERS NUKED.`);
-          } catch(e) { console.error(e); }
+          } catch(e) { 
+              console.error(e); 
+              alert(`❌ FAILED: ${e.message}`);
+          }
       }
   };
 
