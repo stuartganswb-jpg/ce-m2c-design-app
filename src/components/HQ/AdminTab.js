@@ -4,16 +4,9 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, 
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
-// 🚀 DYNAMIC BRAND MAPPING DICTIONARY
-const BRAND_NETSUITE_MAP = {
-    'm2c': { subsidiary: "3", location: "19" },
-    'uniquity': { subsidiary: "6", location: "22" },
-    'ce': { subsidiary: "2", location: "17" },
-    'leyla': { subsidiary: "5", location: "18" }
-};
-
 const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
-  const [activeSection, setActiveSection] = useState("NETSUITE_SYNC"); 
+  // Changed default tab since NETSUITE_SYNC is gone
+  const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
   
   const [users, setUsers] = useState([]);
   const [dynamicRoles, setDynamicRoles] = useState(['admin', 'executive', 'design_team', 'sales_rep']);
@@ -63,17 +56,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeFormType, setActiveFormType] = useState('QUOTE');
   const [formEditor, setFormEditor] = useState({ header: '', footer: '', terms: '' });
 
-  const [nsSubsidiaryId, setNsSubsidiaryId] = useState("3"); 
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncLog, setSyncLog] = useState([]);
-
-  // NEW: Auto-populate the Subsidiary ID based on the active brand tab
-  useEffect(() => {
-      if (BRAND_NETSUITE_MAP[activeBrand]) {
-          setNsSubsidiaryId(BRAND_NETSUITE_MAP[activeBrand].subsidiary);
-      }
-  }, [activeBrand]);
-
   // --- SUPER ADMIN STATE ---
   const [systemLogs, setSystemLogs] = useState([]);
   const [logFilter, setLogFilter] = useState({ app: 'ALL', user: '' });
@@ -82,9 +64,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const DOCUMENT_TYPES = ['QUOTE', 'SALES_ORDER', 'WORK_ORDER', 'PACKING_SLIP', 'INVOICE', 'FACTORY_ROUTER'];
   const BRANDS_LIST = ['m2c', 'uniquity', 'ce', 'leyla']; 
 
-  const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app"; 
-
-  // Identify if the current logged-in user is the Master Admin 
   const currentActiveUser = users.find(u => u.name === currentUser);
   const isSuperAdmin = currentUser === "Master Admin" || currentActiveUser?.pin === "1032" || currentActiveUser?.superAdmin === true;
 
@@ -137,7 +116,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   }, [activeFormType, formTemplates]);
 
-  // Fetch Global Logs across all apps when Super Admin tab is opened
   useEffect(() => {
       if (activeSection === "SUPER_ADMIN" && isSuperAdmin) {
           const fetchGlobalLogs = async () => {
@@ -206,29 +184,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       return () => unsub();
   }, [flowSettings.linkedAssemblyId, masterAssemblies]);
 
-  const addLog = (msg, type = 'info') => {
-      const time = new Date().toLocaleTimeString();
-      setSyncLog(prev => [{ time, msg, type }, ...prev]);
-  };
-
-  const executeSuiteQL = async (queryStr) => {
-      // The stable URL. Do not append limits/offsets here to protect the OAuth signature.
-      const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`;
-
-      const response = await fetch(FIREBASE_FUNCTION_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-              targetUrl: targetUrl,
-              method: 'POST',
-              payload: { q: queryStr }
-          })
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(`NetSuite Error: ${JSON.stringify(data)}`);
-      return data;
-  };
 
   const handleUpdateMasterPin = async () => {
       if (!newMasterPin || newMasterPin.length !== 4) return alert("Master PIN must be exactly 4 digits.");
@@ -251,392 +206,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           console.error(e);
           alert("Failed to update Master PIN.");
       }
-  };
-
-  const handleSyncCustomers = async () => {
-      if (!nsSubsidiaryId) return alert("Please enter a Target Subsidiary ID.");
-      setIsSyncing(true);
-      addLog(`Initiating Customer Sync for Subsidiary [${nsSubsidiaryId}]...`, 'info');
-
-      try {
-          const q = `SELECT id, companyname, email, phone, creditlimit, terms FROM customer WHERE subsidiary = ${nsSubsidiaryId} AND isinactive = 'F'`;
-          const result = await executeSuiteQL(q);
-          const records = result.items || [];
-          
-          addLog(`Downloaded ${records.length} active customers. Writing to CRM Database...`, 'success');
-
-          let successCount = 0;
-          for (const c of records) {
-              const safeId = `CUST-${c.id}`;
-              const docRef = doc(db, "crm_records", safeId);
-              
-              // Auto-Map Subsidiary ID to Brand Key
-              const targetBrand = Object.keys(BRAND_NETSUITE_MAP).find(key => BRAND_NETSUITE_MAP[key].subsidiary === nsSubsidiaryId?.toString()) || activeBrand;
-
-              await setDoc(docRef, {
-                  id: safeId,
-                  type: 'CUSTOMER',
-                  name: c.companyname || `Customer ${c.id}`,
-                  email: c.email || '',
-                  phone: c.phone || '',
-                  creditLimit: parseFloat(c.creditlimit) || 0,
-                  terms: c.terms || '',
-                  billingAddress: '',
-                  shippingAddresses: [],
-                  discountCode: '',
-                  contact: '',
-                  salesRep: '',
-                  notes: 'Imported from NetSuite',
-                  brandId: targetBrand,          
-                  sharedBrands: [targetBrand],   
-                  ytd: 0, mtd: 0, openOrders: 0
-              }, { merge: true });
-              successCount++;
-          }
-          addLog(`✅ Successfully synced ${successCount} CRM records. mapped to brand: ${Object.keys(BRAND_NETSUITE_MAP).find(key => BRAND_NETSUITE_MAP[key].subsidiary === nsSubsidiaryId?.toString()) || activeBrand}`, 'success');
-
-      } catch (err) {
-          console.error(err);
-          addLog(`❌ FAILED: ${err.message}`, 'error');
-      }
-      setIsSyncing(false);
-  };
-
-const handleSyncAddresses = async () => {
-      if (!nsSubsidiaryId) return alert("Please enter a Target Subsidiary ID.");
-      
-      setIsSyncing(true);
-      addLog(`Initiating Address Book Sync for Subsidiary [${nsSubsidiaryId}]...`, 'info');
-
-      try {
-          const q = `
-              SELECT 
-                  Customer.id AS customer_id,
-                  CustomerAddressbook.internalid AS addressbook_id,
-                  CustomerAddressbook.label,
-                  CustomerAddressbook.defaultshipping,
-                  CustomerAddressbookEntityAddress.addressee,
-                  CustomerAddressbookEntityAddress.attention,
-                  CustomerAddressbookEntityAddress.addr1,
-                  CustomerAddressbookEntityAddress.addr2,
-                  CustomerAddressbookEntityAddress.city,
-                  CustomerAddressbookEntityAddress.state,
-                  CustomerAddressbookEntityAddress.zip,
-                  CustomerAddressbookEntityAddress.country
-              FROM 
-                  Customer
-              LEFT JOIN 
-                  CustomerAddressbook ON CustomerAddressbook.entity = Customer.id
-              LEFT JOIN 
-                  CustomerAddressbookEntityAddress ON CustomerAddressbookEntityAddress.nkey = CustomerAddressbook.addressbookaddress
-              WHERE 
-                  Customer.subsidiary = ${nsSubsidiaryId} 
-                  AND Customer.isinactive = 'F'
-          `;
-
-          const result = await executeSuiteQL(q);
-          const records = result.items || [];
-          
-          addLog(`Downloaded ${records.length} total customer/address rows. Filtering empty records...`, 'success');
-
-          const addressMap = {};
-          let validAddressCount = 0;
-
-          for (const row of records) {
-              if (!row.addressbook_id) continue; 
-
-              validAddressCount++;
-              const custId = `CUST-${row.customer_id}`;
-              if (!addressMap[custId]) addressMap[custId] = [];
-              
-              addressMap[custId].push({
-                  addressBookId: row.addressbook_id,
-                  label: row.label || 'Default Address',
-                  isDefault: row.defaultshipping === 'T',
-                  addressee: row.addressee || row.attention || '',
-                  addr1: row.addr1 || '',
-                  addr2: row.addr2 || '',
-                  city: row.city || '',
-                  state: row.state || '',
-                  zip: row.zip || '',
-                  country: row.country || 'US'
-              });
-          }
-
-          if (validAddressCount === 0) {
-              addLog(`⚠️ NetSuite returned your customers, but hid all Address Books. Your NetSuite API Integration Role is likely missing the 'Customer Address' permission.`, 'warn');
-          } else {
-              let successCount = 0;
-              for (const [custId, addresses] of Object.entries(addressMap)) {
-                  addresses.sort((a, b) => (b.isDefault === true) - (a.isDefault === true));
-                  const docRef = doc(db, "crm_records", custId);
-                  await setDoc(docRef, { shippingAddresses: addresses }, { merge: true });
-                  successCount++;
-              }
-              
-              addLog(`✅ Successfully merged ${validAddressCount} address books into ${successCount} CRM profiles.`, 'success');
-          }
-
-      } catch (err) {
-          console.error(err);
-          addLog(`❌ FAILED: ${err.message}`, 'error');
-      }
-      setIsSyncing(false);
-  };
-
-  const handleSyncVendors = async () => {
-      setIsSyncing(true);
-      addLog(`Initiating Vendor Sync for External Co-Op CRM...`, 'info');
-
-      try {
-          // Identify the brand to stamp the vendors with based on the target subsidiary input
-          const targetBrand = Object.keys(BRAND_NETSUITE_MAP).find(key => BRAND_NETSUITE_MAP[key].subsidiary === nsSubsidiaryId?.toString()) || activeBrand;
-
-          const q = `SELECT id, companyname, email, phone, terms FROM vendor WHERE isinactive = 'F'`;
-          const result = await executeSuiteQL(q);
-          const records = result.items || [];
-          
-          addLog(`Downloaded ${records.length} active vendors. Writing to CRM Database...`, 'success');
-
-          let successCount = 0;
-          for (const v of records) {
-              const safeId = `VEND-${v.id}`;
-              const docRef = doc(db, "crm_records", safeId);
-              
-              await setDoc(docRef, {
-                  id: safeId,
-                  type: 'VENDOR',
-                  name: v.companyname || `Vendor ${v.id}`,
-                  email: v.email || '',
-                  phone: v.phone || '',
-                  terms: v.terms || '',
-                  notes: 'Imported from NetSuite',
-                  status: 'ACTIVE',
-                  brandId: targetBrand,          
-                  sharedBrands: [targetBrand]    
-              }, { merge: true });
-              successCount++;
-          }
-          addLog(`✅ Successfully synced ${successCount} Vendor records.`, 'success');
-
-      } catch (err) {
-          console.error(err);
-          addLog(`❌ FAILED: ${err.message}`, 'error');
-      }
-      setIsSyncing(false);
-  };
-
-  const handleSyncItems = async (itemType) => {
-      setIsSyncing(true);
-      
-      const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
-      addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
-
-      try {
-          const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
-          
-          // Map the activeBrand to its specific NetSuite Location and Subsidiary IDs
-          const targetLocation = BRAND_NETSUITE_MAP[activeBrand]?.location || "17"; 
-          const targetSubsidiary = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3"; // Pulls '3' for M2C, '2' for CE
-
-          let allRawRecords = [];
-          let lastId = 0;
-          let hasMore = true;
-          let pageCount = 1;
-
-          // 🚀 INFINITE PAGINATION: Loops safely without breaking proxy authentication
-          while (hasMore) {
-              addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
-              
-              // Added ItemSubsidiaryMap join to securely segregate items by brand
-              const q = `
-                  SELECT 
-                      item.id, 
-                      item.itemid, 
-                      item.displayname,
-                      BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
-                      BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
-                      BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
-                      BUILTIN.DF(item.stockunit) AS uom,
-                      item.custitem9 AS baseprice,
-                      Vendor.companyname AS vendor_name,
-                      ItemVendor.vendorcode AS vendor_part_number,
-                      ItemVendor.purchaseprice AS lastpurchaseprice,
-                      ItemVendor.preferredvendor
-                  FROM 
-                      item
-                  LEFT JOIN 
-                      ItemSubsidiaryMap ON ItemSubsidiaryMap.item = item.id
-                  LEFT JOIN 
-                      ItemVendor ON ItemVendor.item = item.id
-                  LEFT JOIN
-                      Vendor ON ItemVendor.vendor = Vendor.id
-                  WHERE 
-                      item.custitem_sync_to_cpq = 'T' 
-                      AND item.isinactive = 'F' 
-                      AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
-                      AND ${typeFilter}
-                      AND item.id > ${lastId}
-                  ORDER BY 
-                      item.id ASC
-              `;
-
-              const response = await fetch(FIREBASE_FUNCTION_URL, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                      targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                      method: 'POST',
-                      payload: { q }
-                  })
-              });
-              
-              const result = await response.json();
-              if (!response.ok) throw new Error(JSON.stringify(result));
-
-              const batch = result.items || [];
-              allRawRecords = allRawRecords.concat(batch);
-              
-              if (batch.length > 0) {
-                  lastId = batch[batch.length - 1].id;
-                  if (batch.length < 1000) {
-                      hasMore = false; 
-                  } else {
-                      pageCount++;
-                  }
-              } else {
-                  hasMore = false;
-              }
-          }
-          
-          addLog(`Downloaded ${allRawRecords.length} total items across all pages. Processing deduplication...`, 'success');
-
-          const uniqueRecordsMap = {};
-          for (const row of allRawRecords) {
-              const itemId = row.id;
-              if (!uniqueRecordsMap[itemId]) {
-                  uniqueRecordsMap[itemId] = row;
-              } else {
-                  const isNewPreferred = row.preferredvendor === 'T';
-                  const isOldPreferred = uniqueRecordsMap[itemId].preferredvendor === 'T';
-                  const oldHasVendor = !!uniqueRecordsMap[itemId].vendor_name;
-                  const newHasVendor = !!row.vendor_name;
-
-                  if (isNewPreferred && !isOldPreferred) {
-                      uniqueRecordsMap[itemId] = row;
-                  } else if (!oldHasVendor && newHasVendor && !isOldPreferred) {
-                      uniqueRecordsMap[itemId] = row;
-                  }
-              }
-          }
-          const records = Object.values(uniqueRecordsMap);
-          
-          let successCount = 0;
-          for (const item of records) {
-              const newId = `${activeBrand.toUpperCase()}-${itemType === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
-              
-              const existingMatch = allApprovedDesigns.find(d => d.legacyErpId === item.itemid);
-              const targetDocId = existingMatch ? existingMatch.id : newId;
-
-              const pTypeClean = (item.product_type || '').toLowerCase().trim();
-              const uomClean = (item.uom || '').toLowerCase().trim();
-              
-              const isPoleOrLinear = pTypeClean === 'pole' || pTypeClean === 'poles' || uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
-              const autoPartHandling = isPoleOrLinear ? 'Custom' : 'Small Parts';
-              const autoIsCutToSize = isPoleOrLinear; 
-              
-              const hasVendor = item.vendor_name && item.vendor_name.trim() !== '';
-
-              let parsedOutsourceAction = '';
-              if (/EP\d{2}/i.test(item.itemid) || /EP\d{2}/i.test(item.displayname)) {
-                  parsedOutsourceAction = 'PLATING';
-              }
-
-              let parsedCollection = item.collection || '';
-              let collectionsArray = [];
-              if (/^H1/i.test(item.itemid) || /^H1/i.test(item.displayname)) {
-                  parsedCollection = 'Fabricut H1';
-                  collectionsArray = ['FABRICUT H1'];
-              } else if (item.collection) {
-                  collectionsArray = [item.collection.toUpperCase()];
-              }
-
-              let parsedProjection = '';
-
-              const payload = {
-                  id: targetDocId,
-                  itemId: targetDocId,
-                  legacyErpId: item.itemid || item.id,
-                  netSuiteInternalId: item.id, 
-                  itemName: item.displayname || item.itemid,
-                  brandId: activeBrand,
-                  partClass: itemType,
-                  sharedBrands: [activeBrand]
-              };
-
-              if (!existingMatch) {
-                  payload.manufacturingSpecs = {
-                      basePrice: parseFloat(item.baseprice) || 0, 
-                      cost: parseFloat(item.lastpurchaseprice) || 0, 
-                      isInHouse: !hasVendor, 
-                      status: "IMPORTED_FROM_ERP",
-                      productType: item.product_type || 'Uncategorized',
-                      uom: item.uom || 'EA',
-                      binLocation: '',
-                      partHandling: autoPartHandling,
-                      outsourceAction: parsedOutsourceAction, 
-                      collections: collectionsArray, 
-                      parametric: { isCutToSize: autoIsCutToSize }, 
-                      vendorName: item.vendor_name || '', 
-                      vendorId: item.vendor_part_number || '', 
-                      customData: {
-                          collection: parsedCollection, 
-                          watchlist: item.watchlist || '',
-                          projection: parsedProjection 
-                      },
-                      dynamicDicts: {}
-                  };
-                  payload.createdAt = new Date().toISOString();
-              } else {
-                  payload.manufacturingSpecs = {
-                      ...existingMatch.manufacturingSpecs,
-                      basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0,
-                      cost: parseFloat(item.lastpurchaseprice) || existingMatch.manufacturingSpecs?.cost || 0,
-                      isInHouse: hasVendor ? false : (existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : true),
-                      productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
-                      uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
-                      binLocation: existingMatch.manufacturingSpecs?.binLocation || '',
-                      partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
-                      outsourceAction: parsedOutsourceAction || existingMatch.manufacturingSpecs?.outsourceAction || '', 
-                      collections: collectionsArray.length > 0 ? collectionsArray : (existingMatch.manufacturingSpecs?.collections || []), 
-                      vendorName: item.vendor_name || existingMatch.manufacturingSpecs?.vendorName || '',
-                      vendorId: item.vendor_part_number || existingMatch.manufacturingSpecs?.vendorId || '',
-                      parametric: {
-                          ...(existingMatch.manufacturingSpecs?.parametric || {}),
-                          isCutToSize: existingMatch.manufacturingSpecs?.parametric?.isCutToSize !== undefined 
-                                       ? existingMatch.manufacturingSpecs.parametric.isCutToSize 
-                                       : autoIsCutToSize
-                      },
-                      customData: {
-                          ...(existingMatch.manufacturingSpecs?.customData || {}),
-                          collection: parsedCollection || existingMatch.manufacturingSpecs?.customData?.collection || '',
-                          watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || '',
-                          projection: parsedProjection || existingMatch.manufacturingSpecs?.customData?.projection || '' 
-                      }
-                  };
-                  payload.updatedAt = new Date().toISOString();
-              }
-
-              await setDoc(doc(db, "Approved_Designs", targetDocId), payload, { merge: true });
-              successCount++;
-          }
-          addLog(`✅ Successfully synced and enriched ${successCount} library items.`, 'success');
-
-      } catch (err) {
-          console.error(err);
-          addLog(`❌ FAILED: ${err.message}`, 'error');
-      }
-      setIsSyncing(false);
   };
 
   const handleAddDiscount = async () => {
@@ -954,7 +523,6 @@ const handleNukeCustomers = async () => {
       const promptStr = window.prompt(`Type "DELETE ALL CUSTOMERS" to confirm wiping ${activeBrand.toUpperCase()} customers:`); 
       if (promptStr === "DELETE ALL CUSTOMERS") {
           try {
-              // Fetch all to avoid Firebase composite index requirement, then filter locally
               const snap = await getDocs(collection(db, "crm_records"));
               const toDelete = snap.docs.filter(d => {
                   const data = d.data();
@@ -1039,7 +607,6 @@ const handleNukeCustomers = async () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
-      {/* HEADER */}
       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div>
           <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>System Administration</span>
@@ -1050,11 +617,9 @@ const handleNukeCustomers = async () => {
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
         
-        {/* SIDEBAR NAVIGATION */}
         <div style={{ width: '250px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', flexShrink: 0, borderRadius: '2px', overflow: 'hidden' }}>
           <div style={{ padding: '20px 15px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', borderBottom: '1px solid var(--line)' }}>Settings Menu</div>
           
-          <AdminNavButton active={activeSection === "NETSUITE_SYNC"} onClick={() => setActiveSection("NETSUITE_SYNC")} label="NetSuite Sync" icon="🌐" />
           <AdminNavButton active={activeSection === "CPQ_FLOWS"} onClick={() => setActiveSection("CPQ_FLOWS")} label="CPQ Flow Builder" icon="⚙️" />
           <AdminNavButton active={activeSection === "RULES"} onClick={() => setActiveSection("RULES")} label="CPQ Logic Engine" icon="📐" />
           <AdminNavButton active={activeSection === "CRM_SETTINGS"} onClick={() => setActiveSection("CRM_SETTINGS")} label="CRM & Sales Config" icon="👥" />
@@ -1072,61 +637,8 @@ const handleNukeCustomers = async () => {
           )}
         </div>
 
-        {/* MAIN CONTENT AREA */}
         <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', minHeight: '600px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
           
-          {/* --- NETSUITE INTEGRATION MODULE --- */}
-          {activeSection === "NETSUITE_SYNC" && (
-              <div style={{ padding: '30px', display: 'flex', gap: '30px', alignItems: 'stretch' }}>
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                      <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px' }}>
-                          <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>NetSuite Master Sync (Pull)</h3>
-                      </div>
-                      
-                      <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '20px', borderRadius: '2px' }}>
-                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Target Subsidiary ID (Optional in Safe Mode)</label>
-                          <input 
-                              type="number" 
-                              value={nsSubsidiaryId} 
-                              onChange={e => setNsSubsidiaryId(e.target.value)} 
-                              placeholder="e.g. 3 (Classical Elements)" 
-                              style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '1rem', outline: 'none' }} 
-                          />
-                          <p style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', margin: '8px 0 0 0' }}>The Internal ID of the NetSuite subsidiary you want to import data from.</p>
-                      </div>
-
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                          <SyncButton onClick={handleSyncCustomers} disabled={isSyncing} label="Sync Active Customers" sub="SuiteQL: Pulls all active customers mapped to Subsidiary." />
-                          <SyncButton onClick={handleSyncAddresses} disabled={isSyncing} label="Sync Customer Address Books" sub="SuiteQL: Pulls address books and maps IDs for API Drop-Shipping." />
-                          <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors (Co-Op CRM)" sub="SuiteQL: Pulls all active external vendors/co-ops." />
-                          <SyncButton onClick={() => handleSyncItems('Inventory')} disabled={isSyncing} label="Sync Inventory / Components" sub="SuiteQL: Pulls non-assembly items flagged for CPQ sync." />
-                          <SyncButton onClick={() => handleSyncItems('Assembly')} disabled={isSyncing} label="Sync Kits / Assemblies" sub="SuiteQL: Pulls Assembly Items flagged for CPQ sync." />
-                      </div>
-                  </div>
-
-                  <div style={{ flex: 1, background: 'var(--dark)', display: 'flex', flexDirection: 'column', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{ padding: '12px 20px', background: 'var(--dark-2)', color: 'var(--paper)', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #333' }}>
-                          <span>SuiteQL Terminal</span>
-                          <button onClick={() => setSyncLog([])} style={{ background: 'none', border: 'none', color: 'var(--paper)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', opacity: 0.7 }}>CLEAR</button>
-                      </div>
-                      <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', flex: 1, overflowY: 'auto', fontFamily: 'var(--mono)', fontSize: '12px', color: '#a8a5a0' }}>
-                          {syncLog.length === 0 && <span>Awaiting command execution...</span>}
-                          {syncLog.map((log, idx) => {
-                              let color = '#a8a5a0';
-                              if (log.type === 'error') color = '#e27373';
-                              if (log.type === 'success') color = '#7dbb81';
-                              if (log.type === 'warn') color = '#e2b373';
-                              return (
-                                  <div key={idx} style={{ color, borderBottom: '1px solid #333', paddingBottom: '6px' }}>
-                                      <span style={{ opacity: 0.5, marginRight: '10px' }}>[{log.time}]</span>{log.msg}
-                                  </div>
-                              );
-                          })}
-                      </div>
-                  </div>
-              </div>
-          )}
-
           {/* --- FLOW BUILDER --- */}
           {activeSection === "CPQ_FLOWS" && (
             <div style={{ display: 'flex', flex: 1, height: '100%' }}>
@@ -1994,22 +1506,6 @@ const AdminNavButton = ({ active, onClick, label, icon }) => (
     >
         <span style={{ fontSize: '1.1rem', opacity: active ? 1 : 0.6 }}>{icon}</span>
         {label}
-    </button>
-);
-
-const SyncButton = ({ onClick, disabled, label, sub }) => (
-    <button 
-        onClick={onClick} 
-        disabled={disabled} 
-        style={{ 
-            padding: '20px', textAlign: 'left', cursor: disabled ? 'wait' : 'pointer', border: '1px solid var(--line)',
-            background: '#fff', color: 'var(--ink)', transition: 'all 0.2s ease', display: 'flex', flexDirection: 'column', gap: '6px'
-        }}
-        onMouseOver={(e) => { if(!disabled) e.currentTarget.style.borderColor = 'var(--brass)'; }}
-        onMouseOut={(e) => { if(!disabled) e.currentTarget.style.borderColor = 'var(--line)'; }}
-    >
-        <span style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500 }}>{label}</span>
-        <span style={{ fontFamily: 'var(--serif)', fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>{sub}</span>
     </button>
 );
 
