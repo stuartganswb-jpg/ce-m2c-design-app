@@ -47,6 +47,9 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
   });
 
   const S = 3.5;
+  
+  // FIXED: Declared at the top level so the sidebar UI can read it
+  const isFlange = (pillowData.flange || '').toUpperCase().includes('FLANGE') || (pillowData.flange || '').toUpperCase().includes('WELT');
 
   useEffect(() => {
       if (fabricTags.length > pillowData.fabrics.length) {
@@ -284,7 +287,7 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
       const drawingW = dw * displayScale; 
       const drawingH = dh * displayScale;
       
-      const isFlange = (data.flange || '').toUpperCase().includes('FLANGE') || (data.flange || '').toUpperCase().includes('WELT');
+      const isInternalFlange = (data.flange || '').toUpperCase().includes('FLANGE') || (data.flange || '').toUpperCase().includes('WELT');
       const isRailroadMain = (data.stitch || '').toUpperCase().includes('RAILROAD');
 
       // The drawn seams need to be scaled relatively. Original drawings use S*2 scale.
@@ -295,7 +298,7 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
               <defs><clipPath id={`pillowClip-${data.id || 'main'}`}><rect x="0" y="0" width={drawingW} height={drawingH} rx={10} /></clipPath></defs>
               <g>
                   <rect x="0" y="0" width={drawingW} height={drawingH} fill="var(--paper-2)" stroke="var(--ink)" strokeWidth="2" strokeDasharray={isRailroadMain ? '8,8' : 'none'} rx={10} />
-                  {isFlange && <rect x={-data.flangeSize * displayScale} y={-data.flangeSize * displayScale} width={drawingW + data.flangeSize * displayScale * 2} height={drawingH + data.flangeSize * displayScale * 2} fill="none" stroke="var(--ink)" strokeWidth="1" strokeDasharray="4,4" rx={15} opacity="0.8" />}
+                  {isInternalFlange && <rect x={-data.flangeSize * displayScale} y={-data.flangeSize * displayScale} width={drawingW + data.flangeSize * displayScale * 2} height={drawingH + data.flangeSize * displayScale * 2} fill="none" stroke="var(--ink)" strokeWidth="1" strokeDasharray="4,4" rx={15} opacity="0.8" />}
                   {renderOuterTrim(data, drawingW, drawingH)}
               </g>
               
