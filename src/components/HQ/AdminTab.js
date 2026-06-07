@@ -67,6 +67,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncLog, setSyncLog] = useState([]);
 
+  // NEW: Auto-populate the Subsidiary ID based on the active brand tab
+  useEffect(() => {
+      if (BRAND_NETSUITE_MAP[activeBrand]) {
+          setNsSubsidiaryId(BRAND_NETSUITE_MAP[activeBrand].subsidiary);
+      }
+  }, [activeBrand]);
+
   // --- SUPER ADMIN STATE ---
   const [systemLogs, setSystemLogs] = useState([]);
   const [logFilter, setLogFilter] = useState({ app: 'ALL', user: '' });

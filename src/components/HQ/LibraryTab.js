@@ -87,7 +87,12 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); 
     const unsubVendors = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "VENDOR")), snap => setLiveVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))));
-    const unsubCustomers = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "CUSTOMER")), snap => setLiveCustomers(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+    
+    // NEW: Filtered Customer Fetch
+    const unsubCustomers = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "CUSTOMER")), snap => {
+        const allCusts = snap.docs.map(d => ({id: d.id, ...d.data()}));
+        setLiveCustomers(allCusts.filter(c => c.brandId === activeBrand || (c.sharedBrands && c.sharedBrands.includes(activeBrand))));
+    });
 
     const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
       if (docSnap.exists()) {
@@ -99,7 +104,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
               stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || ['0 Seams', '1 Seam', '2 Seams', '3 Seams', '4 Seams'],
               assemblyTypes: data.assemblyTypes || [], cpqRoutingTypes: data.cpqRoutingTypes || [],
               customers: data.customers || [], partHandling: data.partHandling || ['Small Parts', 'Custom'], 
-              inventoryTypes: data.inventoryTypes || [], projections: data.projections || [] 
+              inventoryTypes: data.inventoryTypes || [], projections: data.projections || [], bins: data.bins || []
           });
       }
     });
@@ -109,7 +114,7 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
     });
 
     return () => { unsubSchema(); unsubAssets(); unsubCollections(); unsubLists(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); };
-  }, []);
+  }, [activeBrand]); // <-- Added activeBrand dependency
 
   useEffect(() => {
     if (!activeBrand) return;
