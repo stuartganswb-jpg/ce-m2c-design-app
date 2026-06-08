@@ -65,6 +65,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
   const [userPerms, setUserPerms] = useState([]);
   const [isPushingErp, setIsPushingErp] = useState(false);
+  const [woTargetQty, setWoTargetQty] = useState(1); // 🚀 WO Tool State
+
   const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
   useEffect(() => {
@@ -215,7 +217,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   });
 
   const openPartDetails = (part) => {
-    setActivePart(part); setPdfFile(null); setCadFile(null); setDynamicUploadProgress({}); setCloneSourceId("");
+    setActivePart(part); setPdfFile(null); setCadFile(null); setDynamicUploadProgress({}); setCloneSourceId(""); setWoTargetQty(1);
     
     const baseSpecs = part.manufacturingSpecs || {};
     const parametricData = baseSpecs.parametric || { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" };
@@ -329,7 +331,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     
     setActivePart({ isNew: true, id: newId, itemId: newId, legacyErpId: "PENDING", itemName: `NEW ${actualClass.toUpperCase()}`, brandId: activeBrand, partClass: actualClass });
     setEditSpecs({ productType: "", uom: "EA", finishDetail: "", collections: [], project: "", routingType: "", assemblyType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", weight: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" }, isProjectManaged: false, partHandling: "" }); 
-    setPdfFile(null); setCadFile(null); setCloneSourceId("");
+    setPdfFile(null); setCadFile(null); setCloneSourceId(""); setWoTargetQty(1);
   };
 
   const handleDeletePart = async () => {
@@ -466,6 +468,36 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       } catch (error) {
           console.error(error);
           alert("Sync Failed. Check console.");
+      }
+  };
+
+  // 🚀 NEW: Generate Production Work Order Handler
+  const handleGenerateWO = async () => {
+      if (!activePart || activePart.legacyErpId === "PENDING") {
+          return alert("Part must be saved with an ERP Legacy ID before generating a Work Order.");
+      }
+      if (!window.confirm(`Generate a Stock Build Work Order for ${woTargetQty}x ${activePart.legacyErpId}?`)) return;
+      
+      const newWoId = `WO-${activePart.legacyErpId}-${Date.now().toString().slice(-6)}`;
+      
+      try {
+          await setDoc(doc(db, "hq_work_orders", newWoId), {
+              id: newWoId,
+              woId: newWoId,
+              brand: activeBrand,
+              status: "Approved", // 🟢 Critical: Makes it visible on RTG Board
+              customer: "Internal Stock",
+              hqJobId: activePart.id, // Links to Master Library
+              totalParts: Number(woTargetQty),
+              reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], // Default: +14 days
+              type: "Stock Build",
+              createdAt: Date.now()
+          });
+          alert(`✅ Work Order ${newWoId} successfully pushed to RTG Dispatch!`);
+          setWoTargetQty(1); // Reset
+      } catch (err) {
+          console.error("WO Generation Error:", err);
+          alert("Failed to generate Work Order. Check console.");
       }
   };
 
@@ -949,6 +981,36 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                   </div>
                 </div>
               </div>
+
+              {/* 🚀 PRODUCTION WORK ORDER TOOL */}
+              {activePart.partClass !== 'Master Assembly' && (
+                  <div style={{ background: '#fff', border: '1px solid var(--brass)', padding: '24px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
+                      <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>
+                          Generate Production Work Order
+                      </h4>
+                      <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end' }}>
+                          <div style={{ flex: 1 }}>
+                              <label style={labelStyle}>Target Qty</label>
+                              <input 
+                                  type="number" 
+                                  min="1"
+                                  value={woTargetQty} 
+                                  onChange={e => setWoTargetQty(e.target.value)} 
+                                  style={fieldStyle} 
+                              />
+                          </div>
+                          <button 
+                              onClick={handleGenerateWO}
+                              style={{ flex: 2, padding: '12px 24px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}
+                          >
+                              Push to RTG Dispatch
+                          </button>
+                      </div>
+                      <span style={{ display: 'block', marginTop: '12px', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
+                          This generates an "Approved" Stock Build WO and sends it directly to Tab 13 (RTG Dispatch).
+                      </span>
+                  </div>
+              )}
 
               {/* GEOMETRY & CAD RULES */}
               <div>
