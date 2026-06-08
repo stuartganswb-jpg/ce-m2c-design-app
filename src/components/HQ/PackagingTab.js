@@ -194,9 +194,7 @@ function chaikin(pts, iters = 3) {
 
 // --- GLTF LOADING & TRACING ---
 async function loadGLTF(file) {
-  // Static string import to bypass Vercel Webpack CI error
   const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
-  
   const url = URL.createObjectURL(file);
   try { 
     return await new Promise((res, rej) => new GLTFLoader().load(url, res, null, rej)); 
@@ -416,12 +414,12 @@ const PackagingTab = ({ activeBrand }) => {
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
   }, []);
 
-  const getPoint = useCallback((e) => {
+  const getPoint = useCallback((e, bypassSnap = false) => {
     const svg = svgRef.current; if (!svg) return [0, 0];
     const r = svg.getBoundingClientRect();
     let x = VB.x + (e.clientX - r.left) * (VB.w / r.width);
     let y = VB.y + (e.clientY - r.top) * (VB.h / r.height);
-    if (snapOn) { x = snapTo(x, 0.5); y = snapTo(y, 0.5); }
+    if (snapOn && !bypassSnap) { x = snapTo(x, 0.5); y = snapTo(y, 0.5); }
     return [x, y];
   }, [VB, snapOn]);
 
@@ -432,13 +430,17 @@ const PackagingTab = ({ activeBrand }) => {
   }, [tool, getPoint]);
 
   const onMouseMove = useCallback(e => {
-    const [x, y] = getPoint(e); setCursor([x, y]);
+    const isDragging = dragRef.current !== null;
+    const bypassSnap = tool === "select" || isDragging;
+    const [x, y] = getPoint(e, bypassSnap); 
+    setCursor([x, y]);
+    
     if (drawRef.current) { previewRef.current = { ...previewRef.current, cx: x, cy: y }; tick(n => n + 1); }
     if (dragRef.current) {
       const { startX, startY, origShapes, ids } = dragRef.current;
       setShapes(origShapes.map(s => ids.has(s.id) ? moveShape(s, x - startX, y - startY) : s));
     }
-  }, [getPoint]);
+  }, [getPoint, tool]);
 
   const onMouseUp = useCallback(e => {
     if (dragRef.current) { dragRef.current = null; return; }
@@ -458,18 +460,20 @@ const PackagingTab = ({ activeBrand }) => {
   const onShapeDown = useCallback((e, id) => {
     if (tool !== "select") return;
     e.stopPropagation();
-    const [x, y] = getPoint(e);
+    const [x, y] = getPoint(e, true); // True to instantly bypass grid snapping for a smooth grab
     setSel(prev => { const next = e.shiftKey ? new Set(prev) : new Set(prev.has(id) ? prev : []); next.add(id); dragRef.current = { ids: next, startX: x, startY: y, origShapes: shapes }; return next; });
   }, [tool, getPoint, shapes]);
 
 
   // --- Actions ---
   const handleExportDXF = () => {
-    if(!activeJob) return;
+    if(shapes.length === 0) return;
     const data = generateDXF(shapes);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([data], { type: 'application/dxf' }));
-    a.download = `${activeJob.id}_FOAM_CUT.dxf`; a.click(); URL.revokeObjectURL(a.href);
+    // Generates the active job filename, or falls back to CUSTOM if no job is selected
+    a.download = activeJob ? `${activeJob.id}_FOAM_CUT.dxf` : `CUSTOM_FOAM_CUT.dxf`; 
+    a.click(); URL.revokeObjectURL(a.href);
   };
 
   const handleGLBUpload = async (e) => {
@@ -587,7 +591,13 @@ const PackagingTab = ({ activeBrand }) => {
             </label>
           </div>
           <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-             <button onClick={handleExportDXF} disabled={!activeJob} style={{ ...btnStyle(true), background: activeJob ? theme.brass : theme.line, border: 'none' }}>Export DXF</button>
+             <button 
+                onClick={handleExportDXF} 
+                disabled={shapes.length === 0} 
+                style={{ ...btnStyle(true), background: shapes.length > 0 ? theme.brass : theme.line, border: 'none' }}
+             >
+                Export DXF
+             </button>
           </div>
         </div>
 
@@ -605,15 +615,49 @@ const PackagingTab = ({ activeBrand }) => {
 
             {shapes.map(renderShape)}
             
-            {/* Preview Box for Drawing */}
-            {previewRef.current && drawRef.current && tool === "rect" && (
-               <rect x={Math.min(previewRef.current.sx, previewRef.current.cx)} y={Math.min(previewRef.current.sy, previewRef.current.cy)} width={Math.abs(previewRef.current.cx - previewRef.current.sx)} height={Math.abs(previewRef.current.cy - previewRef.current.sy)} fill="rgba(176,141,87,0.1)" stroke={theme.brass} strokeWidth={0.05} strokeDasharray=".2 .1" />
+            {/* Preview Box & Floating Dimension Tooltip */}
+            {previewRef.current && drawRef.current && ["rect", "ellipse"].includes(tool) && (
+               <>
+                 {tool === "rect" && (
+                   <rect x={Math.min(previewRef.current.sx, previewRef.current.cx)} y={Math.min(previewRef.current.sy, previewRef.current.cy)} width={Math.abs(previewRef.current.cx - previewRef.current.sx)} height={Math.abs(previewRef.current.cy - previewRef.current.sy)} fill="rgba(176,141,87,0.1)" stroke={theme.brass} strokeWidth={0.05} strokeDasharray=".2 .1" />
+                 )}
+                 {tool === "ellipse" && (
+                   <ellipse cx={(previewRef.current.sx + previewRef.current.cx) / 2} cy={(previewRef.current.sy + previewRef.current.cy) / 2} rx={Math.abs(previewRef.current.cx - previewRef.current.sx) / 2} ry={Math.abs(previewRef.current.cy - previewRef.current.sy) / 2} fill="rgba(176,141,87,0.1)" stroke={theme.brass} strokeWidth={0.05} strokeDasharray=".2 .1" />
+                 )}
+                 {(() => {
+                    const c = shiftRef.current;
+                    let w = Math.abs(previewRef.current.cx - previewRef.current.sx);
+                    let h = Math.abs(previewRef.current.cy - previewRef.current.sy);
+                    if (c) w = h = Math.min(w, h);
+                    return (
+                      <g transform={`translate(${previewRef.current.cx + 0.5}, ${previewRef.current.cy + 0.5})`}>
+                        <rect x="0" y="0" width="3.5" height="1" fill={theme.ink} rx="0.2" opacity="0.85" />
+                        <text x="1.75" y="0.65" fill="#fff" fontSize="0.45" fontFamily={theme.mono} textAnchor="middle">
+                          {w.toFixed(2)}" x {h.toFixed(2)}"
+                        </text>
+                      </g>
+                    );
+                 })()}
+               </>
             )}
-            {previewRef.current && drawRef.current && tool === "ellipse" && (
-               <ellipse cx={(previewRef.current.sx + previewRef.current.cx) / 2} cy={(previewRef.current.sy + previewRef.current.cy) / 2} rx={Math.abs(previewRef.current.cx - previewRef.current.sx) / 2} ry={Math.abs(previewRef.current.cy - previewRef.current.sy) / 2} fill="rgba(176,141,87,0.1)" stroke={theme.brass} strokeWidth={0.05} strokeDasharray=".2 .1" />
-            )}
+
             {previewRef.current && drawRef.current && tool === "line" && (
-               <line x1={previewRef.current.sx} y1={previewRef.current.sy} x2={previewRef.current.cx} y2={previewRef.current.cy} stroke={theme.brass} strokeWidth={0.25} strokeDasharray=".2 .1" />
+               <>
+                 <line x1={previewRef.current.sx} y1={previewRef.current.sy} x2={previewRef.current.cx} y2={previewRef.current.cy} stroke={theme.brass} strokeWidth={0.25} strokeDasharray=".2 .1" />
+                 {(() => {
+                    const dx = previewRef.current.cx - previewRef.current.sx;
+                    const dy = previewRef.current.cy - previewRef.current.sy;
+                    const len = Math.sqrt(dx*dx + dy*dy);
+                    return (
+                      <g transform={`translate(${previewRef.current.cx + 0.5}, ${previewRef.current.cy + 0.5})`}>
+                        <rect x="0" y="0" width="2.5" height="1" fill={theme.ink} rx="0.2" opacity="0.85" />
+                        <text x="1.25" y="0.65" fill="#fff" fontSize="0.45" fontFamily={theme.mono} textAnchor="middle">
+                          {len.toFixed(2)}"
+                        </text>
+                      </g>
+                    );
+                 })()}
+               </>
             )}
           </svg>
         </div>
