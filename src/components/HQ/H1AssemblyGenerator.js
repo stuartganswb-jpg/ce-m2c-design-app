@@ -6,11 +6,11 @@ const H1AssemblyGenerator = () => {
     const [status, setStatus] = useState("Ready");
     const [progress, setProgress] = useState({ current: 0, total: 0 });
 
-    // The outsourced finish codes to generate for every root item
+    // The outsourced finish codes
     const OUTSOURCED_CODES = ['EP01', 'EP02', 'EP03', 'EP04', 'EP05', 'EP06', 'P25']; 
 
     const generateAssemblies = async () => {
-        if (!window.confirm("WARNING: This will generate new /P, /EP, and /P25 assemblies and BOM pins for all root H1 items. Proceed?")) return;
+        if (!window.confirm("WARNING: This will remap /EP and /P25 assemblies to consume the ROOT item and delete the old incorrect /P pins. Proceed?")) return;
         
         setStatus("Fetching Root H1 Items...");
         
@@ -25,7 +25,7 @@ const H1AssemblyGenerator = () => {
                 return erpId.toUpperCase().startsWith("H1") && !erpId.includes("/");
             });
 
-            setStatus(`Found ${rootItems.length} root items. Generating payloads...`);
+            setStatus(`Found ${rootItems.length} root items. Generating correction payloads...`);
             setProgress({ current: 0, total: rootItems.length });
 
             let operations = [];
@@ -35,7 +35,7 @@ const H1AssemblyGenerator = () => {
                 const rootErpId = root.legacyErpId.toUpperCase();
                 const brandId = root.brandId || "ce";
 
-                // --- GENERATE /P (PHOSPHATED) IN-HOUSE ASSEMBLY ---
+                // --- 1. PRESERVE /P (PHOSPHATED) IN-HOUSE ASSEMBLY (Unchanged) ---
                 const pId = `${rootErpId}/P`;
                 const pDocId = `AUTO-${pId.replace(/[^a-zA-Z0-9]/g, '')}`;
                 
@@ -59,7 +59,6 @@ const H1AssemblyGenerator = () => {
                     }
                 });
 
-                // Add BOM Pin for /P consuming the Root H1 item
                 operations.push({
                     type: 'set',
                     ref: doc(db, "assembly_pins", `BOM-${pDocId}-ROOT`),
@@ -72,7 +71,7 @@ const H1AssemblyGenerator = () => {
                     }
                 });
 
-                // --- GENERATE /EP AND /P25 OUTSOURCED ASSEMBLIES ---
+                // --- 2. CORRECT /EP AND /P25 OUTSOURCED ASSEMBLIES ---
                 OUTSOURCED_CODES.forEach(finishCode => {
                     const finishId = `${rootErpId}/${finishCode}`;
                     const finishDocId = `AUTO-${finishId.replace(/[^a-zA-Z0-9]/g, '')}`;
@@ -99,22 +98,28 @@ const H1AssemblyGenerator = () => {
                         }
                     });
 
-                    // Add BOM Pin for the Outsourced item consuming the /P WIP item
+                    // 🚨 CLEANUP: Delete the old, incorrect pin pointing to the /P item
+                    operations.push({
+                        type: 'delete',
+                        ref: doc(db, "assembly_pins", `BOM-${finishDocId}-P`)
+                    });
+
+                    // ✅ FIX: Add the new, correct pin pointing directly to the ROOT item
                     operations.push({
                         type: 'set',
-                        ref: doc(db, "assembly_pins", `BOM-${finishDocId}-P`),
+                        ref: doc(db, "assembly_pins", `BOM-${finishDocId}-ROOT`),
                         data: {
                             assemblyId: finishDocId,
-                            partId: pDocId,
-                            partName: `${root.itemName} (Phosphated WIP)`,
-                            legacyErpId: pId,
+                            partId: root.id,
+                            partName: root.itemName,
+                            legacyErpId: rootErpId,
                             defaultQty: 1
                         }
                     });
                 });
             });
 
-            // 4. Execute in Batches of 400 (Firestore limit is 500)
+            // 4. Execute in Batches of 400
             const chunkSize = 400;
             for (let i = 0; i < operations.length; i += chunkSize) {
                 const chunk = operations.slice(i, i + chunkSize);
@@ -123,6 +128,8 @@ const H1AssemblyGenerator = () => {
                 chunk.forEach(op => {
                     if (op.type === 'set') {
                         batch.set(op.ref, op.data, { merge: true });
+                    } else if (op.type === 'delete') {
+                        batch.delete(op.ref);
                     }
                 });
 
@@ -130,10 +137,10 @@ const H1AssemblyGenerator = () => {
                 
                 const currentRootProgress = Math.min(rootItems.length, Math.floor((i / operations.length) * rootItems.length));
                 setProgress({ current: currentRootProgress, total: rootItems.length });
-                setStatus(`Committed batch ${Math.ceil(i / chunkSize) + 1} of ${Math.ceil(operations.length / chunkSize)}...`);
+                setStatus(`Committed batch ${Math.ceil(i / chunkSize)} of ${Math.ceil(operations.length / chunkSize)}...`);
             }
 
-            setStatus("✅ Migration Complete! All WIP, Plated, and P25 assemblies are now linked in the database.");
+            setStatus("✅ Correction Complete! /EP and /P25 items now consume the Root Raw Material directly.");
             setProgress({ current: rootItems.length, total: rootItems.length });
 
         } catch (error) {
@@ -144,16 +151,16 @@ const H1AssemblyGenerator = () => {
 
     return (
         <div style={{ padding: '24px', background: '#fff', border: '1px solid var(--brass)', borderRadius: '2px', margin: '20px 0' }}>
-            <h3 style={{ margin: '0 0 12px 0', fontFamily: 'var(--serif)', color: 'var(--ink)' }}>Database Engine: H1 Assembly Migration</h3>
+            <h3 style={{ margin: '0 0 12px 0', fontFamily: 'var(--serif)', color: 'var(--ink)' }}>Database Engine: H1 BOM Correction</h3>
             <p style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink-soft)', marginBottom: '20px' }}>
-                Scans the library for root H1 items and automatically constructs the Phosphated (/P), Plated (/EP), and /P25 assemblies, strictly binding them via Bill of Materials.
+                Remaps outsourced finishes (/EP and /P25) to consume the root component instead of the Phosphated (/P) component, and deletes the erroneous links.
             </p>
             
             <button 
                 onClick={generateAssemblies} 
                 style={{ padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}
             >
-                Execute Mass Generation
+                Execute Correction
             </button>
 
             <div style={{ marginTop: '20px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>
