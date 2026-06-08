@@ -189,16 +189,15 @@ function chaikin(pts, iters = 3) {
 
 // --- GLTF LOADING & TRACING ---
 async function loadGLTF(file) {
-  let GLTFLoader;
-  const paths = ['three/examples/jsm/loaders/GLTFLoader.js', 'three/addons/loaders/GLTFLoader.js'];
-  for (const path of paths) {
-    try { ({ GLTFLoader } = await import(/* @vite-ignore */ path)); break; } catch {}
-  }
-  if (!GLTFLoader) throw new Error("GLTFLoader not found in environment.");
+  // Static string import to bypass Vercel Webpack CI error
+  const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
   
   const url = URL.createObjectURL(file);
-  try { return await new Promise((res, rej) => new GLTFLoader().load(url, res, null, rej)); } 
-  finally { URL.revokeObjectURL(url); }
+  try { 
+    return await new Promise((res, rej) => new GLTFLoader().load(url, res, null, rej)); 
+  } finally { 
+    URL.revokeObjectURL(url); 
+  }
 }
 
 function renderSilhouette(gltfScene, euler, SIZE = 512) {
