@@ -20,7 +20,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 
 // 3. Initialize App Check immediately after the main app initializes
-// utilizing the standard reCAPTCHA v3 site key
 const appCheck = initializeAppCheck(app, {
   provider: new ReCaptchaV3Provider('6LcbVRItAAAAAFixIoDhVAI5UJda7HbnTbrwV0Om'),
   isTokenAutoRefreshEnabled: true
@@ -32,7 +31,6 @@ export const storage = getStorage(app);
 export const auth = getAuth(app);
 export const functions = getFunctions(app); 
 
-// 5. Aliases (So your Finishing Floor code keeps working 
-// without needing to be rewritten to point to the new 'db')
+// 5. Aliases (So your Finishing Floor code keeps working)
 export const finishingDb = db; 
 export const finishingAuth = auth;

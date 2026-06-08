@@ -61,11 +61,35 @@ const ShopFloor = () => {
     // PERMISSIONS BYPASS: Admins ALWAYS see all tabs
     const myTabs = user?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
+    // SEAMLESS AUTO-LOGIN CHECK
+    useEffect(() => {
+        const checkLocalSession = async () => {
+            const session = localStorage.getItem('hq_session');
+            if (session) {
+                try {
+                    const parsedUser = JSON.parse(session);
+                    const pSnap = await getDoc(doc(shopDb.collection("config"), "permissions"));
+                    let pData = pSnap.exists() ? pSnap.data() : {};
+                    
+                    setPerms(pData);
+                    setUser(parsedUser);
+                    
+                    const r = parsedUser.role ? parsedUser.role.toLowerCase() : 'operator';
+                    setActiveTab(pData[r]?.includes('floor') ? 'floor' : (pData[r]?.[0] || 'scheduler'));
+                } catch (e) {
+                    console.error("Failed to restore session. Manual PIN entry required.", e);
+                }
+            }
+        };
+        checkLocalSession();
+    }, []);
+
     const attemptLogin = async (e) => {
         e.preventDefault();
         if (!pinInput) return;
         try {
-            const snap = await getDocs(query(shopDb.collection("directory"), where("pin", "==", pinInput)));
+            // Check central HQ users
+            const snap = await getDocs(query(collection(db, "hq_users"), where("pin", "==", pinInput)));
             if (!snap.empty) {
                 const uData = snap.docs[0].data();
                 const pSnap = await getDoc(doc(shopDb.collection("config"), "permissions"));
@@ -98,14 +122,25 @@ const ShopFloor = () => {
             onSnapshot(query(shopDb.collection("material_history"), orderBy("t", "desc"), limit(50)), s => setMatHistory(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(query(shopDb.collection("shop_failures"), orderBy("timestamp", "desc")), s => setFailures(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("livio"), s => setLivio(s.docs.map(d=>({id: d.id, ...d.data()})))),
-            onSnapshot(shopDb.collection("directory"), s => setUsers(s.docs.map(d=>({id: d.id, ...d.data()}))))
+            onSnapshot(collection(db, "hq_users"), s => setUsers(s.docs.map(d=>({id: d.id, ...d.data()})))) // Updated to HQ Users
         ];
         return () => unsubs.forEach(u => u()); 
     }, [user]);
 
-    const writeLog = async (msg, cat) => { await addDoc(shopDb.collection("logs"), { u: user.name, msg, cat, t: serverTimestamp() }); };
+    const writeLog = async (msg, cat) => { 
+        try {
+            await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, t: serverTimestamp() }); 
+        } catch (error) {
+            console.error("Failed to write log:", error);
+        }
+    };
     const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
     const handleDelete = async (col, id) => { if(window.confirm("Delete record?")) { await deleteDoc(doc(shopDb.collection(col), id)); writeLog(`Deleted from ${col}`, 'admin'); } };
+    
+    const handleLogout = () => {
+        localStorage.removeItem('hq_session');
+        navigate('/');
+    };
 
     // ==========================================
     // EXECUTION ACTIONS
@@ -826,7 +861,7 @@ const ShopFloor = () => {
                         <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{width: '100%', padding: '15px', textAlign: 'center', fontSize: '1.5rem', marginBottom: '20px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--mono)', letterSpacing: '10px', outline: 'none'}} />
                         <button type="submit" style={{ width: '100%', padding: '15px', background: 'var(--ink)', color: '#fff', fontSize: '10px', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }}>Authenticate</button>
                     </form>
-                    <button onClick={() => navigate('/')} style={{ marginTop: '30px', background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid var(--brass)', paddingBottom: '2px' }}>Return to Hub</button>
+                    <button onClick={handleLogout} style={{ marginTop: '30px', background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid var(--brass)', paddingBottom: '2px' }}>Return to Hub</button>
                 </div>
             </div>
         );
@@ -842,7 +877,7 @@ const ShopFloor = () => {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
                   <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Operator: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{user.name}</strong></span>
-                  <button onClick={() => navigate('/')} style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Return to Hub</button>
+                  <button onClick={handleLogout} style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Return to Hub</button>
                 </div>
             </header>
 

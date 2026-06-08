@@ -35,6 +35,29 @@ const FinishingFloor = () => {
   const [mixModal, setMixModal] = useState(null); 
   const [qcModal, setQcModal] = useState(null); 
 
+  // SEAMLESS AUTO-LOGIN CHECK
+  useEffect(() => {
+    const checkLocalSession = async () => {
+      const session = localStorage.getItem('hq_session');
+      if (session) {
+        try {
+          const parsedUser = JSON.parse(session);
+          const pSnap = await getDoc(doc(db, "fin_config", "permissions"));
+          let pData = pSnap.exists() ? pSnap.data() : {};
+          
+          setPerms(pData);
+          setUser(parsedUser);
+          
+          const r = parsedUser.role ? parsedUser.role.toLowerCase() : 'operator';
+          setActiveTab(pData[r]?.includes('ACTIVE FLOOR') ? 'ACTIVE FLOOR' : (pData[r]?.[0] || 'ACTIVE FLOOR'));
+        } catch (e) {
+          console.error("Failed to restore session. Manual PIN entry required.", e);
+        }
+      }
+    };
+    checkLocalSession();
+  }, []);
+
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000); 
     return () => clearInterval(timer); 
@@ -48,14 +71,22 @@ const FinishingFloor = () => {
       onSnapshot(collection(db, "fin_paint_profiles"), (snap) => { let p = {}; snap.docs.forEach(d => p[d.id] = d.data()); setPaintProfiles(p); }),
       onSnapshot(collection(db, "fin_pots"), (snap) => { let pts = {}; snap.docs.forEach(d => pts[d.id] = d.data().mixedAt); setActivePots(pts); }),
       onSnapshot(collection(db, "fin_supplies"), (snap) => setSupplies(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
-      onSnapshot(collection(db, "fin_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
-      onSnapshot(query(collection(db, "fin_logs"), orderBy("t", "desc"), limit(50)), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
+      // Pointing to HQ Users so the management tab sees the real directory
+      onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
+      // Pointing to HQ Logs
+      onSnapshot(query(collection(db, "hq_logs"), orderBy("t", "desc"), limit(50)), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(doc(db, "fin_config", "settings"), (docSnap) => { if (docSnap.exists()) setSysConfig(prev => ({ ...prev, ...docSnap.data() })); })
     ];
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
 
-  const writeLog = (msg, cat) => addDoc(collection(db, "fin_logs"), { u: user.name, msg, cat, t: serverTimestamp() });
+  const writeLog = async (msg, cat) => {
+    try {
+      await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, t: serverTimestamp() });
+    } catch (error) {
+      console.error("Failed to write log:", error);
+    }
+  };
 
   const attemptLogin = async (e) => {
     e.preventDefault();
@@ -67,7 +98,8 @@ const FinishingFloor = () => {
         return;
       }
       
-      const uSnap = await getDocs(query(collection(db, "fin_users"), where("pin", "==", pinInput)));
+      // Look up user in the central HQ directory
+      const uSnap = await getDocs(query(collection(db, "hq_users"), where("pin", "==", pinInput)));
       if (!uSnap.empty) {
         const uData = uSnap.docs[0].data();
         const pSnap = await getDoc(doc(db, "fin_config", "permissions"));
@@ -87,6 +119,11 @@ const FinishingFloor = () => {
   const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';
   const myTabs = user?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
+  const handleLogout = () => {
+    localStorage.removeItem('hq_session');
+    navigate('/');
+  };
+
   if (!user) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--paper)', fontFamily: 'var(--sans)' }}>
@@ -99,13 +136,13 @@ const FinishingFloor = () => {
             <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{width: '100%', padding: '15px', textAlign: 'center', fontSize: '1.5rem', marginBottom: '20px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--mono)', letterSpacing: '10px', outline: 'none'}} />
             <button type="submit" style={{ width: '100%', padding: '15px', background: 'var(--ink)', color: '#fff', fontSize: '10px', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }}>Authenticate</button>
           </form>
-          <button onClick={() => navigate('/')} style={{ marginTop: '30px', background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid var(--brass)', paddingBottom: '2px' }}>Return to Hub</button>
+          <button onClick={handleLogout} style={{ marginTop: '30px', background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid var(--brass)', paddingBottom: '2px' }}>Return to Hub</button>
         </div>
       </div>
     );
   }
 
-return (
+  return (
     <div style={{ minHeight: '100vh', backgroundColor: 'var(--paper)', display: 'flex', flexDirection: 'column', fontFamily: 'var(--sans)' }}>
       <header style={{ backgroundColor: '#fff', color: 'var(--ink)', padding: '18px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '4px solid var(--brass)', borderBottom: '1px solid var(--line)' }}>
         <div>
@@ -114,7 +151,7 @@ return (
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
           <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Operator: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{user.name}</strong></span>
-          <button onClick={() => navigate('/')} style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Return to Hub</button>
+          <button onClick={handleLogout} style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Return to Hub</button>
         </div>
       </header>
       <nav style={{ display: 'flex', backgroundColor: 'var(--paper)', borderBottom: '1px solid var(--line)', overflowX: 'auto', padding: '0 20px' }}>
