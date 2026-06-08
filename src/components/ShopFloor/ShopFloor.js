@@ -45,9 +45,15 @@ const ShopFloor = () => {
     const [programsMap, setProgramsMap] = useState({});
     const [routingsMap, setRoutingsMap] = useState({});
 
-    // FORMS
-    const [millForm, setMillForm] = useState({ partNum: '', woNum: '', soNum: '', item: '', qty: '', reqDate: '', phosphate: 'No', file: null, _sourceCustomOrderId: null });
-    const [dispatchForm, setDispatchForm] = useState({ op: '', routingId: '', woNum: '', targetQty: '', estStart: '', estFinish: '', estHrs: '', notes: '', phosphate: 'No', _sourceCustomOrderId: null });
+    // MILLING FORMS (Decoupled)
+    const [rtgMillSelection, setRtgMillSelection] = useState("");
+    const [stockMillForm, setStockMillForm] = useState({ partNum: '', qty: '', woNum: '', reqDate: '', phosphate: 'No', file: null });
+
+    // SCHEDULER FORMS (Decoupled)
+    const [dispatchOperator, setDispatchOperator] = useState("");
+    const [rtgDispatchSelection, setRtgDispatchSelection] = useState("");
+    const [stockDispatchForm, setStockDispatchForm] = useState({ op: '', routingId: '', targetQty: '', woNum: '', estStart: '', estFinish: '', estHrs: '', reqDate: '', notes: '', phosphate: 'No' });
+
     const [livioForm, setLivioForm] = useState({ desc: '', reqDate: '', file: null });
 
     // MODALS
@@ -60,29 +66,6 @@ const ShopFloor = () => {
     
     // PERMISSIONS BYPASS: Admins ALWAYS see all tabs
     const myTabs = user?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
-
-    // SEAMLESS AUTO-LOGIN CHECK
-    useEffect(() => {
-        const checkLocalSession = async () => {
-            const session = localStorage.getItem('hq_session');
-            if (session) {
-                try {
-                    const parsedUser = JSON.parse(session);
-                    const pSnap = await getDoc(doc(shopDb.collection("config"), "permissions"));
-                    let pData = pSnap.exists() ? pSnap.data() : {};
-                    
-                    setPerms(pData);
-                    setUser(parsedUser);
-                    
-                    const r = parsedUser.role ? parsedUser.role.toLowerCase() : 'operator';
-                    setActiveTab(pData[r]?.includes('floor') ? 'floor' : (pData[r]?.[0] || 'scheduler'));
-                } catch (e) {
-                    console.error("Failed to restore session. Manual PIN entry required.", e);
-                }
-            }
-        };
-        checkLocalSession();
-    }, []);
 
     const attemptLogin = async (e) => {
         e.preventDefault();
@@ -128,78 +111,143 @@ const ShopFloor = () => {
     }, [user]);
 
     const writeLog = async (msg, cat) => { 
-        try {
-            await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, t: serverTimestamp() }); 
-        } catch (error) {
-            console.error("Failed to write log:", error);
-        }
+        try { await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, t: serverTimestamp() }); } 
+        catch (error) { console.error("Failed to write log:", error); }
     };
+    
     const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
     const handleDelete = async (col, id) => { if(window.confirm("Delete record?")) { await deleteDoc(doc(shopDb.collection(col), id)); writeLog(`Deleted from ${col}`, 'admin'); } };
     
     const handleLogout = () => {
-        localStorage.removeItem('hq_session');
+        setUser(null);
+        setPinInput("");
         navigate('/');
     };
 
     // ==========================================
-    // EXECUTION ACTIONS
+    // EXECUTION ACTIONS (MILLING)
     // ==========================================
-    const handleAddMilling = async () => {
-        if (!millForm.partNum || !millForm.woNum || !millForm.qty) return alert("HQ Part, WO #, and Qty required.");
-        const routing = routingsMap[millForm.partNum];
-        if(!routing) return alert(`ERROR: No routing exists for this Part ID. Please build its sequence in the Routings tab first.`);
+    const handleAddMillingRTG = async () => {
+        if (!rtgMillSelection) return alert("Select a pending RTG order first.");
+        const order = customOrders.find(o => o.id === rtgMillSelection);
+        if (!order) return;
+        
+        const routing = routings.find(r => r.displayName === order.item || r.partId === order.item);
+        if(!routing) return alert(`ERROR: No routing exists for ${order.item}. Please build its sequence in the Routings tab first.`);
         
         let totalEstHrs = 0;
         routing.ops.forEach(op => {
             const prog = programsMap[op.progId];
-            if(prog) totalEstHrs += ((parseFloat(prog.setupTime)||0) + ((parseFloat(prog.timePerPiece)||0) * millForm.qty)) / 60;
+            if(prog) totalEstHrs += ((parseFloat(prog.setupTime)||0) + ((parseFloat(prog.timePerPiece)||0) * order.qty)) / 60;
+        });
+
+        await addDoc(shopDb.collection("milling"), {
+            partNum: routing.partId,
+            woNum: order.woNum,
+            soNum: order.soNum,
+            item: order.note || order.item,
+            qty: parseFloat(order.qty),
+            reqDate: order.reqDate || '',
+            phosphate: 'No',
+            mach: routing.ops[0]?.machine || "Unassigned",
+            estHrs: parseFloat(totalEstHrs.toFixed(2)),
+            priority: order.reqDate ? new Date(order.reqDate).getTime() : 9999999999999,
+            fileUrl: order.imageUrl || null,
+            t: serverTimestamp()
+        });
+        
+        await deleteDoc(doc(db, "shop_custom_orders", order.id));
+        writeLog(`Injected Custom WO ${order.woNum} to Backlog`, 'production');
+        setRtgMillSelection("");
+    };
+
+    const handleAddMillingStock = async () => {
+        if (!stockMillForm.partNum || !stockMillForm.qty) return alert("HQ Part and Qty required for a stock build.");
+        const routing = routingsMap[stockMillForm.partNum];
+        if(!routing) return alert(`ERROR: No engineered routing exists for this Part ID.`);
+        
+        let totalEstHrs = 0;
+        routing.ops.forEach(op => {
+            const prog = programsMap[op.progId];
+            if(prog) totalEstHrs += ((parseFloat(prog.setupTime)||0) + ((parseFloat(prog.timePerPiece)||0) * stockMillForm.qty)) / 60;
         });
 
         let fileUrl = null;
-        if (millForm.file) { const fRef = ref(storage, `production_needs/${Date.now()}_${millForm.file.name}`); await uploadBytesResumable(fRef, millForm.file); fileUrl = await getDownloadURL(fRef); }
+        if (stockMillForm.file) { const fRef = ref(storage, `production_needs/${Date.now()}_${stockMillForm.file.name}`); await uploadBytesResumable(fRef, stockMillForm.file); fileUrl = await getDownloadURL(fRef); }
         
-        await addDoc(shopDb.collection("milling"), { ...millForm, qty: parseFloat(millForm.qty), mach: routing.ops[0]?.machine || "Unassigned", estHrs: parseFloat(totalEstHrs.toFixed(2)), priority: millForm.reqDate ? new Date(millForm.reqDate).getTime() : 9999999999999, fileUrl, phosphate: millForm.phosphate === 'Yes', t: serverTimestamp() });
-        
-        // Remove from RTG Queue if injected from there
-        if (millForm._sourceCustomOrderId) {
-            await deleteDoc(doc(db, "shop_custom_orders", millForm._sourceCustomOrderId));
-        }
+        const finalWo = stockMillForm.woNum || `STOCK-${Date.now().toString().slice(-6)}`;
 
-        writeLog(`Added ${millForm.partNum} to backlog`, 'production');
-        setMillForm({ partNum: '', woNum: '', soNum: '', item: '', qty: '', reqDate: '', phosphate: 'No', file: null, _sourceCustomOrderId: null });
+        await addDoc(shopDb.collection("milling"), {
+            partNum: stockMillForm.partNum,
+            woNum: finalWo,
+            soNum: 'STOCK',
+            item: 'Build to Stock',
+            qty: parseFloat(stockMillForm.qty),
+            reqDate: stockMillForm.reqDate || '',
+            phosphate: stockMillForm.phosphate === 'Yes',
+            mach: routing.ops[0]?.machine || "Unassigned",
+            estHrs: parseFloat(totalEstHrs.toFixed(2)),
+            priority: stockMillForm.reqDate ? new Date(stockMillForm.reqDate).getTime() : 9999999999999,
+            fileUrl,
+            t: serverTimestamp()
+        });
+        
+        writeLog(`Added Stock Build ${finalWo} to Backlog`, 'production');
+        setStockMillForm({ partNum: '', qty: '', woNum: '', reqDate: '', phosphate: 'No', file: null });
     };
 
     const pushToTracker = (m) => {
-        setDispatchForm({ 
-            op: '', routingId: m.partNum || '', woNum: m.woNum || '', targetQty: m.qty || '', 
-            estStart: '', estFinish: '', estHrs: m.estHrs || '', 
-            notes: `SO: ${m.soNum||'N/A'} | Desc: ${m.item||'None'}`, 
-            phosphate: m.phosphate ? 'Yes' : 'No', 
-            _sourceId: m.id, 
-            _customFileUrl: m.fileUrl || null, 
-            _reqDate: m.reqDate || null,
-            _sourceCustomOrderId: null 
+        setStockDispatchForm({ 
+            op: '', routingId: m.partNum || '', targetQty: m.qty || '', woNum: m.woNum || '', 
+            estStart: '', estFinish: '', estHrs: m.estHrs || '', reqDate: m.reqDate || '',
+            notes: `SO: ${m.soNum||'N/A'} | Desc: ${m.item||'None'}`, phosphate: m.phosphate ? 'Yes' : 'No', 
+            _sourceId: m.id, _customFileUrl: m.fileUrl || null 
         });
         setActiveTab('scheduler');
     };
 
-    const handleDispatch = async () => {
-        if(!dispatchForm.routingId) return alert("Select an HQ Part Routing to dispatch.");
-        const routing = routingsMap[dispatchForm.routingId];
+    // ==========================================
+    // EXECUTION ACTIONS (SCHEDULER)
+    // ==========================================
+    const handleAddDispatchRTG = async () => {
+        if (!rtgDispatchSelection) return alert("Select an order first.");
+        const order = customOrders.find(o => o.id === rtgDispatchSelection);
+        if (!order) return;
+        
+        const routing = routings.find(r => r.displayName === order.item || r.partId === order.item);
+        if(!routing || routing.ops.length === 0) return alert("Invalid Routing sequence. Operations missing.");
+
+        let totalEstHrs = 0;
+        const firstOp = routing.ops[0];
+        const p = programsMap[firstOp.progId];
+        if (p) totalEstHrs = (((parseFloat(p.setupTime)||0)+((parseFloat(p.timePerPiece)||0)*order.qty))/60).toFixed(2);
+
+        await addDoc(shopDb.collection("schedule"), { 
+            routingId: routing.partId, currentOpIndex: 0, op: dispatchOperator || '', mach: firstOp.machine, prog: firstOp.progId, woNum: order.woNum, targetQty: parseInt(order.qty), estStart: '', estFinish: '', reqDate: order.reqDate || null, estHrs: parseFloat(totalEstHrs) || null, notes: `SO: ${order.soNum} | Desc: ${order.note || 'None'}`, customFileUrl: order.imageUrl || null, phosphate: false, status: "Pending", totalPausedMs: 0, partialGoodQty: 0, t: serverTimestamp() 
+        });
+        
+        await deleteDoc(doc(db, "shop_custom_orders", order.id));
+        writeLog(`Dispatched RTG WO ${order.woNum} (OP 1)`, 'scheduler');
+        setRtgDispatchSelection("");
+        setDispatchOperator("");
+    };
+
+    const handleAddDispatchStock = async () => {
+        if(!stockDispatchForm.routingId || !stockDispatchForm.targetQty) return alert("Select an HQ Part and enter Qty.");
+        const routing = routingsMap[stockDispatchForm.routingId];
         if(!routing || routing.ops.length === 0) return alert("Invalid Routing sequence. Operations missing.");
 
         const firstOp = routing.ops[0];
+        const finalWo = stockDispatchForm.woNum || `STOCK-${Date.now().toString().slice(-6)}`;
+
         await addDoc(shopDb.collection("schedule"), { 
-            routingId: dispatchForm.routingId, currentOpIndex: 0, op: dispatchForm.op || '', mach: firstOp.machine, prog: firstOp.progId, woNum: dispatchForm.woNum, targetQty: parseInt(dispatchForm.targetQty) || null, estStart: dispatchForm.estStart, estFinish: dispatchForm.estFinish, reqDate: dispatchForm._reqDate || null, estHrs: parseFloat(dispatchForm.estHrs) || null, notes: dispatchForm.notes, customFileUrl: dispatchForm._customFileUrl || null, phosphate: dispatchForm.phosphate === 'Yes', status: "Pending", totalPausedMs: 0, partialGoodQty: 0, t: serverTimestamp() 
+            routingId: stockDispatchForm.routingId, currentOpIndex: 0, op: stockDispatchForm.op || '', mach: firstOp.machine, prog: firstOp.progId, woNum: finalWo, targetQty: parseInt(stockDispatchForm.targetQty), estStart: stockDispatchForm.estStart, estFinish: stockDispatchForm.estFinish, reqDate: stockDispatchForm.reqDate || null, estHrs: parseFloat(stockDispatchForm.estHrs) || null, notes: stockDispatchForm.notes || 'Build to Stock', customFileUrl: stockDispatchForm._customFileUrl || null, phosphate: stockDispatchForm.phosphate === 'Yes', status: "Pending", totalPausedMs: 0, partialGoodQty: 0, t: serverTimestamp() 
         });
         
-        // Clean up from the queues if injected
-        if(dispatchForm._sourceId) await deleteDoc(doc(shopDb.collection("milling"), dispatchForm._sourceId));
-        if(dispatchForm._sourceCustomOrderId) await deleteDoc(doc(db, "shop_custom_orders", dispatchForm._sourceCustomOrderId));
-        
-        writeLog(`Dispatched WO ${dispatchForm.woNum} (OP 1)`, 'scheduler');
-        setDispatchForm({ op: '', routingId: '', woNum: '', targetQty: '', estStart: '', estFinish: '', estHrs: '', notes: '', phosphate: 'No', _sourceCustomOrderId: null });
+        if(stockDispatchForm._sourceId) await deleteDoc(doc(shopDb.collection("milling"), stockDispatchForm._sourceId));
+
+        writeLog(`Dispatched Stock WO ${finalWo} (OP 1)`, 'scheduler');
+        setStockDispatchForm({ op: '', routingId: '', targetQty: '', woNum: '', estStart: '', estFinish: '', estHrs: '', reqDate: '', notes: '', phosphate: 'No' });
     };
 
     const aiOptimizeSchedule = async () => {
@@ -336,6 +384,9 @@ const ShopFloor = () => {
         unexported.forEach(job => batch.update(doc(shopDb.collection("schedule"), job.id), { erpExported: true, erpExportDate: dateStr }));
         await batch.commit(); writeLog(`Exported batch to ERP`, 'admin');
     };
+
+    const fieldStyle = { padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' };
+    const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
 
     // ==========================================
     // RENDERERS
@@ -480,66 +531,62 @@ const ShopFloor = () => {
                     <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: 0 }}>Active Production Tracker</h2>
                     {['admin', 'programmer'].includes(safeUserRole) && <button onClick={aiOptimizeSchedule} style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>✨ AI Optimize Schedule</button>}
                 </div>
+
                 {['admin', 'programmer'].includes(safeUserRole) && (
-                    <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', borderRadius: '2px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <div style={{ display: 'flex', gap: '24px', marginBottom: '30px' }}>
                         
-                        <div style={{ background: 'var(--paper-2)', padding: '16px', marginBottom: '16px', border: '1px solid var(--line)' }}>
-                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Method 1: Inject from RTG Dispatch Queue</label>
-                            <select onChange={(e) => {
-                                const order = customOrders.find(o => o.id === e.target.value);
-                                if (order) {
-                                    const matchedRouting = routings.find(r => r.displayName === order.item || r.partId === order.item);
-                                    let est = '';
-                                    if (matchedRouting && matchedRouting.ops.length > 0) {
-                                        const p = programsMap[matchedRouting.ops[0].progId];
-                                        if (p) est = (((parseFloat(p.setupTime)||0)+((parseFloat(p.timePerPiece)||0)*order.qty))/60).toFixed(2);
-                                    }
-                                    setDispatchForm({
-                                        ...dispatchForm, 
-                                        routingId: matchedRouting ? matchedRouting.partId : '', 
-                                        woNum: order.woNum, 
-                                        targetQty: order.qty, 
-                                        notes: `SO: ${order.soNum} | Desc: ${order.note || 'None'}`,
-                                        _reqDate: order.reqDate || null,
-                                        estHrs: est,
-                                        _sourceCustomOrderId: order.id
-                                    });
-                                }
-                            }} style={{ padding: '12px', width: '100%', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
-                                <option value="">-- Select Pending Order from RTG --</option>
-                                {customOrders.filter(o => o.status === 'Pending').map(o => (
-                                    <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
-                                ))}
-                            </select>
+                        {/* METHOD 1: RTG INJECT */}
+                        <div style={{ flex: 1, background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                            <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink)' }}>Method 1: Inject RTG Custom Order</h4>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <select value={dispatchOperator} onChange={e => setDispatchOperator(e.target.value)} style={fieldStyle}>
+                                    <option value="">Assign Operator (For OP 1)...</option>
+                                    {users.filter(u => !u.hidden && ['operator', 'programmer'].includes(u.role?.toLowerCase())).map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                                </select>
+                                <select value={rtgDispatchSelection} onChange={e => setRtgDispatchSelection(e.target.value)} style={fieldStyle}>
+                                    <option value="">-- Select Pending Order from RTG --</option>
+                                    {customOrders.filter(o => o.status === 'Pending').map(o => (
+                                        <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
+                                    ))}
+                                </select>
+                                <button onClick={handleAddDispatchRTG} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}>
+                                    Dispatch RTG Order to Floor
+                                </button>
+                            </div>
                         </div>
 
-                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Method 2: Manual Selection / Overrides</label>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px' }}>
-                            <select value={dispatchForm.op} onChange={e => setDispatchForm({...dispatchForm, op: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="">Operator (For OP 1)...</option>{users.filter(u => !u.hidden && ['operator', 'programmer'].includes(u.role?.toLowerCase())).map(u => <option key={u.id} value={u.name}>{u.name}</option>)}</select>
-                            <select value={dispatchForm.routingId} onChange={e => { 
-                                const rId = e.target.value; const routing = routingsMap[rId]; 
-                                if(routing && routing.ops.length > 0) {
-                                    const p = programsMap[routing.ops[0].progId];
-                                    const est = p && dispatchForm.targetQty ? (((parseFloat(p.setupTime)||0)+((parseFloat(p.timePerPiece)||0)*dispatchForm.targetQty))/60).toFixed(2) : '';
-                                    setDispatchForm({...dispatchForm, routingId: rId, estHrs: est});
-                                } else { setDispatchForm({...dispatchForm, routingId: rId, estHrs: ''}); }
-                            }} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', gridColumn: 'span 2' }}>
-                                <option value="">Select HQ Part (Routing)...</option>
-                                {routings.map(r => <option key={r.id} value={r.partId}>{r.displayName || r.partId} ({r.ops.length} Ops)</option>)}
-                            </select>
-                            <input type="text" placeholder="WO #" value={dispatchForm.woNum} onChange={e => setDispatchForm({...dispatchForm, woNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+                        {/* METHOD 2: MANUAL ENTRY */}
+                        <div style={{ flex: 1.5, background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                            <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink)' }}>Method 2: Manual / Build-to-Stock</h4>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px', marginBottom: '16px' }}>
+                                <select value={stockDispatchForm.op} onChange={e => setStockDispatchForm({...stockDispatchForm, op: e.target.value})} style={fieldStyle}>
+                                    <option value="">Operator (OP 1)...</option>
+                                    {users.filter(u => !u.hidden && ['operator', 'programmer'].includes(u.role?.toLowerCase())).map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                                </select>
+                                <select value={stockDispatchForm.routingId} onChange={e => { 
+                                    const rId = e.target.value; const routing = routingsMap[rId]; 
+                                    if(routing && routing.ops.length > 0) {
+                                        const p = programsMap[routing.ops[0].progId];
+                                        const est = p && stockDispatchForm.targetQty ? (((parseFloat(p.setupTime)||0)+((parseFloat(p.timePerPiece)||0)*stockDispatchForm.targetQty))/60).toFixed(2) : '';
+                                        setStockDispatchForm({...stockDispatchForm, routingId: rId, estHrs: est});
+                                    } else { setStockDispatchForm({...stockDispatchForm, routingId: rId, estHrs: ''}); }
+                                }} style={fieldStyle}>
+                                    <option value="">Select Engineered HQ Part for Build...</option>
+                                    {routings.map(r => <option key={r.id} value={r.partId}>{r.displayName || r.partId} ({r.ops.length} Ops)</option>)}
+                                </select>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+                                <input type="number" placeholder="Target Qty" value={stockDispatchForm.targetQty} onChange={e => setStockDispatchForm({...stockDispatchForm, targetQty: e.target.value})} style={fieldStyle} />
+                                <input type="text" placeholder="WO # (Auto-Gens if empty)" value={stockDispatchForm.woNum} onChange={e => setStockDispatchForm({...stockDispatchForm, woNum: e.target.value})} style={fieldStyle} />
+                                <input type="number" placeholder="Est Hrs (OP 1)" step="0.1" value={stockDispatchForm.estHrs} onChange={e => setStockDispatchForm({...stockDispatchForm, estHrs: e.target.value})} style={fieldStyle} />
+                            </div>
+                            <button onClick={handleAddDispatchStock} style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '16px', width: '100%', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}>
+                                Dispatch Stock Build to Floor
+                            </button>
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 2fr 1fr', gap: '16px', marginTop: '16px' }}>
-                            <input type="number" placeholder="Qty" value={dispatchForm.targetQty} onChange={e => setDispatchForm({...dispatchForm, targetQty: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                            <input type="date" value={dispatchForm.estStart} onChange={e => setDispatchForm({...dispatchForm, estStart: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                            <input type="date" value={dispatchForm.estFinish} onChange={e => setDispatchForm({...dispatchForm, estFinish: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                            <input type="number" placeholder="Est Hrs (OP 1)" step="0.1" value={dispatchForm.estHrs} onChange={e => setDispatchForm({...dispatchForm, estHrs: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                            <input type="text" placeholder="Notes" value={dispatchForm.notes} onChange={e => setDispatchForm({...dispatchForm, notes: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                            <select value={dispatchForm.phosphate} onChange={e => setDispatchForm({...dispatchForm, phosphate: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="No">Phos: No</option><option value="Yes">Phos: Yes</option></select>
-                        </div>
-                        <button onClick={handleDispatch} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', marginTop: '24px', transition: 'all 0.2s' }}>Dispatch WO to Floor</button>
                     </div>
                 )}
+
                 <div style={{ overflowX: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                         <thead style={{ background: 'var(--paper-2)' }}>
@@ -603,53 +650,50 @@ const ShopFloor = () => {
         return (
             <div>
                 <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: '0 0 24px 0' }}>Production Backlog</h2>
-                <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px', marginBottom: '40px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                
+                <div style={{ display: 'flex', gap: '24px', marginBottom: '40px' }}>
                     
-                    <div style={{ background: 'var(--paper-2)', padding: '16px', marginBottom: '16px', border: '1px solid var(--line)' }}>
-                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Method 1: Inject from RTG Dispatch Queue</label>
-                        <select onChange={(e) => {
-                            const order = customOrders.find(o => o.id === e.target.value);
-                            if (order) {
-                                const matchedRouting = routings.find(r => r.displayName === order.item || r.partId === order.item);
-                                setMillForm({
-                                    ...millForm, 
-                                    partNum: matchedRouting ? matchedRouting.partId : '', 
-                                    woNum: order.woNum, 
-                                    soNum: order.soNum, 
-                                    qty: order.qty, 
-                                    reqDate: order.reqDate || '', 
-                                    item: order.note || '',
-                                    _sourceCustomOrderId: order.id
-                                });
-                            }
-                        }} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
-                            <option value="">-- Select Pending Order from RTG --</option>
-                            {customOrders.filter(o => o.status === 'Pending').map(o => (
-                                <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
-                            ))}
-                        </select>
+                    {/* METHOD 1: RTG INJECT */}
+                    <div style={{ flex: 1, background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink)' }}>Method 1: Inject RTG Custom Order</h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            <select value={rtgMillSelection} onChange={e => setRtgMillSelection(e.target.value)} style={fieldStyle}>
+                                <option value="">-- Select Pending Order from RTG --</option>
+                                {customOrders.filter(o => o.status === 'Pending').map(o => (
+                                    <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
+                                ))}
+                            </select>
+                            <button onClick={handleAddMillingRTG} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'background 0.2s' }}>
+                                Add Custom WO to Backlog
+                            </button>
+                        </div>
                     </div>
 
-                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Method 2: Manual Entry (Select Engineered HQ Part)</label>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '16px' }}>
-                        <input type="text" placeholder="Internal Description (Optional)" value={millForm.item} onChange={e => setMillForm({...millForm, item: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                        <input type="number" placeholder="Target Qty" value={millForm.qty} onChange={e => setMillForm({...millForm, qty: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+                    {/* METHOD 2: MANUAL ENTRY */}
+                    <div style={{ flex: 1.5, background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink)' }}>Method 2: Manual / Build-to-Stock</h4>
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px', marginBottom: '16px' }}>
+                            <select value={stockMillForm.partNum} onChange={e => setStockMillForm({...stockMillForm, partNum: e.target.value})} style={fieldStyle}>
+                                <option value="">Select Engineered HQ Part for Build...</option>
+                                {routings.map(r => <option key={r.id} value={r.partId}>{r.displayName || r.partId}</option>)}
+                            </select>
+                            <input type="number" placeholder="Target Qty" value={stockMillForm.qty} onChange={e => setStockMillForm({...stockMillForm, qty: e.target.value})} style={fieldStyle} />
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', alignItems: 'end' }}>
+                            <div>
+                                <label style={labelStyle}>WO # (Auto-Gens if empty)</label>
+                                <input type="text" placeholder="e.g. STOCK-123" value={stockMillForm.woNum} onChange={e => setStockMillForm({...stockMillForm, woNum: e.target.value})} style={fieldStyle} />
+                            </div>
+                            <div><label style={labelStyle}>Req Date</label><input type="date" value={stockMillForm.reqDate} onChange={e => setStockMillForm({...stockMillForm, reqDate: e.target.value})} style={fieldStyle} /></div>
+                            <div><label style={labelStyle}>Phosphate?</label><select value={stockMillForm.phosphate} onChange={e => setStockMillForm({...stockMillForm, phosphate: e.target.value})} style={fieldStyle}><option value="No">No</option><option value="Yes">Yes</option></select></div>
+                        </div>
+                        <button onClick={handleAddMillingStock} style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '16px', width: '100%', marginTop: '24px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
+                            Add Stock Build to Backlog
+                        </button>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px' }}>
-                        <select value={millForm.partNum} onChange={e => setMillForm({...millForm, partNum: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper)' }}>
-                            <option value="">Select HQ Part...</option>
-                            {routings.map(r => <option key={r.id} value={r.partId}>{r.displayName || r.partId}</option>)}
-                        </select>
-                        <input type="text" placeholder="WO #" value={millForm.woNum} onChange={e => setMillForm({...millForm, woNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                        <input type="text" placeholder="SO #" value={millForm.soNum} onChange={e => setMillForm({...millForm, soNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                    </div>
-                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px', alignItems: 'end' }}>
-                        <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Req Date</label><input type="date" value={millForm.reqDate} onChange={e => setMillForm({...millForm, reqDate: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} /></div>
-                        <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Print (Opt)</label><input type="file" onChange={e => setMillForm({...millForm, file: e.target.files[0]})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} /></div>
-                        <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Phosphate?</label><select value={millForm.phosphate} onChange={e => setMillForm({...millForm, phosphate: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="No">No</option><option value="Yes">Yes</option></select></div>
-                    </div>
-                    <button onClick={handleAddMilling} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', marginTop: '24px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Add to Backlog</button>
+
                 </div>
+
                 {Object.keys(grouped).map(cat => {
                     const groupItems = grouped[cat].sort((a, b) => a.priority - b.priority);
                     if (groupItems.length === 0 && cat === 'Uncategorized') return null;
@@ -947,6 +991,9 @@ const ShopFloor = () => {
             </div>
         );
     }
+
+    const fieldStyle = { padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' };
+    const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
 
     return (
         <div style={{ minHeight: '100vh', backgroundColor: 'var(--paper)', display: 'flex', flexDirection: 'column', fontFamily: 'var(--sans)' }}>
