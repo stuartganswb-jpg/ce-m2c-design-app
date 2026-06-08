@@ -7,18 +7,19 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 // CONSTANTS FOR GLOBAL PERMISSIONS
 const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'admin'];
 const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'OS COMMS', 'ASSET GALLERY', 'MANAGEMENT', 'DAILY SUMMARY'];
+const PICK_TABS = ['QUEUE', 'PACKING', 'GALLERY', 'MESSAGING']; // 🚀 ADDED PICK AND PACK TABS
 
 const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
   
   const [users, setUsers] = useState([]);
   
-  // 🚀 INJECTED FACTORY ROLES BY DEFAULT
   const [dynamicRoles, setDynamicRoles] = useState(['admin', 'executive', 'design_team', 'sales_rep', 'operator', 'programmer', 'floor_manager', 'paint_manager']);
   
-  // 🚀 ADDED STATE FOR FLOOR PERMISSIONS
+  // ADDED STATE FOR FLOOR PERMISSIONS
   const [shopPerms, setShopPerms] = useState({});
   const [finPerms, setFinPerms] = useState({});
+  const [pickPerms, setPickPerms] = useState({}); // 🚀 ADDED WMS PERMISSIONS
 
   const [adminForm, setAdminForm] = useState({ uName: '', uPin: '', uRole: 'operator', oldId: '' });
   const [newRole, setNewRole] = useState('');
@@ -90,6 +91,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       // 🚀 LISTEN FOR FLOOR PERMISSIONS
       const unsubShopPerms = onSnapshot(doc(db, "shop_config", "permissions"), (docSnap) => { if (docSnap.exists()) setShopPerms(docSnap.data()); });
       const unsubFinPerms = onSnapshot(doc(db, "fin_config", "permissions"), (docSnap) => { if (docSnap.exists()) setFinPerms(docSnap.data()); });
+      const unsubPickPerms = onSnapshot(doc(db, "pick_config", "permissions"), (docSnap) => { if (docSnap.exists()) setPickPerms(docSnap.data()); });
 
       const unsubDiscounts = onSnapshot(doc(db, "system", "crm_discounts"), (docSnap) => { 
           if (docSnap.exists() && docSnap.data().list) setCrmDiscounts(docSnap.data().list); 
@@ -118,7 +120,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
       });
 
-      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); };
+      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -140,7 +142,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   let combined = [
                       ...shopSnap.docs.map(d => ({ id: d.id, app: 'SHOP FLOOR', ...d.data() })),
                       ...finSnap.docs.map(d => ({ id: d.id, app: 'FINISHING', ...d.data() })),
-                      ...hqSnap.docs.map(d => ({ id: d.id, app: 'HQ', ...d.data() }))
+                      ...hqSnap.docs.map(d => ({ id: d.id, app: 'HQ/WMS', ...d.data() }))
                   ];
                   
                   combined.sort((a, b) => {
@@ -302,6 +304,10 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const rolePerms = finPerms[role] || [];
       setFinPerms({ ...finPerms, [role]: rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab] });
   };
+  const handlePickPermToggle = (role, tab) => {
+      const rolePerms = pickPerms[role] || [];
+      setPickPerms({ ...pickPerms, [role]: rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab] });
+  };
 
   // 🚀 MASS SAVE TO ALL DATABASES
   const handleSavePermissions = async () => { 
@@ -309,6 +315,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           await setDoc(doc(db, "hq_config", "permissions"), perms); 
           await setDoc(doc(db, "shop_config", "permissions"), shopPerms);
           await setDoc(doc(db, "fin_config", "permissions"), finPerms);
+          await setDoc(doc(db, "pick_config", "permissions"), pickPerms);
           alert("✅ Global Permissions Matrix Saved Successfully!"); 
       } catch (e) {
           console.error(e);
@@ -1318,7 +1325,7 @@ const handleNukeCustomers = async () => {
             <div style={{ padding: '40px', maxWidth: '1100px' }}>
               <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '30px' }}>
                 <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Global User Directory & Access Matrix</h3>
-                <p style={{ margin: '8px 0 0 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Changes saved here will sync across HQ, the Shop Floor, and the Finishing Floor instantly.</p>
+                <p style={{ margin: '8px 0 0 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Changes saved here will sync across all terminals instantly.</p>
               </div>
               
               <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '24px', marginBottom: '30px' }}>
@@ -1399,7 +1406,7 @@ const handleNukeCustomers = async () => {
                 </div>
 
                 {/* FINISHING FLOOR MATRIX */}
-                <div style={{ marginBottom: '20px' }}>
+                <div style={{ marginBottom: '40px' }}>
                     <h5 style={{ margin: '0 0 10px 0', fontFamily: 'var(--mono)', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', padding: '8px', border: '1px solid var(--line)' }}>Finishing Floor Application Tabs</h5>
                     <div style={{ overflowX: 'auto' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center', fontFamily: 'var(--sans)' }}>
@@ -1424,6 +1431,34 @@ const handleNukeCustomers = async () => {
                         </table>
                     </div>
                 </div>
+
+                {/* WAREHOUSE / PICK PACK MATRIX */}
+                <div style={{ marginBottom: '20px' }}>
+                    <h5 style={{ margin: '0 0 10px 0', fontFamily: 'var(--mono)', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', padding: '8px', border: '1px solid var(--line)' }}>Warehouse / Pick & Pack Tabs</h5>
+                    <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center', fontFamily: 'var(--sans)' }}>
+                        <thead style={{ background: '#fff', borderBottom: '1px solid var(--line)' }}>
+                            <tr>
+                                <th style={{ padding: '15px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Tab</th>
+                                {dynamicRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {PICK_TABS.map(tab => (
+                            <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
+                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
+                                {dynamicRoles.map(role => (
+                                    <td key={role} style={{ padding: '15px' }}>
+                                        <input type="checkbox" checked={pickPerms[role]?.includes(tab) || false} onChange={() => handlePickPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
+                                    </td>
+                                ))}
+                            </tr>
+                            ))}
+                        </tbody>
+                        </table>
+                    </div>
+                </div>
+
               </div>
 
               <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
@@ -1506,7 +1541,7 @@ const handleNukeCustomers = async () => {
           {activeSection === "SUPER_ADMIN" && isSuperAdmin && (
             <div style={{ padding: '40px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '30px' }}>
-                <h3 style={{ margin: '0', fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Master Analytics & Surveillance</h3>
+                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Master Analytics & Surveillance</h3>
               </div>
 
               {/* PIN CHANGER */}
