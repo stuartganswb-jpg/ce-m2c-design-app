@@ -34,11 +34,9 @@ const ShopFloor = () => {
     const [tooling, setTooling] = useState([]);
     const [materials, setMaterials] = useState([]);
     const [customOrders, setCustomOrders] = useState([]);
-    const [matHistory, setMatHistory] = useState([]);
     const [failures, setFailures] = useState([]);
     const [livio, setLivio] = useState([]);
     const [users, setUsers] = useState([]);
-    const [logs, setLogs] = useState([]);
 
     const [machineCategoryMap, setMachineCategoryMap] = useState({});
     const [categoryTypeMap, setCategoryTypeMap] = useState({});
@@ -52,7 +50,7 @@ const ShopFloor = () => {
     // SCHEDULER FORMS (Decoupled)
     const [dispatchOperator, setDispatchOperator] = useState("");
     const [rtgDispatchSelection, setRtgDispatchSelection] = useState("");
-    const [stockDispatchForm, setStockDispatchForm] = useState({ op: '', routingId: '', targetQty: '', woNum: '', estStart: '', estFinish: '', estHrs: '', reqDate: '', notes: '', phosphate: 'No' });
+    const [stockDispatchForm, setStockDispatchForm] = useState({ op: '', routingId: '', targetQty: '', woNum: '', estStart: '', estFinish: '', estHrs: '', reqDate: '', notes: '', phosphate: 'No', _sourceId: null, _customFileUrl: null });
 
     const [livioForm, setLivioForm] = useState({ desc: '', reqDate: '', file: null });
 
@@ -71,7 +69,6 @@ const ShopFloor = () => {
         e.preventDefault();
         if (!pinInput) return;
         try {
-            // Check central HQ users
             const snap = await getDocs(query(collection(db, "hq_users"), where("pin", "==", pinInput)));
             if (!snap.empty) {
                 const uData = snap.docs[0].data();
@@ -102,7 +99,6 @@ const ShopFloor = () => {
             onSnapshot(shopDb.collection("tooling"), s => setTooling(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("materials"), s => setMaterials(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("custom_orders"), s => setCustomOrders(s.docs.map(d=>({id: d.id, ...d.data()})))),
-            onSnapshot(query(shopDb.collection("material_history"), orderBy("t", "desc"), limit(50)), s => setMatHistory(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(query(shopDb.collection("shop_failures"), orderBy("timestamp", "desc")), s => setFailures(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("livio"), s => setLivio(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(collection(db, "hq_users"), s => setUsers(s.docs.map(d=>({id: d.id, ...d.data()}))))
@@ -247,7 +243,7 @@ const ShopFloor = () => {
         if(stockDispatchForm._sourceId) await deleteDoc(doc(shopDb.collection("milling"), stockDispatchForm._sourceId));
 
         writeLog(`Dispatched Stock WO ${finalWo} (OP 1)`, 'scheduler');
-        setStockDispatchForm({ op: '', routingId: '', targetQty: '', woNum: '', estStart: '', estFinish: '', estHrs: '', reqDate: '', notes: '', phosphate: 'No' });
+        setStockDispatchForm({ op: '', routingId: '', targetQty: '', woNum: '', estStart: '', estFinish: '', estHrs: '', reqDate: '', notes: '', phosphate: 'No', _sourceId: null, _customFileUrl: null });
     };
 
     const aiOptimizeSchedule = async () => {
@@ -334,7 +330,6 @@ const ShopFloor = () => {
         if(statusType === 'GOOD') {
             if(prog.toolTimes) {
                 for (let [toolName, minsPerPiece] of Object.entries(prog.toolTimes)) {
-                    // Tool is deducted based on the specific machine running the task
                     const machineToolId = cleanId(task.mach, toolName);
                     const totalMinsToDeduct = minsPerPiece * totalPartsRun;
                     await setDoc(doc(shopDb.collection("tooling"), machineToolId), { currentHours: increment(totalMinsToDeduct / 60) }, { merge: true });
@@ -352,7 +347,6 @@ const ShopFloor = () => {
             let imgUrl = null; 
             if(qcForm.failImg) { const fRef = ref(storage, `fails/${Date.now()}.jpg`); await uploadBytesResumable(fRef, qcForm.failImg); imgUrl = await getDownloadURL(fRef); }
             await addDoc(shopDb.collection("shop_failures"), { machine: task.mach, program: prog.name, operator: user.name, reason: qcForm.failReason, notes: qcForm.failNotes, status: 'Open', timestamp: serverTimestamp() });
-            
             await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `⚠️ MACHINING FAILURE: ${prog.name} on ${task.mach}. Reason: ${qcForm.failReason}. \nNotes: ${qcForm.failNotes}`, t: serverTimestamp(), readBy: [], isSystem: true });
         }
 
@@ -385,7 +379,10 @@ const ShopFloor = () => {
         await batch.commit(); writeLog(`Exported batch to ERP`, 'admin');
     };
 
-    const fieldStyle = { padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' };
+    // ==========================================
+    // STYLES
+    // ==========================================
+    const fieldStyle = { padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff', width: '100%', boxSizing: 'border-box' };
     const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
 
     // ==========================================
@@ -539,16 +536,22 @@ const ShopFloor = () => {
                         <div style={{ flex: 1, background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                             <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink)' }}>Method 1: Inject RTG Custom Order</h4>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                <select value={dispatchOperator} onChange={e => setDispatchOperator(e.target.value)} style={fieldStyle}>
-                                    <option value="">Assign Operator (For OP 1)...</option>
-                                    {users.filter(u => !u.hidden && ['operator', 'programmer'].includes(u.role?.toLowerCase())).map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
-                                </select>
-                                <select value={rtgDispatchSelection} onChange={e => setRtgDispatchSelection(e.target.value)} style={fieldStyle}>
-                                    <option value="">-- Select Pending Order from RTG --</option>
-                                    {customOrders.filter(o => o.status === 'Pending').map(o => (
-                                        <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
-                                    ))}
-                                </select>
+                                <div>
+                                    <label style={labelStyle}>Assign Operator (OP 1)</label>
+                                    <select value={dispatchOperator} onChange={e => setDispatchOperator(e.target.value)} style={fieldStyle}>
+                                        <option value="">Unassigned...</option>
+                                        {users.filter(u => !u.hidden && ['operator', 'programmer'].includes(u.role?.toLowerCase())).map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Select RTG Order</label>
+                                    <select value={rtgDispatchSelection} onChange={e => setRtgDispatchSelection(e.target.value)} style={fieldStyle}>
+                                        <option value="">-- Pending Dispatch Orders --</option>
+                                        {customOrders.filter(o => o.status === 'Pending').map(o => (
+                                            <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
+                                        ))}
+                                    </select>
+                                </div>
                                 <button onClick={handleAddDispatchRTG} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}>
                                     Dispatch RTG Order to Floor
                                 </button>
@@ -559,26 +562,41 @@ const ShopFloor = () => {
                         <div style={{ flex: 1.5, background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                             <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink)' }}>Method 2: Manual / Build-to-Stock</h4>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px', marginBottom: '16px' }}>
-                                <select value={stockDispatchForm.op} onChange={e => setStockDispatchForm({...stockDispatchForm, op: e.target.value})} style={fieldStyle}>
-                                    <option value="">Operator (OP 1)...</option>
-                                    {users.filter(u => !u.hidden && ['operator', 'programmer'].includes(u.role?.toLowerCase())).map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
-                                </select>
-                                <select value={stockDispatchForm.routingId} onChange={e => { 
-                                    const rId = e.target.value; const routing = routingsMap[rId]; 
-                                    if(routing && routing.ops.length > 0) {
-                                        const p = programsMap[routing.ops[0].progId];
-                                        const est = p && stockDispatchForm.targetQty ? (((parseFloat(p.setupTime)||0)+((parseFloat(p.timePerPiece)||0)*stockDispatchForm.targetQty))/60).toFixed(2) : '';
-                                        setStockDispatchForm({...stockDispatchForm, routingId: rId, estHrs: est});
-                                    } else { setStockDispatchForm({...stockDispatchForm, routingId: rId, estHrs: ''}); }
-                                }} style={fieldStyle}>
-                                    <option value="">Select Engineered HQ Part for Build...</option>
-                                    {routings.map(r => <option key={r.id} value={r.partId}>{r.displayName || r.partId} ({r.ops.length} Ops)</option>)}
-                                </select>
+                                <div>
+                                    <label style={labelStyle}>Assign Operator (OP 1)</label>
+                                    <select value={stockDispatchForm.op} onChange={e => setStockDispatchForm({...stockDispatchForm, op: e.target.value})} style={fieldStyle}>
+                                        <option value="">Unassigned...</option>
+                                        {users.filter(u => !u.hidden && ['operator', 'programmer'].includes(u.role?.toLowerCase())).map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Select Engineered HQ Part</label>
+                                    <select value={stockDispatchForm.routingId} onChange={e => { 
+                                        const rId = e.target.value; const routing = routingsMap[rId]; 
+                                        if(routing && routing.ops.length > 0) {
+                                            const p = programsMap[routing.ops[0].progId];
+                                            const est = p && stockDispatchForm.targetQty ? (((parseFloat(p.setupTime)||0)+((parseFloat(p.timePerPiece)||0)*stockDispatchForm.targetQty))/60).toFixed(2) : '';
+                                            setStockDispatchForm({...stockDispatchForm, routingId: rId, estHrs: est});
+                                        } else { setStockDispatchForm({...stockDispatchForm, routingId: rId, estHrs: ''}); }
+                                    }} style={fieldStyle}>
+                                        <option value="">Select Part for Stock Build...</option>
+                                        {routings.map(r => <option key={r.id} value={r.partId}>{r.displayName || r.partId} ({r.ops.length} Ops)</option>)}
+                                    </select>
+                                </div>
                             </div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-                                <input type="number" placeholder="Target Qty" value={stockDispatchForm.targetQty} onChange={e => setStockDispatchForm({...stockDispatchForm, targetQty: e.target.value})} style={fieldStyle} />
-                                <input type="text" placeholder="WO # (Auto-Gens if empty)" value={stockDispatchForm.woNum} onChange={e => setStockDispatchForm({...stockDispatchForm, woNum: e.target.value})} style={fieldStyle} />
-                                <input type="number" placeholder="Est Hrs (OP 1)" step="0.1" value={stockDispatchForm.estHrs} onChange={e => setStockDispatchForm({...stockDispatchForm, estHrs: e.target.value})} style={fieldStyle} />
+                                <div>
+                                    <label style={labelStyle}>Target Qty</label>
+                                    <input type="number" placeholder="0" value={stockDispatchForm.targetQty} onChange={e => setStockDispatchForm({...stockDispatchForm, targetQty: e.target.value})} style={fieldStyle} />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>WO # (Auto-Gens if empty)</label>
+                                    <input type="text" placeholder="e.g. STOCK-123" value={stockDispatchForm.woNum} onChange={e => setStockDispatchForm({...stockDispatchForm, woNum: e.target.value})} style={fieldStyle} />
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Est Hrs (OP 1)</label>
+                                    <input type="number" placeholder="0.0" step="0.1" value={stockDispatchForm.estHrs} onChange={e => setStockDispatchForm({...stockDispatchForm, estHrs: e.target.value})} style={fieldStyle} />
+                                </div>
                             </div>
                             <button onClick={handleAddDispatchStock} style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '16px', width: '100%', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}>
                                 Dispatch Stock Build to Floor
@@ -657,12 +675,15 @@ const ShopFloor = () => {
                     <div style={{ flex: 1, background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                         <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink)' }}>Method 1: Inject RTG Custom Order</h4>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            <select value={rtgMillSelection} onChange={e => setRtgMillSelection(e.target.value)} style={fieldStyle}>
-                                <option value="">-- Select Pending Order from RTG --</option>
-                                {customOrders.filter(o => o.status === 'Pending').map(o => (
-                                    <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
-                                ))}
-                            </select>
+                            <div>
+                                <label style={labelStyle}>Select RTG Order</label>
+                                <select value={rtgMillSelection} onChange={e => setRtgMillSelection(e.target.value)} style={fieldStyle}>
+                                    <option value="">-- Pending Dispatch Orders --</option>
+                                    {customOrders.filter(o => o.status === 'Pending').map(o => (
+                                        <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
+                                    ))}
+                                </select>
+                            </div>
                             <button onClick={handleAddMillingRTG} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'background 0.2s' }}>
                                 Add Custom WO to Backlog
                             </button>
@@ -673,11 +694,17 @@ const ShopFloor = () => {
                     <div style={{ flex: 1.5, background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                         <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink)' }}>Method 2: Manual / Build-to-Stock</h4>
                         <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '16px', marginBottom: '16px' }}>
-                            <select value={stockMillForm.partNum} onChange={e => setStockMillForm({...stockMillForm, partNum: e.target.value})} style={fieldStyle}>
-                                <option value="">Select Engineered HQ Part for Build...</option>
-                                {routings.map(r => <option key={r.id} value={r.partId}>{r.displayName || r.partId}</option>)}
-                            </select>
-                            <input type="number" placeholder="Target Qty" value={stockMillForm.qty} onChange={e => setStockMillForm({...stockMillForm, qty: e.target.value})} style={fieldStyle} />
+                            <div>
+                                <label style={labelStyle}>Select Engineered HQ Part</label>
+                                <select value={stockMillForm.partNum} onChange={e => setStockMillForm({...stockMillForm, partNum: e.target.value})} style={fieldStyle}>
+                                    <option value="">Select Part for Stock Build...</option>
+                                    {routings.map(r => <option key={r.id} value={r.partId}>{r.displayName || r.partId}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label style={labelStyle}>Target Qty</label>
+                                <input type="number" placeholder="0" value={stockMillForm.qty} onChange={e => setStockMillForm({...stockMillForm, qty: e.target.value})} style={fieldStyle} />
+                            </div>
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', alignItems: 'end' }}>
                             <div>
@@ -986,12 +1013,11 @@ const ShopFloor = () => {
                         <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="ENTER PIN" maxLength="4" style={{width: '100%', padding: '15px', textAlign: 'center', fontSize: '1.5rem', marginBottom: '20px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--mono)', letterSpacing: '10px', outline: 'none'}} />
                         <button type="submit" style={{ width: '100%', padding: '15px', background: 'var(--ink)', color: '#fff', fontSize: '10px', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }}>Authenticate</button>
                     </form>
-                    <button onClick={handleLogout} style={{ marginTop: '30px', background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid var(--brass)', paddingBottom: '2px' }}>Return to Hub</button>
+                    <button onClick={() => navigate('/')} style={{ marginTop: '30px', background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderBottom: '1px solid var(--brass)', paddingBottom: '2px' }}>Return to Hub</button>
                 </div>
             </div>
         );
     }
-
 
     return (
         <div style={{ minHeight: '100vh', backgroundColor: 'var(--paper)', display: 'flex', flexDirection: 'column', fontFamily: 'var(--sans)' }}>
