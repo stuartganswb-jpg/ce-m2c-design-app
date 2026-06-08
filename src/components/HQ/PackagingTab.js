@@ -16,6 +16,11 @@ const theme = {
   mono: "'IBM Plex Mono', monospace"
 };
 
+const inpStyle = { 
+  width: "100%", padding: "8px", border: `1px solid ${theme.line}`, 
+  background: '#fff', fontSize: '0.8rem', fontFamily: theme.sans, boxSizing: 'border-box' 
+};
+
 // --- UTILITIES ---
 const uid = () => Math.random().toString(36).slice(2, 9);
 const snapTo = (v, inc) => Math.round(v / inc) * inc;
@@ -305,8 +310,6 @@ function GLBModal({ gltfScene, foamW, foamH, onClose, onTrace }) {
     catch (err) { setError(err.message || "Trace failed."); } finally { setTracing(false); }
   };
 
-  const inpStyle = { width: "100%", padding: "8px", border: `1px solid ${theme.line}`, background: '#fff', fontSize: '0.8rem', fontFamily: theme.sans };
-
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(28,26,22,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
       <div style={{ background: theme.paper, padding: "30px", border: `1px solid ${theme.line}`, width: "460px", display: "flex", flexDirection: "column", gap: "20px" }}>
@@ -342,6 +345,7 @@ const PackagingTab = ({ activeBrand }) => {
   // Database States
   const [jobs, setJobs] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [standardBoxes, setStandardBoxes] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
   
   // Canvas State
@@ -366,7 +370,7 @@ const PackagingTab = ({ activeBrand }) => {
 
   // --- Real-time Firebase Subscriptions ---
   useEffect(() => {
-    // 1. Listen to jobs that require packaging (Dispatched from RTG)
+    // 1. Listen to jobs that require packaging
     const qJobs = query(collection(db, "jobs"), where("status", "==", "PACKAGING"));
     const unsubJobs = onSnapshot(qJobs, (snap) => {
       const liveJobs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -380,18 +384,23 @@ const PackagingTab = ({ activeBrand }) => {
       setTemplates(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    return () => { unsubJobs(); unsubTemplates(); };
+    // 3. Listen to Standard Box / Sheet Sizes
+    const unsubBoxes = onSnapshot(query(collection(db, "standard_boxes")), (snap) => {
+      setStandardBoxes(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => { unsubJobs(); unsubTemplates(); unsubBoxes(); };
   }, [activeBrand, activeJobId]);
 
   const activeJob = jobs.find(j => j.id === activeJobId);
 
-  // Update canvas to match job's required box size if defined
+  // Auto-populate sheet size when the user explicitly switches to a new job
   useEffect(() => {
     if (activeJob?.boxSize) {
       setFoamW(activeJob.boxSize.w || 90);
       setFoamH(activeJob.boxSize.h || 8);
     }
-  }, [activeJob]);
+  }, [activeJobId]); // Tied strictly to ID change to prevent overwriting manual adjustments
 
   // --- Keyboard & Mouse Mechanics ---
   useEffect(() => {
@@ -480,7 +489,7 @@ const PackagingTab = ({ activeBrand }) => {
 
   const loadTemplate = (tpl) => {
     if (window.confirm(`Load template "${tpl.name}"? Current canvas will be overwritten.`)) {
-      setShapes(tpl.shapes.map(s => ({ ...s, id: uid() }))); // Re-ID to avoid canvas conflicts
+      setShapes(tpl.shapes.map(s => ({ ...s, id: uid() })));
       setFoamW(tpl.foamW); setFoamH(tpl.foamH);
     }
   };
@@ -489,6 +498,14 @@ const PackagingTab = ({ activeBrand }) => {
     if (window.confirm("Delete this saved template permanently?")) {
       await deleteDoc(doc(db, "packaging_templates", id));
     }
+  };
+
+  const saveStandardBox = async () => {
+    const name = prompt("Enter a name for this standard box/sheet size (e.g., 'Medium Square Box'):");
+    if (!name) return;
+    await addDoc(collection(db, "standard_boxes"), {
+      name, w: foamW, h: foamH, brandId: activeBrand || 'global', createdAt: serverTimestamp()
+    });
   };
 
   // --- Rendering Helpers ---
@@ -570,7 +587,6 @@ const PackagingTab = ({ activeBrand }) => {
             </label>
           </div>
           <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-             <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>SHEET: {foamW}" x {foamH}"</span>
              <button onClick={handleExportDXF} disabled={!activeJob} style={{ ...btnStyle(true), background: activeJob ? theme.brass : theme.line, border: 'none' }}>Export DXF</button>
           </div>
         </div>
@@ -603,18 +619,51 @@ const PackagingTab = ({ activeBrand }) => {
         </div>
       </div>
 
-      {/* RIGHT PANEL: JOB PARTS REFERENCE */}
-      <div style={{ width: '240px', padding: '20px', background: theme.paper2, border: `1px solid ${theme.line}`, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
-        <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: theme.brass }}>Order Requirements</span>
-        <h3 style={{ margin: '5px 0 15px 0', fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink }}>Bill of Materials</h3>
+      {/* RIGHT PANEL: SHEET SIZING & BOM */}
+      <div style={{ width: '270px', background: theme.paper2, border: `1px solid ${theme.line}`, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
         
-        {activeJob ? (
-          <>
-            <div style={{ fontSize: '0.8rem', color: theme.inkSoft, marginBottom: '15px' }}>
-              <strong>Assigned Box:</strong><br/>
-              {activeJob.boxSize?.name || "Standard Box"}<br/>
-              ({activeJob.boxSize?.w || foamW}" x {activeJob.boxSize?.h || foamH}")
+        {/* Workspace Configuration */}
+        <div style={{ padding: '20px' }}>
+          <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: theme.brass }}>Workspace Settings</span>
+          <h3 style={{ margin: '5px 0 15px 0', fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink }}>Sheet / Box Size</h3>
+
+          <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.7rem', color: theme.inkSoft, marginBottom: '4px' }}>Width (in)</label>
+              <input type="number" value={foamW} onChange={e => setFoamW(parseFloat(e.target.value) || 0)} style={{ ...inpStyle, padding: '6px' }} />
             </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.7rem', color: theme.inkSoft, marginBottom: '4px' }}>Height (in)</label>
+              <input type="number" value={foamH} onChange={e => setFoamH(parseFloat(e.target.value) || 0)} style={{ ...inpStyle, padding: '6px' }} />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <select 
+              onChange={(e) => {
+                const box = standardBoxes.find(b => b.id === e.target.value);
+                if (box) { setFoamW(box.w); setFoamH(box.h); }
+              }}
+              style={{ flex: 1, ...inpStyle, padding: '6px' }}
+              defaultValue=""
+            >
+              <option value="" disabled>Load Standard...</option>
+              {standardBoxes.map(b => (
+                <option key={b.id} value={b.id}>{b.name} ({b.w}" x {b.h}")</option>
+              ))}
+            </select>
+            <button onClick={saveStandardBox} style={{ ...btnStyle(false), padding: '6px 10px' }}>Save</button>
+          </div>
+        </div>
+
+        <hr style={{ border: 0, borderTop: `1px solid ${theme.line}`, margin: 0 }} />
+
+        {/* Bill of Materials */}
+        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+          <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: theme.brass }}>Order Requirements</span>
+          <h3 style={{ margin: '5px 0 15px 0', fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink }}>Bill of Materials</h3>
+          
+          {activeJob ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflowY: 'auto' }}>
               {activeJob.items?.map((item, idx) => (
                 <div key={item.id || idx} style={{ background: '#fff', padding: '10px', border: `1px solid ${theme.line}` }}>
@@ -625,10 +674,10 @@ const PackagingTab = ({ activeBrand }) => {
                 </div>
               ))}
             </div>
-          </>
-        ) : (
-           <div style={{ fontSize: '0.8rem', color: theme.inkSoft, fontStyle: 'italic' }}>Select a job from the queue.</div>
-        )}
+          ) : (
+             <div style={{ fontSize: '0.8rem', color: theme.inkSoft, fontStyle: 'italic' }}>Select a job from the queue.</div>
+          )}
+        </div>
       </div>
 
       {/* MODALS */}
