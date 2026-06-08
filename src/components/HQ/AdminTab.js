@@ -4,13 +4,23 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, 
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
+// CONSTANTS FOR GLOBAL PERMISSIONS
+const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'admin'];
+const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'OS COMMS', 'ASSET GALLERY', 'MANAGEMENT', 'DAILY SUMMARY'];
+
 const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
-  // Changed default tab since NETSUITE_SYNC is gone
   const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
   
   const [users, setUsers] = useState([]);
-  const [dynamicRoles, setDynamicRoles] = useState(['admin', 'executive', 'design_team', 'sales_rep']);
-  const [adminForm, setAdminForm] = useState({ uName: '', uPin: '', uRole: 'sales_rep', oldId: '' });
+  
+  // 🚀 INJECTED FACTORY ROLES BY DEFAULT
+  const [dynamicRoles, setDynamicRoles] = useState(['admin', 'executive', 'design_team', 'sales_rep', 'operator', 'programmer', 'floor_manager', 'paint_manager']);
+  
+  // 🚀 ADDED STATE FOR FLOOR PERMISSIONS
+  const [shopPerms, setShopPerms] = useState({});
+  const [finPerms, setFinPerms] = useState({});
+
+  const [adminForm, setAdminForm] = useState({ uName: '', uPin: '', uRole: 'operator', oldId: '' });
   const [newRole, setNewRole] = useState('');
 
   const [cpqFlows, setCpqFlows] = useState([]);
@@ -56,7 +66,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeFormType, setActiveFormType] = useState('QUOTE');
   const [formEditor, setFormEditor] = useState({ header: '', footer: '', terms: '' });
 
-  // --- SUPER ADMIN STATE ---
   const [systemLogs, setSystemLogs] = useState([]);
   const [logFilter, setLogFilter] = useState({ app: 'ALL', user: '' });
   const [newMasterPin, setNewMasterPin] = useState("");
@@ -77,6 +86,10 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { 
           if (docSnap.exists()) setGlobalLists(docSnap.data()); 
       });
+
+      // 🚀 LISTEN FOR FLOOR PERMISSIONS
+      const unsubShopPerms = onSnapshot(doc(db, "shop_config", "permissions"), (docSnap) => { if (docSnap.exists()) setShopPerms(docSnap.data()); });
+      const unsubFinPerms = onSnapshot(doc(db, "fin_config", "permissions"), (docSnap) => { if (docSnap.exists()) setFinPerms(docSnap.data()); });
 
       const unsubDiscounts = onSnapshot(doc(db, "system", "crm_discounts"), (docSnap) => { 
           if (docSnap.exists() && docSnap.data().list) setCrmDiscounts(docSnap.data().list); 
@@ -105,7 +118,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
       });
 
-      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubLogos(); unsubForms(); };
+      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -275,12 +288,34 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       if (!window.confirm(`Delete role: ${role}?`)) return;
       await setDoc(doc(db, "hq_config", "roles"), { list: dynamicRoles.filter(r => r !== role) }, { merge: true });
   };
-  const handlePermToggle = (role, tab) => {
+
+  // 🚀 UNIFIED PERMISSION TOGGLES
+  const handleHqPermToggle = (role, tab) => {
       const rolePerms = perms[role] || [];
-      const newPerms = rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab];
-      setPerms({ ...perms, [role]: newPerms });
+      setPerms({ ...perms, [role]: rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab] });
   };
-  const handleSavePermissions = async () => { await setDoc(doc(db, "hq_config", "permissions"), perms); alert("Matrix Saved!"); };
+  const handleShopPermToggle = (role, tab) => {
+      const rolePerms = shopPerms[role] || [];
+      setShopPerms({ ...shopPerms, [role]: rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab] });
+  };
+  const handleFinPermToggle = (role, tab) => {
+      const rolePerms = finPerms[role] || [];
+      setFinPerms({ ...finPerms, [role]: rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab] });
+  };
+
+  // 🚀 MASS SAVE TO ALL DATABASES
+  const handleSavePermissions = async () => { 
+      try {
+          await setDoc(doc(db, "hq_config", "permissions"), perms); 
+          await setDoc(doc(db, "shop_config", "permissions"), shopPerms);
+          await setDoc(doc(db, "fin_config", "permissions"), finPerms);
+          alert("✅ Global Permissions Matrix Saved Successfully!"); 
+      } catch (e) {
+          console.error(e);
+          alert("Failed to save permissions.");
+      }
+  };
+
   const handleSaveUser = async () => {
       if(!adminForm.uName || !adminForm.uPin) return alert("Name and PIN are required.");
       if (adminForm.oldId && adminForm.oldId !== adminForm.uPin) await deleteDoc(doc(db, "hq_users", adminForm.oldId));
@@ -1278,11 +1313,12 @@ const handleNukeCustomers = async () => {
             </div>
           )}
 
-          {/* --- USERS VIEW --- */}
+          {/* --- UNIFIED USER DIRECTORY & MATRIX --- */}
           {activeSection === "USERS" && (
-            <div style={{ padding: '40px', maxWidth: '1000px' }}>
+            <div style={{ padding: '40px', maxWidth: '1100px' }}>
               <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '30px' }}>
-                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>User Directory & Access Matrix</h3>
+                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Global User Directory & Access Matrix</h3>
+                <p style={{ margin: '8px 0 0 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Changes saved here will sync across HQ, the Shop Floor, and the Finishing Floor instantly.</p>
               </div>
               
               <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '24px', marginBottom: '30px' }}>
@@ -1301,33 +1337,97 @@ const handleNukeCustomers = async () => {
                 </div>
               </div>
               
-              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', marginBottom: '30px', overflowX: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Permissions Matrix</h4>
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center', fontFamily: 'var(--sans)' }}>
-                  <thead style={{ background: 'var(--paper)', borderBottom: '1px solid var(--line)' }}>
-                      <tr>
-                          <th style={{ padding: '15px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Tab</th>
-                          {dynamicRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
-                      </tr>
-                  </thead>
-                  <tbody>
-                    {TABS.map(tab => (
-                      <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
-                          <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)' }}>{tab}</td>
-                          {dynamicRoles.map(role => (
-                              <td key={role} style={{ padding: '15px' }}>
-                                  <input type="checkbox" checked={perms[role]?.includes(tab) || false} onChange={() => handlePermToggle(role, tab)} style={{ cursor: 'pointer' }} />
-                              </td>
-                          ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <button onClick={handleSavePermissions} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '24px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Matrix Configuration</button>
+              {/* 🚀 THE MASTER PERMISSIONS MATRIX */}
+              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                    <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Unified Permissions Matrix</h4>
+                    <button onClick={handleSavePermissions} style={{ padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save All Matrix Rules</button>
+                </div>
+                
+                {/* HQ MATRIX */}
+                <div style={{ marginBottom: '40px' }}>
+                    <h5 style={{ margin: '0 0 10px 0', fontFamily: 'var(--mono)', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', padding: '8px', border: '1px solid var(--line)' }}>HQ Application Tabs</h5>
+                    <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center', fontFamily: 'var(--sans)' }}>
+                        <thead style={{ background: '#fff', borderBottom: '1px solid var(--line)' }}>
+                            <tr>
+                                <th style={{ padding: '15px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Tab</th>
+                                {dynamicRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {TABS.map(tab => (
+                            <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
+                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
+                                {dynamicRoles.map(role => (
+                                    <td key={role} style={{ padding: '15px' }}>
+                                        <input type="checkbox" checked={perms[role]?.includes(tab) || false} onChange={() => handleHqPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
+                                    </td>
+                                ))}
+                            </tr>
+                            ))}
+                        </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                {/* SHOP FLOOR MATRIX */}
+                <div style={{ marginBottom: '40px' }}>
+                    <h5 style={{ margin: '0 0 10px 0', fontFamily: 'var(--mono)', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', padding: '8px', border: '1px solid var(--line)' }}>Shop Floor Application Tabs</h5>
+                    <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center', fontFamily: 'var(--sans)' }}>
+                        <thead style={{ background: '#fff', borderBottom: '1px solid var(--line)' }}>
+                            <tr>
+                                <th style={{ padding: '15px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Tab</th>
+                                {dynamicRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {SHOP_TABS.map(tab => (
+                            <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
+                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
+                                {dynamicRoles.map(role => (
+                                    <td key={role} style={{ padding: '15px' }}>
+                                        <input type="checkbox" checked={shopPerms[role]?.includes(tab) || false} onChange={() => handleShopPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
+                                    </td>
+                                ))}
+                            </tr>
+                            ))}
+                        </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                {/* FINISHING FLOOR MATRIX */}
+                <div style={{ marginBottom: '20px' }}>
+                    <h5 style={{ margin: '0 0 10px 0', fontFamily: 'var(--mono)', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', padding: '8px', border: '1px solid var(--line)' }}>Finishing Floor Application Tabs</h5>
+                    <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center', fontFamily: 'var(--sans)' }}>
+                        <thead style={{ background: '#fff', borderBottom: '1px solid var(--line)' }}>
+                            <tr>
+                                <th style={{ padding: '15px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Tab</th>
+                                {dynamicRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {FIN_TABS.map(tab => (
+                            <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
+                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
+                                {dynamicRoles.map(role => (
+                                    <td key={role} style={{ padding: '15px' }}>
+                                        <input type="checkbox" checked={finPerms[role]?.includes(tab) || false} onChange={() => handleFinPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
+                                    </td>
+                                ))}
+                            </tr>
+                            ))}
+                        </tbody>
+                        </table>
+                    </div>
+                </div>
               </div>
 
               <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>User Directory</h4>
+                <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Global User Directory</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '15px', marginBottom: '20px' }}>
                   <input value={adminForm.uName} onChange={e => setAdminForm({...adminForm, uName: e.target.value})} placeholder="User Name" disabled={!!adminForm.oldId} style={{ padding: '12px', border: '1px solid var(--line)', background: adminForm.oldId ? 'var(--paper)' : '#fff', outline: 'none', fontFamily: 'var(--sans)' }} />
                   <input value={adminForm.uPin} onChange={e => setAdminForm({...adminForm, uPin: e.target.value})} placeholder="4-Digit PIN" maxLength="4" style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
@@ -1406,7 +1506,7 @@ const handleNukeCustomers = async () => {
           {activeSection === "SUPER_ADMIN" && isSuperAdmin && (
             <div style={{ padding: '40px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '30px' }}>
-                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Master Analytics & Surveillance</h3>
+                <h3 style={{ margin: '0', fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Master Analytics & Surveillance</h3>
               </div>
 
               {/* PIN CHANGER */}
