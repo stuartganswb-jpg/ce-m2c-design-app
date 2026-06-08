@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+
+// 🚀 IMPORT THE MIGRATION TOOL
 import H1AssemblyGenerator from './H1AssemblyGenerator';
 
 const AVAILABLE_BRANDS = [
@@ -24,7 +26,6 @@ const DEFAULT_SYSTEM_WINDOWS = {
   projections: ['ce', 'm2c', 'uniquity', 'leyla'] 
 };
 
-// 🚀 NEW: Added focusItemId and clearFocus props
 const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [isAdmin] = useState(true);
 
@@ -66,7 +67,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
   const [userPerms, setUserPerms] = useState([]);
   const [isPushingErp, setIsPushingErp] = useState(false);
-  const [woTargetQty, setWoTargetQty] = useState(1); // 🚀 WO Tool State
+  const [woTargetQty, setWoTargetQty] = useState(1); 
 
   const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
@@ -93,7 +94,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})))); 
     const unsubVendors = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "VENDOR")), snap => setLiveVendors(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     
-    // NEW: Filtered Customer Fetch
     const unsubCustomers = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "CUSTOMER")), snap => {
         const allCusts = snap.docs.map(d => ({id: d.id, ...d.data()}));
         setLiveCustomers(allCusts.filter(c => c.brandId === activeBrand || (c.sharedBrands && c.sharedBrands.includes(activeBrand))));
@@ -140,19 +140,16 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       return () => unsubscribe();
   }, [activePart]);
 
-  // 🚀 NEW: Watch for focusItemId from parent navigation (like Stock View)
   useEffect(() => {
       if (focusItemId && inventory.length > 0) {
           const partToFocus = inventory.find(p => p.id === focusItemId);
           if (partToFocus) {
               openPartDetails(partToFocus);
-              // Clear it so it doesn't get stuck open if they navigate away and back normally
               if (clearFocus) clearFocus();
           }
       }
   }, [focusItemId, inventory, clearFocus]);
 
-  // --- DYNAMIC DICTIONARY GENERATORS ---
   const dynamicProdTypes = Array.from(new Set([
       ...(globalLists.prodTypes || []).map(p => p.toUpperCase()), 
       ...inventory.map(p => (p.productType || p.manufacturingSpecs?.productType || "").toUpperCase()).filter(Boolean)
@@ -472,7 +469,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       }
   };
 
-  // 🚀 NEW: Generate Production Work Order Handler
+  // 🚀 WORK ORDER GENERATION HANDLER
   const handleGenerateWO = async () => {
       if (!activePart || activePart.legacyErpId === "PENDING") {
           return alert("Part must be saved with an ERP Legacy ID before generating a Work Order.");
@@ -486,31 +483,27 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               id: newWoId,
               woId: newWoId,
               brand: activeBrand,
-              status: "Approved", // 🟢 Critical: Makes it visible on RTG Board
+              status: "Approved", 
               customer: "Internal Stock",
-              hqJobId: activePart.id, // Links to Master Library
+              hqJobId: activePart.id, 
               totalParts: Number(woTargetQty),
-              reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], // Default: +14 days
+              reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], 
               type: "Stock Build",
               createdAt: Date.now()
           });
           alert(`✅ Work Order ${newWoId} successfully pushed to RTG Dispatch!`);
-          setWoTargetQty(1); // Reset
+          setWoTargetQty(1); 
       } catch (err) {
           console.error("WO Generation Error:", err);
           alert("Failed to generate Work Order. Check console.");
       }
   };
 
-  // Reusable styling objects
   const fieldStyle = { width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' };
   const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' };
   const sectionHeaderStyle = { margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
-      
-      return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
       {/* 🚀 TEMPORARY MIGRATION SCRIPT - Delete after running */}
