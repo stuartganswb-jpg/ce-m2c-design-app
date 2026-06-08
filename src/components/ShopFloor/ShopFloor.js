@@ -46,8 +46,8 @@ const ShopFloor = () => {
     const [routingsMap, setRoutingsMap] = useState({});
 
     // FORMS
-    const [millForm, setMillForm] = useState({ partNum: '', woNum: '', soNum: '', item: '', qty: '', reqDate: '', phosphate: 'No', file: null });
-    const [dispatchForm, setDispatchForm] = useState({ op: '', routingId: '', woNum: '', targetQty: '', estStart: '', estFinish: '', estHrs: '', notes: '', phosphate: 'No' });
+    const [millForm, setMillForm] = useState({ partNum: '', woNum: '', soNum: '', item: '', qty: '', reqDate: '', phosphate: 'No', file: null, _sourceCustomOrderId: null });
+    const [dispatchForm, setDispatchForm] = useState({ op: '', routingId: '', woNum: '', targetQty: '', estStart: '', estFinish: '', estHrs: '', notes: '', phosphate: 'No', _sourceCustomOrderId: null });
     const [livioForm, setLivioForm] = useState({ desc: '', reqDate: '', file: null });
 
     // MODALS
@@ -158,13 +158,29 @@ const ShopFloor = () => {
 
         let fileUrl = null;
         if (millForm.file) { const fRef = ref(storage, `production_needs/${Date.now()}_${millForm.file.name}`); await uploadBytesResumable(fRef, millForm.file); fileUrl = await getDownloadURL(fRef); }
+        
         await addDoc(shopDb.collection("milling"), { ...millForm, qty: parseFloat(millForm.qty), mach: routing.ops[0]?.machine || "Unassigned", estHrs: parseFloat(totalEstHrs.toFixed(2)), priority: millForm.reqDate ? new Date(millForm.reqDate).getTime() : 9999999999999, fileUrl, phosphate: millForm.phosphate === 'Yes', t: serverTimestamp() });
+        
+        // Remove from RTG Queue if injected from there
+        if (millForm._sourceCustomOrderId) {
+            await deleteDoc(doc(db, "shop_custom_orders", millForm._sourceCustomOrderId));
+        }
+
         writeLog(`Added ${millForm.partNum} to backlog`, 'production');
-        setMillForm({ partNum: '', woNum: '', soNum: '', item: '', qty: '', reqDate: '', phosphate: 'No', file: null });
+        setMillForm({ partNum: '', woNum: '', soNum: '', item: '', qty: '', reqDate: '', phosphate: 'No', file: null, _sourceCustomOrderId: null });
     };
 
     const pushToTracker = (m) => {
-        setDispatchForm({ op: '', routingId: m.partNum || '', woNum: m.woNum || '', targetQty: m.qty || '', estStart: '', estFinish: '', estHrs: m.estHrs || '', notes: `SO: ${m.soNum||'N/A'} | Desc: ${m.item||'None'}`, phosphate: m.phosphate ? 'Yes' : 'No', _sourceId: m.id, _customFileUrl: m.fileUrl || null, _reqDate: m.reqDate || null });
+        setDispatchForm({ 
+            op: '', routingId: m.partNum || '', woNum: m.woNum || '', targetQty: m.qty || '', 
+            estStart: '', estFinish: '', estHrs: m.estHrs || '', 
+            notes: `SO: ${m.soNum||'N/A'} | Desc: ${m.item||'None'}`, 
+            phosphate: m.phosphate ? 'Yes' : 'No', 
+            _sourceId: m.id, 
+            _customFileUrl: m.fileUrl || null, 
+            _reqDate: m.reqDate || null,
+            _sourceCustomOrderId: null 
+        });
         setActiveTab('scheduler');
     };
 
@@ -177,9 +193,13 @@ const ShopFloor = () => {
         await addDoc(shopDb.collection("schedule"), { 
             routingId: dispatchForm.routingId, currentOpIndex: 0, op: dispatchForm.op || '', mach: firstOp.machine, prog: firstOp.progId, woNum: dispatchForm.woNum, targetQty: parseInt(dispatchForm.targetQty) || null, estStart: dispatchForm.estStart, estFinish: dispatchForm.estFinish, reqDate: dispatchForm._reqDate || null, estHrs: parseFloat(dispatchForm.estHrs) || null, notes: dispatchForm.notes, customFileUrl: dispatchForm._customFileUrl || null, phosphate: dispatchForm.phosphate === 'Yes', status: "Pending", totalPausedMs: 0, partialGoodQty: 0, t: serverTimestamp() 
         });
+        
+        // Clean up from the queues if injected
         if(dispatchForm._sourceId) await deleteDoc(doc(shopDb.collection("milling"), dispatchForm._sourceId));
+        if(dispatchForm._sourceCustomOrderId) await deleteDoc(doc(db, "shop_custom_orders", dispatchForm._sourceCustomOrderId));
+        
         writeLog(`Dispatched WO ${dispatchForm.woNum} (OP 1)`, 'scheduler');
-        setDispatchForm({ op: '', routingId: '', woNum: '', targetQty: '', estStart: '', estFinish: '', estHrs: '', notes: '', phosphate: 'No' });
+        setDispatchForm({ op: '', routingId: '', woNum: '', targetQty: '', estStart: '', estFinish: '', estHrs: '', notes: '', phosphate: 'No', _sourceCustomOrderId: null });
     };
 
     const aiOptimizeSchedule = async () => {
@@ -439,7 +459,7 @@ const ShopFloor = () => {
                                             <div key={j.id} style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', borderTop: '1px solid var(--line)', paddingTop: '12px', marginTop: '8px' }}>
                                                 <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{j.woNum}</strong> - <span style={{ color: j.status === 'Setup' ? 'var(--brass)' : 'var(--ink-soft)' }}>{j.status}</span><br/>
                                                 <span style={{ fontSize: '0.85rem', color: 'var(--ink)', display: 'block', marginTop: '4px' }}>OP {j.currentOpIndex+1}/{routingsMap[j.routingId]?.ops?.length||1}: {programsMap[j.prog]?.name || j.prog}</span>
-                                                <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '4px' }}>Part: {j.routingId} | Op: {j.op}</span>
+                                                <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '4px' }}>Part: {routingsMap[j.routingId]?.displayName || j.routingId} | Op: {j.op}</span>
                                             </div>
                                         ))}
                                     </div>
@@ -462,6 +482,38 @@ const ShopFloor = () => {
                 </div>
                 {['admin', 'programmer'].includes(safeUserRole) && (
                     <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', borderRadius: '2px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        
+                        <div style={{ background: 'var(--paper-2)', padding: '16px', marginBottom: '16px', border: '1px solid var(--line)' }}>
+                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Method 1: Inject from RTG Dispatch Queue</label>
+                            <select onChange={(e) => {
+                                const order = customOrders.find(o => o.id === e.target.value);
+                                if (order) {
+                                    const matchedRouting = routings.find(r => r.displayName === order.item || r.partId === order.item);
+                                    let est = '';
+                                    if (matchedRouting && matchedRouting.ops.length > 0) {
+                                        const p = programsMap[matchedRouting.ops[0].progId];
+                                        if (p) est = (((parseFloat(p.setupTime)||0)+((parseFloat(p.timePerPiece)||0)*order.qty))/60).toFixed(2);
+                                    }
+                                    setDispatchForm({
+                                        ...dispatchForm, 
+                                        routingId: matchedRouting ? matchedRouting.partId : '', 
+                                        woNum: order.woNum, 
+                                        targetQty: order.qty, 
+                                        notes: `SO: ${order.soNum} | Desc: ${order.note || 'None'}`,
+                                        _reqDate: order.reqDate || null,
+                                        estHrs: est,
+                                        _sourceCustomOrderId: order.id
+                                    });
+                                }
+                            }} style={{ padding: '12px', width: '100%', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                                <option value="">-- Select Pending Order from RTG --</option>
+                                {customOrders.filter(o => o.status === 'Pending').map(o => (
+                                    <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Method 2: Manual Selection / Overrides</label>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px' }}>
                             <select value={dispatchForm.op} onChange={e => setDispatchForm({...dispatchForm, op: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="">Operator (For OP 1)...</option>{users.filter(u => !u.hidden && ['operator', 'programmer'].includes(u.role?.toLowerCase())).map(u => <option key={u.id} value={u.name}>{u.name}</option>)}</select>
                             <select value={dispatchForm.routingId} onChange={e => { 
@@ -472,7 +524,8 @@ const ShopFloor = () => {
                                     setDispatchForm({...dispatchForm, routingId: rId, estHrs: est});
                                 } else { setDispatchForm({...dispatchForm, routingId: rId, estHrs: ''}); }
                             }} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', gridColumn: 'span 2' }}>
-                                <option value="">Select HQ Part (Routing)...</option>{routings.map(r => <option key={r.id} value={r.partId}>{r.partId} ({r.ops.length} Ops)</option>)}
+                                <option value="">Select HQ Part (Routing)...</option>
+                                {routings.map(r => <option key={r.id} value={r.partId}>{r.displayName || r.partId} ({r.ops.length} Ops)</option>)}
                             </select>
                             <input type="text" placeholder="WO #" value={dispatchForm.woNum} onChange={e => setDispatchForm({...dispatchForm, woNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
                         </div>
@@ -508,7 +561,7 @@ const ShopFloor = () => {
                                 return (
                                 <tr key={t.id} style={{ borderBottom: '1px solid var(--line)', background: rowColor }}>
                                     <td style={{ padding: '16px' }}>
-                                        <div style={{ fontWeight: 500, color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>{t.routingId} {t.phosphate && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px' }}>Phos</span>}</div>
+                                        <div style={{ fontWeight: 500, color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>{routingsMap[t.routingId]?.displayName || t.routingId} {t.phosphate && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px' }}>Phos</span>}</div>
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px' }}>OP {t.currentOpIndex+1}/{routingsMap[t.routingId]?.ops?.length||1}: {programsMap[t.prog]?.name || t.prog}</div>
                                     </td>
                                     <td style={{ padding: '16px', color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500 }}>{t.woNum}</td>
@@ -551,13 +604,41 @@ const ShopFloor = () => {
             <div>
                 <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: '0 0 24px 0' }}>Production Backlog</h2>
                 <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px', marginBottom: '40px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    
+                    <div style={{ background: 'var(--paper-2)', padding: '16px', marginBottom: '16px', border: '1px solid var(--line)' }}>
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Method 1: Inject from RTG Dispatch Queue</label>
+                        <select onChange={(e) => {
+                            const order = customOrders.find(o => o.id === e.target.value);
+                            if (order) {
+                                const matchedRouting = routings.find(r => r.displayName === order.item || r.partId === order.item);
+                                setMillForm({
+                                    ...millForm, 
+                                    partNum: matchedRouting ? matchedRouting.partId : '', 
+                                    woNum: order.woNum, 
+                                    soNum: order.soNum, 
+                                    qty: order.qty, 
+                                    reqDate: order.reqDate || '', 
+                                    item: order.note || '',
+                                    _sourceCustomOrderId: order.id
+                                });
+                            }
+                        }} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                            <option value="">-- Select Pending Order from RTG --</option>
+                            {customOrders.filter(o => o.status === 'Pending').map(o => (
+                                <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Method 2: Manual Entry (Select Engineered HQ Part)</label>
                     <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '16px' }}>
                         <input type="text" placeholder="Internal Description (Optional)" value={millForm.item} onChange={e => setMillForm({...millForm, item: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
                         <input type="number" placeholder="Target Qty" value={millForm.qty} onChange={e => setMillForm({...millForm, qty: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px' }}>
                         <select value={millForm.partNum} onChange={e => setMillForm({...millForm, partNum: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper)' }}>
-                            <option value="">Select Engineered HQ Part...</option>{routings.map(r => <option key={r.id} value={r.partId}>{r.partId}</option>)}
+                            <option value="">Select HQ Part...</option>
+                            {routings.map(r => <option key={r.id} value={r.partId}>{r.displayName || r.partId}</option>)}
                         </select>
                         <input type="text" placeholder="WO #" value={millForm.woNum} onChange={e => setMillForm({...millForm, woNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
                         <input type="text" placeholder="SO #" value={millForm.soNum} onChange={e => setMillForm({...millForm, soNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
@@ -581,7 +662,7 @@ const ShopFloor = () => {
                                         return (
                                         <div key={m.id} style={{ background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)', position: 'relative' }}>
                                             {['admin', 'programmer'].includes(safeUserRole) && <button onClick={() => handleDelete('milling', m.id)} style={{ position: 'absolute', top: '16px', right: '16px', background: 'transparent', border: 'none', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Del</button>}
-                                            <h4 style={{ margin: '0 0 12px 0', color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500 }}>{m.partNum} {m.phosphate && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px' }}>Phos</span>}</h4>
+                                            <h4 style={{ margin: '0 0 12px 0', color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500 }}>{routingsMap[m.partNum]?.displayName || m.partNum} {m.phosphate && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px' }}>Phos</span>}</h4>
                                             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink-soft)', marginBottom: '8px' }}>WO: <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{m.woNum}</span> {m.soNum && `| SO: ${m.soNum}`}</div>
                                             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink-soft)', marginBottom: '8px' }}>Target: <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{m.qty}</span></div>
                                             {m.reqDate && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '12px' }}>Req By: {m.reqDate}</div>}
@@ -748,7 +829,7 @@ const ShopFloor = () => {
                                 <tr key={h.id} style={{ borderBottom: '1px solid var(--line)' }}>
                                     <td style={{ padding: '16px 24px', color: 'var(--ink)', fontWeight: 500, fontSize: '1.05rem' }}>{h.woNum}</td>
                                     <td style={{ padding: '16px 24px', color: 'var(--ink-soft)' }}>{h.notes?.includes("SO:") ? h.notes.split("SO:")[1].split("|")[0].trim() : '-'}</td>
-                                    <td style={{ padding: '16px 24px', color: 'var(--ink)', fontWeight: 500 }}>{h.routingId}</td>
+                                    <td style={{ padding: '16px 24px', color: 'var(--ink)', fontWeight: 500 }}>{routingsMap[h.routingId]?.displayName || h.routingId}</td>
                                     <td style={{ padding: '16px 24px', textAlign: 'center', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{h.goodQty}</td>
                                 </tr>
                             ))}
@@ -787,7 +868,7 @@ const ShopFloor = () => {
                                 return (
                                 <tr key={h.id} style={{ borderBottom: '1px solid var(--line)' }}>
                                     <td style={{ padding: '16px', color: 'var(--ink-soft)', fontSize: '0.9rem' }}>{dateStr}</td>
-                                    <td style={{ padding: '16px', color: 'var(--ink)', fontWeight: 500 }}>{h.routingId} <span style={{fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)'}}>(OP {h.currentOpIndex+1})</span></td>
+                                    <td style={{ padding: '16px', color: 'var(--ink)', fontWeight: 500 }}>{routingsMap[h.routingId]?.displayName || h.routingId} <span style={{fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)'}}>(OP {h.currentOpIndex+1})</span></td>
                                     <td style={{ padding: '16px', color: 'var(--ink)', fontWeight: 500 }}>{h.woNum}</td>
                                     <td style={{ padding: '16px', color: 'var(--ink-soft)' }}>{h.op}</td>
                                     <td style={{ padding: '16px', textAlign: 'center' }}><span style={{ color: 'var(--ink)', fontWeight: 500 }}>{good}</span> / <span style={{ color: '#d9534f' }}>{scrap}</span></td>
