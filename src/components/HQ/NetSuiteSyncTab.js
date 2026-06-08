@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc } from "firebase/firestore";
+import { doc, setDoc, getDocs, collection } from "firebase/firestore";
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -266,6 +266,18 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
 
         try {
+            // 1. Fetch Existing App Dictionary First (CRITICAL TO PREVENT DUPLICATES)
+            addLog("Mapping current App Database to prevent overwrites...", 'info');
+            const appDbSnap = await getDocs(collection(db, "Approved_Designs"));
+            const existingPartsMap = {};
+            appDbSnap.docs.forEach(d => {
+                const data = d.data();
+                if (data.legacyErpId) {
+                    existingPartsMap[data.legacyErpId.toUpperCase()] = { id: d.id, ...data };
+                }
+            });
+
+            // 2. Fetch NetSuite Data
             const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
             const targetSubsidiary = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3"; 
 
@@ -345,9 +357,13 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             
             let successCount = 0;
             for (const item of records) {
-                const newId = `${activeBrand.toUpperCase()}-${itemType === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
-                const mergedBins = Array.from(item.all_bins || []).join(', ');
+                const legacyErpId = (item.itemid || item.id).toString().toUpperCase();
+                const existingAppRecord = existingPartsMap[legacyErpId];
                 
+                // CRITICAL: If the item exists (like our generated AUTO- assemblies), map to THAT document ID.
+                const docId = existingAppRecord ? existingAppRecord.id : `${activeBrand.toUpperCase()}-${itemType === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
+                
+                const mergedBins = Array.from(item.all_bins || []).join(', ');
                 const pTypeClean = (item.product_type || '').toLowerCase().trim();
                 const uomClean = (item.uom || '').toLowerCase().trim();
                 
@@ -368,16 +384,39 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     collectionsArray = [item.collection.toUpperCase()];
                 }
 
+                // PAYLOAD CONSTRUCTION
                 const payload = {
-                    id: newId,
-                    itemId: newId,
                     legacyErpId: item.itemid || item.id,
                     netSuiteInternalId: item.id, 
                     itemName: item.displayname || item.itemid,
-                    brandId: activeBrand,
-                    partClass: itemType,
-                    sharedBrands: [activeBrand],
-                    manufacturingSpecs: {
+                    updatedAt: new Date().toISOString()
+                };
+
+                if (existingAppRecord) {
+                    // SAFE MERGE: Update cost/price/bins, but DO NOT overwrite routing, outsource flags, or custom projection bounds
+                    payload.manufacturingSpecs = {
+                        ...(existingAppRecord.manufacturingSpecs || {}), // Spreads existing safe data (projection, etc)
+                        basePrice: parseFloat(item.baseprice) || existingAppRecord.manufacturingSpecs?.basePrice || 0,
+                        cost: parseFloat(item.lastpurchaseprice) || existingAppRecord.manufacturingSpecs?.cost || 0,
+                        productType: item.product_type || existingAppRecord.manufacturingSpecs?.productType || 'Uncategorized',
+                        uom: item.uom || existingAppRecord.manufacturingSpecs?.uom || 'EA',
+                        binLocation: mergedBins || existingAppRecord.manufacturingSpecs?.binLocation || '',
+                        vendorName: item.vendor_name || existingAppRecord.manufacturingSpecs?.vendorName || '',
+                        vendorId: item.vendor_part_number || existingAppRecord.manufacturingSpecs?.vendorId || '',
+                        customData: {
+                            ...(existingAppRecord.manufacturingSpecs?.customData || {}), // Preserves existing projection mapping
+                            collection: parsedCollection || existingAppRecord.manufacturingSpecs?.customData?.collection || '',
+                            watchlist: item.watchlist || existingAppRecord.manufacturingSpecs?.customData?.watchlist || ''
+                        }
+                    };
+                } else {
+                    // BRAND NEW ITEM: Baseline all attributes
+                    payload.id = docId;
+                    payload.itemId = docId;
+                    payload.brandId = activeBrand;
+                    payload.partClass = itemType;
+                    payload.sharedBrands = [activeBrand];
+                    payload.manufacturingSpecs = {
                         basePrice: parseFloat(item.baseprice) || 0, 
                         cost: parseFloat(item.lastpurchaseprice) || 0, 
                         isInHouse: !hasVendor, 
@@ -395,14 +434,14 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                             collection: parsedCollection, 
                             watchlist: item.watchlist || '',
                         }
-                    },
-                    updatedAt: new Date().toISOString()
-                };
+                    };
+                }
 
-                await setDoc(doc(db, "Approved_Designs", newId), payload, { merge: true });
+                // merge: true forces Firestore to deeply merge rather than destroy omitted fields
+                await setDoc(doc(db, "Approved_Designs", docId), payload, { merge: true });
                 successCount++;
             }
-            addLog(`✅ Successfully synced and enriched ${successCount} library items.`, 'success');
+            addLog(`✅ Successfully synced and enriched ${successCount} library items. App structure preserved.`, 'success');
 
         } catch (err) {
             console.error(err);
@@ -439,8 +478,8 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         <SyncButton onClick={handleSyncCustomers} disabled={isSyncing} label="Sync Active Customers" sub="SuiteQL: Pulls all active customers mapped to Subsidiary (Paginated)." />
                         <SyncButton onClick={handleSyncAddresses} disabled={isSyncing} label="Sync Customer Address Books" sub="SuiteQL: Pulls address books and maps IDs for API Drop-Shipping." />
                         <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors (Co-Op CRM)" sub="SuiteQL: Pulls all active external vendors/co-ops (Paginated)." />
-                        <SyncButton onClick={() => handleSyncItems('Inventory')} disabled={isSyncing} label="Sync Inventory / Components" sub="SuiteQL: Pulls non-assembly items flagged for CPQ sync." />
-                        <SyncButton onClick={() => handleSyncItems('Assembly')} disabled={isSyncing} label="Sync Kits / Assemblies" sub="SuiteQL: Pulls Assembly Items flagged for CPQ sync." />
+                        <SyncButton onClick={() => handleSyncItems('Inventory')} disabled={isSyncing} label="Sync Inventory / Components" sub="SuiteQL: Protects BOM links; Pulls Cost, Price & Logistics for parts." />
+                        <SyncButton onClick={() => handleSyncItems('Assembly')} disabled={isSyncing} label="Sync Kits / Assemblies" sub="SuiteQL: Protects BOM links; Pulls Cost, Price & Logistics for Assemblies." />
                     </div>
                 </div>
 
