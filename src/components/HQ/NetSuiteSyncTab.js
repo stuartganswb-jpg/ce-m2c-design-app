@@ -289,7 +289,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             while (hasMore) {
                 addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
                 
-                // 🚀 FIXED: Explicitly querying custitem_bracket_projection
+                // 🚀 FIXED: Swapped item.baseprice out for item.custitem9
                 const q = `
                     SELECT 
                         item.id, item.itemid, item.displayname, item.weight,
@@ -298,8 +298,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
                         BUILTIN.DF(item.custitem_bracket_projection) AS projection, 
                         BUILTIN.DF(item.stockunit) AS uom,
-                        item.baseprice,
-                        item.custitem9 AS custom_price,
+                        item.custitem9 AS baseprice,
                         Vendor.companyname AS vendor_name,
                         ItemVendor.vendorcode AS vendor_part_number,
                         ItemVendor.purchaseprice AS lastpurchaseprice,
@@ -381,8 +380,8 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     collectionsArray = [item.collection.toUpperCase()];
                 }
 
-                // Use baseprice if available, fallback to custom field custitem9
-                const determinedPrice = parseFloat(item.baseprice) || parseFloat(item.custom_price) || 0;
+                // Parse the base price directly from custitem9
+                const determinedPrice = parseFloat(item.baseprice) || 0;
 
                 const payload = {
                     legacyErpId: item.itemid || item.id,
