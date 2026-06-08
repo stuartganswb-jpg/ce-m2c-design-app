@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc, orderBy, limit } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc, orderBy, limit, writeBatch } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
@@ -539,14 +539,36 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   };
 
+  // 🚀 UPDATED: Wipes Assemblies AND their BOM Pins to prevent ghosts
   const handleNukeAssemblies = async () => { 
-      const promptStr = window.prompt(`Type "DELETE ALL ASSEMBLIES" to confirm wiping ${activeBrand.toUpperCase()} assemblies:`); 
+      const promptStr = window.prompt(`Type "DELETE ALL ASSEMBLIES" to confirm wiping ${activeBrand.toUpperCase()} assemblies AND BOM pins:`); 
       if (promptStr === "DELETE ALL ASSEMBLIES") {
           try {
+              // 1. Get all Assemblies
               const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "in", ["Assembly", "Master Assembly"]), where("brandId", "==", activeBrand)));
-              await Promise.all(snap.docs.map(d => deleteDoc(doc(db, "Approved_Designs", d.id))));
-              alert(`✅ ALL ${activeBrand.toUpperCase()} ASSEMBLIES NUKED.`);
-          } catch(e) { console.error(e); }
+              
+              // 2. Get ALL BOM Pins (Crucial to prevent ghost data)
+              const pinsSnap = await getDocs(collection(db, "assembly_pins"));
+
+              const allDocs = [
+                  ...snap.docs.map(d => doc(db, "Approved_Designs", d.id)),
+                  ...pinsSnap.docs.map(d => doc(db, "assembly_pins", d.id))
+              ];
+
+              // 3. Delete in batches to bypass Firebase 500 document limits
+              const chunkSize = 400;
+              for (let i = 0; i < allDocs.length; i += chunkSize) {
+                  const chunk = allDocs.slice(i, i + chunkSize);
+                  const batch = writeBatch(db);
+                  chunk.forEach(docRef => batch.delete(docRef));
+                  await batch.commit();
+              }
+
+              alert(`✅ ALL ${activeBrand.toUpperCase()} ASSEMBLIES AND BOM PINS NUKED.`);
+          } catch(e) { 
+              console.error(e); 
+              alert("❌ Failed to nuke database: " + e.message);
+          }
       }
   };
   
@@ -561,7 +583,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   };
 
-const handleNukeCustomers = async () => { 
+  const handleNukeCustomers = async () => { 
       const promptStr = window.prompt(`Type "DELETE ALL CUSTOMERS" to confirm wiping ${activeBrand.toUpperCase()} customers:`); 
       if (promptStr === "DELETE ALL CUSTOMERS") {
           try {
@@ -1541,7 +1563,7 @@ const handleNukeCustomers = async () => {
           {activeSection === "SUPER_ADMIN" && isSuperAdmin && (
             <div style={{ padding: '40px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '30px' }}>
-                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Master Analytics & Surveillance</h3>
+                <h3 style={{ margin: '0 0 12px 0', fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Master Analytics & Surveillance</h3>
               </div>
 
               {/* PIN CHANGER */}
