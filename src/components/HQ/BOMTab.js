@@ -14,6 +14,13 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [assemblies, setAssemblies] = useState([]);
   const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
   
+  // 🚀 NEW: Filter States
+  const [searchTerm, setSearchTerm] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [routingFilter, setRoutingFilter] = useState("ALL"); 
+  const [collectionFilter, setCollectionFilter] = useState(""); 
+  const [watchlistFilter, setWatchlistFilter] = useState(""); 
+
   const [bomPins, setBomPins] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
   
@@ -158,6 +165,50 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           });
       }
   }, [selectedAssemblyData, activeBrand]);
+
+  // 🚀 NEW: DYNAMIC DICTIONARY GENERATORS FOR FILTERS
+  const dynamicProdTypes = Array.from(new Set([
+      ...(globalLists.prodTypes || []).map(p => p.toUpperCase()), 
+      ...assemblies.map(p => (p.productType || p.manufacturingSpecs?.productType || "").toUpperCase()).filter(Boolean)
+  ])).sort();
+
+  const dynamicCollections = Array.from(new Set([
+      ...collectionsData.map(c => c.name.toUpperCase()), 
+      ...assemblies.flatMap(p => p.manufacturingSpecs?.collections ? p.manufacturingSpecs.collections.map(c => c.toUpperCase()) : (p.manufacturingSpecs?.customData?.collection && p.manufacturingSpecs.customData.collection !== 'N/A' ? [p.manufacturingSpecs.customData.collection.toUpperCase()] : []))
+  ])).sort();
+
+  const dynamicWatchlists = Array.from(new Set([
+      ...(globalLists.watchLists || []).map(w => w.toUpperCase()), 
+      ...assemblies.map(p => {
+          const specs = p.manufacturingSpecs || {};
+          const nsWatchlist = specs.customData?.watchlist && specs.customData.watchlist !== 'N/A' ? specs.customData.watchlist.toUpperCase() : "NONE";
+          return specs.watchList ? specs.watchList.toUpperCase() : nsWatchlist;
+      }).filter(w => w !== "NONE")
+  ])).sort();
+
+  // 🚀 NEW: ASSEMBLY FILTER LOGIC
+  const filteredAssemblies = assemblies.filter(part => {
+      const term = searchTerm.toLowerCase();
+      const specs = part.manufacturingSpecs || {};
+
+      const matchesSearch = part.itemName?.toLowerCase().includes(term) || 
+                            (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term)) || 
+                            (part.itemId && part.itemId.toLowerCase().includes(term));
+      
+      let matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase() || (part.productType || "").toUpperCase() === typeFilter.toUpperCase();
+      
+      const nsCollection = specs.customData?.collection ? [specs.customData.collection.toUpperCase()] : [];
+      const partCollections = specs.collections ? specs.collections.map(c=>c.toUpperCase()) : nsCollection;
+      let matchesCollection = collectionFilter === "" || partCollections.includes(collectionFilter.toUpperCase()); 
+      
+      let matchesRouting = routingFilter === "ALL" || (routingFilter === "UNASSIGNED" ? (!part.routingType || part.routingType === "UNASSIGNED") : (part.routingType?.toUpperCase() === routingFilter.toUpperCase()));
+
+      const nsWatchlist = specs.customData?.watchlist && specs.customData.watchlist !== 'N/A' ? specs.customData.watchlist.toUpperCase() : "NONE";
+      const currentWatchList = specs.watchList ? specs.watchList.toUpperCase() : nsWatchlist;
+      let matchesWatchlist = watchlistFilter === "" || currentWatchList === watchlistFilter.toUpperCase();
+      
+      return matchesSearch && matchesType && matchesCollection && matchesRouting && matchesWatchlist;
+  });
 
   const populatedBOM = bomPins.map(pin => {
       const masterPart = libraryParts.find(p => p.id === pin.partId);
@@ -403,24 +454,61 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
-      {/* HEADER */}
-      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
-        <div>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Global Component Data Sync</span>
-          <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Bill of Materials Engine</h2>
-        </div>
-        
-        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Select Assembly</label>
-          <select value={selectedAssemblyId} onChange={(e) => { setSelectedAssemblyId(e.target.value); setActiveComponent(null); }} style={{ padding: '10px 16px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', minWidth: '350px', outline: 'none', background: '#fff' }}>
-            {assemblies.length === 0 && <option value="">No Assemblies Found</option>}
-            {assemblies.map(a => (
-                <option key={a.id} value={a.itemId}>
-                    [{a.routingType ? a.routingType.toUpperCase() : 'UNASSIGNED'}] {a.legacyErpId && a.legacyErpId !== "N/A" ? `${a.legacyErpId} : ` : ''}{a.itemName}
-                </option>
-            ))}
-          </select>
-        </div>
+      {/* HEADER WITH TIERED ASSEMBLY TOGGLE & SEARCH */}
+      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: '16px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+          
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                  <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Bill of Materials Engine</h2>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', paddingLeft: '16px', borderLeft: '1px solid var(--line)' }}>{filteredAssemblies.length} Assemblies</span>
+              </div>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Global Component Data Sync</span>
+          </div>
+
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+              
+              <select value={routingFilter} onChange={(e) => setRoutingFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none', background: 'var(--paper-2)', minWidth: '150px' }}>
+                  <option value="ALL">All Routing Types</option>
+                  <option value="UNASSIGNED">Unassigned / Pending</option>
+                  {(globalLists.assemblyTypes || []).map(type => (
+                      <option key={type} value={type}>{type}</option>
+                  ))}
+              </select>
+              
+              {windowConfig.system.prodTypes?.includes(activeBrand) && (
+                  <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }}>
+                      <option value="">All Categories</option>
+                      {dynamicProdTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                  </select>
+              )}
+
+              {windowConfig.system.collections?.includes(activeBrand) && (
+                  <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }}>
+                      <option value="">All Collections</option>
+                      {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+              )}
+
+              {windowConfig.system.watchLists?.includes(activeBrand) && (
+                  <select value={watchlistFilter} onChange={(e) => setWatchlistFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }}>
+                      <option value="">All Watchlists</option>
+                      <option value="NONE">None / Unassigned</option>
+                      {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
+                  </select>
+              )}
+
+              <input placeholder="Search Name, ERP ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '200px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }} />
+
+              {/* MAIN ASSEMBLY SELECTOR */}
+              <select value={selectedAssemblyId} onChange={(e) => { setSelectedAssemblyId(e.target.value); setActiveComponent(null); }} style={{ padding: '10px 16px', border: '2px solid var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem', minWidth: '300px', outline: 'none', background: '#fff', marginLeft: 'auto', fontWeight: 500 }}>
+                  <option value="" disabled>-- Select Assembly to Edit --</option>
+                  {filteredAssemblies.map(a => (
+                      <option key={a.id} value={a.itemId}>
+                          [{a.routingType ? a.routingType.toUpperCase() : 'UNASSIGNED'}] {a.legacyErpId && a.legacyErpId !== "N/A" && a.legacyErpId !== "PENDING" ? `${a.legacyErpId} : ` : ''}{a.itemName}
+                      </option>
+                  ))}
+              </select>
+          </div>
       </div>
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1 }}>
