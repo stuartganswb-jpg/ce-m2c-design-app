@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, doc, setDoc, deleteDoc, updateDoc, writeBatch, serverTimestamp, increment } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, writeBatch, increment } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection as oldCol, getDocs as oldGetDocs } from 'firebase/firestore';
@@ -8,14 +8,14 @@ import { getFirestore, collection as oldCol, getDocs as oldGetDocs } from 'fireb
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
 const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
 
-const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, programsMap, machines, categories, setupCodes, tooling, materials, users, perms, setPerms, writeLog, handleDelete, safeUserRole, TABS }) => {
+const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, programsMap, machines, categories, setupCodes, tooling, materials, writeLog, handleDelete, safeUserRole }) => {
     
     const [routingForm, setRoutingForm] = useState({ id: null, partId: '', isRawMat: false, matProfile: '', matLength: '', ops: [] });
     const [progForm, setProgForm] = useState({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} });
     const [toolForm, setToolForm] = useState({ item: '', desc: '', machine: '', max: '', qty: '', reorder: '', toolNum: '' });
     const [matForm, setMatForm] = useState({ type: '', thick: '', width: '' });
     
-    const [adminForm, setAdminForm] = useState({ catName: '', catType: 'Manual', macName: '', macCat: '', scName: '', uName: '', uPin: '', uRole: 'operator', oldPin: '' });
+    const [adminForm, setAdminForm] = useState({ catName: '', catType: 'Manual', macName: '', macCat: '', scName: '' });
 
     // ==========================================
     // 🚀 FORCE SYNC TO HQ LIBRARY
@@ -146,8 +146,6 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
     };
 
     const saveAdminDoc = async (col, id, data, msg) => { await setDoc(doc(shopDb.collection(col), cleanId(id, "")), data, {merge:true}); writeLog(msg, 'admin'); };
-    const handlePermToggle = (role, tab) => { const rolePerms = perms[role] || []; const newPerms = rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab]; setPerms({ ...perms, [role]: newPerms }); };
-    const savePermissions = async () => { await setDoc(doc(shopDb.collection("config"), "permissions"), perms); writeLog("Updated Matrix", "admin"); alert("Matrix Saved!"); };
 
     // ==========================================
     // RENDERERS
@@ -514,10 +512,10 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
         return (
             <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
                 <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '30px' }}>
-                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Management & Configuration</h2>
+                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Machine Configuration</h2>
                 </div>
                 
-                {/* 🚀 1. MIGRATION ENGINE (Visible on Admin tab) */}
+                {/* 🚀 1. MIGRATION ENGINE (Visible on Machine Config tab) */}
                 <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px', marginBottom: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div>
                         <h3 style={{ color: 'var(--ink)', margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Force Sync: Shop Floor → HQ Library</h3>
@@ -528,31 +526,6 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                     <button onClick={handleForceSyncToHQ} style={{ padding: '16px 32px', background: 'var(--ink)', color: '#fff', fontWeight: 500, fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }}>
                         Force Sync to HQ
                     </button>
-                </div>
-
-                <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', marginBottom: '40px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                    <h3 style={sectionHeaderStyle}>Permissions Setup Matrix</h3>
-                    <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center', fontFamily: 'var(--sans)' }}>
-                            <thead style={{ background: 'var(--paper)' }}>
-                                <tr>
-                                    <th style={{ padding: '16px', borderBottom: '1px solid var(--line)', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Tab</th>
-                                    {['operator', 'programmer', 'admin', 'purchasing', 'csr'].map(r => <th key={r} style={{ padding: '16px', borderBottom: '1px solid var(--line)', borderLeft: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{r}</th>)}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {TABS.map(tab => (
-                                    <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
-                                        <td style={{ padding: '16px', textAlign: 'left', color: 'var(--ink)', fontSize: '0.95rem' }}>{tab}</td>
-                                        {['operator', 'programmer', 'admin', 'purchasing', 'csr'].map(role => (
-                                            <td key={role} style={{ padding: '16px', borderLeft: '1px solid var(--line)' }}><input type="checkbox" checked={perms[role]?.includes(tab) || false} onChange={() => handlePermToggle(role, tab)} style={{ cursor: 'pointer' }} /></td>
-                                        ))}
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                    <button onClick={savePermissions} style={{ ...btnStyle, width: '100%', marginTop: '24px' }}>Save Matrix Configuration</button>
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
@@ -612,58 +585,6 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                                             <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{m.category}</span>
                                         </div>
                                         <button onClick={() => handleDelete('machines', m.id)} style={{ color: '#d9534f', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, lineHeight: 1 }}>×</button>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div>
-                        <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                            <h3 style={sectionHeaderStyle}>User Directory</h3>
-                            
-                            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '12px', marginBottom: '16px' }}>
-                                <input type="text" placeholder="Full Name" value={adminForm.uName} onChange={e => setAdminForm({...adminForm, uName: e.target.value})} disabled={!!adminForm.oldPin} style={{ ...fieldStyle, background: adminForm.oldPin ? 'var(--paper-2)' : '#fff' }} />
-                                <input type="text" placeholder="PIN" value={adminForm.uPin} onChange={e => setAdminForm({...adminForm, uPin: e.target.value})} style={fieldStyle} maxLength="4" />
-                                <select value={adminForm.uRole} onChange={e => setAdminForm({...adminForm, uRole: e.target.value})} style={fieldStyle}>
-                                    <option value="operator">Operator</option><option value="programmer">Programmer</option><option value="admin">Admin</option><option value="purchasing">Purchasing</option><option value="csr">CSR</option>
-                                </select>
-                            </div>
-                            
-                            <div style={{ display: 'flex', gap: '12px', marginBottom: '30px' }}>
-                                <button onClick={async () => { 
-                                    if(!adminForm.uName || !adminForm.uPin) return alert('Name and PIN are required.'); 
-                                    if(adminForm.oldPin && adminForm.oldPin !== adminForm.uPin) {
-                                        await deleteDoc(doc(shopDb.collection("users"), adminForm.oldPin)); 
-                                    }
-                                    await setDoc(doc(shopDb.collection("users"), adminForm.uPin), { name: adminForm.uName, pin: adminForm.uPin, role: adminForm.uRole }); 
-                                    await setDoc(doc(shopDb.collection("directory"), adminForm.uName), { name: adminForm.uName, role: adminForm.uRole, pin: adminForm.uPin, hidden: false }, {merge:true}); 
-                                    writeLog(adminForm.oldPin ? `Updated User: ${adminForm.uName}` : `Added User: ${adminForm.uName}`, 'admin'); 
-                                    setAdminForm({...adminForm, uName: '', uPin: '', oldPin: '', uRole: 'operator'}); 
-                                }} style={{ ...btnStyle, flex: 1, background: adminForm.oldPin ? 'var(--brass)' : 'var(--ink)' }}>
-                                    {adminForm.oldPin ? 'Update User' : 'Add New User'}
-                                </button>
-                                
-                                {adminForm.oldPin && (
-                                    <button onClick={() => setAdminForm({...adminForm, uName: '', uPin: '', oldPin: '', uRole: 'operator'})} style={{ ...btnStyle, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)' }}>
-                                        Cancel
-                                    </button>
-                                )}
-                            </div>
-                            
-                            <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                {users.length === 0 && <span style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem' }}>No users defined.</span>}
-                                {users.map(u => (
-                                    <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', opacity: u.hidden ? 0.5 : 1 }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink)', fontWeight: 500 }}>{u.name}</span> 
-                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{u.role}</span>
-                                        </div>
-                                        <div style={{ display: 'flex', gap: '12px' }}>
-                                            <button onClick={() => setAdminForm({...adminForm, uName: u.name, uPin: u.pin || '', uRole: u.role || 'operator', oldPin: u.pin || ''})} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '6px 12px', transition: 'all 0.2s' }}>Edit</button>
-                                            <button onClick={async () => { await updateDoc(doc(shopDb.collection("directory"), u.id), { hidden: !u.hidden }); }} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '6px 12px', transition: 'all 0.2s' }}>{u.hidden ? 'Show' : 'Hide'}</button>
-                                            <button onClick={async () => { if(!window.confirm(`Terminate ${u.name}?`)) return; await deleteDoc(doc(shopDb.collection("directory"), u.id)); if(u.pin) await deleteDoc(doc(shopDb.collection("users"), u.pin)); writeLog(`Terminated User: ${u.name}`, 'admin'); }} style={{ color: '#d9534f', background: 'transparent', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '6px 12px' }}>Term</button>
-                                        </div>
                                     </div>
                                 ))}
                             </div>

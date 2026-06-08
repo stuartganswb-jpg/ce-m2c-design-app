@@ -122,7 +122,7 @@ const ShopFloor = () => {
             onSnapshot(query(shopDb.collection("material_history"), orderBy("t", "desc"), limit(50)), s => setMatHistory(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(query(shopDb.collection("shop_failures"), orderBy("timestamp", "desc")), s => setFailures(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("livio"), s => setLivio(s.docs.map(d=>({id: d.id, ...d.data()})))),
-            onSnapshot(collection(db, "hq_users"), s => setUsers(s.docs.map(d=>({id: d.id, ...d.data()})))) // Updated to HQ Users
+            onSnapshot(collection(db, "hq_users"), s => setUsers(s.docs.map(d=>({id: d.id, ...d.data()}))))
         ];
         return () => unsubs.forEach(u => u()); 
     }, [user]);
@@ -884,7 +884,7 @@ const ShopFloor = () => {
             <nav style={{ display: 'flex', backgroundColor: 'var(--paper)', borderBottom: '1px solid var(--line)', overflowX: 'auto', padding: '0 20px' }}>
                 {TABS.filter(t => myTabs.includes(t)).map(tab => (
                     <button key={tab} onClick={() => setActiveTab(tab)} style={{ whiteSpace: 'nowrap', padding: '16px 20px', cursor: 'pointer', border: 'none', borderBottom: activeTab === tab ? `2px solid var(--brass)` : '2px solid transparent', background: 'transparent', color: activeTab === tab ? 'var(--ink)' : 'var(--ink-soft)', fontWeight: 400, fontFamily: 'var(--mono)', textTransform: 'uppercase', fontSize: '11px', letterSpacing: '.1em', transition: 'all 0.2s', opacity: activeTab === tab ? 1 : 0.7 }}>
-                        {tab}
+                        {tab === 'admin' ? 'MACHINE CONFIG' : tab}
                     </button>
                 ))}
             </nav>
@@ -895,8 +895,7 @@ const ShopFloor = () => {
                         <ShopEngineering 
                             activeTab={activeTab} user={user} hqParts={hqParts} routings={routings} programs={programs} 
                             programsMap={programsMap} machines={machines} categories={categories} setupCodes={setupCodes} 
-                            tooling={tooling} materials={materials} users={users} perms={perms} setPerms={setPerms} 
-                            writeLog={writeLog} handleDelete={handleDelete} safeUserRole={safeUserRole} TABS={TABS} 
+                            tooling={tooling} materials={materials} writeLog={writeLog} handleDelete={handleDelete} safeUserRole={safeUserRole} 
                         />
                     ) : (
                         <>

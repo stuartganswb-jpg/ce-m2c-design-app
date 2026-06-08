@@ -6,7 +6,6 @@ import SetupQueue from './SetupQueue';
 import ActiveFloor from './ActiveFloor';
 import Recipes from './Recipes';
 import Supplies from './Supplies';
-import Management from './Management';
 import Summary from './Summary';
 import { MixModal, QcModal } from './Modals';
 
@@ -14,7 +13,8 @@ import { MixModal, QcModal } from './Modals';
 import FloorAssetViewer from './FloorAssetViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 
-const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'OS COMMS', 'ASSET GALLERY', 'MANAGEMENT', 'DAILY SUMMARY'];
+// REMOVED 'MANAGEMENT' FROM THIS ARRAY
+const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY'];
 
 const FinishingFloor = () => {
   const navigate = useNavigate();
@@ -35,7 +35,6 @@ const FinishingFloor = () => {
   const [mixModal, setMixModal] = useState(null); 
   const [qcModal, setQcModal] = useState(null); 
 
-  // SEAMLESS AUTO-LOGIN CHECK
   useEffect(() => {
     const checkLocalSession = async () => {
       const session = localStorage.getItem('hq_session');
@@ -51,7 +50,7 @@ const FinishingFloor = () => {
           const r = parsedUser.role ? parsedUser.role.toLowerCase() : 'operator';
           setActiveTab(pData[r]?.includes('ACTIVE FLOOR') ? 'ACTIVE FLOOR' : (pData[r]?.[0] || 'ACTIVE FLOOR'));
         } catch (e) {
-          console.error("Failed to restore session. Manual PIN entry required.", e);
+          console.error("Failed to restore session.", e);
         }
       }
     };
@@ -71,9 +70,7 @@ const FinishingFloor = () => {
       onSnapshot(collection(db, "fin_paint_profiles"), (snap) => { let p = {}; snap.docs.forEach(d => p[d.id] = d.data()); setPaintProfiles(p); }),
       onSnapshot(collection(db, "fin_pots"), (snap) => { let pts = {}; snap.docs.forEach(d => pts[d.id] = d.data().mixedAt); setActivePots(pts); }),
       onSnapshot(collection(db, "fin_supplies"), (snap) => setSupplies(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
-      // Pointing to HQ Users so the management tab sees the real directory
       onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
-      // Pointing to HQ Logs
       onSnapshot(query(collection(db, "hq_logs"), orderBy("t", "desc"), limit(50)), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(doc(db, "fin_config", "settings"), (docSnap) => { if (docSnap.exists()) setSysConfig(prev => ({ ...prev, ...docSnap.data() })); })
     ];
@@ -81,11 +78,8 @@ const FinishingFloor = () => {
   }, [user]);
 
   const writeLog = async (msg, cat) => {
-    try {
-      await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, t: serverTimestamp() });
-    } catch (error) {
-      console.error("Failed to write log:", error);
-    }
+    try { await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, t: serverTimestamp() }); } 
+    catch (error) { console.error("Failed to write log:", error); }
   };
 
   const attemptLogin = async (e) => {
@@ -98,7 +92,6 @@ const FinishingFloor = () => {
         return;
       }
       
-      // Look up user in the central HQ directory
       const uSnap = await getDocs(query(collection(db, "hq_users"), where("pin", "==", pinInput)));
       if (!uSnap.empty) {
         const uData = uSnap.docs[0].data();
@@ -167,7 +160,6 @@ const FinishingFloor = () => {
           {activeTab === 'ACTIVE FLOOR' && <ActiveFloor workOrders={workOrders} recipes={recipes} activePots={activePots} sysConfig={sysConfig} setMixModal={setMixModal} now={now} user={user} setQcModal={setQcModal} users={users} />}
           {activeTab === 'FINISH RECIPES' && <Recipes recipes={recipes} paintProfiles={paintProfiles} supplies={supplies} writeLog={writeLog} user={user} />}
           {activeTab === 'SUPPLIES' && <Supplies supplies={supplies} writeLog={writeLog} user={user} />}
-          {activeTab === 'MANAGEMENT' && <Management sysConfig={sysConfig} users={users} logs={logs} writeLog={writeLog} user={user} perms={perms} setPerms={setPerms} db={db} TABS={TABS} />}
           {activeTab === 'DAILY SUMMARY' && <Summary workOrders={workOrders} />}
           
           {/* 🚀 SHARED APPS */}
