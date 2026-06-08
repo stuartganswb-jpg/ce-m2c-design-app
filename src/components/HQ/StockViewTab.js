@@ -141,7 +141,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                 addLog("No ERP IDs found in HQ catalog to sync quantities.", "warn");
             }
 
-            // STEP 2: SYNC ITEM METADATA (Vendors, Watchlists, Collections)
+            // STEP 2: SYNC ITEM METADATA (Vendors, Watchlists, Collections, Bins)
             addLog("Initiating SuiteQL pull for Item Metadata...", "info");
             
             const typeFilter = "item.itemtype IN ('InvtPart', 'Assembly')";
@@ -153,7 +153,6 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
             while (hasMore) {
                 addLog(`Fetching metadata batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
                 
-                // NO BIN TABLES HERE TO PREVENT 400 ERROR
                 const q = `
                     SELECT 
                         item.id, 
@@ -167,20 +166,18 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                         Vendor.companyname AS vendor_name,
                         ItemVendor.vendorcode AS vendor_part_number,
                         ItemVendor.purchaseprice AS lastpurchaseprice,
-                        ItemVendor.preferredvendor
-                    FROM 
-                        item
-                    LEFT JOIN 
-                        ItemVendor ON ItemVendor.item = item.id
-                    LEFT JOIN
-                        Vendor ON ItemVendor.vendor = Vendor.id
-                    WHERE 
-                        item.custitem_sync_to_cpq = 'T' 
-                        AND item.isinactive = 'F' 
-                        AND ${typeFilter}
-                        AND item.id > ${lastId}
-                    ORDER BY 
-                        item.id ASC
+                        ItemVendor.preferredvendor,
+                        Bin.binnumber
+                    FROM item
+                    LEFT JOIN ItemVendor ON ItemVendor.item = item.id
+                    LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id
+                    LEFT JOIN InventoryBalance ON InventoryBalance.item = item.id
+                    LEFT JOIN Bin ON InventoryBalance.bin = Bin.id
+                    WHERE item.custitem_sync_to_cpq = 'T' 
+                    AND item.isinactive = 'F' 
+                    AND ${typeFilter}
+                    AND item.id > ${lastId}
+                    ORDER BY item.id ASC
                 `;
                 
                 const response = await fetch(FIREBASE_FUNCTION_URL, {
@@ -211,24 +208,29 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                 }
             }
             
-            addLog(`Downloaded ${allRawRecords.length} total items. Processing deduplication...`, 'success');
+            addLog(`Downloaded ${allRawRecords.length} total items. Processing deduplication and bins...`, 'success');
 
             const uniqueRecordsMap = {};
             for (const row of allRawRecords) {
                 const itemId = row.id;
+                
                 if (!uniqueRecordsMap[itemId]) {
-                    uniqueRecordsMap[itemId] = row;
-                } else {
-                    const isNewPreferred = row.preferredvendor === 'T';
-                    const isOldPreferred = uniqueRecordsMap[itemId].preferredvendor === 'T';
-                    const oldHasVendor = !!uniqueRecordsMap[itemId].vendor_name;
-                    const newHasVendor = !!row.vendor_name;
+                    uniqueRecordsMap[itemId] = { ...row, all_bins: new Set() };
+                } 
 
-                    if (isNewPreferred && !isOldPreferred) {
-                        uniqueRecordsMap[itemId] = row;
-                    } else if (!oldHasVendor && newHasVendor && !isOldPreferred) {
-                        uniqueRecordsMap[itemId] = row;
-                    }
+                if (row.binnumber) {
+                    uniqueRecordsMap[itemId].all_bins.add(row.binnumber);
+                }
+
+                const isNewPreferred = row.preferredvendor === 'T';
+                const isOldPreferred = uniqueRecordsMap[itemId].preferredvendor === 'T';
+                const oldHasVendor = !!uniqueRecordsMap[itemId].vendor_name;
+                const newHasVendor = !!row.vendor_name;
+
+                if (isNewPreferred && !isOldPreferred) {
+                    uniqueRecordsMap[itemId] = { ...row, all_bins: uniqueRecordsMap[itemId].all_bins };
+                } else if (!oldHasVendor && newHasVendor && !isOldPreferred) {
+                    uniqueRecordsMap[itemId] = { ...row, all_bins: uniqueRecordsMap[itemId].all_bins };
                 }
             }
             const records = Object.values(uniqueRecordsMap);
@@ -237,6 +239,8 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
             for (const item of records) {
                 const existingMatch = hqParts.find(d => d.legacyErpId === item.itemid);
                 if (!existingMatch) continue; 
+
+                const mergedBins = Array.from(item.all_bins || []).join(', ');
 
                 const pTypeClean = (item.product_type || '').toLowerCase().trim();
                 const uomClean = (item.uom || '').toLowerCase().trim();
@@ -268,7 +272,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                         isInHouse: hasVendor ? false : (existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : true),
                         productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
                         uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
-                        binLocation: existingMatch.manufacturingSpecs?.binLocation || '', 
+                        binLocation: mergedBins || existingMatch.manufacturingSpecs?.binLocation || '', 
                         partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
                         outsourceAction: parsedOutsourceAction || existingMatch.manufacturingSpecs?.outsourceAction || '', 
                         collections: collectionsArray.length > 0 ? collectionsArray : (existingMatch.manufacturingSpecs?.collections || []), 

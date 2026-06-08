@@ -287,11 +287,14 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         Vendor.companyname AS vendor_name,
                         ItemVendor.vendorcode AS vendor_part_number,
                         ItemVendor.purchaseprice AS lastpurchaseprice,
-                        ItemVendor.preferredvendor
+                        ItemVendor.preferredvendor,
+                        Bin.binnumber
                     FROM item
                     LEFT JOIN ItemSubsidiaryMap ON ItemSubsidiaryMap.item = item.id
                     LEFT JOIN ItemVendor ON ItemVendor.item = item.id
                     LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id
+                    LEFT JOIN InventoryBalance ON InventoryBalance.item = item.id
+                    LEFT JOIN Bin ON InventoryBalance.bin = Bin.id
                     WHERE item.custitem_sync_to_cpq = 'T' 
                     AND item.isinactive = 'F' 
                     AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
@@ -313,24 +316,29 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 }
             }
             
-            addLog(`Downloaded ${allRawRecords.length} total items. Processing deduplication...`, 'success');
+            addLog(`Downloaded ${allRawRecords.length} total items. Processing deduplication and bins...`, 'success');
 
             const uniqueRecordsMap = {};
             for (const row of allRawRecords) {
                 const itemId = row.id;
+                
                 if (!uniqueRecordsMap[itemId]) {
-                    uniqueRecordsMap[itemId] = row;
-                } else {
-                    const isNewPreferred = row.preferredvendor === 'T';
-                    const isOldPreferred = uniqueRecordsMap[itemId].preferredvendor === 'T';
-                    const oldHasVendor = !!uniqueRecordsMap[itemId].vendor_name;
-                    const newHasVendor = !!row.vendor_name;
+                    uniqueRecordsMap[itemId] = { ...row, all_bins: new Set() };
+                } 
 
-                    if (isNewPreferred && !isOldPreferred) {
-                        uniqueRecordsMap[itemId] = row;
-                    } else if (!oldHasVendor && newHasVendor && !isOldPreferred) {
-                        uniqueRecordsMap[itemId] = row;
-                    }
+                if (row.binnumber) {
+                    uniqueRecordsMap[itemId].all_bins.add(row.binnumber);
+                }
+
+                const isNewPreferred = row.preferredvendor === 'T';
+                const isOldPreferred = uniqueRecordsMap[itemId].preferredvendor === 'T';
+                const oldHasVendor = !!uniqueRecordsMap[itemId].vendor_name;
+                const newHasVendor = !!row.vendor_name;
+
+                if (isNewPreferred && !isOldPreferred) {
+                    uniqueRecordsMap[itemId] = { ...row, all_bins: uniqueRecordsMap[itemId].all_bins };
+                } else if (!oldHasVendor && newHasVendor && !isOldPreferred) {
+                    uniqueRecordsMap[itemId] = { ...row, all_bins: uniqueRecordsMap[itemId].all_bins };
                 }
             }
             const records = Object.values(uniqueRecordsMap);
@@ -338,6 +346,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             let successCount = 0;
             for (const item of records) {
                 const newId = `${activeBrand.toUpperCase()}-${itemType === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
+                const mergedBins = Array.from(item.all_bins || []).join(', ');
                 
                 const pTypeClean = (item.product_type || '').toLowerCase().trim();
                 const uomClean = (item.uom || '').toLowerCase().trim();
@@ -375,7 +384,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         status: "IMPORTED_FROM_ERP",
                         productType: item.product_type || 'Uncategorized',
                         uom: item.uom || 'EA',
-                        binLocation: '',
+                        binLocation: mergedBins,
                         partHandling: autoPartHandling,
                         outsourceAction: parsedOutsourceAction, 
                         collections: collectionsArray, 
