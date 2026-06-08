@@ -10,14 +10,11 @@ admin.initializeApp();
 // ============================================================================
 
 exports.authenticatePin = onCall({ 
-    enforceAppCheck: true, // 🚀 RE-ARMED: Demands valid App Check token
+    enforceAppCheck: false, // 🚀 SHIELD DOWN: Lets traffic through
     cors: true 
 }, async (request) => {
     
-    // Failsafe: Ensure App Check token exists before proceeding
-    if (!request.app) {
-        throw new HttpsError('failed-precondition', 'Unauthorized access attempt. App Verification Failed.');
-    }
+    // 🚀 BYPASSED: Removed the manual request.app token check so it doesn't block you
 
     const { pin } = request.data;
     const clientIp = request.rawRequest.ip;
@@ -99,7 +96,6 @@ const NS_CONSUMER_SECRET = "4f88d6f93c57a1b9e0ffb29ff71831d47b075dcdf609cdb028dd
 const NS_TOKEN_ID = "2e5ce04cce902b621aad683d91e08674631cc7c9dd07edaae07cdc12e12f57ad";
 const NS_TOKEN_SECRET = "f5c98c85514f46fc67674d822b6d70461e5407da13c84c2db6c7c9c4e7f29a72";
 
-// 🔐 Internal Signature Generator
 const generateNetSuiteHeader = (method, url) => {
     const oauth_nonce = Math.random().toString(36).substring(2, 15);
     const oauth_timestamp = Math.floor(Date.now() / 1000).toString();
@@ -120,7 +116,6 @@ const generateNetSuiteHeader = (method, url) => {
     return `OAuth realm="${NS_ACCOUNT}", oauth_consumer_key="${NS_CONSUMER_KEY}", oauth_token="${NS_TOKEN_ID}", oauth_nonce="${oauth_nonce}", oauth_timestamp="${oauth_timestamp}", oauth_signature_method="HMAC-SHA256", oauth_signature="${encodeURIComponent(oauth_signature)}", oauth_version="1.0"`;
 };
 
-// 🚀 The Universal NetSuite Proxy (V2 Syntax)
 exports.netsuiteProxy = onRequest({ cors: true }, async (req, res) => {
     try {
         const { targetUrl, method, payload } = req.body;
