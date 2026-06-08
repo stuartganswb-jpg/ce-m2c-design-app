@@ -47,7 +47,6 @@ const ShopFloor = () => {
 
     // FORMS
     const [millForm, setMillForm] = useState({ partNum: '', woNum: '', soNum: '', item: '', qty: '', reqDate: '', phosphate: 'No', file: null, _sourceCustomOrderId: null });
-    const [dispatchForm, setDispatchForm] = useState({ op: '', routingId: '', woNum: '', targetQty: '', estStart: '', estFinish: '', estHrs: '', notes: '', phosphate: 'No', _sourceCustomOrderId: null, _sourceId: null });
     const [livioForm, setLivioForm] = useState({ desc: '', reqDate: '', file: null });
 
     // MODALS
@@ -133,6 +132,7 @@ const ShopFloor = () => {
             console.error("Failed to write log:", error);
         }
     };
+    
     const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
     const handleDelete = async (col, id) => { if(window.confirm("Delete record?")) { await deleteDoc(doc(shopDb.collection(col), id)); writeLog(`Deleted from ${col}`, 'admin'); } };
     
@@ -142,98 +142,86 @@ const ShopFloor = () => {
     };
 
     // ==========================================
-    // EXECUTION ACTIONS
+    // DATA PIPELINE: HQ -> MILLING -> SCHEDULE
     // ==========================================
-    const handleAddMilling = async () => {
-        if (!millForm.partNum || !millForm.woNum || !millForm.qty) return alert("HQ Part, WO #, and Qty required.");
+    const handleAcceptHQOrder = async () => {
+        if (!millForm.partNum || !millForm.woNum || !millForm.qty) return alert("Please select an order from the HQ Dispatch Queue.");
         
         const routing = routingsMap[millForm.partNum];
+        if (!routing) return alert(`ERROR: No routing exists for Part ID ${millForm.partNum}. Please build its sequence in the Routings tab first.`);
+        
         let totalEstHrs = 0;
         let firstMachine = "Unassigned";
 
-        if (routing && routing.ops) {
-            firstMachine = routing.ops[0]?.machine || "Unassigned";
+        if (routing.ops && routing.ops.length > 0) {
+            firstMachine = routing.ops[0].machine || "Unassigned";
             routing.ops.forEach(op => {
                 const prog = programsMap[op.progId];
                 if(prog) totalEstHrs += ((parseFloat(prog.setupTime)||0) + ((parseFloat(prog.timePerPiece)||0) * millForm.qty)) / 60;
             });
         }
 
-        let fileUrl = null;
-        if (millForm.file) { const fRef = ref(storage, `production_needs/${Date.now()}_${millForm.file.name}`); await uploadBytesResumable(fRef, millForm.file); fileUrl = await getDownloadURL(fRef); }
-        
+        // 1. Move into the machine backlog queue
         await addDoc(shopDb.collection("milling"), { 
             ...millForm, 
             qty: parseFloat(millForm.qty), 
             mach: firstMachine, 
             estHrs: parseFloat(totalEstHrs.toFixed(2)), 
             priority: millForm.reqDate ? new Date(millForm.reqDate).getTime() : 9999999999999, 
-            fileUrl, 
             phosphate: millForm.phosphate === 'Yes', 
             status: 'Backlog',
             t: serverTimestamp() 
         });
         
+        // 2. Remove it from the HQ holding queue
         if (millForm._sourceCustomOrderId) {
             await deleteDoc(doc(db, "shop_custom_orders", millForm._sourceCustomOrderId));
         }
 
-        writeLog(`Added ${millForm.partNum} to backlog`, 'production');
+        writeLog(`Accepted HQ Order ${millForm.woNum} into backlog`, 'production');
         setMillForm({ partNum: '', woNum: '', soNum: '', item: '', qty: '', reqDate: '', phosphate: 'No', file: null, _sourceCustomOrderId: null });
     };
 
-    const pushToTracker = async (m) => {
+    const pushToTrackerQueue = async (m) => {
         await updateDoc(doc(shopDb.collection("milling"), m.id), { status: 'Tracker' });
         writeLog(`Pushed ${m.woNum} to Scheduler Queue`, 'scheduler');
     };
 
-    const prepDispatch = (m) => {
-        setDispatchForm({ 
-            op: '', routingId: m.partNum || '', woNum: m.woNum || '', targetQty: m.qty || '', 
-            estStart: '', estFinish: '', estHrs: m.estHrs || '', 
-            notes: `SO: ${m.soNum||'N/A'} | Desc: ${m.item||'None'}`, 
-            phosphate: m.phosphate ? 'Yes' : 'No', 
-            _sourceId: m.id, 
-            _customFileUrl: m.fileUrl || null, 
-            _reqDate: m.reqDate || null,
-            _sourceCustomOrderId: null 
-        });
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-    };
-
-    const handleDispatch = async () => {
-        if(!dispatchForm.routingId) return alert("Select an HQ Part to dispatch.");
-        const routing = routingsMap[dispatchForm.routingId];
+    const dispatchToAIQueue = async (m) => {
+        const routing = routingsMap[m.partNum];
         const firstOp = routing && routing.ops?.length > 0 ? routing.ops[0] : { machine: 'Unassigned', progId: 'Manual' };
 
+        // 1. Create the Schedule Document (Status: Pending)
         await addDoc(shopDb.collection("schedule"), { 
-            routingId: dispatchForm.routingId, 
+            routingId: m.partNum, 
             currentOpIndex: 0, 
-            op: dispatchForm.op || '', 
+            op: '', // AI or Operator will assign
             mach: firstOp.machine, 
             prog: firstOp.progId, 
-            woNum: dispatchForm.woNum, 
-            targetQty: parseInt(dispatchForm.targetQty) || null, 
-            estStart: dispatchForm.estStart, 
-            estFinish: dispatchForm.estFinish, 
-            reqDate: dispatchForm._reqDate || null, 
-            estHrs: parseFloat(dispatchForm.estHrs) || null, 
-            notes: dispatchForm.notes, 
-            customFileUrl: dispatchForm._customFileUrl || null, 
-            phosphate: dispatchForm.phosphate === 'Yes', 
+            woNum: m.woNum, 
+            targetQty: parseInt(m.qty) || null, 
+            estStart: '', // AI will assign
+            estFinish: '', // AI will assign
+            reqDate: m.reqDate || null, 
+            estHrs: parseFloat(m.estHrs) || null, 
+            notes: `SO: ${m.soNum||'N/A'} | Desc: ${m.item||'None'}`, 
+            customFileUrl: m.fileUrl || null, 
+            phosphate: m.phosphate || false, 
             status: "Pending", 
             totalPausedMs: 0, 
             partialGoodQty: 0, 
             t: serverTimestamp() 
         });
         
-        if(dispatchForm._sourceId) await deleteDoc(doc(shopDb.collection("milling"), dispatchForm._sourceId));
-        if(dispatchForm._sourceCustomOrderId) await deleteDoc(doc(db, "shop_custom_orders", dispatchForm._sourceCustomOrderId));
+        // 2. Remove from Tracker Holding Queue
+        await deleteDoc(doc(shopDb.collection("milling"), m.id));
         
-        writeLog(`Dispatched WO ${dispatchForm.woNum} (OP 1)`, 'scheduler');
-        setDispatchForm({ op: '', routingId: '', woNum: '', targetQty: '', estStart: '', estFinish: '', estHrs: '', notes: '', phosphate: 'No', _sourceCustomOrderId: null, _sourceId: null });
+        writeLog(`Dispatched WO ${m.woNum} to AI Unscheduled Queue`, 'scheduler');
     };
 
+    // ==========================================
+    // EXECUTION ACTIONS
+    // ==========================================
     const aiOptimizeSchedule = async () => {
         if(!window.confirm("✨ AI RECOMMENDED SORT: Group identical Setup Codes on Automated machines, and strictly respect Operator Manual capacity limits?")) return;
         const pendingJobs = schedule.filter(s => s.status === 'Pending');
@@ -355,6 +343,25 @@ const ShopFloor = () => {
         writeLog(`Run finalized: OP ${task.currentOpIndex + 1} of ${task.routingId}`, 'production'); setActiveModal(null);
     };
 
+    const printBinLabel = (job) => {
+        const hqPart = hqParts.find(p => p.id === job.routingId || p.legacyErpId === job.routingId);
+        const bin = hqPart?.manufacturingSpecs?.binLocation || 'N/A';
+        const partName = routingsMap[job.routingId]?.displayName || job.routingId;
+        
+        const zpl = `
+            ^XA
+            ^FO50,50^A0N,40,40^FDWO: ${job.woNum}^FS
+            ^FO50,100^A0N,30,30^FDPart: ${partName}^FS
+            ^FO50,150^A0N,30,30^FDQty: ${job.goodQty}^FS
+            ^FO50,220^A0N,50,50^FDBIN: ${bin}^FS
+            ^FO50,300^BY3,2,70^BCN,70,Y,N,N^FD${job.woNum}^FS
+            ^XZ
+        `;
+        
+        console.log("Sending ZPL to Zebra Printer:", zpl);
+        alert(`🖨️ Zebra Label Spooled for WO ${job.woNum}\nRouting to Bin: ${bin}`);
+    };
+
     const handleExportBatch = async () => {
         const unexported = schedule.filter(s => {
             if (s.status !== 'Completed' || s.erpExported) return false;
@@ -362,10 +369,14 @@ const ShopFloor = () => {
             return routing && s.currentOpIndex === (routing.ops.length - 1);
         });
         if(unexported.length === 0) return alert("No new final operations ready to export.");
-        if(!window.confirm(`Archive ${unexported.length} finished parts to ERP Exported?`)) return;
+        if(!window.confirm(`Archive ${unexported.length} finished parts to ERP Exported? This signals NetSuite synchronization.`)) return;
+        
         const batch = writeBatch(db); const dateStr = new Date().toISOString().split('T')[0];
         unexported.forEach(job => batch.update(doc(shopDb.collection("schedule"), job.id), { erpExported: true, erpExportDate: dateStr }));
-        await batch.commit(); writeLog(`Exported batch to ERP`, 'admin');
+        
+        await batch.commit(); 
+        writeLog(`Exported batch to ERP`, 'admin');
+        alert("✅ Batch Exported. NetSuite Work Order Build routine triggered.");
     };
 
     // ==========================================
@@ -377,48 +388,6 @@ const ShopFloor = () => {
             <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <div style={{ background: '#fff', padding: '40px', borderRadius: '2px', width: activeModal === 'specs' ? '800px' : '600px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)' }}>
                     
-                    {activeModal === 'specs' && (
-                        <div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
-                                <h2 style={{ fontFamily: 'var(--serif)', margin: 0, color: 'var(--ink)', fontSize: '1.8rem', fontWeight: 500 }}>Job Specifications: {modalData.woNum}</h2>
-                                <button onClick={() => setActiveModal(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
-                            </div>
-                            <div style={{ display: 'flex', gap: '30px' }}>
-                                {modalData.imageUrl && (
-                                    <div style={{ flex: 1, border: '1px solid var(--line)', padding: '16px', background: 'var(--paper)' }}>
-                                        <img src={modalData.imageUrl} alt="Part" style={{ width: '100%', objectFit: 'contain' }}/>
-                                    </div>
-                                )}
-                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                                    <div style={{ background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)' }}>
-                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px', letterSpacing: '.1em' }}>Client</div>
-                                        <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{modalData.clientName || 'N/A'}</div>
-                                    </div>
-                                    {modalData.note && (
-                                        <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', borderLeft: '4px solid var(--brass)' }}>
-                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--brass)', marginBottom: '8px', letterSpacing: '.1em' }}>Client / RFI Notes</div>
-                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', whiteSpace: 'pre-wrap', color: 'var(--ink)', lineHeight: '1.5' }}>{modalData.note}</div>
-                                        </div>
-                                    )}
-                                    {modalData.cpqSpecs && Object.keys(modalData.cpqSpecs).length > 0 && (
-                                        <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
-                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '16px', borderBottom: '1px solid var(--line)', paddingBottom: '8px', letterSpacing: '.1em' }}>CPQ Build Specs</div>
-                                            {Object.entries(modalData.cpqSpecs).map(([k, v]) => {
-                                                const part = hqParts.find(p => p.id === v);
-                                                const displayVal = part ? part.itemName : v;
-                                                return (
-                                                    <div key={k} style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', padding: '8px 0' }}>
-                                                        <span style={{ color: 'var(--ink-soft)' }}>{k}:</span><span style={{ fontWeight: 500, color: 'var(--ink)' }}>{displayVal}</span>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
                     {activeModal === 'start' && (
                         <div>
                             <h2 style={{ fontFamily: 'var(--serif)', margin: '0 0 20px 0', color: 'var(--ink)', fontSize: '1.8rem', fontWeight: 500 }}>First Part Verification</h2>
@@ -510,16 +479,19 @@ const ShopFloor = () => {
         return (
             <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                    <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: 0 }}>Active Production Tracker</h2>
+                    <div>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Pipeline Control</span>
+                        <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: 0 }}>Active Production Tracker</h2>
+                    </div>
                     {['admin', 'programmer'].includes(safeUserRole) && <button onClick={aiOptimizeSchedule} style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>✨ AI Optimize Schedule</button>}
                 </div>
 
                 {/* 🚀 QUEUE FROM MILLING BACKLOG */}
                 {trackerQueue.length > 0 && (
-                    <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', borderRadius: '2px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <div style={{ background: '#fff', border: '1px solid var(--brass)', padding: '24px', borderRadius: '2px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
                         <h3 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             Jobs Ready For Dispatch (From Backlog)
-                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>{trackerQueue.length} Pending</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--brass)', letterSpacing: '.1em', border: '1px solid var(--brass)', padding: '4px 8px' }}>{trackerQueue.length} Pending</span>
                         </h3>
                         <div style={{ display: 'flex', overflowX: 'auto', gap: '16px', paddingBottom: '12px' }}>
                             {trackerQueue.map(q => (
@@ -529,44 +501,10 @@ const ShopFloor = () => {
                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Qty: {q.qty}</span>
                                     </div>
                                     <div style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>{routingsMap[q.partNum]?.displayName || q.partNum}</div>
-                                    <button onClick={() => prepDispatch(q)} style={{ width: '100%', background: 'var(--ink)', color: '#fff', border: 'none', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Setup Dispatch Tool</button>
+                                    <button onClick={() => dispatchToAIQueue(q)} style={{ width: '100%', background: 'var(--ink)', color: '#fff', border: 'none', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Dispatch to AI Queue</button>
                                 </div>
                             ))}
                         </div>
-                    </div>
-                )}
-
-                {/* DISPATCH MANUAL OVERRIDE TOOL */}
-                {['admin', 'programmer'].includes(safeUserRole) && (
-                    <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', borderRadius: '2px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                        
-                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Manual Schedule / Override Dispatch Tool</label>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px' }}>
-                            <select value={dispatchForm.op} onChange={e => setDispatchForm({...dispatchForm, op: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="">Operator (For OP 1)...</option>{users.filter(u => !u.hidden && ['operator', 'programmer'].includes(u.role?.toLowerCase())).map(u => <option key={u.id} value={u.name}>{u.name}</option>)}</select>
-                            
-                            <select value={dispatchForm.routingId} onChange={e => { 
-                                const rId = e.target.value; const routing = routingsMap[rId]; 
-                                if(routing && routing.ops?.length > 0) {
-                                    const p = programsMap[routing.ops[0].progId];
-                                    const est = p && dispatchForm.targetQty ? (((parseFloat(p.setupTime)||0)+((parseFloat(p.timePerPiece)||0)*dispatchForm.targetQty))/60).toFixed(2) : '';
-                                    setDispatchForm({...dispatchForm, routingId: rId, estHrs: est});
-                                } else { setDispatchForm({...dispatchForm, routingId: rId, estHrs: ''}); }
-                            }} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', gridColumn: 'span 2' }}>
-                                <option value="">Select HQ Part (Routing)...</option>
-                                {routings.map(r => <option key={r.id} value={r.partId}>{r.displayName || r.partId} ({r.ops?.length || 0} Ops)</option>)}
-                            </select>
-
-                            <input type="text" placeholder="WO #" value={dispatchForm.woNum} onChange={e => setDispatchForm({...dispatchForm, woNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 2fr 1fr', gap: '16px', marginTop: '16px' }}>
-                            <input type="number" placeholder="Qty" value={dispatchForm.targetQty} onChange={e => setDispatchForm({...dispatchForm, targetQty: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                            <input type="date" value={dispatchForm.estStart} onChange={e => setDispatchForm({...dispatchForm, estStart: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                            <input type="date" value={dispatchForm.estFinish} onChange={e => setDispatchForm({...dispatchForm, estFinish: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                            <input type="number" placeholder="Est Hrs (OP 1)" step="0.1" value={dispatchForm.estHrs} onChange={e => setDispatchForm({...dispatchForm, estHrs: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                            <input type="text" placeholder="Notes" value={dispatchForm.notes} onChange={e => setDispatchForm({...dispatchForm, notes: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                            <select value={dispatchForm.phosphate} onChange={e => setDispatchForm({...dispatchForm, phosphate: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="No">Phos: No</option><option value="Yes">Phos: Yes</option></select>
-                        </div>
-                        <button onClick={handleDispatch} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', marginTop: '24px', transition: 'all 0.2s' }}>Dispatch WO to Floor</button>
                     </div>
                 )}
                 
@@ -585,7 +523,7 @@ const ShopFloor = () => {
                             </tr>
                         </thead>
                         <tbody>
-                            {activeTracker.length === 0 && <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>Tracker is empty.</td></tr>}
+                            {activeTracker.length === 0 && <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>Tracker is empty. Waiting for HQ Dispatch.</td></tr>}
                             {activeTracker.map(t => {
                                 const canRun = t.op === user.name || safeUserRole === 'admin';
                                 const rowColor = t.status === 'Running' ? 'var(--paper-2)' : (t.status === 'Paused' ? '#fdf2f2' : (t.status === 'Setup' ? 'var(--paper)' : '#fff'));
@@ -639,15 +577,14 @@ const ShopFloor = () => {
             grouped[cat].push(m); 
         });
 
-        const inHouseParts = hqParts.filter(p => p.manufacturingSpecs?.isInHouse !== false);
-
         return (
             <div>
                 <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: '0 0 24px 0' }}>Production Backlog</h2>
+                
+                {/* STRICT HQ DISPATCH TOOL */}
                 <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px', marginBottom: '40px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                    
-                    <div style={{ background: 'var(--paper-2)', padding: '16px', marginBottom: '16px', border: '1px solid var(--line)' }}>
-                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Method 1: Inject from RTG Dispatch Queue</label>
+                    <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
+                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>HQ App-Generated Work Orders</label>
                         <select onChange={(e) => {
                             const order = customOrders.find(o => o.id === e.target.value);
                             if (order) {
@@ -663,37 +600,16 @@ const ShopFloor = () => {
                                     _sourceCustomOrderId: order.id
                                 });
                             }
-                        }} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
-                            <option value="">-- Select Pending Order from RTG --</option>
+                        }} style={{ padding: '16px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '1rem', outline: 'none', background: '#fff' }}>
+                            <option value="">-- Select Pending Order from RTG Dispatch --</option>
                             {customOrders.filter(o => o.status === 'Pending').map(o => (
                                 <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
                             ))}
                         </select>
+                        <button onClick={handleAcceptHQOrder} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', marginTop: '16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Accept HQ Order to Machine Backlog</button>
                     </div>
-
-                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Method 2: Manual Entry (Select Master HQ Part)</label>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '16px' }}>
-                        <input type="text" placeholder="Internal Description (Optional)" value={millForm.item} onChange={e => setMillForm({...millForm, item: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                        <input type="number" placeholder="Target Qty" value={millForm.qty} onChange={e => setMillForm({...millForm, qty: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px' }}>
-                        <select value={millForm.partNum} onChange={e => setMillForm({...millForm, partNum: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper)' }}>
-                            <option value="">Select HQ Part (In-House)...</option>
-                            {inHouseParts.map(p => {
-                                const id = p.legacyErpId && p.legacyErpId !== "PENDING" ? p.legacyErpId : p.itemId || p.id;
-                                return <option key={p.id} value={p.id}>{id} - {p.itemName || p.name}</option>;
-                            })}
-                        </select>
-                        <input type="text" placeholder="WO #" value={millForm.woNum} onChange={e => setMillForm({...millForm, woNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                        <input type="text" placeholder="SO #" value={millForm.soNum} onChange={e => setMillForm({...millForm, soNum: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
-                    </div>
-                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px', alignItems: 'end' }}>
-                        <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Req Date</label><input type="date" value={millForm.reqDate} onChange={e => setMillForm({...millForm, reqDate: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} /></div>
-                        <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Print (Opt)</label><input type="file" onChange={e => setMillForm({...millForm, file: e.target.files[0]})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} /></div>
-                        <div><label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Phosphate?</label><select value={millForm.phosphate} onChange={e => setMillForm({...millForm, phosphate: e.target.value})} style={{ padding: '12px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}><option value="No">No</option><option value="Yes">Yes</option></select></div>
-                    </div>
-                    <button onClick={handleAddMilling} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', marginTop: '24px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Add to Backlog</button>
                 </div>
+
                 {Object.keys(grouped).map(cat => {
                     const groupItems = grouped[cat].sort((a, b) => a.priority - b.priority);
                     if (groupItems.length === 0 && cat === 'Uncategorized') return null;
@@ -710,7 +626,7 @@ const ShopFloor = () => {
                                             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink-soft)', marginBottom: '8px' }}>WO: <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{m.woNum}</span> {m.soNum && `| SO: ${m.soNum}`}</div>
                                             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink-soft)', marginBottom: '8px' }}>Target: <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{m.qty}</span></div>
                                             {m.reqDate && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '12px' }}>Req By: {m.reqDate}</div>}
-                                            {['admin', 'programmer'].includes(safeUserRole) && <button onClick={() => pushToTracker(m)} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px', width: '100%', marginTop: '20px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Push to Tracker Queue</button>}
+                                            {['admin', 'programmer'].includes(safeUserRole) && <button onClick={() => pushToTrackerQueue(m)} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px', width: '100%', marginTop: '20px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Push to Tracker Queue</button>}
                                         </div>
                                     )})}
                                 </div>
@@ -718,129 +634,6 @@ const ShopFloor = () => {
                         </div>
                     );
                 })}
-            </div>
-        );
-    };
-
-    const renderCustomTab = () => {
-        const activeOrders = customOrders.filter(o => o.status !== 'Completed' && o.status !== 'Sent to Plating').sort((a,b) => a.priority - b.priority);
-        const rods = activeOrders.filter(o => o.category === 'Cut to Size Rods');
-        const fabs = activeOrders.filter(o => o.category === 'Custom Fabrication');
-
-        const CustomCard = ({ order }) => {
-            const printZebraLabel = (order) => {
-                const zpl = `
-                    ^XA
-                    ^FO50,50^A0N,40,40^FDWO: ${order.woNum}^FS
-                    ^FO50,100^A0N,30,30^FDSO: ${order.soNum}^FS
-                    ${order.isOutsourced ? `^FO50,150^A0N,30,30^FDFinish: ${order.finishRecipe}^FS` : ''}
-                    ${order.isOutsourced ? `^FO50,200^A0N,30,30^FDService/Ea: $${order.outsourcePrice}^FS` : ''}
-                    ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
-                    ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
-                    ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
-                    ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.woNum}^FS
-                    ^XZ
-                `;
-                console.log("Sending ZPL to Zebra Printer:", zpl);
-                alert(`🖨️ Zebra Label Spooled for ${order.woNum}`);
-            };
-
-            const handleStartProcess = async () => {
-                await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process' });
-                await addDoc(collection(db, "global_messages"), { 
-                    sender: 'System', sourceApp: 'SHOP', target: 'FINISHING', 
-                    msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true 
-                });
-            };
-
-            const handleCompleteWithLabel = async () => {
-                const actionText = order.isOutsourced ? 'complete and send to PLATING DISPATCH' : 'complete and print Zebra label';
-                if (!window.confirm(`Mark ${order.woNum} ${actionText}?`)) return;
-                
-                printZebraLabel(order);
-                
-                const finalStatus = order.isOutsourced ? 'Sent to Plating' : 'Completed';
-
-                await updateDoc(doc(db, "shop_custom_orders", order.id), { 
-                    status: finalStatus, completedAt: serverTimestamp(), completedBy: user.name 
-                });
-
-                if (order.isOutsourced) {
-                    await addDoc(collection(db, "global_messages"), { 
-                        sender: 'System', sourceApp: 'SHOP', target: 'ALL', 
-                        msg: `🚚 OUTSOURCE DISPATCH: Custom parts for ${order.woNum} sent to plating/finishing vendor.`, t: serverTimestamp(), isSystem: true 
-                    });
-                } else {
-                    await addDoc(collection(db, "global_messages"), { 
-                        sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', 
-                        msg: `STAGING ALERT: Custom parts for ${order.woNum} are arriving at staging.`, t: serverTimestamp(), isSystem: true 
-                    });
-
-                    const pendingForSO = customOrders.filter(o => o.soNum === order.soNum && o.status !== 'Completed' && o.status !== 'Sent to Plating' && o.id !== order.id);
-                    if (pendingForSO.length === 0) {
-                        await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `✅ CUSTOM ORDER READY: All custom parts for SO ${order.soNum} have finished machining and are ready for the Finishing Floor!`, t: serverTimestamp(), readBy: [], isSystem: true });
-                    }
-                }
-            };
-
-            const isRunning = order.status === 'In Process';
-
-            return (
-                <div style={{ background: '#fff', border: '1px solid var(--line)', borderLeft: isRunning ? '4px solid var(--brass)' : '1px solid var(--line)', padding: '24px', marginBottom: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-                        <h4 style={{ margin: 0, fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.item || order.partNum}</h4>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: isRunning ? 'var(--paper)' : 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '4px 8px' }}>
-                                {isRunning ? 'In Process' : `WO: ${order.woNum}`}
-                            </span>
-                            {order.isOutsourced && (
-                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', padding: '4px 8px' }}>
-                                    Outsourced Finish
-                                </span>
-                            )}
-                        </div>
-                    </div>
-                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '16px' }}>SO: {order.soNum}</div>
-                    <div style={{ display: 'flex', gap: '24px', marginBottom: '20px', background: 'var(--paper)', padding: '16px', border: '1px solid var(--line)' }}>
-                        <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.qty}</span></div>
-                        {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
-                        <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Deadline</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1rem', color: 'var(--ink)' }}>{order.reqDate || 'ASAP'}</span></div>
-                    </div>
-                    
-                    <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
-                        <button onClick={() => { setModalData(order); setActiveModal('specs'); }} style={{ flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Specs</button>
-                        
-                        {!isRunning ? (
-                            <button onClick={handleStartProcess} style={{ flex: 1.5, background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Start Process</button>
-                        ) : (
-                            <button onClick={handleCompleteWithLabel} style={{ flex: 1.5, background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
-                                {order.isOutsourced ? 'Send to Plating' : 'Complete & Label'}
-                            </button>
-                        )}
-                    </div>
-                </div>
-            );
-        };
-
-        return (
-            <div>
-                <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '24px' }}>Custom Orders Inbox</h2>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
-                    <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                        <h3 style={{ margin: '0 0 24px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>
-                            Cut-to-Size Rods
-                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{rods.length} Pending</span>
-                        </h3>
-                        {rods.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No pending rod orders.</div> : rods.map(o => <CustomCard key={o.id} order={o} />)}
-                    </div>
-                    <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                        <h3 style={{ margin: '0 0 24px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>
-                            Custom Fabrication
-                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{fabs.length} Pending</span>
-                        </h3>
-                        {fabs.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No pending custom fab orders.</div> : fabs.map(o => <CustomCard key={o.id} order={o} />)}
-                    </div>
-                </div>
             </div>
         );
     };
@@ -866,15 +659,19 @@ const ShopFloor = () => {
                                 <th style={{ padding: '16px 24px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>SO #</th>
                                 <th style={{ padding: '16px 24px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Part #</th>
                                 <th style={{ padding: '16px 24px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Good Qty Completed</th>
+                                <th style={{ padding: '16px 24px', borderBottom: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Logistics</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {unexported.length === 0 ? <tr><td colSpan="4" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>No unexported completed jobs.</td></tr> : unexported.map(h => (
+                            {unexported.length === 0 ? <tr><td colSpan="5" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>No unexported completed jobs.</td></tr> : unexported.map(h => (
                                 <tr key={h.id} style={{ borderBottom: '1px solid var(--line)' }}>
                                     <td style={{ padding: '16px 24px', color: 'var(--ink)', fontWeight: 500, fontSize: '1.05rem' }}>{h.woNum}</td>
                                     <td style={{ padding: '16px 24px', color: 'var(--ink-soft)' }}>{h.notes?.includes("SO:") ? h.notes.split("SO:")[1].split("|")[0].trim() : '-'}</td>
                                     <td style={{ padding: '16px 24px', color: 'var(--ink)', fontWeight: 500 }}>{routingsMap[h.routingId]?.displayName || h.routingId}</td>
                                     <td style={{ padding: '16px 24px', textAlign: 'center', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{h.goodQty}</td>
+                                    <td style={{ padding: '16px 24px', textAlign: 'right' }}>
+                                        <button onClick={() => printBinLabel(h)} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 16px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨️ Print Bin Label</button>
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>
@@ -973,6 +770,100 @@ const ShopFloor = () => {
             </div>
         </div>
     );
+
+    const renderCustomTab = () => {
+        // Keeping logic for Custom Fab orders from RTG
+        const activeOrders = customOrders.filter(o => o.status !== 'Completed' && o.status !== 'Sent to Plating').sort((a,b) => a.priority - b.priority);
+        const rods = activeOrders.filter(o => o.category === 'Cut to Size Rods');
+        const fabs = activeOrders.filter(o => o.category === 'Custom Fabrication');
+
+        const CustomCard = ({ order }) => {
+            const printZebraLabel = (order) => {
+                const zpl = `
+                    ^XA
+                    ^FO50,50^A0N,40,40^FDWO: ${order.woNum}^FS
+                    ^FO50,100^A0N,30,30^FDSO: ${order.soNum}^FS
+                    ${order.isOutsourced ? `^FO50,150^A0N,30,30^FDFinish: ${order.finishRecipe}^FS` : ''}
+                    ${order.isOutsourced ? `^FO50,200^A0N,30,30^FDService/Ea: $${order.outsourcePrice}^FS` : ''}
+                    ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
+                    ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
+                    ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
+                    ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.woNum}^FS
+                    ^XZ
+                `;
+                console.log("Sending ZPL to Zebra Printer:", zpl);
+                alert(`🖨️ Zebra Label Spooled for ${order.woNum}`);
+            };
+
+            const handleStartProcess = async () => {
+                await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process' });
+                await addDoc(collection(db, "global_messages"), { 
+                    sender: 'System', sourceApp: 'SHOP', target: 'FINISHING', 
+                    msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true 
+                });
+            };
+
+            const handleCompleteWithLabel = async () => {
+                const actionText = order.isOutsourced ? 'complete and send to PLATING DISPATCH' : 'complete and print Zebra label';
+                if (!window.confirm(`Mark ${order.woNum} ${actionText}?`)) return;
+                
+                printZebraLabel(order);
+                const finalStatus = order.isOutsourced ? 'Sent to Plating' : 'Completed';
+                await updateDoc(doc(db, "shop_custom_orders", order.id), { status: finalStatus, completedAt: serverTimestamp(), completedBy: user.name });
+
+                if (order.isOutsourced) {
+                    await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `🚚 OUTSOURCE DISPATCH: Custom parts for ${order.woNum} sent to plating/finishing vendor.`, t: serverTimestamp(), isSystem: true });
+                } else {
+                    await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', msg: `STAGING ALERT: Custom parts for ${order.woNum} are arriving at staging.`, t: serverTimestamp(), isSystem: true });
+                }
+            };
+
+            const isRunning = order.status === 'In Process';
+
+            return (
+                <div style={{ background: '#fff', border: '1px solid var(--line)', borderLeft: isRunning ? '4px solid var(--brass)' : '1px solid var(--line)', padding: '24px', marginBottom: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                        <h4 style={{ margin: 0, fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.item || order.partNum}</h4>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: isRunning ? 'var(--paper)' : 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '4px 8px' }}>
+                                {isRunning ? 'In Process' : `WO: ${order.woNum}`}
+                            </span>
+                        </div>
+                    </div>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '16px' }}>SO: {order.soNum}</div>
+                    <div style={{ display: 'flex', gap: '24px', marginBottom: '20px', background: 'var(--paper)', padding: '16px', border: '1px solid var(--line)' }}>
+                        <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.qty}</span></div>
+                        {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
+                    </div>
+                    <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
+                        {!isRunning ? (
+                            <button onClick={handleStartProcess} style={{ flex: 1.5, background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Start Process</button>
+                        ) : (
+                            <button onClick={handleCompleteWithLabel} style={{ flex: 1.5, background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
+                                {order.isOutsourced ? 'Send to Plating' : 'Complete & Label'}
+                            </button>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        return (
+            <div>
+                <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '24px' }}>Custom Orders Inbox</h2>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
+                    <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <h3 style={{ margin: '0 0 24px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>Cut-to-Size Rods</h3>
+                        {rods.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No pending rod orders.</div> : rods.map(o => <CustomCard key={o.id} order={o} />)}
+                    </div>
+                    <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <h3 style={{ margin: '0 0 24px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>Custom Fabrication</h3>
+                        {fabs.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No pending custom fab orders.</div> : fabs.map(o => <CustomCard key={o.id} order={o} />)}
+                    </div>
+                </div>
+            </div>
+        );
+    };
 
     if (!user) {
         return (
