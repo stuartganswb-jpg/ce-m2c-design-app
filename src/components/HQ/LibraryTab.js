@@ -23,7 +23,8 @@ const DEFAULT_SYSTEM_WINDOWS = {
   projections: ['ce', 'm2c', 'uniquity', 'leyla'] 
 };
 
-const LibraryTab = ({ currentUser, activeBrand }) => {
+// 🚀 NEW: Added focusItemId and clearFocus props
+const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [isAdmin] = useState(true);
 
   const [inventory, setInventory] = useState([]);
@@ -135,6 +136,18 @@ const LibraryTab = ({ currentUser, activeBrand }) => {
       const unsubscribe = onSnapshot(q, (snapshot) => { setActiveBomPins(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))); });
       return () => unsubscribe();
   }, [activePart]);
+
+  // 🚀 NEW: Watch for focusItemId from parent navigation (like Stock View)
+  useEffect(() => {
+      if (focusItemId && inventory.length > 0) {
+          const partToFocus = inventory.find(p => p.id === focusItemId);
+          if (partToFocus) {
+              openPartDetails(partToFocus);
+              // Clear it so it doesn't get stuck open if they navigate away and back normally
+              if (clearFocus) clearFocus();
+          }
+      }
+  }, [focusItemId, inventory, clearFocus]);
 
   // --- DYNAMIC DICTIONARY GENERATORS ---
   const dynamicProdTypes = Array.from(new Set([

@@ -4,9 +4,10 @@ import { collection, onSnapshot, query, doc, setDoc } from "firebase/firestore";
 
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
-const StockViewTab = ({ currentUser, activeBrand }) => {
+const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [hqParts, setHqParts] = useState([]);
     const [nsStock, setNsStock] = useState({});
+    const [lastSyncTime, setLastSyncTime] = useState(""); // NEW: Tracks when data was last pulled
     const [vendors, setVendors] = useState([]);
     
     // BUILDER STATE
@@ -32,13 +33,23 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
     };
 
    useEffect(() => {
+        // NEW: Check session storage for cached inventory so it survives tab switches
+        const cachedStock = sessionStorage.getItem(`nsStock_${activeBrand}`);
+        const cachedTime = sessionStorage.getItem(`nsStockTime_${activeBrand}`);
+        if (cachedStock) {
+            try {
+                setNsStock(JSON.parse(cachedStock));
+                if (cachedTime) setLastSyncTime(cachedTime);
+            } catch (e) {
+                console.error("Failed to parse cached stock data");
+            }
+        }
+
         const q = query(collection(db, "Approved_Designs"));
         const unsubParts = onSnapshot(q, (snap) => {
-            // NEW: Added the filter to block cross-brand inventory
             let parts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
                 .filter(p => p.brandId === activeBrand || (p.sharedBrands && p.sharedBrands.includes(activeBrand))); 
             
-            // SORT ALPHABETICALLY BY ERP ID OR ITEM NAME
             parts.sort((a, b) => {
                 const strA = (a.legacyErpId || a.itemName || "").toUpperCase();
                 const strB = (b.legacyErpId || b.itemName || "").toUpperCase();
@@ -59,7 +70,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
         });
 
         return () => { unsubParts(); unsubLists(); unsubCollections(); };
-    }, []);
+    }, [activeBrand]);
 
     const pullNetSuiteStock = async () => {
         setIsSyncing(true);
@@ -137,6 +148,13 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                 });
                 
                 setNsStock(stockMap);
+                
+                // NEW: Save to Session Storage
+                const currentTime = new Date().toLocaleTimeString();
+                setLastSyncTime(currentTime);
+                sessionStorage.setItem(`nsStock_${activeBrand}`, JSON.stringify(stockMap));
+                sessionStorage.setItem(`nsStockTime_${activeBrand}`, currentTime);
+
             } else {
                 addLog("No ERP IDs found in HQ catalog to sync quantities.", "warn");
             }
@@ -440,9 +458,18 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
             {/* HEADER & FILTER BAR */}
             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
                 {/* TITLE ROW */}
-                <div>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Live NetSuite Inventory Integration</span>
-                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>ERP Stock & Sourcing View</h2>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Live NetSuite Inventory Integration</span>
+                        <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>ERP Stock & Sourcing View</h2>
+                    </div>
+                    {/* NEW: Last Sync Time Indicator */}
+                    {lastSyncTime && (
+                        <div style={{ textAlign: 'right' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Cached Data From</span>
+                            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)' }}>{lastSyncTime}</div>
+                        </div>
+                    )}
                 </div>
                 
                 {/* ADVANCED FILTER BAR ROW */}
@@ -521,7 +548,23 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                                             {item.legacyErpId || item.itemId}
                                             {item.manufacturingSpecs?.isInHouse === false && <span style={{display: 'block', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px', textTransform: 'uppercase'}}>Outsourced</span>}
                                         </td>
-                                        <td style={{ padding: '16px 20px', fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>{item.itemName}</td>
+                                        
+                                        {/* NEW: Clickable Item Name Link */}
+                                        <td 
+                                            onClick={() => onNavigateToLibrary && onNavigateToLibrary(item.id)}
+                                            style={{ 
+                                                padding: '16px 20px', 
+                                                fontWeight: 500, 
+                                                color: 'var(--brass)', 
+                                                fontSize: '0.95rem',
+                                                cursor: onNavigateToLibrary ? 'pointer' : 'default',
+                                                textDecoration: onNavigateToLibrary ? 'underline' : 'none'
+                                            }}
+                                            title={onNavigateToLibrary ? "Open in Master Library" : ""}
+                                        >
+                                            {item.itemName}
+                                        </td>
+                                        
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>{item.manufacturingSpecs?.binLocation || '-'}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink)' }}>{item.stock.onHand}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', fontWeight: 500, color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>{item.stock.available}</td>

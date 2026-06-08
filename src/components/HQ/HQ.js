@@ -79,6 +79,9 @@ function HQ() {
   const [activeBrand, setActiveBrand] = useState(null);
   const [activeTab, setActiveTab] = useState(TABS[0]);
 
+  // NEW: State to hold an item ID we want to immediately open in the Master Library
+  const [libraryFocusItemId, setLibraryFocusItemId] = useState(null);
+
   const [globalCart, setGlobalCart] = useState(() => {
     try {
         const savedCart = localStorage.getItem('hq_global_cart');
@@ -310,7 +313,17 @@ function HQ() {
             {activeTab === '1.5 Node Grouping' && <NodeClusterTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '2. Visual Assembly' && <VisualAssemblyTab currentUser={user.name} activeBrand={activeBrand.id} onProceed={() => setActiveTab('3. BOM Engine')} />}
             {activeTab === '3. BOM Engine' && <BOMTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === '4. Master Library' && <LibraryTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            
+            {/* 🚀 Wired up focusItemId for auto-opening parts from other tabs */}
+            {activeTab === '4. Master Library' && (
+                <LibraryTab 
+                    currentUser={user.name} 
+                    activeBrand={activeBrand.id} 
+                    focusItemId={libraryFocusItemId}
+                    clearFocus={() => setLibraryFocusItemId(null)}
+                />
+            )}
+            
             {activeTab === '4.5 Mass Update' && <LibraryMassUpdateTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '6. Instructions' && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '7. Packaging' && <PackagingTab currentUser={user.name} activeBrand={activeBrand.id} />}
@@ -319,16 +332,23 @@ function HQ() {
             {activeTab === '9.5 UPS Shipping' && <UPSShippingCalculator currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '10. External Co-Op' && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '10.5 Project Mgmt' && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            
-            {/* 🚀 Wired up writeLog to OS Comms */}
             {activeTab === '10.7 OS Comms' && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={logHqAction} />}
-            
-            {/* 🚀 Wired up writeLog to Admin Tab */}
             {activeTab === '11. System Admin' && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} writeLog={logHqAction} />}
-            
             {activeTab === '11.1 NetSuite Sync' && <NetSuiteSyncTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '12. ERP Push / Pull' && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === '12.5 Stock View' && <StockViewTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            
+            {/* 🚀 Wired up onNavigateToLibrary to set the focus ID and switch tabs */}
+            {activeTab === '12.5 Stock View' && (
+                <StockViewTab 
+                    currentUser={user.name} 
+                    activeBrand={activeBrand.id} 
+                    onNavigateToLibrary={(itemId) => {
+                        setLibraryFocusItemId(itemId);
+                        setActiveTab('4. Master Library');
+                    }}
+                />
+            )}
+            
             {activeTab === '13. RTG Dispatch' && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '14. Asset Gallery' && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '14.5 Batch Processor' && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
