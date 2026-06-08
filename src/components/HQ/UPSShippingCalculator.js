@@ -505,9 +505,11 @@ function IntlCalculator() {
     const r = regionList.find(x => x.label === regionLabel);
     if (!r) return null;
     if (r.zone !== undefined) return r.zone;
-    if (svc.key.startsWith('wwe')) return r.wwe ?? null;
-    if (svc.key.startsWith('wws')) return r.wws ?? null;
+    
     if (svc.key.startsWith('wwex')) return r.wwex ?? null;
+    if (svc.key.startsWith('wws')) return r.wws ?? null;
+    if (svc.key.startsWith('wwe')) return r.wwe ?? null;
+    
     return null;
   }, [regionList, svc]);
 
@@ -631,9 +633,10 @@ function IntlCalculator() {
             {regionList.map(r => {
               let zone = null;
               if (r.zone !== undefined) zone = r.zone;
-              else if (svc.key.startsWith('wwe')) zone = r.wwe;
-              else if (svc.key.startsWith('wws')) zone = r.wws;
               else if (svc.key.startsWith('wwex')) zone = r.wwex;
+              else if (svc.key.startsWith('wws')) zone = r.wws;
+              else if (svc.key.startsWith('wwe')) zone = r.wwe;
+              
               return (
                 <option key={r.label} value={r.label} disabled={!zone}>
                   {r.label}{!zone ? ' (not served)' : ''}
