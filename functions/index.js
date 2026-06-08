@@ -10,11 +10,14 @@ admin.initializeApp();
 // ============================================================================
 
 exports.authenticatePin = onCall({ 
-    enforceAppCheck: false, // 🚀 SHIELD DOWN: Lets traffic through
+    enforceAppCheck: true, // 🚀 RE-ARMED: Demands valid App Check token
     cors: true 
 }, async (request) => {
     
-    // 🚀 BYPASSED: Removed the manual request.app token check so it doesn't block you
+    // Failsafe: Ensure App Check token exists before proceeding
+    if (!request.app) {
+        throw new HttpsError('failed-precondition', 'Unauthorized access attempt. App Verification Failed.');
+    }
 
     const { pin } = request.data;
     const clientIp = request.rawRequest.ip;
