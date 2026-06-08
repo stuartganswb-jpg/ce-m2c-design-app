@@ -1437,4 +1437,4 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     );
 };
 
-export default LibraryTab;
+export default LibraryMassUpdateTab;
