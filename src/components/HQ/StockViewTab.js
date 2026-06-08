@@ -7,7 +7,7 @@ const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [hqParts, setHqParts] = useState([]);
     const [nsStock, setNsStock] = useState({});
-    const [lastSyncTime, setLastSyncTime] = useState(""); // NEW: Tracks when data was last pulled
+    const [lastSyncTime, setLastSyncTime] = useState(""); 
     const [vendors, setVendors] = useState([]);
     
     // BUILDER STATE
@@ -26,6 +26,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [typeFilter, setTypeFilter] = useState("");
     const [collectionFilter, setCollectionFilter] = useState("");
     const [watchlistFilter, setWatchlistFilter] = useState(""); 
+    
+    // NEW ALARM FILTERS
+    const [filterBelowRop, setFilterBelowRop] = useState(false);
+    const [filterOnBo, setFilterOnBo] = useState(false);
 
     const addLog = (msg, type = 'info') => {
         const time = new Date().toLocaleTimeString();
@@ -33,7 +37,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     };
 
    useEffect(() => {
-        // NEW: Check session storage for cached inventory so it survives tab switches
         const cachedStock = sessionStorage.getItem(`nsStock_${activeBrand}`);
         const cachedTime = sessionStorage.getItem(`nsStockTime_${activeBrand}`);
         if (cachedStock) {
@@ -149,7 +152,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 
                 setNsStock(stockMap);
                 
-                // NEW: Save to Session Storage
                 const currentTime = new Date().toLocaleTimeString();
                 setLastSyncTime(currentTime);
                 sessionStorage.setItem(`nsStock_${activeBrand}`, JSON.stringify(stockMap));
@@ -159,7 +161,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 addLog("No ERP IDs found in HQ catalog to sync quantities.", "warn");
             }
 
-            // STEP 2: SYNC ITEM METADATA (Vendors, Watchlists, Collections, Bins)
+            // STEP 2: SYNC ITEM METADATA
             addLog("Initiating SuiteQL pull for Item Metadata...", "info");
             
             const typeFilter = "item.itemtype IN ('InvtPart', 'Assembly')";
@@ -317,7 +319,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         setIsSyncing(false);
     };
 
-    // ALGORITHM: OUTSOURCED PURCHASING
     const calculateSuggestedPOQty = (available, rop, moq, leadTime) => {
         if (available > rop) return 0;
         const dynamicRateOfSale = 1.5; 
@@ -327,7 +328,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         return Math.ceil(suggested);
     };
 
-    // ALGORITHM: IN-HOUSE PRODUCTION (Factoring in constraints & committed stock)
     const calculateSuggestedWOQty = (available, rop, moq, leadTime, committed, backorder) => {
         if (available > rop && backorder <= 0 && committed <= available) return 0;
         const productionBuffer = leadTime ? (leadTime * 1.2) : 5; 
@@ -337,12 +337,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     };
 
     const handleOrderQtyChange = (partId, qty) => {
-        setOrderDrafts(prev => ({ ...prev, [partId]: parseInt(qty) || 0 }));
+        setOrderDrafts(prev => ({ ...prev, [partId]: qty === "" ? "" : Math.max(0, parseInt(qty) || 0) }));
     };
 
     const generatePOPayload = () => {
         const lineItems = Object.entries(orderDrafts).map(([partId, qty]) => {
-            if (qty <= 0) return null;
+            if (!qty || qty <= 0) return null;
             const part = hqParts.find(p => p.id === partId);
             return {
                 itemId: part.legacyErpId || part.itemId,
@@ -353,7 +353,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             };
         }).filter(Boolean);
 
-        if (lineItems.length === 0) return alert("No items have quantities greater than 0.");
+        if (lineItems.length === 0) return alert("No items have quantities entered greater than 0.");
 
         const poPayload = { vendor: activeVendor, subsidiary: "2", memo: "Auto-Generated via Fab-OS Stock View", items: lineItems };
 
@@ -372,7 +372,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
 
     const generateWOPayload = () => {
         const lineItems = Object.entries(orderDrafts).map(([partId, qty]) => {
-            if (qty <= 0) return null;
+            if (!qty || qty <= 0) return null;
             const part = hqParts.find(p => p.id === partId);
             return {
                 itemId: part.legacyErpId || part.itemId,
@@ -382,7 +382,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             };
         }).filter(Boolean);
 
-        if (lineItems.length === 0) return alert("No items have quantities greater than 0.");
+        if (lineItems.length === 0) return alert("No items have quantities entered greater than 0.");
 
         const woPayload = { subsidiary: "2", memo: "Auto-Generated via Fab-OS Stock View", department: "Production", items: lineItems };
 
@@ -442,7 +442,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const wl = specs.watchList || specs.customData?.watchlist || "NONE";
         let matchesWatchlist = watchlistFilter === "" || wl.toUpperCase() === watchlistFilter.toUpperCase();
         
-        return matchesSearch && matchesType && matchesCollection && matchesClass && matchesWatchlist;
+        // NEW ALARM FILTERS
+        let matchesRop = !filterBelowRop || part.isLowStock;
+        let matchesBo = !filterOnBo || part.stock.backorder > 0;
+
+        return matchesSearch && matchesType && matchesCollection && matchesClass && matchesWatchlist && matchesRop && matchesBo;
     });
 
     let displayItems = baseFilteredItems;
@@ -463,7 +467,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Live NetSuite Inventory Integration</span>
                         <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>ERP Stock & Sourcing View</h2>
                     </div>
-                    {/* NEW: Last Sync Time Indicator */}
                     {lastSyncTime && (
                         <div style={{ textAlign: 'right' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Cached Data From</span>
@@ -508,6 +511,18 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         disabled={activeBuilder === 'PO' && !!activeVendor}
                         style={{ flex: 1.5, minWidth: '200px', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} 
                     />
+
+                    {/* NEW ALARM FILTERS */}
+                    <div style={{ display: 'flex', gap: '16px', alignItems: 'center', padding: '0 12px' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: filterBelowRop ? '#d9534f' : 'var(--ink-soft)' }}>
+                            <input type="checkbox" checked={filterBelowRop} onChange={e => setFilterBelowRop(e.target.checked)} />
+                            Below ROP
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: filterOnBo ? '#d9534f' : 'var(--ink-soft)' }}>
+                            <input type="checkbox" checked={filterOnBo} onChange={e => setFilterOnBo(e.target.checked)} />
+                            On BO
+                        </label>
+                    </div>
                     
                     <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '12px 24px', background: isSyncing ? 'var(--paper)' : 'var(--ink)', color: isSyncing ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s', whiteSpace: 'nowrap' }}>
                         {isSyncing ? 'Syncing...' : 'Pull NetSuite Stock'}
@@ -549,7 +564,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             {item.manufacturingSpecs?.isInHouse === false && <span style={{display: 'block', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px', textTransform: 'uppercase'}}>Outsourced</span>}
                                         </td>
                                         
-                                        {/* NEW: Clickable Item Name Link */}
                                         <td 
                                             onClick={() => onNavigateToLibrary && onNavigateToLibrary(item.id)}
                                             style={{ 
@@ -628,7 +642,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         ? calculateSuggestedPOQty(item.stock.available, item.rop, item.moq, item.leadTime)
                                         : calculateSuggestedWOQty(item.stock.available, item.rop, item.moq, item.leadTime, item.stock.committed, item.stock.backorder);
                                     
-                                    const currentDraft = orderDrafts[item.id] !== undefined ? orderDrafts[item.id] : (suggested > 0 ? suggested : 0);
+                                    // NEW: Default to empty string instead of suggesting
+                                    const currentDraft = orderDrafts[item.id] !== undefined ? orderDrafts[item.id] : "";
                                     
                                     return (
                                         <div key={item.id} style={{ border: item.isLowStock ? '1px solid #d9534f' : '1px solid var(--line)', padding: '20px', background: item.isLowStock ? '#fdf2f2' : 'var(--paper)' }}>
@@ -654,9 +669,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <div style={{ fontSize: '1.2rem', fontWeight: 500, color: suggested > 0 ? 'var(--ink)' : 'var(--ink-soft)' }}>{suggested} units</div>
                                                 </div>
                                                 <div style={{ flex: 1.5 }}>
-                                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Final {activeBuilder === 'PO' ? 'Order' : 'Build'} Qty</label>
+                                                    {/* NEW: Label Updated to "Required" */}
+                                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Required {activeBuilder === 'PO' ? 'Order' : 'Build'} Qty</label>
                                                     <input 
                                                         type="number" 
+                                                        placeholder="0"
                                                         value={currentDraft} 
                                                         onChange={(e) => handleOrderQtyChange(item.id, e.target.value)}
                                                         style={{ width: '100%', padding: '12px', fontSize: '1.1rem', fontFamily: 'var(--sans)', border: currentDraft > 0 ? '1px solid var(--ink)' : '1px solid var(--line)', boxSizing: 'border-box', outline: 'none' }}
