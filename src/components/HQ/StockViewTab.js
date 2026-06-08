@@ -172,7 +172,7 @@ const StockViewTab = ({ currentUser, activeBrand }) => {
                     LEFT JOIN ItemVendor ON ItemVendor.item = item.id
                     LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id
                     LEFT JOIN InventoryBalance ON InventoryBalance.item = item.id
-                    LEFT JOIN Bin ON InventoryBalance.bin = Bin.id
+                    LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
                     WHERE item.custitem_sync_to_cpq = 'T' 
                     AND item.isinactive = 'F' 
                     AND ${typeFilter}
