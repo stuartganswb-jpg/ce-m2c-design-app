@@ -260,10 +260,9 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    const handleSyncItems = async (itemType) => {
+    const handleSyncItems = async () => {
         setIsSyncing(true);
-        const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
-        addLog(`Initiating Advanced Library Sync for [${typeDesc}]...`, 'info');
+        addLog(`Initiating Advanced Master Library Sync...`, 'info');
 
         try {
             // 1. Fetch Existing App Dictionary & Internal IDs
@@ -321,9 +320,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
                     
                     /* ADVANCED BOM RELATIONAL JOINS */
-                    LEFT JOIN assemblyitembom ON assemblyitembom.assembly = item.id
+                    LEFT JOIN assemblyitembom ON assemblyitembom.assembly = item.id AND assemblyitembom.masterdefault = 'T'
                     LEFT JOIN bom ON bom.id = assemblyitembom.billofmaterials
-                    LEFT JOIN bomrevision ON bomrevision.billofmaterials = bom.id
+                    LEFT JOIN bomrevision ON bomrevision.billofmaterials = bom.id 
+                        AND (bomrevision.effectivestartdate <= SYSDATE AND (bomrevision.effectiveenddate IS NULL OR bomrevision.effectiveenddate >= SYSDATE))
                     LEFT JOIN bomrevisioncomponentmember ON bomrevisioncomponentmember.bomrevision = bomrevision.id
                     
                     WHERE item.custitem_sync_to_cpq = 'T' 
@@ -399,16 +399,34 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 let isInHouse = true;
                 let outsourceAction = "";
 
+                // 1. Classify Assembly vs Inventory
                 if (sku.includes('/P') || sku.includes('/EP')) {
                     partClass = "Assembly";
                     routingType = "STANDARD";
                     
                     if (sku.includes('/EP')) {
                         isInHouse = false;
-                        const epMatch = sku.match(/\/EP(\d+)/);
-                        outsourceAction = epMatch ? `PLATING_${epMatch[1]}` : 'PLATING';
                     }
                 }
+
+                // 2. Outsource Action Logic (/EP1-6 and /P25)
+                if (sku.match(/\/EP[1-6]\b/) || sku.includes('/P25')) {
+                    outsourceAction = "Plated";
+                    if (sku.includes('/P25')) {
+                        isInHouse = false; 
+                    }
+                } else if (sku.includes('/EP')) {
+                    outsourceAction = "PLATING"; // Fallback for generic /EP items
+                }
+
+                // 3. Part Handling Logic (Poles vs Small Parts)
+                const pTypeClean = (item.product_type || '').toLowerCase().trim();
+                const uomClean = (item.uom || '').toLowerCase().trim();
+                
+                const isPole = pTypeClean.includes('pole') || pTypeClean.includes('track') || 
+                               uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
+                
+                const partHandling = isPole ? "Custom" : "Small Parts";
 
                 const docId = existingAppRecord ? existingAppRecord.id : `${activeBrand.toUpperCase()}-${partClass === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
                 const mergedBins = Array.from(item.all_bins || []).join(', ');
@@ -428,6 +446,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     weight: parseFloat(item.weight) || 0,
                     isInHouse: isInHouse,
                     outsourceAction: outsourceAction,
+                    partHandling: partHandling,
                     productType: item.product_type || 'Uncategorized',
                     uom: item.uom || 'EA',
                     bomRevision: item.bom_revision || '',
@@ -517,8 +536,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         <SyncButton onClick={handleSyncCustomers} disabled={isSyncing} label="Sync Active Customers" sub="SuiteQL: Pulls all active customers mapped to Subsidiary." />
                         <SyncButton onClick={handleSyncAddresses} disabled={isSyncing} label="Sync Customer Address Books" sub="SuiteQL: Pulls address books and maps IDs." />
                         <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors" sub="SuiteQL: Pulls all active external vendors/co-ops." />
-                        <SyncButton onClick={() => handleSyncItems('Inventory')} disabled={isSyncing} label="Sync Inventory / Components" sub="SuiteQL: Protects BOM links; Pulls Cost, Price, Weight, Projection & Logistics." />
-                        <SyncButton onClick={() => handleSyncItems('Assembly')} disabled={isSyncing} label="Sync Kits / Standard Assemblies" sub="SuiteQL: Protects BOM links; Pulls Cost, Price, Weight, Projection & Logistics." />
+                        <SyncButton onClick={handleSyncItems} disabled={isSyncing} label="Sync Master Library (Items, Kits & BOMs)" sub="SuiteQL: Single-pass sync. Pulls all Inventory, Assemblies, active BOM Revisions, and component mappings." />
                     </div>
                 </div>
 
