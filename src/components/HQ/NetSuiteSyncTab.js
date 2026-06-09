@@ -316,8 +316,8 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
     
     /* ADVANCED BOM RELATIONAL JOINS */
-    LEFT JOIN bomassembly ON bomassembly.assembly = item.id AND bomassembly.masterdefault = 'T'
-    LEFT JOIN bom ON bom.id = bomassembly.billofmaterials
+    LEFT JOIN assemblyitembom ON assemblyitembom.assembly = item.id AND assemblyitembom.masterdefault = 'T'
+    LEFT JOIN bom ON bom.id = assemblyitembom.billofmaterials
     LEFT JOIN bomrevision ON bomrevision.billofmaterials = bom.id 
         AND (bomrevision.effectivestartdate <= SYSDATE AND (bomrevision.effectiveenddate IS NULL OR bomrevision.effectiveenddate >= SYSDATE))
     LEFT JOIN bomrevisioncomponentmember ON bomrevisioncomponentmember.bomrevision = bomrevision.id
