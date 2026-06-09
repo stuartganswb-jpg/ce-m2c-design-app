@@ -17,10 +17,11 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
     
     const [adminForm, setAdminForm] = useState({ catName: '', catType: 'Manual', macName: '', macCat: '', scName: '' });
 
-    // --- NEW FILTER STATES ---
+    // --- ALIGNED FILTER STATES ---
     const [hqSearch, setHqSearch] = useState('');
     const [filterWatchlist, setFilterWatchlist] = useState(false);
     const [filterCollection, setFilterCollection] = useState('');
+    const [filterRoutingType, setFilterRoutingType] = useState('');
     const [showMissingPrograms, setShowMissingPrograms] = useState(false);
 
     // ==========================================
@@ -163,10 +164,30 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
 
     if (activeTab === 'routings') {
         
+        // --- DYNAMIC DATA EXTRACTION (Aligned with Mass Update Library) ---
+        const dynamicCollections = Array.from(new Set(
+            hqParts.flatMap(p => {
+                const specs = p.manufacturingSpecs || {};
+                const cust = specs.customData || {};
+                const legacyCollection = specs.collection && specs.collection !== 'N/A' ? specs.collection : null;
+                return [
+                    ...(specs.collections || []),
+                    cust.collection !== 'N/A' ? cust.collection : null,
+                    legacyCollection
+                ].filter(Boolean).map(c => c.toUpperCase());
+            })
+        )).sort();
+
+        const dynamicRoutingTypes = Array.from(new Set(
+            hqParts.map(p => (p.manufacturingSpecs?.routingType || p.routingType || "").toUpperCase()).filter(Boolean)
+        )).sort();
+
         // --- FILTERING LOGIC ---
         const filteredHqInventory = hqParts.filter(p => {
             const id = p.legacyErpId && p.legacyErpId !== "PENDING" ? p.legacyErpId : p.itemId || p.id;
             const name = p.itemName || p.name || '';
+            const specs = p.manufacturingSpecs || {};
+            const cust = specs.customData || {};
 
             // 1. Omit Finished Parts (Filters out anything with '/' like /EP1, /P)
             if (id.includes('/')) return false;
@@ -174,14 +195,35 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
             // 2. Search Box Filter
             if (hqSearch && !id.toLowerCase().includes(hqSearch.toLowerCase()) && !name.toLowerCase().includes(hqSearch.toLowerCase())) return false;
 
-            // 3. Collection & Watchlist Filter
-            if (filterWatchlist && !p.watchlist) return false;
-            if (filterCollection && !(p.collection || '').toLowerCase().includes(filterCollection.toLowerCase())) return false;
+            // 3. Collection Filter (Checks arrays and legacy fields mapped to library)
+            if (filterCollection) {
+                const partCols = [
+                    ...(specs.collections || []),
+                    cust.collection !== 'N/A' ? cust.collection : null,
+                    specs.collection !== 'N/A' ? specs.collection : null
+                ].filter(Boolean).map(c => c.toUpperCase());
+                
+                if (!partCols.includes(filterCollection.toUpperCase())) return false;
+            }
 
-            // 4. Missing Programs Filter
+            // 4. Assembly / Routing Type Filter
+            if (filterRoutingType) {
+                const rType = (specs.routingType || p.routingType || "").toUpperCase();
+                if (rType !== filterRoutingType.toUpperCase()) return false;
+            }
+
+            // 5. Watchlist Filter
+            if (filterWatchlist) {
+                const wl = specs.watchList || cust.watchlist || "";
+                if (!wl || wl === 'NONE' || wl === 'N/A') return false;
+            }
+
+            // 6. Missing Programs Filter
             if (showMissingPrograms) {
-                const hasProgram = routings.some(r => r.partId === p.id && r.ops && r.ops.length > 0);
-                if (hasProgram) return false;
+                const hasProgramNum = !!(specs.programNum || p.programNum);
+                const hasRouting = routings.some(r => r.partId === p.id && r.ops && r.ops.length > 0);
+                
+                if (hasProgramNum || hasRouting) return false;
             }
 
             return true;
@@ -201,7 +243,7 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                             <div>
                                 <h4 style={sectionHeaderStyle}>1. Select Master HQ Part</h4>
                                 
-                                {/* FILTER CONTROLS */}
+                                {/* ALIGNED FILTER CONTROLS */}
                                 <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
                                     <input 
                                         type="text" 
@@ -210,13 +252,22 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                                         onChange={e => setHqSearch(e.target.value)} 
                                         style={{ ...fieldStyle, flex: 2, padding: '8px 12px' }} 
                                     />
-                                    <input 
-                                        type="text" 
-                                        placeholder="Collection..." 
+                                    <select 
                                         value={filterCollection} 
                                         onChange={e => setFilterCollection(e.target.value)} 
-                                        style={{ ...fieldStyle, flex: 1, padding: '8px 12px' }} 
-                                    />
+                                        style={{ ...fieldStyle, flex: 1, padding: '8px 12px', background: '#fff' }}
+                                    >
+                                        <option value="">All Collections...</option>
+                                        {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                    <select 
+                                        value={filterRoutingType} 
+                                        onChange={e => setFilterRoutingType(e.target.value)} 
+                                        style={{ ...fieldStyle, flex: 1, padding: '8px 12px', background: '#fff' }}
+                                    >
+                                        <option value="">All Assembly Types...</option>
+                                        {dynamicRoutingTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                                    </select>
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)', cursor: 'pointer' }}>
                                         <input 
                                             type="checkbox" 
@@ -236,7 +287,7 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                                 </div>
 
                                 <select value={routingForm.partId} onChange={e => setRoutingForm({...routingForm, partId: e.target.value})} style={{ ...fieldStyle, background: '#fff' }}>
-                                    <option value="">Select HQ Part...</option>
+                                    <option value="">Select HQ Part ({filteredHqInventory.length} results)...</option>
                                     {filteredHqInventory.map(p => {
                                         const id = p.legacyErpId && p.legacyErpId !== "PENDING" ? p.legacyErpId : p.itemId || p.id;
                                         return <option key={p.id} value={p.id}>{id} - {p.itemName || p.name}</option>;
