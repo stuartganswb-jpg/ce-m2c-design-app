@@ -260,13 +260,12 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    const handleSyncItems = async (itemType) => {
+    const handleSyncItems = async () => {
         setIsSyncing(true);
-        const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
-        addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
+        addLog(`Initiating Advanced Master Library Sync...`, 'info');
 
         try {
-            // 1. Fetch Existing App Dictionary
+            // 1. Fetch Existing App Dictionary & Internal IDs
             addLog("Mapping current App Database to prevent overwrites...", 'info');
             const appDbSnap = await getDocs(collection(db, "Approved_Designs"));
             const existingPartsMap = {};
@@ -283,7 +282,6 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             });
 
             // 2. Fetch NetSuite Data
-            const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
             const targetSubsidiary = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3"; 
 
             let allRawRecords = [];
@@ -294,7 +292,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             while (hasMore) {
                 addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
                 
-                // CRITICAL FIX: Restored the clean, non-restrictive JOINs that successfully pull BOMs
+                // 🚀 NEW: Added comp.itemtype and comp.cost joins to explicitly identify and cost Service items
                 const q = `
                     SELECT 
                         item.id, 
@@ -314,7 +312,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         bom.id AS bom_id,
                         bomrevision.name AS bom_revision,
                         bomrevisioncomponentmember.item AS component_internal_id,
-                        bomrevisioncomponentmember.bomquantity AS component_qty
+                        bomrevisioncomponentmember.bomquantity AS component_qty,
+                        comp.itemtype AS comp_itemtype,
+                        comp.cost AS comp_cost,
+                        comp.averagecost AS comp_averagecost
                     FROM item
                     LEFT JOIN ItemSubsidiaryMap ON ItemSubsidiaryMap.item = item.id
                     LEFT JOIN ItemVendor ON ItemVendor.item = item.id
@@ -327,11 +328,12 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     LEFT JOIN bom ON bom.id = assemblyitembom.billofmaterials
                     LEFT JOIN bomrevision ON bomrevision.billofmaterials = bom.id
                     LEFT JOIN bomrevisioncomponentmember ON bomrevisioncomponentmember.bomrevision = bomrevision.id
+                    LEFT JOIN item AS comp ON comp.id = bomrevisioncomponentmember.item
                     
                     WHERE item.custitem_sync_to_cpq = 'T' 
                     AND item.isinactive = 'F' 
                     AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
-                    AND ${typeFilter}
+                    AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')
                     AND item.id > ${lastId}
                     ORDER BY item.id ASC
                 `;
@@ -352,14 +354,13 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             addLog(`Downloaded ${allRawRecords.length} total rows. Processing deduplication, BOMs, and Bins...`, 'success');
 
             const uniqueRecordsMap = {};
-            const nsInternalToLegacyMap = {}; // Lookup Dictionary
+            const nsInternalToLegacyMap = {}; // Lookup Dictionary for Live Batch
 
             // 1. Group Duplicates, Aggregate BOM Components, and Build Lookup
             for (const row of allRawRecords) {
                 const itemId = row.id;
                 const legacySku = (row.itemid || row.id).toString().toUpperCase();
 
-                // Populate the lookup dictionary (Internal ID -> Legacy ERP ID)
                 nsInternalToLegacyMap[itemId] = legacySku;
 
                 if (!uniqueRecordsMap[itemId]) {
@@ -371,21 +372,25 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     };
                 }
                 
-                // Add bins
                 if (row.binnumber) uniqueRecordsMap[itemId].all_bins.add(row.binnumber);
                 
-                // Add Revision
                 if (row.bom_revision && !uniqueRecordsMap[itemId].bom_revision) {
                     uniqueRecordsMap[itemId].bom_revision = row.bom_revision;
                 }
 
-                // Add BOM Components
                 if (row.component_internal_id) {
                     const exists = uniqueRecordsMap[itemId].bom_components.find(c => c.internalId === row.component_internal_id);
                     if (!exists) {
+                        // 🚀 NEW: Detect Service / Non-Inventory parts and capture their cost
+                        const compType = row.comp_itemtype || '';
+                        const isService = compType === 'NonInvtPart' || compType === 'Service' || compType === 'OthCharge';
+                        const cCost = parseFloat(row.comp_cost) || parseFloat(row.comp_averagecost) || 0;
+
                         uniqueRecordsMap[itemId].bom_components.push({
                             internalId: row.component_internal_id,
-                            qty: row.component_qty || 1
+                            qty: row.component_qty || 1,
+                            isService: isService,
+                            cost: cCost
                         });
                     }
                 }
@@ -436,7 +441,14 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
                 const docId = existingAppRecord ? existingAppRecord.id : `${activeBrand.toUpperCase()}-${partClass === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
                 const mergedBins = Array.from(item.all_bins || []).join(', ');
-                const determinedCost = parseFloat(item.base_cost) || 0;
+                
+                // 🚀 NEW: Overwrite outsource assembly cost with service component cost
+                let determinedCost = parseFloat(item.base_cost) || 0;
+                const serviceComponents = item.bom_components.filter(c => c.isService);
+                
+                if (!isInHouse && serviceComponents.length > 0) {
+                    determinedCost = serviceComponents.reduce((sum, c) => sum + (c.cost * c.qty), 0);
+                }
 
                 const payload = {
                     legacyErpId: item.itemid || item.id,
@@ -483,8 +495,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 if (partClass === 'Assembly' && item.bom_components.length > 0) {
                     const batch = writeBatch(db);
                     
-                    item.bom_components.forEach(comp => {
-                        // Resolve the internal ID to the Legacy ERP ID using our new maps
+                    // 🚀 NEW: Filter OUT service items so they don't become ghost pins
+                    const physicalComponents = item.bom_components.filter(c => !c.isService);
+
+                    physicalComponents.forEach(comp => {
                         const resolvedLegacyId = nsInternalToLegacyMap[comp.internalId] || existingInternalIdMap[comp.internalId] || comp.internalId;
                         
                         const pinId = `PIN-${docId}-${comp.internalId}`; 
@@ -493,13 +507,15 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         batch.set(pinRef, {
                             id: pinId,
                             assemblyId: docId, 
-                            partId: resolvedLegacyId, // Successfully mapped to HQ format
+                            partId: resolvedLegacyId,
                             defaultQty: comp.qty,
                             syncedFromErp: true
                         }, { merge: true });
                     });
                     
-                    await batch.commit();
+                    if (physicalComponents.length > 0) {
+                        await batch.commit();
+                    }
                 }
 
                 successCount++;
@@ -542,10 +558,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         <SyncButton onClick={handleSyncCustomers} disabled={isSyncing} label="Sync Active Customers" sub="SuiteQL: Pulls all active customers mapped to Subsidiary." />
                         <SyncButton onClick={handleSyncAddresses} disabled={isSyncing} label="Sync Customer Address Books" sub="SuiteQL: Pulls address books and maps IDs." />
                         <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors" sub="SuiteQL: Pulls all active external vendors/co-ops." />
-                        
-                        {/* RESTORED TO TWO SEPARATE BUTTONS */}
-                        <SyncButton onClick={() => handleSyncItems('Inventory')} disabled={isSyncing} label="Sync Inventory / Components" sub="SuiteQL: Pulls Cost, Price, Weight, Projection & Logistics." />
-                        <SyncButton onClick={() => handleSyncItems('Assembly')} disabled={isSyncing} label="Sync Kits / Standard Assemblies" sub="SuiteQL: Protects BOM links; Pulls Revisions & Component Mappings." />
+                        <SyncButton onClick={handleSyncItems} disabled={isSyncing} label="Sync Master Library (Items, Kits & BOMs)" sub="SuiteQL: Single-pass sync. Pulls all Inventory, Assemblies, active BOM Revisions, and component mappings." />
                     </div>
                 </div>
 
