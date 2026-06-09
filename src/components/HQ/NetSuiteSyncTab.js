@@ -266,14 +266,19 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         addLog(`Initiating Advanced Library Sync for [${typeDesc}]...`, 'info');
 
         try {
-            // 1. Fetch Existing App Dictionary
+            // 1. Fetch Existing App Dictionary & Internal IDs
             addLog("Mapping current App Database to prevent overwrites...", 'info');
             const appDbSnap = await getDocs(collection(db, "Approved_Designs"));
             const existingPartsMap = {};
+            const existingInternalIdMap = {};
+            
             appDbSnap.docs.forEach(d => {
                 const data = d.data();
                 if (data.legacyErpId) {
                     existingPartsMap[data.legacyErpId.toUpperCase()] = { id: d.id, ...data };
+                }
+                if (data.netSuiteInternalId) {
+                    existingInternalIdMap[data.netSuiteInternalId.toString()] = data.legacyErpId.toUpperCase();
                 }
             });
 
@@ -289,46 +294,45 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
                 
                 const q = `
-    SELECT 
-        item.id, 
-        item.itemid, 
-        item.displayname, 
-        item.weight,
-        BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
-        BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
-        BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
-        BUILTIN.DF(item.custitem_bracket_projection) AS projection, 
-        BUILTIN.DF(item.stockunit) AS uom,
-        item.averagecost AS base_cost,
-        Vendor.companyname AS vendor_name,
-        ItemVendor.vendorcode AS vendor_part_number,
-        ItemVendor.preferredvendor,
-        Bin.binnumber,
-        bom.id AS bom_id,
-        bomrevision.name AS bom_revision,
-        bomrevisioncomponentmember.item AS component_internal_id,
-        bomrevisioncomponentmember.bomquantity AS component_qty
-    FROM item
-    LEFT JOIN ItemSubsidiaryMap ON ItemSubsidiaryMap.item = item.id
-    LEFT JOIN ItemVendor ON ItemVendor.item = item.id
-    LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id
-    LEFT JOIN InventoryBalance ON InventoryBalance.item = item.id
-    LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
-    
-    /* ADVANCED BOM RELATIONAL JOINS */
-    LEFT JOIN assemblyitembom ON assemblyitembom.assembly = item.id AND assemblyitembom.masterdefault = 'T'
-    LEFT JOIN bom ON bom.id = assemblyitembom.billofmaterials
-    LEFT JOIN bomrevision ON bomrevision.billofmaterials = bom.id 
-        AND (bomrevision.effectivestartdate <= SYSDATE AND (bomrevision.effectiveenddate IS NULL OR bomrevision.effectiveenddate >= SYSDATE))
-    LEFT JOIN bomrevisioncomponentmember ON bomrevisioncomponentmember.bomrevision = bomrevision.id
-    
-    WHERE item.custitem_sync_to_cpq = 'T' 
-    AND item.isinactive = 'F' 
-    AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
-    AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')
-    AND item.id > ${lastId}
-    ORDER BY item.id ASC
-`;
+                    SELECT 
+                        item.id, 
+                        item.itemid, 
+                        item.displayname, 
+                        item.weight,
+                        BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
+                        BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
+                        BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
+                        BUILTIN.DF(item.custitem_bracket_projection) AS projection, 
+                        BUILTIN.DF(item.stockunit) AS uom,
+                        item.averagecost AS base_cost,
+                        Vendor.companyname AS vendor_name,
+                        ItemVendor.vendorcode AS vendor_part_number,
+                        ItemVendor.preferredvendor,
+                        Bin.binnumber,
+                        bom.id AS bom_id,
+                        bomrevision.name AS bom_revision,
+                        bomrevisioncomponentmember.item AS component_internal_id,
+                        bomrevisioncomponentmember.bomquantity AS component_qty
+                    FROM item
+                    LEFT JOIN ItemSubsidiaryMap ON ItemSubsidiaryMap.item = item.id
+                    LEFT JOIN ItemVendor ON ItemVendor.item = item.id
+                    LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id
+                    LEFT JOIN InventoryBalance ON InventoryBalance.item = item.id
+                    LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
+                    
+                    /* ADVANCED BOM RELATIONAL JOINS */
+                    LEFT JOIN assemblyitembom ON assemblyitembom.assembly = item.id
+                    LEFT JOIN bom ON bom.id = assemblyitembom.billofmaterials
+                    LEFT JOIN bomrevision ON bomrevision.billofmaterials = bom.id
+                    LEFT JOIN bomrevisioncomponentmember ON bomrevisioncomponentmember.bomrevision = bomrevision.id
+                    
+                    WHERE item.custitem_sync_to_cpq = 'T' 
+                    AND item.isinactive = 'F' 
+                    AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
+                    AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')
+                    AND item.id > ${lastId}
+                    ORDER BY item.id ASC
+                `;
 
                 const result = await executeSuiteQL(q);
                 const batch = result.items || [];
@@ -346,7 +350,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             addLog(`Downloaded ${allRawRecords.length} total rows. Processing deduplication, BOMs, and Bins...`, 'success');
 
             const uniqueRecordsMap = {};
-            const nsInternalToLegacyMap = {}; // Lookup Dictionary
+            const nsInternalToLegacyMap = {}; // Lookup Dictionary for Live Batch
 
             // 1. Group Duplicates, Aggregate BOM Components, and Build Lookup
             for (const row of allRawRecords) {
@@ -359,12 +363,17 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     uniqueRecordsMap[itemId] = { 
                         ...row, 
                         all_bins: new Set(),
-                        bom_components: [] 
+                        bom_components: [],
+                        bom_revision: row.bom_revision || ''
                     };
                 }
                 
                 if (row.binnumber) uniqueRecordsMap[itemId].all_bins.add(row.binnumber);
                 
+                if (row.bom_revision && !uniqueRecordsMap[itemId].bom_revision) {
+                    uniqueRecordsMap[itemId].bom_revision = row.bom_revision;
+                }
+
                 if (row.component_internal_id) {
                     const exists = uniqueRecordsMap[itemId].bom_components.find(c => c.internalId === row.component_internal_id);
                     if (!exists) {
@@ -450,7 +459,9 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     const batch = writeBatch(db);
                     
                     item.bom_components.forEach(comp => {
-                        const resolvedLegacyId = nsInternalToLegacyMap[comp.internalId] || comp.internalId;
+                        // Dynamically map NetSuite Component ID to HQ Legacy ERP ID
+                        const resolvedLegacyId = nsInternalToLegacyMap[comp.internalId] || existingInternalIdMap[comp.internalId] || comp.internalId;
+                        
                         const pinId = `PIN-${docId}-${comp.internalId}`; 
                         const pinRef = doc(db, "assembly_pins", pinId);
                         

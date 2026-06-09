@@ -3,7 +3,6 @@ import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
-// 🚀 IMPORT THE MIGRATION TOOL
 import H1AssemblyGenerator from './H1AssemblyGenerator';
 
 const AVAILABLE_BRANDS = [
@@ -53,7 +52,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [activeBomPins, setActiveBomPins] = useState([]); 
 
   const [activePart, setActivePart] = useState(null);
-  const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, clientPricing: [], collections: [] }); 
+  const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, clientPricing: [], collections: [], bomRevision: "" }); 
   const [isSaving, setIsSaving] = useState(false);
   
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' }); 
@@ -134,7 +133,11 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   }, [activeBrand]);
 
   useEffect(() => {
-      if (!activePart || activePart.partClass !== 'Master Assembly') { setActiveBomPins([]); return; }
+      // 🚀 THE FIX: Allow both Standard Assemblies AND Master Assemblies to display their pins in the Library editor
+      if (!activePart || (activePart.partClass !== 'Master Assembly' && activePart.partClass !== 'Assembly')) { 
+          setActiveBomPins([]); 
+          return; 
+      }
       const q = query(collection(db, "assembly_pins"), where("assemblyId", "==", activePart.itemId));
       const unsubscribe = onSnapshot(q, (snapshot) => { setActiveBomPins(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))); });
       return () => unsubscribe();
@@ -242,6 +245,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         tempLegacyId: part.legacyErpId === "PENDING" ? "" : part.legacyErpId,
         clientPricing: part.clientPricing || [], 
         binLocation: baseSpecs.binLocation || "", 
+        bomRevision: baseSpecs.bomRevision || "",
         project: part.project || "",
         collections: currentCollections, 
         routingType: part.routingType || "",
@@ -277,6 +281,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         project: prev.project,
         routingType: prev.routingType,
         productType: prev.productType,
+        bomRevision: prev.bomRevision || clonedSpecs.bomRevision,
         weight: prev.weight || clonedSpecs.weight
     }));
     setCloneSourceId("");
@@ -328,7 +333,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     const newId = `${activeBrand.toUpperCase()}-${actualClass === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
     
     setActivePart({ isNew: true, id: newId, itemId: newId, legacyErpId: "PENDING", itemName: `NEW ${actualClass.toUpperCase()}`, brandId: activeBrand, partClass: actualClass });
-    setEditSpecs({ productType: "", uom: "EA", finishDetail: "", collections: [], project: "", routingType: "", assemblyType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", weight: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" }, isProjectManaged: false, partHandling: "" }); 
+    setEditSpecs({ productType: "", uom: "EA", finishDetail: "", collections: [], project: "", routingType: "", assemblyType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], bomRevision: "", binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", weight: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", maxLength: "", widthOffset: "", cadProfile: "CYLINDER", length: "", width: "", height: "" }, isProjectManaged: false, partHandling: "" }); 
     setPdfFile(null); setCadFile(null); setCloneSourceId(""); setWoTargetQty(1);
   };
 
@@ -469,7 +474,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       }
   };
 
-  // 🚀 WORK ORDER GENERATION HANDLER
   const handleGenerateWO = async () => {
       if (!activePart || activePart.legacyErpId === "PENDING") {
           return alert("Part must be saved with an ERP Legacy ID before generating a Work Order.");
@@ -506,10 +510,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
-      {/* 🚀 TEMPORARY MIGRATION SCRIPT - Delete after running */}
       <H1AssemblyGenerator />
 
-      {/* HEADER WITH TIERED INVENTORY TOGGLE */}
       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Master Library</h2>
@@ -559,7 +561,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
         
-        {/* LEFT LIST */}
         <div style={{ flex: activePart ? 1 : 1, display: 'grid', gridTemplateColumns: activePart ? 'repeat(auto-fill, minmax(200px, 1fr))' : 'repeat(auto-fill, minmax(250px, 1fr))', gap: '16px', alignContent: 'start' }}>
           {filteredInventory.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', padding: '24px', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>No {partClassFilter === 'ALL' ? 'records' : partClassFilter} found in this category.</div>}
           {filteredInventory.map(part => {
@@ -616,7 +617,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           })}
         </div>
 
-        {/* RIGHT EDIT PANEL */}
         {activePart && (
           <div style={{ flex: 1.5, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'sticky', top: '20px', maxHeight: '90vh', overflowY: 'auto', borderRadius: '2px', display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 10, borderBottom: '1px solid var(--line)' }}>
@@ -660,17 +660,16 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                           </div>
                       )}
 
-                      {/* --- FILE CABINET FOR MASTER ASSEMBLIES --- */}
-                      {activePart.partClass === 'Master Assembly' && (
+                      {(activePart.partClass === 'Master Assembly' || activePart.partClass === 'Assembly') && (
                           <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px' }}>
                               <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '12px' }}>File Cabinet: {activePart.legacyErpId !== "PENDING" ? activePart.legacyErpId : activePart.itemId}</div>
                               {activeBomPins.length === 0 ? (
-                                  <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>↳ No nested components pinned yet. (Configure in Visual Assembly)</div>
+                                  <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>↳ No nested components pinned yet. (Sync from ERP or drop pins in Visual Assembly)</div>
                               ) : (
                                   activeBomPins.map(pin => (
                                       <div key={pin.id} style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                           <span style={{ color: 'var(--ink-soft)' }}>↳</span> 
-                                          <span><strong>{pin.defaultQty || 1}x</strong> {pin.partName} <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>[{pin.legacyErpId}]</span></span>
+                                          <span><strong>{pin.defaultQty || 1}x</strong> {pin.partName || pin.partId}</span>
                                       </div>
                                   ))
                               )}
@@ -679,7 +678,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                   </div>
               )}
 
-              {/* --- CLONE SPECS ENGINE --- */}
               <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <label style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>
                       Clone CPQ Attributes & Specs
@@ -698,7 +696,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               <div>
                  <h4 style={sectionHeaderStyle}>Identification</h4>
                  
-                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '20px', marginBottom: '24px' }}>
                      <div>
                          <label style={labelStyle}>Record Name / Description</label>
                          <input name="tempName" value={editSpecs.tempName !== undefined ? editSpecs.tempName : activePart.itemName} onChange={handleSpecChange} style={fieldStyle} />
@@ -706,6 +704,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                      <div>
                          <label style={labelStyle}>ERP Legacy ID (Internal)</label>
                          <input name="tempLegacyId" value={editSpecs.tempLegacyId !== undefined ? editSpecs.tempLegacyId : (activePart.legacyErpId === "PENDING" ? "" : activePart.legacyErpId)} onChange={handleSpecChange} placeholder="e.g. P-1234" style={{ ...fieldStyle, textTransform: 'uppercase' }} />
+                     </div>
+                     <div>
+                         <label style={labelStyle}>BOM Revision</label>
+                         <input name="bomRevision" value={editSpecs.bomRevision || ''} onChange={handleSpecChange} placeholder="N/A" style={fieldStyle} />
                      </div>
                  </div>
 
@@ -768,7 +770,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                  </div>
               </div>
 
-              {/* BRAND-AWARE CORE ATTRIBUTES */}
               <div>
                  <h4 style={sectionHeaderStyle}>Core Attributes</h4>
                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
@@ -982,7 +983,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                 </div>
               </div>
 
-              {/* 🚀 PRODUCTION WORK ORDER TOOL */}
               {activePart.partClass !== 'Master Assembly' && (
                   <div style={{ background: '#fff', border: '1px solid var(--brass)', padding: '24px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
                       <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>
@@ -1012,7 +1012,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                   </div>
               )}
 
-              {/* GEOMETRY & CAD RULES */}
               <div>
                 <h4 style={sectionHeaderStyle}>Geometry & Z-Index Rules</h4>
                 <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px' }}>

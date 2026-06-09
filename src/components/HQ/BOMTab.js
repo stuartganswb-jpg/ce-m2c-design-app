@@ -209,7 +209,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   });
 
   const populatedBOM = bomPins.map(pin => {
-      const masterPart = libraryParts.find(p => p.id === pin.partId);
+      // 🚀 CRITICAL FIX: Allow fallback lookups to prevent visual rendering breaks if pins don't map perfectly the first time
+      const masterPart = libraryParts.find(p => p.id === pin.partId || p.legacyErpId === pin.partId || p.itemId === pin.partId || p.netSuiteInternalId == pin.partId);
       return { ...pin, masterPart: masterPart || null };
   });
 
@@ -518,7 +519,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
             </div>
             
             <div style={{ flex: 1, overflowY: 'auto', padding: '16px', background: 'var(--paper)' }}>
-                {populatedBOM.length === 0 && <div style={{ textAlign: 'center', color: 'var(--ink-soft)', marginTop: '40px', fontStyle: 'italic', fontSize: '0.9rem' }}>No components found. Drop pins in Visual Assembly to build BOM.</div>}
+                {populatedBOM.length === 0 && <div style={{ textAlign: 'center', color: 'var(--ink-soft)', marginTop: '40px', fontStyle: 'italic', fontSize: '0.9rem' }}>No components found. Sync from NetSuite to build BOM.</div>}
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     {populatedBOM.map(item => {
@@ -543,11 +544,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
                                 <div style={{ padding: '12px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                        <div style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)' }}>{item.partName}</div>
+                                        <div style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)' }}>{item.partName || master.itemName || item.partId}</div>
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>QTY: {item.defaultQty}</div>
                                     </div>
                                     <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px' }}>
-                                        <span style={{ color: 'var(--ink)' }}>{item.legacyErpId}</span> | {specs.productType || "NO TYPE"}
+                                        <span style={{ color: 'var(--ink)' }}>{item.partId}</span> | {specs.productType || "NO TYPE"}
                                     </div>
                                     {isNew && <div style={{ fontSize: '9px', fontFamily: 'var(--mono)', color: '#d9534f', textTransform: 'uppercase', marginTop: '6px' }}>Needs Specs</div>}
                                 </div>
@@ -569,7 +570,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                         {activeComponent ? "Changes made here update the Master Library globally." : "Review and set root metadata for this assembly."}
                     </span>
                 </div>
-                {activeComponent && <span style={{ background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em' }}>{activeComponent.masterPart?.legacyErpId}</span>}
+                {activeComponent && <span style={{ background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em' }}>{activeComponent.masterPart?.legacyErpId || activeComponent.partId}</span>}
             </div>
 
             <div style={{ padding: '30px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '30px' }}>
@@ -685,7 +686,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                                 <div><label style={labelStyle}>Part Handling</label><select name="partHandling" value={assemblyDetails.partHandling || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Unassigned / Standard</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
                                             )}
 
-                                            <div><label style={labelStyle}>UOM</label><select name="uom" value={assemblyDetails.uom || "EA"} onChange={handleAssemblySpecChange} style={fieldStyle}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+                                            <div><label style={labelStyle}>UOM</label><select name="uom" value={assemblyDetails.uom || "EA"} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
                                             
                                             {windowConfig.system.collections?.includes(activeBrand) && (
                                                 <div style={{ gridColumn: 'span 2' }}>
