@@ -1241,4 +1241,4 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   );
 };
 
-export default LibraryTab;
+export default BOMTab;
