@@ -75,6 +75,26 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         return () => { unsubParts(); unsubLists(); unsubCollections(); };
     }, [activeBrand]);
 
+    // --- ALIGNED DYNAMIC DICTIONARY LISTS ---
+    const dynamicProdTypes = Array.from(new Set([
+        ...(globalLists.prodTypes || []).map(p => p.toUpperCase()), 
+        ...hqParts.map(p => (p.productType || p.manufacturingSpecs?.productType || "").toUpperCase()).filter(Boolean)
+    ])).sort();
+
+    const dynamicCollections = Array.from(new Set([
+        ...collectionsData.map(c => c.name.toUpperCase()), 
+        ...hqParts.flatMap(p => p.manufacturingSpecs?.collections ? p.manufacturingSpecs.collections.map(c => c.toUpperCase()) : (p.manufacturingSpecs?.customData?.collection && p.manufacturingSpecs.customData.collection !== 'N/A' ? [p.manufacturingSpecs.customData.collection.toUpperCase()] : []))
+    ])).sort();
+
+    const dynamicWatchlists = Array.from(new Set([
+        ...(globalLists.watchLists || []).map(w => w.toUpperCase()),
+        ...hqParts.map(p => {
+            const specs = p.manufacturingSpecs || {};
+            const nsWatchlist = specs.customData?.watchlist && specs.customData.watchlist !== 'N/A' ? specs.customData.watchlist.toUpperCase() : "NONE";
+            return specs.watchList ? specs.watchList.toUpperCase() : nsWatchlist;
+        }).filter(w => w !== "NONE")
+    ])).sort();
+
     const pullNetSuiteStock = async () => {
         setIsSyncing(true);
         setSyncLog([]);
@@ -340,84 +360,128 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         setOrderDrafts(prev => ({ ...prev, [partId]: qty === "" ? "" : Math.max(0, parseInt(qty) || 0) }));
     };
 
-    const generatePOPayload = () => {
+    // --- NEW FIREBASE PUSH FUNCTIONS ---
+    const pushPOsToDispatch = async () => {
         const lineItems = Object.entries(orderDrafts).map(([partId, qty]) => {
             if (!qty || qty <= 0) return null;
-            const part = hqParts.find(p => p.id === partId);
-            return {
-                itemId: part.legacyErpId || part.itemId,
-                vendorPart: part.manufacturingSpecs?.vendorId || 'N/A',
-                quantity: qty,
-                rate: part.manufacturingSpecs?.cost || 0,
-                description: part.itemName
-            };
+            return { partId, qty };
         }).filter(Boolean);
 
         if (lineItems.length === 0) return alert("No items have quantities entered greater than 0.");
 
-        const poPayload = { vendor: activeVendor, subsidiary: "2", memo: "Auto-Generated via Fab-OS Stock View", items: lineItems };
+        try {
+            const newPoId = `PO-${activeVendor.replace(/[^a-zA-Z0-9]/g, '').substring(0,5)}-${Date.now().toString().slice(-6)}`;
+            
+            const items = lineItems.map(({ partId, qty }) => {
+                const part = hqParts.find(p => p.id === partId);
+                return {
+                    itemId: part.legacyErpId || part.itemId,
+                    vendorPart: part.manufacturingSpecs?.vendorId || 'N/A',
+                    quantity: qty,
+                    rate: part.manufacturingSpecs?.cost || 0,
+                    description: part.itemName
+                };
+            });
 
-        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(poPayload, null, 2));
-        const downloadAnchorNode = document.createElement('a');
-        downloadAnchorNode.setAttribute("href", dataStr);
-        downloadAnchorNode.setAttribute("download", `PO_Export_${activeVendor}_${Date.now()}.json`);
-        document.body.appendChild(downloadAnchorNode);
-        downloadAnchorNode.click();
-        downloadAnchorNode.remove();
+            await setDoc(doc(db, "hq_purchase_orders", newPoId), {
+                id: newPoId,
+                poId: newPoId,
+                brand: activeBrand,
+                status: "Approved",
+                vendor: activeVendor,
+                items: items,
+                reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+                createdAt: Date.now()
+            });
 
-        addLog(`✅ Exported PO Payload for ${activeVendor} (${lineItems.length} lines)`, "success");
-        alert("✅ Purchase Order payload generated! Ready to push to NetSuite.");
-        setOrderDrafts({}); 
+            addLog(`✅ Pushed Purchase Order to RTG Dispatch!`, "success");
+            alert("✅ Purchase Order successfully pushed to RTG Dispatch!");
+            setOrderDrafts({}); 
+        } catch(e) {
+            console.error("PO Push Error", e);
+            alert("Failed to push Purchase Order.");
+        }
     };
 
-    const generateWOPayload = () => {
+    const pushWOsToDispatch = async () => {
         const lineItems = Object.entries(orderDrafts).map(([partId, qty]) => {
             if (!qty || qty <= 0) return null;
-            const part = hqParts.find(p => p.id === partId);
-            return {
-                itemId: part.legacyErpId || part.itemId,
-                quantityToBuild: qty,
-                description: part.itemName,
-                routingType: part.routingType || 'Standard'
-            };
+            return { partId, qty };
         }).filter(Boolean);
 
         if (lineItems.length === 0) return alert("No items have quantities entered greater than 0.");
 
-        const woPayload = { subsidiary: "2", memo: "Auto-Generated via Fab-OS Stock View", department: "Production", items: lineItems };
+        try {
+            for (const { partId, qty } of lineItems) {
+                const part = hqParts.find(p => p.id === partId);
+                const erpId = part.legacyErpId || part.itemId || '';
+                
+                const isPhosphate = erpId.toUpperCase().endsWith('/P');
+                const isPlating = /EP[1-6]$/i.test(erpId.toUpperCase());
+                
+                const rootErpId = erpId.replace(/\/(P|EP[1-6])$/i, '');
+                const rootPart = hqParts.find(p => (p.legacyErpId || p.itemId || '').toUpperCase() === rootErpId) || part;
 
-        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(woPayload, null, 2));
-        const downloadAnchorNode = document.createElement('a');
-        downloadAnchorNode.setAttribute("href", dataStr);
-        downloadAnchorNode.setAttribute("download", `WO_Export_${Date.now()}.json`);
-        document.body.appendChild(downloadAnchorNode);
-        downloadAnchorNode.click();
-        downloadAnchorNode.remove();
-
-        addLog(`✅ Exported WO Payload (${lineItems.length} jobs)`, "success");
-        alert("✅ Work Order payload generated! Ready to push to NetSuite.");
-        setOrderDrafts({}); 
+                const newWoId = `WO-${erpId}-${Date.now().toString().slice(-6)}`;
+                await setDoc(doc(db, "hq_work_orders", newWoId), {
+                    id: newWoId,
+                    woId: newWoId,
+                    brand: activeBrand,
+                    status: "Approved",
+                    customer: "Internal Stock",
+                    hqJobId: rootPart.id, 
+                    originalVariantId: part.id,
+                    variantErpId: erpId,
+                    totalParts: Number(qty),
+                    reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+                    type: "Stock Build",
+                    routingType: part.routingType || 'Standard',
+                    needsPhosphating: isPhosphate,
+                    isPlatingDemand: isPlating,
+                    rootItem: rootErpId,
+                    createdAt: Date.now()
+                });
+            }
+            
+            addLog(`✅ Pushed ${lineItems.length} Work Orders to RTG Dispatch!`, "success");
+            alert("✅ Work Orders successfully pushed to RTG Dispatch!");
+            setOrderDrafts({}); 
+        } catch(e) {
+            console.error("WO Push Error", e);
+            alert("Failed to push Work Orders.");
+        }
     };
 
-    const dynamicWatchlists = Array.from(new Set([
-        ...(globalLists.watchLists || []).map(w => w.toUpperCase()),
-        ...hqParts.map(p => {
-            const specs = p.manufacturingSpecs || {};
-            const nsWatchlist = specs.customData?.watchlist && specs.customData.watchlist !== 'N/A' ? specs.customData.watchlist.toUpperCase() : "NONE";
-            return specs.watchList ? specs.watchList.toUpperCase() : nsWatchlist;
-        }).filter(w => w !== "NONE")
-    ])).sort();
-
+    // --- AGGREGATING DEMAND FROM VARIANTS TO ROOT ITEM ---
     const enrichedInventory = hqParts.map(part => {
         const erpId = (part.legacyErpId || part.itemId).toUpperCase();
         const stock = nsStock[erpId] || { onHand: 0, available: 0, onOrder: 0, committed: 0, backorder: 0 };
         const specs = part.manufacturingSpecs || {};
         
+        let aggregatedCommitted = stock.committed;
+        let aggregatedBackorder = stock.backorder;
+
+        const isVariant = /\/(P|EP[1-6])$/i.test(erpId);
+        if (!isVariant) {
+            const variantMatcher = new RegExp(`^${erpId}\\/(P|EP[1-6])$`, 'i');
+            Object.entries(nsStock).forEach(([nsId, variantStock]) => {
+                if (nsId !== erpId && variantMatcher.test(nsId)) {
+                    aggregatedCommitted += (variantStock.committed || 0);
+                    aggregatedBackorder += (variantStock.backorder || 0);
+                }
+            });
+        }
+
         const rop = parseInt(specs.reorderPoint) || 0;
         const moq = parseInt(specs.moq) || 0;
         const leadTime = parseInt(specs.leadTime) || 0;
 
-        return { ...part, stock, rop, moq, leadTime, isLowStock: stock.available <= rop && rop > 0 };
+        return { 
+            ...part, 
+            stock: { ...stock, aggregatedCommitted, aggregatedBackorder }, 
+            rop, moq, leadTime, 
+            isLowStock: stock.available <= rop && rop > 0 
+        };
     });
 
     const baseFilteredItems = enrichedInventory.filter(part => {
@@ -442,9 +506,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const wl = specs.watchList || specs.customData?.watchlist || "NONE";
         let matchesWatchlist = watchlistFilter === "" || wl.toUpperCase() === watchlistFilter.toUpperCase();
         
-        // NEW ALARM FILTERS
         let matchesRop = !filterBelowRop || part.isLowStock;
-        let matchesBo = !filterOnBo || part.stock.backorder > 0;
+        let matchesBo = !filterOnBo || part.stock.aggregatedBackorder > 0;
 
         return matchesSearch && matchesType && matchesCollection && matchesClass && matchesWatchlist && matchesRop && matchesBo;
     });
@@ -461,7 +524,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             
             {/* HEADER & FILTER BAR */}
             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
-                {/* TITLE ROW */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Live NetSuite Inventory Integration</span>
@@ -475,7 +537,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     )}
                 </div>
                 
-                {/* ADVANCED FILTER BAR ROW */}
+                {/* ALIGNED ADVANCED FILTER BAR ROW */}
                 <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
                     
                     <select value={partClassFilter} onChange={(e) => setPartClassFilter(e.target.value)} disabled={activeBuilder === 'PO' && !!activeVendor} style={{ flex: 1, minWidth: '160px', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper-2)', color: 'var(--ink)' }}>
@@ -490,12 +552,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     
                     <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} disabled={activeBuilder === 'PO' && !!activeVendor} style={{ flex: 1, minWidth: '160px', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
                         <option value="">All Categories</option>
-                        {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                        {dynamicProdTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
                     </select>
 
                     <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} disabled={activeBuilder === 'PO' && !!activeVendor} style={{ flex: 1, minWidth: '160px', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
                         <option value="">All Collections</option>
-                        {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                        {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
 
                     <select value={watchlistFilter} onChange={(e) => setWatchlistFilter(e.target.value)} disabled={activeBuilder === 'PO' && !!activeVendor} style={{ flex: 1, minWidth: '160px', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
@@ -512,7 +574,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         style={{ flex: 1.5, minWidth: '200px', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} 
                     />
 
-                    {/* NEW ALARM FILTERS */}
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center', padding: '0 12px' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: filterBelowRop ? '#d9534f' : 'var(--ink-soft)' }}>
                             <input type="checkbox" checked={filterBelowRop} onChange={e => setFilterBelowRop(e.target.checked)} />
@@ -548,9 +609,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Bin</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>On Hand</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Avail</th>
-                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Committed</th>
+                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Agg. Commit</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>On Order</th>
-                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Backorder</th>
+                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Agg. BO</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>ROP</th>
                                 </tr>
                             </thead>
@@ -582,9 +643,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>{item.manufacturingSpecs?.binLocation || '-'}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink)' }}>{item.stock.onHand}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', fontWeight: 500, color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>{item.stock.available}</td>
-                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink-soft)' }}>{item.stock.committed}</td>
+                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink-soft)' }}>{item.stock.aggregatedCommitted}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink-soft)' }}>{item.stock.onOrder}</td>
-                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.backorder > 0 ? '#d9534f' : 'var(--ink-soft)' }}>{item.stock.backorder}</td>
+                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.aggregatedBackorder > 0 ? '#d9534f' : 'var(--ink-soft)' }}>{item.stock.aggregatedBackorder}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', color: 'var(--ink-soft)' }}>{item.rop || '-'}</td>
                                     </tr>
                                 ))}
@@ -637,12 +698,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                                 {displayItems.map(item => {
-                                    // Switch Algorithm based on Mode
                                     const suggested = activeBuilder === 'PO' 
                                         ? calculateSuggestedPOQty(item.stock.available, item.rop, item.moq, item.leadTime)
-                                        : calculateSuggestedWOQty(item.stock.available, item.rop, item.moq, item.leadTime, item.stock.committed, item.stock.backorder);
+                                        : calculateSuggestedWOQty(item.stock.available, item.rop, item.moq, item.leadTime, item.stock.aggregatedCommitted, item.stock.aggregatedBackorder);
                                     
-                                    // NEW: Default to empty string instead of suggesting
                                     const currentDraft = orderDrafts[item.id] !== undefined ? orderDrafts[item.id] : "";
                                     
                                     return (
@@ -657,7 +716,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             
                                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '8px', background: '#fff', padding: '16px', border: '1px solid var(--line)', textAlign: 'center', marginBottom: '20px' }}>
                                                 <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Avail</div><div style={{ fontSize: '1.1rem', fontWeight: 500, color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>{item.stock.available}</div></div>
-                                                <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Commit</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.stock.committed || 0}</div></div>
+                                                <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Commit</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.stock.aggregatedCommitted || 0}</div></div>
                                                 <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>ROP</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.rop || 0}</div></div>
                                                 <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>MOQ</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.moq || 0}</div></div>
                                                 <div><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>{activeBuilder === 'PO' ? 'Lead' : 'ProdTime'}</div><div style={{ fontSize: '1.1rem', color: 'var(--ink)' }}>{item.leadTime || 0}d</div></div>
@@ -669,7 +728,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <div style={{ fontSize: '1.2rem', fontWeight: 500, color: suggested > 0 ? 'var(--ink)' : 'var(--ink-soft)' }}>{suggested} units</div>
                                                 </div>
                                                 <div style={{ flex: 1.5 }}>
-                                                    {/* NEW: Label Updated to "Required" */}
                                                     <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Required {activeBuilder === 'PO' ? 'Order' : 'Build'} Qty</label>
                                                     <input 
                                                         type="number" 
@@ -687,14 +745,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         )}
                     </div>
 
-                    {/* DYNAMIC EXPORT BUTTON */}
+                    {/* DYNAMIC PUSH TO FIREBASE BUTTON */}
                     {(activeBuilder === 'WO' || activeVendor) && (
                         <div style={{ padding: '24px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
                             <button 
-                                onClick={activeBuilder === 'PO' ? generatePOPayload : generateWOPayload}
+                                onClick={activeBuilder === 'PO' ? pushPOsToDispatch : pushWOsToDispatch}
                                 style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}
                             >
-                                {activeBuilder === 'PO' ? 'Export PO Payload to ERP' : 'Export Work Order Payload to ERP'}
+                                {activeBuilder === 'PO' ? 'Push PO to RTG Dispatch' : 'Push Work Order to RTG Dispatch'}
                             </button>
                         </div>
                     )}
