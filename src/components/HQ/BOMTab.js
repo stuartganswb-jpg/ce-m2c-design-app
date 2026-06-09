@@ -137,7 +137,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           setAssemblyDetails({
               itemName: selectedAssemblyData.itemName || "",
               legacyErpId: selectedAssemblyData.legacyErpId === "PENDING" ? "" : (selectedAssemblyData.legacyErpId || ""),
-              productType: selectedAssemblyData.productType || "",
+              productType: selectedAssemblyData.manufacturingSpecs?.productType || selectedAssemblyData.productType || "",
               collections: currentCollections,
               routingType: selectedAssemblyData.routingType || "UNASSIGNED",
               project: selectedAssemblyData.project || "",
@@ -165,6 +165,17 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           });
       }
   }, [selectedAssemblyData, activeBrand]);
+
+  // 🚀 HELPER: Force React to display imported data even if it doesn't match the Master Lists perfectly
+  const renderOptionFallback = (currentVal, optionsArray) => {
+      const safeVal = String(currentVal || "").trim().toUpperCase();
+      if (!safeVal || safeVal === "N/A" || safeVal === "UNASSIGNED" || safeVal === "NONE") return null;
+      const safeArr = (optionsArray || []).map(o => String(o).trim().toUpperCase());
+      if (!safeArr.includes(safeVal)) {
+          return <option value={safeVal}>{currentVal} (Imported ERP Value)</option>;
+      }
+      return null;
+  };
 
   const dynamicProdTypes = Array.from(new Set([
       ...(globalLists.prodTypes || []).map(p => p.toUpperCase()), 
@@ -209,7 +220,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   });
 
   const populatedBOM = bomPins.map(pin => {
-      // 🚀 CRITICAL FIX: Allow fallback lookups to prevent visual rendering breaks if pins don't map perfectly the first time
       const masterPart = libraryParts.find(p => p.id === pin.partId || p.legacyErpId === pin.partId || p.itemId === pin.partId || p.netSuiteInternalId == pin.partId);
       return { ...pin, masterPart: masterPart || null };
   });
@@ -678,15 +688,43 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         <h4 style={sectionHeaderStyle}>Classification & Attributes</h4>
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                             
-                                            <div><label style={labelStyle}>Product Type</label><select name="productType" value={assemblyDetails.productType || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
-                                            <div><label style={labelStyle}>Routing Classification</label><select name="routingType" value={assemblyDetails.routingType || ""} onChange={handleAssemblySpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}><option value="">Unassigned</option>{(globalLists.assemblyTypes || []).map(t => <option key={t} value={t}>{t}</option>)}</select></div>
+                                            <div>
+                                                <label style={labelStyle}>Product Type</label>
+                                                <select name="productType" value={String(assemblyDetails.productType || "").toUpperCase()} onChange={handleAssemblySpecChange} style={fieldStyle}>
+                                                    <option value="">Select...</option>
+                                                    {(globalLists.prodTypes || []).map(pt => <option key={pt} value={String(pt).toUpperCase()}>{pt}</option>)}
+                                                    {renderOptionFallback(assemblyDetails.productType, globalLists.prodTypes)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label style={labelStyle}>Routing Classification</label>
+                                                <select name="routingType" value={String(assemblyDetails.routingType || "").toUpperCase()} onChange={handleAssemblySpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}>
+                                                    <option value="">Unassigned</option>
+                                                    {(globalLists.assemblyTypes || []).map(t => <option key={t} value={String(t).toUpperCase()}>{t}</option>)}
+                                                    {renderOptionFallback(assemblyDetails.routingType, globalLists.assemblyTypes)}
+                                                </select>
+                                            </div>
                                             <div><label style={labelStyle}>Project / Grouping</label><input name="project" value={assemblyDetails.project || ""} onChange={handleAssemblySpecChange} style={fieldStyle} /></div>
 
                                             {windowConfig.system.partHandling?.includes(activeBrand) && (
-                                                <div><label style={labelStyle}>Part Handling</label><select name="partHandling" value={assemblyDetails.partHandling || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Unassigned / Standard</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
+                                                <div>
+                                                    <label style={labelStyle}>Part Handling</label>
+                                                    <select name="partHandling" value={String(assemblyDetails.partHandling || "").toUpperCase()} onChange={handleAssemblySpecChange} style={fieldStyle}>
+                                                        <option value="">Unassigned / Standard</option>
+                                                        {(globalLists.partHandling || []).map(ph => <option key={ph} value={String(ph).toUpperCase()}>{ph}</option>)}
+                                                        {renderOptionFallback(assemblyDetails.partHandling, globalLists.partHandling)}
+                                                    </select>
+                                                </div>
                                             )}
 
-                                            <div><label style={labelStyle}>UOM</label><select name="uom" value={assemblyDetails.uom || "EA"} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+                                            <div>
+                                                <label style={labelStyle}>UOM</label>
+                                                <select name="uom" value={String(assemblyDetails.uom || "EA").toUpperCase()} onChange={handleAssemblySpecChange} style={fieldStyle}>
+                                                    <option value="">Select...</option>
+                                                    {(globalLists.uom || []).map(u => <option key={u} value={String(u).toUpperCase()}>{u}</option>)}
+                                                    {renderOptionFallback(assemblyDetails.uom, globalLists.uom)}
+                                                </select>
+                                            </div>
                                             
                                             {windowConfig.system.collections?.includes(activeBrand) && (
                                                 <div style={{ gridColumn: 'span 2' }}>
@@ -722,7 +760,14 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                                 <div><label style={labelStyle}>Seam Count</label><select name="seamCount" value={assemblyDetails.seamCount || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                                             )}
                                             {windowConfig.system.outsourceActions?.includes(activeBrand) && (
-                                                <div><label style={labelStyle}>Outsource Action</label><select name="outsourceAction" value={assemblyDetails.outsourceAction || ""} onChange={handleAssemblySpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                                <div>
+                                                    <label style={labelStyle}>Outsource Action</label>
+                                                    <select name="outsourceAction" value={String(assemblyDetails.outsourceAction || "").toUpperCase()} onChange={handleAssemblySpecChange} style={fieldStyle}>
+                                                        <option value="">Select...</option>
+                                                        {(globalLists.outsourceActions || []).map(x => <option key={x} value={String(x).toUpperCase()}>{x}</option>)}
+                                                        {renderOptionFallback(assemblyDetails.outsourceAction, globalLists.outsourceActions)}
+                                                    </select>
+                                                </div>
                                             )}
                                             
                                             {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
@@ -756,7 +801,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ gridColumn: 'span 2' }}>
                                                 <label style={labelStyle}>Assign to Watchlist</label>
                                                 <select name="watchList" value={assemblyDetails.watchList || "NONE"} onChange={handleAssemblySpecChange} style={fieldStyle}>
-                                                    <option value="NONE">None</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
+                                                    <option value="NONE">None</option>
+                                                    {(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
                                                 </select>
                                             </div>
                                         </div>
@@ -767,30 +813,28 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
                                             <div>
                                                 <label style={labelStyle}>Bracket Projection (Inches)</label>
-                                                <select value={assemblyDetails.customData?.projection || ""} onChange={(e) => handleAssemblyCustomFieldChange("projection", e.target.value)} style={fieldStyle}>
+                                                <select value={String(assemblyDetails.customData?.projection || "").toUpperCase()} onChange={(e) => handleAssemblyCustomFieldChange("projection", e.target.value)} style={fieldStyle}>
                                                     <option value="">-- No Projection / Not Bracket --</option>
-                                                    {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" Projection</option>)}
+                                                    {(globalLists.projections || []).map(p => <option key={p} value={String(p).toUpperCase()}>{p}" Projection</option>)}
+                                                    {renderOptionFallback(assemblyDetails.customData?.projection, globalLists.projections)}
                                                 </select>
                                             </div>
                                             <div>
                                                 <label style={labelStyle}>Bracket Mount Type</label>
-                                                <select value={assemblyDetails.customData?.bracketType || ""} onChange={(e) => handleAssemblyCustomFieldChange("bracketType", e.target.value)} style={fieldStyle}>
+                                                <select value={String(assemblyDetails.customData?.bracketType || "").toUpperCase()} onChange={(e) => handleAssemblyCustomFieldChange("bracketType", e.target.value)} style={fieldStyle}>
                                                     <option value="">-- Not a Bracket --</option>
-                                                    <option value="WALL">Wall Mount</option>
-                                                    <option value="CEILING">Ceiling Mount</option>
-                                                    <option value="INSIDE MOUNT">Inside Mount</option>
+                                                    {(globalLists.bracketMounts || []).map(m => <option key={m} value={String(m).toUpperCase()}>{m}</option>)}
+                                                    {renderOptionFallback(assemblyDetails.customData?.bracketType, globalLists.bracketMounts)}
                                                 </select>
                                             </div>
                                             <div style={{ gridColumn: 'span 2' }}>
                                                 <label style={labelStyle}>Service / Fee Type (Auto-Append)</label>
-                                                <select value={assemblyDetails.customData?.feeType || ""} onChange={(e) => handleAssemblyCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
+                                                <select value={String(assemblyDetails.customData?.feeType || "").toUpperCase()} onChange={(e) => handleAssemblyCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
                                                     <option value="">-- No Special Fee --</option>
-                                                    <option value="SPLICE">Splice Fee</option>
-                                                    <option value="MITER_CUT">Miter Cut Fee</option>
-                                                    <option value="BENT_RETURN">Bent Return (FR) Fee</option>
-                                                    <option value="MITER_RETURN">Miter Return Fee</option>
+                                                    {(globalLists.feeTypes || []).map(f => <option key={f} value={String(f).toUpperCase()}>{f}</option>)}
+                                                    {renderOptionFallback(assemblyDetails.customData?.feeType, globalLists.feeTypes)}
                                                 </select>
-                                                <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>If selected, the Vision System will automatically bill for this item when triggered.</span>
+                                                <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>If selected, the Vision System will automatically bill for this item when triggered.</span>
                                             </div>
                                         </div>
                                     </div>
@@ -991,23 +1035,44 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             <h4 style={sectionHeaderStyle}>Core Static Attributes</h4>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                 
-                                <div><label style={labelStyle}>Prod Type</label><select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}</select></div>
+                                <div>
+                                    <label style={labelStyle}>Prod Type</label>
+                                    <select name="productType" value={String(editSpecs.productType || "").toUpperCase()} onChange={handleSpecChange} style={fieldStyle}>
+                                        <option value="">Select...</option>
+                                        {(globalLists.prodTypes || []).map(pt => <option key={pt} value={String(pt).toUpperCase()}>{pt}</option>)}
+                                        {renderOptionFallback(editSpecs.productType, globalLists.prodTypes)}
+                                    </select>
+                                </div>
                                 
                                 <div>
                                     <label style={labelStyle}>{isAssembly ? 'Routing Classification' : 'Inventory Category'}</label>
-                                    <select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}>
+                                    <select name="routingType" value={String(editSpecs.routingType || "").toUpperCase()} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}>
                                         <option value="">Unassigned</option>
-                                        {(isAssembly ? (globalLists.assemblyTypes || []) : (globalLists.inventoryTypes || [])).map(t => <option key={t} value={t}>{t}</option>)}
+                                        {(isAssembly ? (globalLists.assemblyTypes || []) : (globalLists.inventoryTypes || [])).map(t => <option key={t} value={String(t).toUpperCase()}>{t}</option>)}
+                                        {renderOptionFallback(editSpecs.routingType, isAssembly ? globalLists.assemblyTypes : globalLists.inventoryTypes)}
                                     </select>
                                 </div>
                                 
                                 <div><label style={labelStyle}>Project / Grouping</label><input name="project" value={editSpecs.project || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
 
                                 {windowConfig.system.partHandling?.includes(activeBrand) && (
-                                    <div><label style={labelStyle}>Part Handling</label><select name="partHandling" value={editSpecs.partHandling || ""} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}><option value="">Unassigned / Standard</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
+                                    <div>
+                                        <label style={labelStyle}>Part Handling</label>
+                                        <select name="partHandling" value={String(editSpecs.partHandling || "").toUpperCase()} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}>
+                                            <option value="">Unassigned / Standard</option>
+                                            {(globalLists.partHandling || []).map(ph => <option key={ph} value={String(ph).toUpperCase()}>{ph}</option>)}
+                                            {renderOptionFallback(editSpecs.partHandling, globalLists.partHandling)}
+                                        </select>
+                                    </div>
                                 )}
 
-                                <div><label style={labelStyle}>UOM</label><select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={fieldStyle}>{(globalLists.uom || []).map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+                                <div>
+                                    <label style={labelStyle}>UOM</label>
+                                    <select name="uom" value={String(editSpecs.uom || "EA").toUpperCase()} onChange={handleSpecChange} style={fieldStyle}>
+                                        {(globalLists.uom || []).map(u => <option key={u} value={String(u).toUpperCase()}>{u}</option>)}
+                                        {renderOptionFallback(editSpecs.uom, globalLists.uom)}
+                                    </select>
+                                </div>
                                 
                                 {windowConfig.system.collections?.includes(activeBrand) && (
                                     <div style={{ gridColumn: 'span 2' }}>
@@ -1043,7 +1108,14 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     <div><label style={labelStyle}>Seam Count</label><select name="seamCount" value={editSpecs.seamCount || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                                 )}
                                 {windowConfig.system.outsourceActions?.includes(activeBrand) && (
-                                    <div><label style={labelStyle}>Outsource Action</label><select name="outsourceAction" value={editSpecs.outsourceAction || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                                    <div>
+                                        <label style={labelStyle}>Outsource Action</label>
+                                        <select name="outsourceAction" value={String(editSpecs.outsourceAction || "").toUpperCase()} onChange={handleSpecChange} style={fieldStyle}>
+                                            <option value="">Select...</option>
+                                            {(globalLists.outsourceActions || []).map(x => <option key={x} value={String(x).toUpperCase()}>{x}</option>)}
+                                            {renderOptionFallback(editSpecs.outsourceAction, globalLists.outsourceActions)}
+                                        </select>
+                                    </div>
                                 )}
                                 
                                 {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
@@ -1088,28 +1160,26 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
                                 <div>
                                     <label style={labelStyle}>Bracket Projection (Inches)</label>
-                                    <select value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={fieldStyle}>
+                                    <select value={String(editSpecs.customData?.projection || "").toUpperCase()} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={fieldStyle}>
                                         <option value="">-- No Projection / Not Bracket --</option>
-                                        {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" Projection</option>)}
+                                        {(globalLists.projections || []).map(p => <option key={p} value={String(p).toUpperCase()}>{p}" Projection</option>)}
+                                        {renderOptionFallback(editSpecs.customData?.projection, globalLists.projections)}
                                     </select>
                                 </div>
                                 <div>
                                     <label style={labelStyle}>Bracket Mount Type</label>
-                                    <select value={editSpecs.customData?.bracketType || ""} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={fieldStyle}>
+                                    <select value={String(editSpecs.customData?.bracketType || "").toUpperCase()} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={fieldStyle}>
                                         <option value="">-- Not a Bracket --</option>
-                                        <option value="WALL">Wall Mount</option>
-                                        <option value="CEILING">Ceiling Mount</option>
-                                        <option value="INSIDE MOUNT">Inside Mount</option>
+                                        {(globalLists.bracketMounts || []).map(m => <option key={m} value={String(m).toUpperCase()}>{m}</option>)}
+                                        {renderOptionFallback(editSpecs.customData?.bracketType, globalLists.bracketMounts)}
                                     </select>
                                 </div>
                                 <div style={{ gridColumn: 'span 2' }}>
                                     <label style={labelStyle}>Service / Fee Type (Auto-Append)</label>
-                                    <select value={editSpecs.customData?.feeType || ""} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
+                                    <select value={String(editSpecs.customData?.feeType || "").toUpperCase()} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
                                         <option value="">-- No Special Fee --</option>
-                                        <option value="SPLICE">Splice Fee</option>
-                                        <option value="MITER_CUT">Miter Cut Fee</option>
-                                        <option value="BENT_RETURN">Bent Return (FR) Fee</option>
-                                        <option value="MITER_RETURN">Miter Return Fee</option>
+                                        {(globalLists.feeTypes || []).map(f => <option key={f} value={String(f).toUpperCase()}>{f}</option>)}
+                                        {renderOptionFallback(editSpecs.customData?.feeType, globalLists.feeTypes)}
                                     </select>
                                     <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', fontStyle: 'italic', display: 'block', marginTop: '6px' }}>If selected, the Vision System will automatically bill for this item when triggered.</span>
                                 </div>

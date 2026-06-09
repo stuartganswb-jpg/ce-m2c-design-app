@@ -133,7 +133,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   }, [activeBrand]);
 
   useEffect(() => {
-      // 🚀 THE FIX: Allow both Standard Assemblies AND Master Assemblies to display their pins in the Library editor
       if (!activePart || (activePart.partClass !== 'Master Assembly' && activePart.partClass !== 'Assembly')) { 
           setActiveBomPins([]); 
           return; 
@@ -152,6 +151,17 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           }
       }
   }, [focusItemId, inventory, clearFocus]);
+
+  // 🚀 HELPER: Force React to display imported data even if it doesn't match the Master Lists perfectly
+  const renderOptionFallback = (currentVal, optionsArray) => {
+      const safeVal = String(currentVal || "").trim().toUpperCase();
+      if (!safeVal || safeVal === "N/A" || safeVal === "UNASSIGNED" || safeVal === "NONE") return null;
+      const safeArr = (optionsArray || []).map(o => String(o).trim().toUpperCase());
+      if (!safeArr.includes(safeVal)) {
+          return <option value={safeVal}>{currentVal} (Imported ERP Value)</option>;
+      }
+      return null;
+  };
 
   const dynamicProdTypes = Array.from(new Set([
       ...(globalLists.prodTypes || []).map(p => p.toUpperCase()), 
@@ -249,11 +259,12 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         project: part.project || "",
         collections: currentCollections, 
         routingType: part.routingType || "",
-        productType: (part.productType || baseSpecs.productType || "").toUpperCase(),
-        uom: (baseSpecs.uom || "EA").toUpperCase(),
+        productType: (part.productType || baseSpecs.productType || ""),
+        uom: (baseSpecs.uom || "EA"),
         watchList: currentWatchList,
         isProjectManaged: baseSpecs.isProjectManaged || false,
         partHandling: baseSpecs.partHandling || "",
+        outsourceAction: baseSpecs.outsourceAction || "",
         weight: baseSpecs.weight || ""
     });
   };
@@ -777,18 +788,20 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                    {windowConfig.system.prodTypes?.includes(activeBrand) && (
                        <div>
                            <label style={labelStyle}>Prod Type</label>
-                           <select name="productType" value={editSpecs.productType || ""} onChange={handleSpecChange} style={fieldStyle}>
+                           <select name="productType" value={String(editSpecs.productType || "").toUpperCase()} onChange={handleSpecChange} style={fieldStyle}>
                                <option value="">Select...</option>
-                               {dynamicProdTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                               {dynamicProdTypes.map(pt => <option key={pt} value={String(pt).toUpperCase()}>{pt}</option>)}
+                               {renderOptionFallback(editSpecs.productType, dynamicProdTypes)}
                            </select>
                        </div>
                    )}
 
                    <div>
                        <label style={labelStyle}>{activePart.partClass === 'Inventory' ? 'Inventory Category' : 'Routing Classification'}</label>
-                       <select name="routingType" value={editSpecs.routingType || ""} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}>
+                       <select name="routingType" value={String(editSpecs.routingType || "").toUpperCase()} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}>
                            <option value="">Unassigned</option>
-                           {(activePart.partClass === 'Inventory' ? (globalLists.inventoryTypes || []) : (globalLists.assemblyTypes || [])).map(t => <option key={t} value={t}>{t}</option>)}
+                           {(activePart.partClass === 'Inventory' ? (globalLists.inventoryTypes || []) : (globalLists.assemblyTypes || [])).map(t => <option key={t} value={String(t).toUpperCase()}>{t}</option>)}
+                           {renderOptionFallback(editSpecs.routingType, activePart.partClass === 'Inventory' ? globalLists.inventoryTypes : globalLists.assemblyTypes)}
                        </select>
                    </div>
                    
@@ -798,14 +811,22 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                    </div>
 
                    {windowConfig.system.partHandling?.includes(activeBrand) && (
-                       <div><label style={labelStyle}>Part Handling</label><select name="partHandling" value={editSpecs.partHandling || ""} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}><option value="">Unassigned / Standard</option>{(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}</select></div>
+                       <div>
+                           <label style={labelStyle}>Part Handling</label>
+                           <select name="partHandling" value={String(editSpecs.partHandling || "").toUpperCase()} onChange={handleSpecChange} style={{ ...fieldStyle, textTransform: 'uppercase' }}>
+                               <option value="">Unassigned / Standard</option>
+                               {(globalLists.partHandling || []).map(ph => <option key={ph} value={String(ph).toUpperCase()}>{ph}</option>)}
+                               {renderOptionFallback(editSpecs.partHandling, globalLists.partHandling)}
+                           </select>
+                       </div>
                    )}
                    
                    {windowConfig.system.uom?.includes(activeBrand) && (
                        <div>
                            <label style={labelStyle}>UOM</label>
-                           <select name="uom" value={editSpecs.uom || "EA"} onChange={handleSpecChange} style={fieldStyle}>
-                               {dynamicUoms.map(u => <option key={u} value={u}>{u}</option>)}
+                           <select name="uom" value={String(editSpecs.uom || "EA").toUpperCase()} onChange={handleSpecChange} style={fieldStyle}>
+                               {dynamicUoms.map(u => <option key={u} value={String(u).toUpperCase()}>{u}</option>)}
+                               {renderOptionFallback(editSpecs.uom, dynamicUoms)}
                            </select>
                        </div>
                    )}
@@ -843,8 +864,16 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                    {windowConfig.system.seamCounts?.includes(activeBrand) && (
                        <div><label style={labelStyle}>Seam Count</label><select name="seamCount" value={editSpecs.seamCount || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
+                   
                    {windowConfig.system.outsourceActions?.includes(activeBrand) && (
-                       <div><label style={labelStyle}>Outsource Action</label><select name="outsourceAction" value={editSpecs.outsourceAction || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+                       <div>
+                           <label style={labelStyle}>Outsource Action</label>
+                           <select name="outsourceAction" value={String(editSpecs.outsourceAction || "").toUpperCase()} onChange={handleSpecChange} style={fieldStyle}>
+                               <option value="">Select...</option>
+                               {(globalLists.outsourceActions || []).map(x => <option key={x} value={String(x).toUpperCase()}>{x}</option>)}
+                               {renderOptionFallback(editSpecs.outsourceAction, globalLists.outsourceActions)}
+                           </select>
+                       </div>
                    )}
                    
                    {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
@@ -893,23 +922,26 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                       <div>
                           <label style={labelStyle}>Bracket Projection (Inches)</label>
-                          <select value={editSpecs.customData?.projection || ""} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={fieldStyle}>
+                          <select value={String(editSpecs.customData?.projection || "").toUpperCase()} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={fieldStyle}>
                               <option value="">-- No Projection / Not Bracket --</option>
-                              {(globalLists.projections || []).map(p => <option key={p} value={p}>{p}" Projection</option>)}
+                              {(globalLists.projections || []).map(p => <option key={p} value={String(p).toUpperCase()}>{p}" Projection</option>)}
+                              {renderOptionFallback(editSpecs.customData?.projection, globalLists.projections)}
                           </select>
                       </div>
                       <div>
                           <label style={labelStyle}>Bracket Mount Type</label>
-                          <select value={editSpecs.customData?.bracketType || ""} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={fieldStyle}>
+                          <select value={String(editSpecs.customData?.bracketType || "").toUpperCase()} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={fieldStyle}>
                               <option value="">-- Not a Bracket --</option>
-                              {(globalLists.bracketMounts || []).map(m => <option key={m} value={m}>{m}</option>)}
+                              {(globalLists.bracketMounts || []).map(m => <option key={m} value={String(m).toUpperCase()}>{m}</option>)}
+                              {renderOptionFallback(editSpecs.customData?.bracketType, globalLists.bracketMounts)}
                           </select>
                       </div>
                       <div style={{ gridColumn: 'span 2' }}>
                           <label style={labelStyle}>Service / Fee Type (Auto-Append)</label>
-                          <select value={editSpecs.customData?.feeType || ""} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
+                          <select value={String(editSpecs.customData?.feeType || "").toUpperCase()} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
                               <option value="">-- No Special Fee --</option>
-                              {(globalLists.feeTypes || []).map(f => <option key={f} value={f}>{f}</option>)}
+                              {(globalLists.feeTypes || []).map(f => <option key={f} value={String(f).toUpperCase()}>{f}</option>)}
+                              {renderOptionFallback(editSpecs.customData?.feeType, globalLists.feeTypes)}
                           </select>
                           <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>If selected, the Vision System will automatically bill for this item when triggered.</span>
                       </div>
