@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc, getDocs, collection } from "firebase/firestore";
+import { doc, setDoc, getDocs, collection, writeBatch } from "firebase/firestore";
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -263,7 +263,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     const handleSyncItems = async (itemType) => {
         setIsSyncing(true);
         const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
-        addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
+        addLog(`Initiating Advanced Library Sync for [${typeDesc}]...`, 'info');
 
         try {
             // 1. Fetch Existing App Dictionary
@@ -278,7 +278,6 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             });
 
             // 2. Fetch NetSuite Data
-            const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
             const targetSubsidiary = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3"; 
 
             let allRawRecords = [];
@@ -289,31 +288,39 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             while (hasMore) {
                 addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
                 
-                // 🚀 FIXED: Swapped item.baseprice out for item.custitem9
                 const q = `
                     SELECT 
-                        item.id, item.itemid, item.displayname, item.weight,
+                        item.id, 
+                        item.itemid, 
+                        item.displayname, 
+                        item.weight,
                         BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
                         BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
                         BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
                         BUILTIN.DF(item.custitem_bracket_projection) AS projection, 
                         BUILTIN.DF(item.stockunit) AS uom,
-                        item.custitem9 AS baseprice,
+                        item.averagecost AS base_cost,
                         Vendor.companyname AS vendor_name,
                         ItemVendor.vendorcode AS vendor_part_number,
-                        ItemVendor.purchaseprice AS lastpurchaseprice,
                         ItemVendor.preferredvendor,
-                        Bin.binnumber
+                        Bin.binnumber,
+                        bom.id AS bom_id,
+                        bomrevision.name AS bom_revision,
+                        bomrevisioncomponent.item AS component_internal_id,
+                        bomrevisioncomponent.bomquantity AS component_qty
                     FROM item
                     LEFT JOIN ItemSubsidiaryMap ON ItemSubsidiaryMap.item = item.id
                     LEFT JOIN ItemVendor ON ItemVendor.item = item.id
                     LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id
                     LEFT JOIN InventoryBalance ON InventoryBalance.item = item.id
                     LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
+                    LEFT JOIN bom ON bom.item = item.id
+                    LEFT JOIN bomrevision ON bomrevision.bom = bom.id AND bomrevision.isactive = 'T'
+                    LEFT JOIN bomrevisioncomponent ON bomrevisioncomponent.bomrevision = bomrevision.id
                     WHERE item.custitem_sync_to_cpq = 'T' 
                     AND item.isinactive = 'F' 
                     AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
-                    AND ${typeFilter}
+                    AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')
                     AND item.id > ${lastId}
                     ORDER BY item.id ASC
                 `;
@@ -331,118 +338,133 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 }
             }
             
-            addLog(`Downloaded ${allRawRecords.length} total items. Processing deduplication and bins...`, 'success');
+            addLog(`Downloaded ${allRawRecords.length} total rows. Processing deduplication, BOMs, and Bins...`, 'success');
 
             const uniqueRecordsMap = {};
+            const nsInternalToLegacyMap = {}; // Lookup Dictionary
+
+            // 1. Group Duplicates, Aggregate BOM Components, and Build Lookup
             for (const row of allRawRecords) {
                 const itemId = row.id;
-                if (!uniqueRecordsMap[itemId]) uniqueRecordsMap[itemId] = { ...row, all_bins: new Set() };
+                const legacySku = (row.itemid || row.id).toString().toUpperCase();
+
+                nsInternalToLegacyMap[itemId] = legacySku;
+
+                if (!uniqueRecordsMap[itemId]) {
+                    uniqueRecordsMap[itemId] = { 
+                        ...row, 
+                        all_bins: new Set(),
+                        bom_components: [] 
+                    };
+                }
+                
                 if (row.binnumber) uniqueRecordsMap[itemId].all_bins.add(row.binnumber);
-
-                const isNewPreferred = row.preferredvendor === 'T';
-                const isOldPreferred = uniqueRecordsMap[itemId].preferredvendor === 'T';
-                const oldHasVendor = !!uniqueRecordsMap[itemId].vendor_name;
-                const newHasVendor = !!row.vendor_name;
-
-                if (isNewPreferred && !isOldPreferred) {
-                    uniqueRecordsMap[itemId] = { ...row, all_bins: uniqueRecordsMap[itemId].all_bins };
-                } else if (!oldHasVendor && newHasVendor && !isOldPreferred) {
-                    uniqueRecordsMap[itemId] = { ...row, all_bins: uniqueRecordsMap[itemId].all_bins };
+                
+                if (row.component_internal_id) {
+                    const exists = uniqueRecordsMap[itemId].bom_components.find(c => c.internalId === row.component_internal_id);
+                    if (!exists) {
+                        uniqueRecordsMap[itemId].bom_components.push({
+                            internalId: row.component_internal_id,
+                            qty: row.component_qty || 1
+                        });
+                    }
                 }
             }
+
             const records = Object.values(uniqueRecordsMap);
-            
             let successCount = 0;
+
+            // 2. Process and Push to Firebase
             for (const item of records) {
-                const legacyErpId = (item.itemid || item.id).toString().toUpperCase();
-                const existingAppRecord = existingPartsMap[legacyErpId];
+                const sku = (item.itemid || item.id).toString().toUpperCase();
+                const existingAppRecord = existingPartsMap[sku];
                 
-                const docId = existingAppRecord ? existingAppRecord.id : `${activeBrand.toUpperCase()}-${itemType === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
-                
-                const mergedBins = Array.from(item.all_bins || []).join(', ');
-                const pTypeClean = (item.product_type || '').toLowerCase().trim();
-                const uomClean = (item.uom || '').toLowerCase().trim();
-                
-                const isPoleOrLinear = pTypeClean === 'pole' || pTypeClean === 'poles' || uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
-                const autoPartHandling = isPoleOrLinear ? 'Custom' : 'Small Parts';
-                const autoIsCutToSize = isPoleOrLinear; 
-                const hasVendor = item.vendor_name && item.vendor_name.trim() !== '';
+                // --- DYNAMIC CLASSIFICATION ENGINE ---
+                let partClass = "Inventory";
+                let routingType = "UNASSIGNED";
+                let isInHouse = true;
+                let outsourceAction = "";
 
-                let parsedOutsourceAction = '';
-                if (/EP\d{1,2}/i.test(item.itemid) || /EP\d{1,2}/i.test(item.displayname)) parsedOutsourceAction = 'PLATING';
-
-                let parsedCollection = item.collection || '';
-                let collectionsArray = [];
-                if (/^H1/i.test(item.itemid) || /^H1/i.test(item.displayname)) {
-                    parsedCollection = 'Fabricut H1';
-                    collectionsArray = ['FABRICUT H1'];
-                } else if (item.collection) {
-                    collectionsArray = [item.collection.toUpperCase()];
+                if (sku.includes('/P') || sku.includes('/EP')) {
+                    partClass = "Assembly";
+                    routingType = "STANDARD";
+                    
+                    if (sku.includes('/EP')) {
+                        isInHouse = false;
+                        const epMatch = sku.match(/\/EP(\d+)/);
+                        outsourceAction = epMatch ? `PLATING_${epMatch[1]}` : 'PLATING';
+                    }
                 }
 
-                // Parse the base price directly from custitem9
-                const determinedPrice = parseFloat(item.baseprice) || 0;
+                const docId = existingAppRecord ? existingAppRecord.id : `${activeBrand.toUpperCase()}-${partClass === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
+                const mergedBins = Array.from(item.all_bins || []).join(', ');
+                const determinedCost = parseFloat(item.base_cost) || 0;
 
                 const payload = {
                     legacyErpId: item.itemid || item.id,
                     netSuiteInternalId: item.id, 
                     itemName: item.displayname || item.itemid,
+                    partClass: partClass,
+                    routingType: routingType,
                     updatedAt: new Date().toISOString()
                 };
 
+                const newSpecs = {
+                    cost: determinedCost,
+                    weight: parseFloat(item.weight) || 0,
+                    isInHouse: isInHouse,
+                    outsourceAction: outsourceAction,
+                    productType: item.product_type || 'Uncategorized',
+                    uom: item.uom || 'EA',
+                    bomRevision: item.bom_revision || '',
+                    binLocation: mergedBins,
+                    vendorName: item.vendor_name || '', 
+                    vendorId: item.vendor_part_number || '', 
+                    customData: {
+                        collection: item.collection || '', 
+                        watchlist: item.watchlist || '',
+                        projection: item.projection || ''
+                    }
+                };
+
                 if (existingAppRecord) {
-                    // SAFE MERGE: Preserves custom manual configs while updating numbers
-                    payload.manufacturingSpecs = {
-                        ...(existingAppRecord.manufacturingSpecs || {}), 
-                        basePrice: determinedPrice || existingAppRecord.manufacturingSpecs?.basePrice || 0,
-                        cost: parseFloat(item.lastpurchaseprice) || existingAppRecord.manufacturingSpecs?.cost || 0,
-                        weight: parseFloat(item.weight) || existingAppRecord.manufacturingSpecs?.weight || 0,
-                        productType: item.product_type || existingAppRecord.manufacturingSpecs?.productType || 'Uncategorized',
-                        uom: item.uom || existingAppRecord.manufacturingSpecs?.uom || 'EA',
-                        binLocation: mergedBins || existingAppRecord.manufacturingSpecs?.binLocation || '',
-                        vendorName: item.vendor_name || existingAppRecord.manufacturingSpecs?.vendorName || '',
-                        vendorId: item.vendor_part_number || existingAppRecord.manufacturingSpecs?.vendorId || '',
-                        customData: {
-                            ...(existingAppRecord.manufacturingSpecs?.customData || {}),
-                            collection: parsedCollection || existingAppRecord.manufacturingSpecs?.customData?.collection || '',
-                            watchlist: item.watchlist || existingAppRecord.manufacturingSpecs?.customData?.watchlist || '',
-                            projection: item.projection || existingAppRecord.manufacturingSpecs?.customData?.projection || ''
-                        }
-                    };
+                    payload.manufacturingSpecs = { ...(existingAppRecord.manufacturingSpecs || {}), ...newSpecs };
                 } else {
-                    // BRAND NEW ITEM
                     payload.id = docId;
                     payload.itemId = docId;
                     payload.brandId = activeBrand;
-                    payload.partClass = itemType;
                     payload.sharedBrands = [activeBrand];
-                    payload.manufacturingSpecs = {
-                        basePrice: determinedPrice || 0, 
-                        cost: parseFloat(item.lastpurchaseprice) || 0, 
-                        weight: parseFloat(item.weight) || 0,
-                        isInHouse: !hasVendor, 
-                        status: "IMPORTED_FROM_ERP",
-                        productType: item.product_type || 'Uncategorized',
-                        uom: item.uom || 'EA',
-                        binLocation: mergedBins,
-                        partHandling: autoPartHandling,
-                        outsourceAction: parsedOutsourceAction, 
-                        collections: collectionsArray, 
-                        parametric: { isCutToSize: autoIsCutToSize }, 
-                        vendorName: item.vendor_name || '', 
-                        vendorId: item.vendor_part_number || '', 
-                        customData: {
-                            collection: parsedCollection, 
-                            watchlist: item.watchlist || '',
-                            projection: item.projection || ''
-                        }
-                    };
+                    payload.manufacturingSpecs = { ...newSpecs, status: "IMPORTED_FROM_ERP" };
                 }
 
+                // A. Write the main Item record
                 await setDoc(doc(db, "Approved_Designs", docId), payload, { merge: true });
+
+                // B. Write the BOM Pins if this is an assembly
+                if (partClass === 'Assembly' && item.bom_components.length > 0) {
+                    const batch = writeBatch(db);
+                    
+                    item.bom_components.forEach(comp => {
+                        const resolvedLegacyId = nsInternalToLegacyMap[comp.internalId] || comp.internalId;
+                        const pinId = `PIN-${docId}-${comp.internalId}`; 
+                        const pinRef = doc(db, "assembly_pins", pinId);
+                        
+                        batch.set(pinRef, {
+                            id: pinId,
+                            assemblyId: docId, 
+                            partId: resolvedLegacyId,
+                            defaultQty: comp.qty,
+                            syncedFromErp: true
+                        }, { merge: true });
+                    });
+                    
+                    await batch.commit();
+                }
+
                 successCount++;
             }
-            addLog(`✅ Successfully synced and enriched ${successCount} library items. App structure preserved.`, 'success');
+
+            addLog(`✅ Successfully synced and mapped ${successCount} items, components, and routing logic.`, 'success');
 
         } catch (err) {
             console.error(err);
@@ -452,7 +474,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
                 <div>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Integration</span>
@@ -480,7 +502,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         <SyncButton onClick={handleSyncAddresses} disabled={isSyncing} label="Sync Customer Address Books" sub="SuiteQL: Pulls address books and maps IDs." />
                         <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors" sub="SuiteQL: Pulls all active external vendors/co-ops." />
                         <SyncButton onClick={() => handleSyncItems('Inventory')} disabled={isSyncing} label="Sync Inventory / Components" sub="SuiteQL: Protects BOM links; Pulls Cost, Price, Weight, Projection & Logistics." />
-                        <SyncButton onClick={() => handleSyncItems('Assembly')} disabled={isSyncing} label="Sync Kits / Assemblies" sub="SuiteQL: Protects BOM links; Pulls Cost, Price, Weight, Projection & Logistics." />
+                        <SyncButton onClick={() => handleSyncItems('Assembly')} disabled={isSyncing} label="Sync Kits / Standard Assemblies" sub="SuiteQL: Protects BOM links; Pulls Cost, Price, Weight, Projection & Logistics." />
                     </div>
                 </div>
 

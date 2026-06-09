@@ -14,7 +14,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [assemblies, setAssemblies] = useState([]);
   const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
   
-  // 🚀 NEW: Filter States
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [routingFilter, setRoutingFilter] = useState("ALL"); 
@@ -38,14 +37,14 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [customersData, setCustomersData] = useState([]);
 
   const [activeComponent, setActiveComponent] = useState(null);
-  const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [], collections: [], clientPricing: [], sharedBrands: [] });
+  const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [], collections: [], clientPricing: [], sharedBrands: [], bomRevision: "" });
   const [isSaving, setIsSaving] = useState(false);
 
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '' }); 
 
   const [assemblyDetails, setAssemblyDetails] = useState({
       itemName: "", legacyErpId: "", productType: "", routingType: "UNASSIGNED", project: "",
-      basePrice: "", cost: "", weight: "", pdfUrl: "", cadUrl: "",
+      basePrice: "", cost: "", weight: "", pdfUrl: "", cadUrl: "", bomRevision: "",
       isProjectManaged: false, binLocation: "",
       partHandling: "", uom: "EA", pillowSize: "", fillType: "", flangeStyle: "", stitchType: "", seamCount: "", outsourceAction: "", watchList: "NONE",
       dynamicDicts: {}, customData: {}, collections: [], clientPricing: [], sharedBrands: []
@@ -147,6 +146,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               weight: selectedAssemblyData.manufacturingSpecs?.weight || "",
               pdfUrl: selectedAssemblyData.manufacturingSpecs?.pdfUrl || "",
               cadUrl: selectedAssemblyData.manufacturingSpecs?.cadUrl || "",
+              bomRevision: selectedAssemblyData.manufacturingSpecs?.bomRevision || "",
               isProjectManaged: selectedAssemblyData.manufacturingSpecs?.isProjectManaged || false,
               binLocation: selectedAssemblyData.manufacturingSpecs?.binLocation || "",
               partHandling: selectedAssemblyData.manufacturingSpecs?.partHandling || "",
@@ -166,7 +166,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       }
   }, [selectedAssemblyData, activeBrand]);
 
-  // 🚀 NEW: DYNAMIC DICTIONARY GENERATORS FOR FILTERS
   const dynamicProdTypes = Array.from(new Set([
       ...(globalLists.prodTypes || []).map(p => p.toUpperCase()), 
       ...assemblies.map(p => (p.productType || p.manufacturingSpecs?.productType || "").toUpperCase()).filter(Boolean)
@@ -186,7 +185,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       }).filter(w => w !== "NONE")
   ])).sort();
 
-  // 🚀 NEW: ASSEMBLY FILTER LOGIC
   const filteredAssemblies = assemblies.filter(part => {
       const term = searchTerm.toLowerCase();
       const specs = part.manufacturingSpecs || {};
@@ -240,6 +238,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           cpqCategories, 
           isInHouse, 
           partHandling,
+          bomRevision: baseSpecs.bomRevision || "",
           project: bomItem.masterPart.project || "",
           routingType: bomItem.masterPart.routingType || "",
           clientPricing: bomItem.masterPart.clientPricing || [],
@@ -369,6 +368,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                   basePrice: assemblyDetails.basePrice, 
                   cost: assemblyDetails.cost,
                   weight: assemblyDetails.weight,
+                  bomRevision: assemblyDetails.bomRevision,
                   pdfUrl: finalPdfUrl,
                   cadUrl: finalCadUrl,
                   isProjectManaged: assemblyDetails.isProjectManaged,
@@ -414,6 +414,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
       const compiledSpecs = { 
           ...editSpecs, 
+          bomRevision: editSpecs.bomRevision || "",
           pdfUrl: finalPdfUrl, 
           cadUrl: finalCadUrl,
           status: "SPECS_LOCKED" 
@@ -446,7 +447,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
   const isAssembly = activeComponent?.masterPart?.partClass === 'Assembly' || activeComponent?.masterPart?.partClass === 'Master Assembly';
 
-  // --- REUSABLE UI STYLES FOR THE COMPONENTS ---
   const fieldStyle = { width: '100%', padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' };
   const labelStyle = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' };
   const sectionHeaderStyle = { margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' };
@@ -454,7 +454,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
-      {/* HEADER WITH TIERED ASSEMBLY TOGGLE & SEARCH */}
       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: '16px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
           
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -499,7 +498,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
               <input placeholder="Search Name, ERP ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '200px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }} />
 
-              {/* MAIN ASSEMBLY SELECTOR */}
               <select value={selectedAssemblyId} onChange={(e) => { setSelectedAssemblyId(e.target.value); setActiveComponent(null); }} style={{ padding: '10px 16px', border: '2px solid var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem', minWidth: '300px', outline: 'none', background: '#fff', marginLeft: 'auto', fontWeight: 500 }}>
                   <option value="" disabled>-- Select Assembly to Edit --</option>
                   {filteredAssemblies.map(a => (
@@ -513,7 +511,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1 }}>
         
-        {/* LEFT COLUMN: BOM LIST */}
         <div style={{ width: '380px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', flexShrink: 0, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
             <div style={{ padding: '20px 24px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
                 <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Components</span>
@@ -561,7 +558,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
             </div>
         </div>
 
-        {/* RIGHT COLUMN: EDITOR */}
         <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
             
             <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
@@ -578,7 +574,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
             <div style={{ padding: '30px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '30px' }}>
                 
-                {/* --- STATE 1: ASSEMBLY METADATA EDITOR --- */}
                 {!activeComponent ? (
                     <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                         {selectedAssemblyData ? (
@@ -599,9 +594,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     <div>
                                         <h4 style={sectionHeaderStyle}>Parent Assembly Details</h4>
                                         
-                                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '20px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '20px', marginBottom: '20px' }}>
                                             <div><label style={labelStyle}>Assembly Name</label><input name="itemName" value={assemblyDetails.itemName} onChange={handleAssemblySpecChange} style={fieldStyle} /></div>
                                             <div><label style={labelStyle}>ERP ID</label><input name="legacyErpId" value={assemblyDetails.legacyErpId} onChange={handleAssemblySpecChange} placeholder="PENDING" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                            <div><label style={labelStyle}>BOM Revision</label><input name="bomRevision" value={assemblyDetails.bomRevision || ''} onChange={handleAssemblySpecChange} placeholder="e.g. Rev A" style={fieldStyle} /></div>
                                         </div>
 
                                         <div style={{ marginBottom: '20px' }}>
@@ -851,8 +847,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                     </div>
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
-                        {/* --- STATE 2: COMPONENT EDITOR --- */}
-
                         <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '24px' }}>
                             <h4 style={sectionHeaderStyle}>CPQ Configuration Mapping</h4>
                             <p style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '20px', lineHeight: '1.5' }}>
@@ -877,9 +871,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                         <div>
                             <h4 style={sectionHeaderStyle}>Identification & Logistics</h4>
                             
-                            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '20px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '20px', marginBottom: '20px' }}>
                                 <div><label style={labelStyle}>Record Name / Description</label><input name="tempName" value={editSpecs.tempName !== undefined ? editSpecs.tempName : activeComponent.masterPart.itemName} onChange={handleSpecChange} style={fieldStyle} /></div>
                                 <div><label style={labelStyle}>ERP Legacy ID</label><input name="tempLegacyId" value={editSpecs.tempLegacyId !== undefined ? editSpecs.tempLegacyId : (activeComponent.masterPart.legacyErpId === "PENDING" ? "" : activeComponent.masterPart.legacyErpId)} onChange={handleSpecChange} placeholder="e.g. P-1234" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                <div><label style={labelStyle}>BOM Revision</label><input name="bomRevision" value={editSpecs.bomRevision || ''} onChange={handleSpecChange} placeholder="N/A" style={fieldStyle} /></div>
                             </div>
 
                             <div style={{ marginBottom: '30px' }}>
