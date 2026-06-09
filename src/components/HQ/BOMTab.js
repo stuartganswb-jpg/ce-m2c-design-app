@@ -23,10 +23,12 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [bomPins, setBomPins] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
   
+  // 🚀 FIXED: Added bracketMounts, feeTypes, and cpqRoutingTypes to the global state
   const [globalLists, setGlobalLists] = useState({ 
       uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [], 
       pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], 
-      partHandling: [], inventoryTypes: [], assemblyTypes: [], projections: [], customers: [] 
+      partHandling: [], inventoryTypes: [], assemblyTypes: [], projections: [], customers: [],
+      bracketMounts: [], feeTypes: [], cpqRoutingTypes: [], bins: []
   }); 
   const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] }); 
   
@@ -61,22 +63,29 @@ const BOMTab = ({ currentUser, activeBrand }) => {
     const unsubSchema = onSnapshot(doc(db, "system", "master_schema"), (docSnap) => {
       if (docSnap.exists() && docSnap.data().inventoryFields) setCustomSchema(docSnap.data().inventoryFields);
     });
+    
     const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
       if (docSnap.exists()) {
           const data = docSnap.data();
+          // 🚀 FIXED: Now properly downloading all dictionaries so the Vision Engine dropdowns render
           setGlobalLists({
               uom: data.uom || [], prodTypes: data.prodTypes || [],
               watchLists: data.watchLists || [], vendors: data.vendors || [], outsourceActions: data.outsourceActions || [],
               pillowSizes: data.pillowSizes || [], fillTypes: data.fillTypes || [], flangeStyles: data.flangeStyles || [],
-              stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || ['0 Seams', '1 Seam', '2 Seams', '3 Seams', '4 Seams'],
-              partHandling: data.partHandling || ['Small Parts', 'Custom'],
+              stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || [],
+              partHandling: data.partHandling || [],
               inventoryTypes: data.inventoryTypes || [], 
               assemblyTypes: data.assemblyTypes || [],
               projections: data.projections || [],
-              customers: data.customers || [] 
+              customers: data.customers || [],
+              bracketMounts: data.bracketMounts || [],
+              feeTypes: data.feeTypes || [],
+              cpqRoutingTypes: data.cpqRoutingTypes || [],
+              bins: data.bins || []
           });
       }
     });
+    
     const unsubWindowConfig = onSnapshot(doc(db, "system", "window_config"), (docSnap) => {
       if (docSnap.exists()) {
           setWindowConfig({ system: { partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
@@ -1138,8 +1147,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         ) : field.type === 'file' ? (
                                             <div style={{ background: 'var(--paper)', padding: '12px', border: '1px solid var(--line)' }}>
                                                 {editSpecs.customData?.[field.key] && <a href={editSpecs.customData[field.key]} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--ink)', textDecoration: 'underline', display: 'block', marginBottom: '8px' }}>View Current File</a>}
-                                                <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
-                                                {dynamicUploadProgress[field.key] > 0 && <progress value={dynamicUploadProgress[field.key]} max="100" style={{ width: '100%', marginTop: '8px' }} />}
+                                                <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0], false)} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
                                             </div>
                                         ) : (
                                             <input type={field.type} value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={fieldStyle} />
