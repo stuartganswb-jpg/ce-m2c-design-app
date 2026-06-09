@@ -260,12 +260,13 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    const handleSyncItems = async () => {
+    const handleSyncItems = async (itemType) => {
         setIsSyncing(true);
-        addLog(`Initiating Advanced Master Library Sync...`, 'info');
+        const typeDesc = itemType === 'Inventory' ? 'Inventory Items' : 'Assemblies / Kits';
+        addLog(`Initiating Advanced CPQ Data Sync for [${typeDesc}]...`, 'info');
 
         try {
-            // 1. Fetch Existing App Dictionary & Internal IDs
+            // 1. Fetch Existing App Dictionary
             addLog("Mapping current App Database to prevent overwrites...", 'info');
             const appDbSnap = await getDocs(collection(db, "Approved_Designs"));
             const existingPartsMap = {};
@@ -282,6 +283,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             });
 
             // 2. Fetch NetSuite Data
+            const typeFilter = itemType === 'Inventory' ? "item.itemtype = 'InvtPart'" : "item.itemtype = 'Assembly'";
             const targetSubsidiary = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3"; 
 
             let allRawRecords = [];
@@ -292,6 +294,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             while (hasMore) {
                 addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
                 
+                // CRITICAL FIX: Restored the clean, non-restrictive JOINs that successfully pull BOMs
                 const q = `
                     SELECT 
                         item.id, 
@@ -319,17 +322,16 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     LEFT JOIN InventoryBalance ON InventoryBalance.item = item.id
                     LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
                     
-                    /* ADVANCED BOM RELATIONAL JOINS */
-                    LEFT JOIN assemblyitembom ON assemblyitembom.assembly = item.id AND assemblyitembom.masterdefault = 'T'
+                    /* ADVANCED BOM RELATIONAL JOINS - CLEANED */
+                    LEFT JOIN assemblyitembom ON assemblyitembom.assembly = item.id
                     LEFT JOIN bom ON bom.id = assemblyitembom.billofmaterials
-                    LEFT JOIN bomrevision ON bomrevision.billofmaterials = bom.id 
-                        AND (bomrevision.effectivestartdate <= SYSDATE AND (bomrevision.effectiveenddate IS NULL OR bomrevision.effectiveenddate >= SYSDATE))
+                    LEFT JOIN bomrevision ON bomrevision.billofmaterials = bom.id
                     LEFT JOIN bomrevisioncomponentmember ON bomrevisioncomponentmember.bomrevision = bomrevision.id
                     
                     WHERE item.custitem_sync_to_cpq = 'T' 
                     AND item.isinactive = 'F' 
                     AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
-                    AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')
+                    AND ${typeFilter}
                     AND item.id > ${lastId}
                     ORDER BY item.id ASC
                 `;
@@ -350,13 +352,14 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             addLog(`Downloaded ${allRawRecords.length} total rows. Processing deduplication, BOMs, and Bins...`, 'success');
 
             const uniqueRecordsMap = {};
-            const nsInternalToLegacyMap = {}; // Lookup Dictionary for Live Batch
+            const nsInternalToLegacyMap = {}; // Lookup Dictionary
 
             // 1. Group Duplicates, Aggregate BOM Components, and Build Lookup
             for (const row of allRawRecords) {
                 const itemId = row.id;
                 const legacySku = (row.itemid || row.id).toString().toUpperCase();
 
+                // Populate the lookup dictionary (Internal ID -> Legacy ERP ID)
                 nsInternalToLegacyMap[itemId] = legacySku;
 
                 if (!uniqueRecordsMap[itemId]) {
@@ -368,12 +371,15 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     };
                 }
                 
+                // Add bins
                 if (row.binnumber) uniqueRecordsMap[itemId].all_bins.add(row.binnumber);
                 
+                // Add Revision
                 if (row.bom_revision && !uniqueRecordsMap[itemId].bom_revision) {
                     uniqueRecordsMap[itemId].bom_revision = row.bom_revision;
                 }
 
+                // Add BOM Components
                 if (row.component_internal_id) {
                     const exists = uniqueRecordsMap[itemId].bom_components.find(c => c.internalId === row.component_internal_id);
                     if (!exists) {
@@ -416,7 +422,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         isInHouse = false; 
                     }
                 } else if (sku.includes('/EP')) {
-                    outsourceAction = "PLATING"; // Fallback for generic /EP items
+                    outsourceAction = "PLATING"; // Fallback for any other /EP items
                 }
 
                 // 3. Part Handling Logic (Poles vs Small Parts)
@@ -478,7 +484,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     const batch = writeBatch(db);
                     
                     item.bom_components.forEach(comp => {
-                        // Dynamically map NetSuite Component ID to HQ Legacy ERP ID
+                        // Resolve the internal ID to the Legacy ERP ID using our new maps
                         const resolvedLegacyId = nsInternalToLegacyMap[comp.internalId] || existingInternalIdMap[comp.internalId] || comp.internalId;
                         
                         const pinId = `PIN-${docId}-${comp.internalId}`; 
@@ -487,7 +493,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         batch.set(pinRef, {
                             id: pinId,
                             assemblyId: docId, 
-                            partId: resolvedLegacyId,
+                            partId: resolvedLegacyId, // Successfully mapped to HQ format
                             defaultQty: comp.qty,
                             syncedFromErp: true
                         }, { merge: true });
@@ -499,7 +505,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 successCount++;
             }
 
-            addLog(`✅ Successfully synced and mapped ${successCount} items, components, and routing logic.`, 'success');
+            addLog(`✅ Successfully synced and mapped ${successCount} library items. App structure preserved.`, 'success');
 
         } catch (err) {
             console.error(err);
@@ -536,7 +542,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         <SyncButton onClick={handleSyncCustomers} disabled={isSyncing} label="Sync Active Customers" sub="SuiteQL: Pulls all active customers mapped to Subsidiary." />
                         <SyncButton onClick={handleSyncAddresses} disabled={isSyncing} label="Sync Customer Address Books" sub="SuiteQL: Pulls address books and maps IDs." />
                         <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors" sub="SuiteQL: Pulls all active external vendors/co-ops." />
-                        <SyncButton onClick={handleSyncItems} disabled={isSyncing} label="Sync Master Library (Items, Kits & BOMs)" sub="SuiteQL: Single-pass sync. Pulls all Inventory, Assemblies, active BOM Revisions, and component mappings." />
+                        
+                        {/* RESTORED TO TWO SEPARATE BUTTONS */}
+                        <SyncButton onClick={() => handleSyncItems('Inventory')} disabled={isSyncing} label="Sync Inventory / Components" sub="SuiteQL: Pulls Cost, Price, Weight, Projection & Logistics." />
+                        <SyncButton onClick={() => handleSyncItems('Assembly')} disabled={isSyncing} label="Sync Kits / Standard Assemblies" sub="SuiteQL: Protects BOM links; Pulls Revisions & Component Mappings." />
                     </div>
                 </div>
 
