@@ -105,6 +105,10 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const [floorRecipeData, setFloorRecipeData] = useState([]); 
 
     const [newListItems, setNewListItems] = useState({});
+    
+    // 🚀 RESTORED MISSING DICTIONARY STATE FOR THE BOTTOM UI
+    const [newDictInput, setNewDictItem] = useState({ prodTypes: "", watchLists: "", collections: "" });
+
     const [showSchemaForm, setShowSchemaForm] = useState(false);
     const [showFinishForm, setShowFinishForm] = useState(false);
     const [showOutsourceFinishForm, setShowOutsourceFinishForm] = useState(false);
@@ -167,6 +171,55 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         return () => { unsubLists(); unsubCols(); unsubWin(); unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubVendors(); unsubCustomers(); unsubRecipes(); };
     }, [activeBrand]);
 
+    // 🚀 RESTORED MISSING HANDLERS FOR THE BOTTOM UI
+    const handleAddMasterListItem = async (listKey) => {
+        const value = newDictInput[listKey]?.trim();
+        if (!value) return;
+        const currentList = globalLists[listKey] || [];
+        if (currentList.includes(value)) return alert("Item already exists.");
+        await setDoc(doc(db, "system", "master_lists"), { [listKey]: [...currentList, value] }, { merge: true });
+        setNewDictItem(prev => ({ ...prev, [listKey]: "" }));
+    };
+
+    const handleRemoveMasterListItem = async (listKey, value) => {
+        if (!window.confirm(`Remove ${value} from ${listKey}?`)) return;
+        const currentList = globalLists[listKey] || [];
+        await setDoc(doc(db, "system", "master_lists"), { [listKey]: currentList.filter(i => i !== value) }, { merge: true });
+    };
+
+    const handleQuickAddCollection = async () => {
+        const value = newDictInput.collections?.trim().toUpperCase();
+        if (!value) return;
+        const safeId = `COL_${Date.now()}`;
+        await setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: value, allowedCustomers: [], allowedFinishes: [] });
+        setNewDictItem(prev => ({ ...prev, collections: "" }));
+    };
+
+    const handleQuickDeleteCollection = async (id, name) => {
+        if (!window.confirm(`Permanently delete collection: ${name}?`)) return;
+        await deleteDoc(doc(db, "hq_collections", id));
+    };
+
+    // 🚀 DYNAMIC ARRAYS FOR DROPDOWNS
+    const dynamicProdTypes = Array.from(new Set([
+        ...(globalLists.prodTypes || []).map(p => p.toUpperCase()), 
+        ...inventory.map(p => (p.productType || p.manufacturingSpecs?.productType || "").toUpperCase()).filter(Boolean)
+    ])).sort();
+
+    const dynamicCollections = Array.from(new Set([
+        ...collectionsData.map(c => c.name.toUpperCase()), 
+        ...inventory.flatMap(p => p.manufacturingSpecs?.collections ? p.manufacturingSpecs.collections.map(c => c.toUpperCase()) : (p.manufacturingSpecs?.customData?.collection && p.manufacturingSpecs.customData.collection !== 'N/A' ? [p.manufacturingSpecs.customData.collection.toUpperCase()] : []))
+    ])).sort();
+
+    const dynamicWatchlists = Array.from(new Set([
+        ...(globalLists.watchLists || []).map(w => w.toUpperCase()), 
+        ...inventory.map(p => {
+            const specs = p.manufacturingSpecs || {};
+            const nsWatchlist = specs.customData?.watchlist && specs.customData.watchlist !== 'N/A' ? specs.customData.watchlist.toUpperCase() : "NONE";
+            return specs.watchList ? specs.watchList.toUpperCase() : nsWatchlist;
+        }).filter(w => w !== "NONE")
+    ])).sort();
+
     // 🚀 SYNC ERP DATA TO DICTIONARIES
     const handleSyncDictionaries = async () => {
         if (!window.confirm("Scan inventory for unmapped Product Types, Watchlists, and Collections to permanently add them to your Master Dictionaries?")) return;
@@ -197,6 +250,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             });
         });
 
+        // Update master_lists
         const updatedLists = {
             ...globalLists,
             prodTypes: Array.from(newProdTypes),
@@ -204,6 +258,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         };
         await setDoc(doc(db, "system", "master_lists"), updatedLists, { merge: true });
 
+        // Add missing collections
         const colPromises = Array.from(colsToAdd).map(cName => {
             const safeId = `COL_${Date.now()}_${Math.random().toString(36).substring(2,7)}`;
             return setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: cName, allowedCustomers: [], allowedFinishes: [] });
@@ -303,7 +358,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             for (let i = 0; i < dataRows.length; i++) {
                 const row = dataRows[i];
                 
-                // Using the ID field if present, otherwise fallback to ERP ID
                 const docId = headers.includes("ID (DO NOT EDIT)") ? row[headers.indexOf("ID (DO NOT EDIT)")] : null;
                 const erpId = row[headers.indexOf("Legacy ERP ID")];
                 if (!docId && !erpId) continue;
@@ -804,7 +858,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </label>
                             <select disabled={!updates.productType.active} value={updates.productType.value} onChange={(e) => handleUpdateChange('productType', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.productType.active ? 1 : 0.5 }}>
                                 <option value="">Select Type...</option>
-                                {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt.toUpperCase()}>{pt}</option>)}
+                                {dynamicProdTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
                             </select>
                         </div>
 
@@ -815,8 +869,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </label>
                             <select disabled={!updates.routingType.active} value={updates.routingType.value} onChange={(e) => handleUpdateChange('routingType', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.routingType.active ? 1 : 0.5 }}>
                                 <option value="">Select Routing...</option>
-                                <optgroup label="Raw Materials">{(globalLists.inventoryTypes || []).map(t => <option key={t} value={t}>{t}</option>)}</optgroup>
-                                <optgroup label="Assemblies">{(globalLists.assemblyTypes || []).map(t => <option key={t} value={t}>{t}</option>)}</optgroup>
+                                <optgroup label="Raw Materials">{(globalLists.inventoryTypes || []).map(t => <option key={t} value={t.toUpperCase()}>{t}</option>)}</optgroup>
+                                <optgroup label="Assemblies">{(globalLists.assemblyTypes || []).map(t => <option key={t} value={t.toUpperCase()}>{t}</option>)}</optgroup>
                             </select>
                         </div>
 
@@ -849,7 +903,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </label>
                             <select disabled={!updates.watchList.active} value={updates.watchList.value} onChange={(e) => handleUpdateChange('watchList', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.watchList.active ? 1 : 0.5 }}>
                                 <option value="NONE">None</option>
-                                {(globalLists.watchLists || []).map(w => <option key={w} value={w.toUpperCase()}>{w}</option>)}
+                                {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
                             </select>
                         </div>
 
@@ -1034,7 +1088,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </label>
                             <select disabled={!updates.collection.active} value={updates.collection.value} onChange={(e) => handleUpdateChange('collection', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.collection.active ? 1 : 0.5 }}>
                                 <option value="">Select Collection...</option>
-                                {collectionsData.map(c => <option key={c.id} value={c.name.toUpperCase()}>{c.name}</option>)}
+                                {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
                     </div>
@@ -1089,180 +1143,176 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                         
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
                             
-                            {windowConfig.system.inHouseFinishes?.includes(adminBrandFilter) && (
-                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                                    <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
-                                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>In-House Master Finishes</span>
-                                        <div style={{ display: 'flex', gap: '12px' }}>
-                                            <button onClick={handleSyncFloorRecipes} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Sync Floor Recipes</button>
-                                            <button onClick={() => { setShowFinishForm(!showFinishForm); setEditingGlobalFinish(null); setNewFinishConfig({name: '', code: '', type: '', textureUrl: '', clientMapping: []}); }} style={{ background: theme.ink, color: '#fff', border: 'none', padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showFinishForm && !editingGlobalFinish ? 'Close' : 'Add Finish'}</button>
-                                        </div>
-                                    </div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                                        {showFinishForm && (
-                                            <div style={{ padding: '30px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px', marginBottom: '10px' }}>
-                                                    {editingGlobalFinish ? `Editing: ${newFinishConfig.name}` : 'New In-House Finish'}
-                                                </div>
-                                                <div><label style={labelStyle}>Finish Name</label><input value={newFinishConfig.name} onChange={(e) => setNewFinishConfig({...newFinishConfig, name: e.target.value})} placeholder="e.g. Matte Brass" style={fieldStyle} /></div>
-                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                                    <div><label style={labelStyle}>Code</label><input value={newFinishConfig.code} onChange={(e) => setNewFinishConfig({...newFinishConfig, code: e.target.value})} placeholder="MB" style={fieldStyle} /></div>
-                                                    <div><label style={labelStyle}>Category / Type</label><input value={newFinishConfig.type} onChange={(e) => setNewFinishConfig({...newFinishConfig, type: e.target.value})} placeholder="e.g. METAL, WOOD" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
-                                                </div>
-                                                <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>
-                                                    <label style={labelStyle}>Seamless Texture Map (JPG/PNG)</label>
-                                                    {newFinishConfig.textureUrl && <div style={{ color: theme.inkSoft, fontSize: '0.85rem', marginBottom: '8px' }}>Asset Ready</div>}
-                                                    <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', width: '100%', cursor: 'pointer' }} />
-                                                    {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
-                                                </div>
-
-                                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px', marginTop: '10px' }}>
-                                                    <label style={labelStyle}>Client-Specific Finish Names (CPQ Mapping)</label>
-                                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                                                        <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={fieldStyle}>
-                                                            <option value="">Select Customer...</option>
-                                                            {liveCustomers.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                                                        </select>
-                                                        <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={fieldStyle} />
-                                                        <button onClick={() => {
-                                                            if(!newFinishClientMapping.customerId || !newFinishClientMapping.clientFinishName) return alert("Select customer and enter finish name.");
-                                                            setNewFinishConfig(prev => ({...prev, clientMapping: [...(prev.clientMapping || []), newFinishClientMapping]}));
-                                                            setNewFinishClientMapping({customerId: '', clientFinishName: ''});
-                                                        }} style={{ padding: '0 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Map</button>
-                                                    </div>
-                                                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                        {(newFinishConfig.clientMapping || []).map((mapping, idx) => (
-                                                            <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: theme.paper2, padding: '10px 16px', border: `1px solid ${theme.line}`, fontSize: '0.9rem' }}>
-                                                                <span><strong style={{ color: theme.ink }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
-                                                                <span style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </div>
-
-                                                <button onClick={handleAddGlobalFinish} style={{ padding: '16px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
-                                                    {editingGlobalFinish ? 'Save Changes' : 'Save New Finish'}
-                                                </button>
-                                            </div>
-                                        )}
-                                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
-                                            {globalFinishes.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No finishes added yet.</span>}
-                                            {globalFinishes.map(finish => {
-                                                const hasRecipe = activeRecipes.includes(finish.code) || activeRecipes.includes(finish.name);
-                                                return (
-                                                    <div key={finish.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.paper, padding: '20px', border: `1px solid ${theme.line}`, borderLeft: `2px solid ${theme.brass}` }}>
-                                                        <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
-                                                            <div style={{ width: '48px', height: '48px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : theme.paper2, borderRadius: '50%', border: `1px solid ${theme.line}` }} />
-                                                            <div>
-                                                                <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.name} {finish.code && `(${finish.code})`}</div>
-                                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Status: {hasRecipe ? 'Production Ready' : 'Working / R&D'}</div>
-                                                                {finish.clientMapping && finish.clientMapping.length > 0 && (
-                                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink, marginTop: '4px' }}>{finish.clientMapping.length} Client Map(s) Active</div>
-                                                                )}
-                                                                <div style={{ marginTop: '10px' }}>
-                                                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '2px', display: 'inline-block' }}>
-                                                                        {inlineTextureProgress[finish.id] > 0 ? `Uploading ${inlineTextureProgress[finish.id]}%` : (finish.textureUrl ? 'Replace Texture Map' : 'Upload Texture Map')}
-                                                                        <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleUpdateExistingFinishTexture(finish.id, e.target.files[0])} />
-                                                                    </label>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        <div style={{ display: 'flex', gap: '12px' }}>
-                                                            <button onClick={() => handleEditGlobalFinish(finish)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Edit Finish">Edit</button>
-                                                            <button onClick={() => handleRemoveFinish(finish.id)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Delete Finish">Del</button>
-                                                        </div>
-                                                    </div>
-                                                )
-                                            })}
-                                        </div>
+                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>In-House Master Finishes</span>
+                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                        <button onClick={handleSyncFloorRecipes} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Sync Floor Recipes</button>
+                                        <button onClick={() => { setShowFinishForm(!showFinishForm); setEditingGlobalFinish(null); setNewFinishConfig({name: '', code: '', type: '', textureUrl: '', clientMapping: []}); }} style={{ background: theme.ink, color: '#fff', border: 'none', padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showFinishForm && !editingGlobalFinish ? 'Close' : 'Add Finish'}</button>
                                     </div>
                                 </div>
-                            )}
-
-                            {windowConfig.system.outsourceFinishes?.includes(adminBrandFilter) && (
-                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                                    <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
-                                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Outsourced Master Finishes</span>
-                                        <button onClick={() => { setShowOutsourceFinishForm(!showOutsourceFinishForm); setEditingOutsourceFinish(null); setNewOutsourceFinishConfig({name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: []}); }} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showOutsourceFinishForm && !editingOutsourceFinish ? 'Close' : 'Add Finish'}</button>
-                                    </div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                                        {showOutsourceFinishForm && (
-                                            <div style={{ padding: '30px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px', marginBottom: '10px' }}>
-                                                    {editingOutsourceFinish ? `Editing: ${newOutsourceFinishConfig.name}` : 'New Outsourced Finish'}
-                                                </div>
-                                                <div><label style={labelStyle}>Finish Name</label><input value={newOutsourceFinishConfig.name} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, name: e.target.value})} style={fieldStyle} /></div>
-                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                                    <div><label style={labelStyle}>Approved Vendor</label><select value={newOutsourceFinishConfig.vendor} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, vendor: e.target.value})} style={fieldStyle}><option value="">Select...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
-                                                    <div><label style={labelStyle}>Price Multiplier (x)</label><input type="number" step="0.1" value={newOutsourceFinishConfig.multiplier} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, multiplier: e.target.value})} style={fieldStyle} /></div>
-                                                </div>
-                                                
-                                                <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>
-                                                    <label style={labelStyle}>Seamless Texture Map (JPG/PNG)</label>
-                                                    {newOutsourceFinishConfig.textureUrl && <div style={{ color: theme.inkSoft, fontSize: '0.85rem', marginBottom: '8px' }}>Asset Ready</div>}
-                                                    <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0], true)} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', width: '100%', cursor: 'pointer' }} />
-                                                    {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
-                                                </div>
-
-                                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px', marginTop: '10px' }}>
-                                                    <label style={labelStyle}>Client-Specific Finish Names (CPQ Mapping)</label>
-                                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                                                        <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={fieldStyle}>
-                                                            <option value="">Select Customer...</option>
-                                                            {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
-                                                        </select>
-                                                        <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={fieldStyle} />
-                                                        <button onClick={() => {
-                                                            if(!newFinishClientMapping.customerId || !newFinishClientMapping.clientFinishName) return alert("Select customer and enter finish name.");
-                                                            setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: [...(prev.clientMapping || []), newFinishClientMapping]}));
-                                                            setNewFinishClientMapping({customerId: '', clientFinishName: ''});
-                                                        }} style={{ padding: '0 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Map</button>
-                                                    </div>
-                                                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                        {(newOutsourceFinishConfig.clientMapping || []).map((mapping, idx) => (
-                                                            <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: theme.paper2, padding: '10px 16px', border: `1px solid ${theme.line}`, fontSize: '0.9rem' }}>
-                                                                <span><strong style={{ color: theme.ink }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
-                                                                <span style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                                
-                                                <button onClick={handleAddOutsourceFinish} style={{ padding: '16px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
-                                                    {editingOutsourceFinish ? 'Save Changes' : 'Save Outsourced Finish'}
-                                                </button>
+                                <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                    {showFinishForm && (
+                                        <div style={{ padding: '30px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                            <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px', marginBottom: '10px' }}>
+                                                {editingGlobalFinish ? `Editing: ${newFinishConfig.name}` : 'New In-House Finish'}
                                             </div>
-                                        )}
-                                        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
-                                            {outsourceFinishes.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No outsourced finishes added yet.</span>}
-                                            {outsourceFinishes.map(finish => (
+                                            <div><label style={labelStyle}>Finish Name</label><input value={newFinishConfig.name} onChange={(e) => setNewFinishConfig({...newFinishConfig, name: e.target.value})} placeholder="e.g. Matte Brass" style={fieldStyle} /></div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                                <div><label style={labelStyle}>Code</label><input value={newFinishConfig.code} onChange={(e) => setNewFinishConfig({...newFinishConfig, code: e.target.value})} placeholder="MB" style={fieldStyle} /></div>
+                                                <div><label style={labelStyle}>Category / Type</label><input value={newFinishConfig.type} onChange={(e) => setNewFinishConfig({...newFinishConfig, type: e.target.value})} placeholder="e.g. METAL, WOOD" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                            </div>
+                                            <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>
+                                                <label style={labelStyle}>Seamless Texture Map (JPG/PNG)</label>
+                                                {newFinishConfig.textureUrl && <div style={{ color: theme.inkSoft, fontSize: '0.85rem', marginBottom: '8px' }}>Asset Ready</div>}
+                                                <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', width: '100%', cursor: 'pointer' }} />
+                                                {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
+                                            </div>
+
+                                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px', marginTop: '10px' }}>
+                                                <label style={labelStyle}>Client-Specific Finish Names (CPQ Mapping)</label>
+                                                <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                                                    <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={fieldStyle}>
+                                                        <option value="">Select Customer...</option>
+                                                        {liveCustomers.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                                                    </select>
+                                                    <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={fieldStyle} />
+                                                    <button onClick={() => {
+                                                        if(!newFinishClientMapping.customerId || !newFinishClientMapping.clientFinishName) return alert("Select customer and enter finish name.");
+                                                        setNewFinishConfig(prev => ({...prev, clientMapping: [...(prev.clientMapping || []), newFinishClientMapping]}));
+                                                        setNewFinishClientMapping({customerId: '', clientFinishName: ''});
+                                                    }} style={{ padding: '0 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Map</button>
+                                                </div>
+                                                <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                    {(newFinishConfig.clientMapping || []).map((mapping, idx) => (
+                                                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: theme.paper2, padding: '10px 16px', border: `1px solid ${theme.line}`, fontSize: '0.9rem' }}>
+                                                            <span><strong style={{ color: theme.ink }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
+                                                            <span style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <button onClick={handleAddGlobalFinish} style={{ padding: '16px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                {editingGlobalFinish ? 'Save Changes' : 'Save New Finish'}
+                                            </button>
+                                        </div>
+                                    )}
+                                    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                        {globalFinishes.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No finishes added yet.</span>}
+                                        {globalFinishes.map(finish => {
+                                            const hasRecipe = activeRecipes.includes(finish.code) || activeRecipes.includes(finish.name);
+                                            return (
                                                 <div key={finish.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.paper, padding: '20px', border: `1px solid ${theme.line}`, borderLeft: `2px solid ${theme.brass}` }}>
                                                     <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
                                                         <div style={{ width: '48px', height: '48px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : theme.paper2, borderRadius: '50%', border: `1px solid ${theme.line}` }} />
                                                         <div>
-                                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.name}</div>
-                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Vendor: <span style={{color: theme.ink}}>{finish.vendor || 'Unassigned'}</span> | Mult: <span style={{color: theme.ink}}>x{finish.multiplier}</span></div>
+                                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.name} {finish.code && `(${finish.code})`}</div>
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Status: {hasRecipe ? 'Production Ready' : 'Working / R&D'}</div>
                                                             {finish.clientMapping && finish.clientMapping.length > 0 && (
                                                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink, marginTop: '4px' }}>{finish.clientMapping.length} Client Map(s) Active</div>
                                                             )}
                                                             <div style={{ marginTop: '10px' }}>
                                                                 <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '2px', display: 'inline-block' }}>
                                                                     {inlineTextureProgress[finish.id] > 0 ? `Uploading ${inlineTextureProgress[finish.id]}%` : (finish.textureUrl ? 'Replace Texture Map' : 'Upload Texture Map')}
-                                                                    <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleUpdateExistingFinishTexture(finish.id, e.target.files[0], true)} />
+                                                                    <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleUpdateExistingFinishTexture(finish.id, e.target.files[0])} />
                                                                 </label>
                                                             </div>
                                                         </div>
                                                     </div>
                                                     <div style={{ display: 'flex', gap: '12px' }}>
-                                                        <button onClick={() => handleEditOutsourceFinish(finish)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Edit Finish">Edit</button>
-                                                        <button onClick={() => handleRemoveOutsourceFinish(finish.id)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Delete Finish">Del</button>
+                                                        <button onClick={() => handleEditGlobalFinish(finish)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Edit Finish">Edit</button>
+                                                        <button onClick={() => handleRemoveFinish(finish.id)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Delete Finish">Del</button>
                                                     </div>
                                                 </div>
-                                            ))}
-                                        </div>
+                                            )
+                                        })}
                                     </div>
                                 </div>
-                            )}
+                            </div>
+
+                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Outsourced Master Finishes</span>
+                                    <button onClick={() => { setShowOutsourceFinishForm(!showOutsourceFinishForm); setEditingOutsourceFinish(null); setNewOutsourceFinishConfig({name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: []}); }} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showOutsourceFinishForm && !editingOutsourceFinish ? 'Close' : 'Add Finish'}</button>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                    {showOutsourceFinishForm && (
+                                        <div style={{ padding: '30px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                            <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px', marginBottom: '10px' }}>
+                                                {editingOutsourceFinish ? `Editing: ${newOutsourceFinishConfig.name}` : 'New Outsourced Finish'}
+                                            </div>
+                                            <div><label style={labelStyle}>Finish Name</label><input value={newOutsourceFinishConfig.name} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, name: e.target.value})} style={fieldStyle} /></div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                                <div><label style={labelStyle}>Approved Vendor</label><select value={newOutsourceFinishConfig.vendor} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, vendor: e.target.value})} style={fieldStyle}><option value="">Select...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
+                                                <div><label style={labelStyle}>Price Multiplier (x)</label><input type="number" step="0.1" value={newOutsourceFinishConfig.multiplier} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, multiplier: e.target.value})} style={fieldStyle} /></div>
+                                            </div>
+                                            
+                                            <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>
+                                                <label style={labelStyle}>Seamless Texture Map (JPG/PNG)</label>
+                                                {newOutsourceFinishConfig.textureUrl && <div style={{ color: theme.inkSoft, fontSize: '0.85rem', marginBottom: '8px' }}>Asset Ready</div>}
+                                                <input type="file" accept="image/*" onChange={(e) => handleFinishTextureUpload(e.target.files[0], true)} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', width: '100%', cursor: 'pointer' }} />
+                                                {finishUploadProgress > 0 && <progress value={finishUploadProgress} max="100" style={{ width: '100%', marginTop: '10px' }}/>}
+                                            </div>
+
+                                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px', marginTop: '10px' }}>
+                                                <label style={labelStyle}>Client-Specific Finish Names (CPQ Mapping)</label>
+                                                <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                                                    <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={fieldStyle}>
+                                                        <option value="">Select Customer...</option>
+                                                        {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                                    </select>
+                                                    <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={fieldStyle} />
+                                                    <button onClick={() => {
+                                                        if(!newFinishClientMapping.customerId || !newFinishClientMapping.clientFinishName) return alert("Select customer and enter finish name.");
+                                                        setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: [...(prev.clientMapping || []), newFinishClientMapping]}));
+                                                        setNewFinishClientMapping({customerId: '', clientFinishName: ''});
+                                                    }} style={{ padding: '0 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Map</button>
+                                                </div>
+                                                <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                    {(newOutsourceFinishConfig.clientMapping || []).map((mapping, idx) => (
+                                                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', background: theme.paper2, padding: '10px 16px', border: `1px solid ${theme.line}`, fontSize: '0.9rem' }}>
+                                                            <span><strong style={{ color: theme.ink }}>{mapping.customerId}:</strong> {mapping.clientFinishName}</span>
+                                                            <span style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem' }} onClick={() => setNewOutsourceFinishConfig(prev => ({...prev, clientMapping: prev.clientMapping.filter((_, i) => i !== idx)}))}>×</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            
+                                            <button onClick={handleAddOutsourceFinish} style={{ padding: '16px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                {editingOutsourceFinish ? 'Save Changes' : 'Save Outsourced Finish'}
+                                            </button>
+                                        </div>
+                                    )}
+                                    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
+                                        {outsourceFinishes.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No outsourced finishes added yet.</span>}
+                                        {outsourceFinishes.map(finish => (
+                                            <div key={finish.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.paper, padding: '20px', border: `1px solid ${theme.line}`, borderLeft: `2px solid ${theme.brass}` }}>
+                                                <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                                                    <div style={{ width: '48px', height: '48px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : theme.paper2, borderRadius: '50%', border: `1px solid ${theme.line}` }} />
+                                                    <div>
+                                                        <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.name}</div>
+                                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Vendor: <span style={{color: theme.ink}}>{finish.vendor || 'Unassigned'}</span> | Mult: <span style={{color: theme.ink}}>x{finish.multiplier}</span></div>
+                                                        {finish.clientMapping && finish.clientMapping.length > 0 && (
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink, marginTop: '4px' }}>{finish.clientMapping.length} Client Map(s) Active</div>
+                                                        )}
+                                                        <div style={{ marginTop: '10px' }}>
+                                                            <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '2px', display: 'inline-block' }}>
+                                                                {inlineTextureProgress[finish.id] > 0 ? `Uploading ${inlineTextureProgress[finish.id]}%` : (finish.textureUrl ? 'Replace Texture Map' : 'Upload Texture Map')}
+                                                                <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleUpdateExistingFinishTexture(finish.id, e.target.files[0], true)} />
+                                                            </label>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '12px' }}>
+                                                    <button onClick={() => handleEditOutsourceFinish(finish)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Edit Finish">Edit</button>
+                                                    <button onClick={() => handleRemoveOutsourceFinish(finish.id)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }} title="Delete Finish">Del</button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
 
                             {windowConfig.custom.filter(w => (w.brands || []).includes(adminBrandFilter)).map(w => {
                                 const myData = dynamicAssets.filter(d => d.windowId === w.id);
@@ -1347,7 +1397,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </div>
                             </div>
 
-                            {/* --- SYSTEM DATA & MASTER DICTIONARIES --- */}
+                            {/* --- MASTER DICTIONARIES --- */}
                             <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                                 <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
                                     <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Master Dictionaries</span>
@@ -1365,14 +1415,14 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                         </div>
                                         <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
                                             <input value={newDictInput.collections || ''} onChange={(e) => setNewDictItem({...newDictInput, collections: e.target.value})} style={{ flex: 1, padding: '10px', border: `1px solid ${theme.line}`, outline: 'none', fontFamily: 'var(--sans)' }} placeholder="Add collection..." />
-                                            <button onClick={handleAddCollection} style={{ background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', padding: '0 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
+                                            <button onClick={handleQuickAddCollection} style={{ background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', padding: '0 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
                                         </div>
                                         <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                             {collectionsData.length === 0 && <div style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No collections.</div>}
                                             {collectionsData.map(c => (
                                                 <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem', background: '#fff', padding: '12px 16px', border: `1px solid ${theme.line}`, color: theme.ink }}>
                                                     <span>{c.name}</span>
-                                                    <span onClick={() => handleDeleteCollection(c.id, c.name)} style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem', opacity: 0.7 }}>×</span>
+                                                    <span onClick={() => handleQuickDeleteCollection(c.id, c.name)} style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem', opacity: 0.7 }}>×</span>
                                                 </div>
                                             ))}
                                         </div>
@@ -1387,8 +1437,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                     <button onClick={() => handleDeleteListCategory(listKey)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.1rem', cursor: 'pointer' }} title="Delete Category">×</button>
                                                 </div>
                                                 <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
-                                                    <input value={newListItems[listKey] || ''} onChange={(e) => setNewListItems({...newListItems, [listKey]: e.target.value})} style={{ flex: 1, padding: '10px', border: `1px solid ${theme.line}`, outline: 'none', fontFamily: 'var(--sans)' }} placeholder="Add item..." />
-                                                    <button onClick={() => handleAddListItem(listKey)} style={{ background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', padding: '0 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
+                                                    <input value={newDictInput[listKey] || ''} onChange={(e) => setNewDictItem({...newDictInput, [listKey]: e.target.value})} style={{ flex: 1, padding: '10px', border: `1px solid ${theme.line}`, outline: 'none', fontFamily: 'var(--sans)' }} placeholder="Add item..." />
+                                                    <button onClick={() => handleAddMasterListItem(listKey)} style={{ background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', padding: '0 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
                                                 </div>
                                                 <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                                     {(globalLists[listKey] || []).length === 0 && <div style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>List is empty.</div>}
@@ -1403,7 +1453,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                                 )}
                                                                 <span>{item}</span>
                                                             </div>
-                                                            <span onClick={() => handleRemoveListItem(listKey, item)} style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem', opacity: 0.7 }}>×</span>
+                                                            <span onClick={() => handleRemoveMasterListItem(listKey, item)} style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem', opacity: 0.7 }}>×</span>
                                                         </div>
                                                     ))}
                                                 </div>
