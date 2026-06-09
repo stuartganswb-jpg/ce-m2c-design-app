@@ -30,6 +30,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const loadRTGOrders = async () => {
         setLoading(true);
         try {
+            // Only pull orders that are strictly "Approved" (Not yet Dispatched)
             const soQuery = query(collection(db, "hq_sales_orders"), where("status", "==", "Approved"), where("brand", "==", activeBrand));
             const woQuery = query(collection(db, "hq_work_orders"), where("status", "==", "Approved"), where("brand", "==", activeBrand));
             const poQuery = query(collection(db, "hq_purchase_orders"), where("status", "==", "Approved"), where("brand", "==", activeBrand));
@@ -140,7 +141,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 }
             }
             
-            addLog(`✅ Sync complete. Added ${newOrders} new orders. (Ignored ${skippedOrganic} organic orders, ${skippedStatus} wrong status).`, "success");
+            addLog(`✅ Sync complete. Added ${newOrders} new orders.`, "success");
             loadRTGOrders();
         } catch(e) {
             console.error(e);
@@ -150,35 +151,44 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    const fetchEnrichedJobData = async (hqJobId) => {
+    const fetchEnrichedJobData = async (hqJobId, orderType) => {
         let originalJob = null;
         let svgUri = null;
         let finishRecipe = "PENDING-RECIPE";
 
         if (hqJobId) {
             try {
-                const jSnap = await getDoc(doc(db, "jobs", hqJobId));
-                if (jSnap.exists()) {
-                    originalJob = jSnap.data();
-                } else {
-                    addLog(`Database missed job document: ${hqJobId}`, 'warn');
-                }
-
-                const filesSnap = await getDocs(query(collection(db, "crm_files"), where("jobId", "==", hqJobId)));
-                if (!filesSnap.empty) {
-                    const drawingDoc = filesSnap.docs.find(d => d.data().type === 'VISION_DRAWING');
-                    if (drawingDoc) {
-                        const svgString = drawingDoc.data().svgData;
-                        if (svgString) {
-                            svgUri = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgString);
-                        }
+                if (orderType === 'stock') {
+                    // For stock builds, we look directly in the Master Library (Approved_Designs)
+                    const adSnap = await getDoc(doc(db, "Approved_Designs", hqJobId));
+                    if (adSnap.exists()) {
+                        originalJob = adSnap.data();
                     } else {
-                        addLog(`No Shop Drawing found attached to ${hqJobId}`, 'info');
+                        addLog(`Master Library item not found: ${hqJobId}`, 'warn');
                     }
                 } else {
-                    addLog(`No files of any type attached to ${hqJobId}`, 'info');
+                    // For Sales Orders, we check the CPQ 'jobs' collection
+                    const jSnap = await getDoc(doc(db, "jobs", hqJobId));
+                    if (jSnap.exists()) {
+                        originalJob = jSnap.data();
+                    } else {
+                        // Fallback to library
+                        const adSnap = await getDoc(doc(db, "Approved_Designs", hqJobId));
+                        if (adSnap.exists()) originalJob = adSnap.data();
+                        else addLog(`Database missed job document: ${hqJobId}`, 'warn');
+                    }
+                    
+                    // Only try to fetch CPQ Shop Drawings for Sales Orders
+                    const filesSnap = await getDocs(query(collection(db, "crm_files"), where("jobId", "==", hqJobId)));
+                    if (!filesSnap.empty) {
+                        const drawingDoc = filesSnap.docs.find(d => d.data().type === 'VISION_DRAWING');
+                        if (drawingDoc && drawingDoc.data().svgData) {
+                            svgUri = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(drawingDoc.data().svgData);
+                        }
+                    }
                 }
 
+                // Check for CPQ finish recipe
                 if (originalJob && originalJob.cpqData && originalJob.cpqData.configuration) {
                     const fSnap = await getDoc(doc(db, "system", "master_finishes"));
                     if (fSnap.exists() && fSnap.data().finishes) {
@@ -191,21 +201,20 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 }
             } catch (err) {
                 console.error("Enrichment Fetch Error:", err);
-                addLog(`Warning: Failed to fetch enriched data - ${err.message}`, 'error');
             }
         }
         return { originalJob, svgUri, finishRecipe };
     };
 
-    const handleViewOrder = async (order) => {
-        setActiveViewOrder(order);
+    const handleViewOrder = async (order, orderType) => {
+        setActiveViewOrder({ ...order, orderType });
         setActiveJobDetails(null); 
         if (order.hqJobId) {
-            const { originalJob, finishRecipe, svgUri } = await fetchEnrichedJobData(order.hqJobId);
+            const { originalJob, finishRecipe, svgUri } = await fetchEnrichedJobData(order.hqJobId, orderType);
             if (originalJob) {
                 setActiveJobDetails({ ...originalJob, finishRecipe, svgUri });
             } else {
-                addLog(`Warning: Original CPQ Job Document [${order.hqJobId}] not found in database.`, 'warn');
+                addLog(`Warning: Original Document [${order.hqJobId}] not found in database.`, 'warn');
                 setActiveJobDetails({ finishRecipe, svgUri });
             }
         }
@@ -215,7 +224,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
 
         try {
-            const { originalJob, finishRecipe, svgUri } = await fetchEnrichedJobData(hqOrder.hqJobId);
+            const { originalJob, finishRecipe, svgUri } = await fetchEnrichedJobData(hqOrder.hqJobId, orderType);
 
             let cpqSpecs = {};
             if (originalJob && originalJob.cpqData && originalJob.cpqData.breakdown) {
@@ -224,7 +233,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 });
             }
 
-            const finWorkOrderId = orderType === 'sales' ? `WO-${hqOrder.soId || Date.now()}` : `WO-${hqOrder.woId || Date.now()}`;
+            // Fix the double WO-WO- issue by just using the ID properly
+            let finWorkOrderId = hqOrder.id;
+            if (orderType === 'sales' && !finWorkOrderId.startsWith('WO-')) {
+                finWorkOrderId = `WO-${hqOrder.soId || hqOrder.id}`;
+            }
             
             const finPayload = {
                 id: finWorkOrderId,
@@ -241,7 +254,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 totalParts: Number(hqOrder.totalParts) || 1,
                 note: hqOrder.memo || originalJob?.sidemark || "", 
                 cpqSpecs: cpqSpecs, 
-                imageUrl: svgUri || null, 
+                imageUrl: svgUri || originalJob?.finalImageUrl || null, 
                 
                 dimensions: {
                     length: Number(hqOrder.length) || 10,
@@ -255,13 +268,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 tasks: {
                     setup: { status: 'Pending', assignedTo: null }
                 },
+                brand: activeBrand,
                 createdAt: Date.now()
             };
 
             await setDoc(doc(db, "fin_workorders", finWorkOrderId), finPayload);
 
+            // Change status to Dispatched so it leaves the RTG board
             const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
-            await updateDoc(doc(db, collectionName, hqOrder.id), { pushedToFinishing: true });
+            await updateDoc(doc(db, collectionName, hqOrder.id), { 
+                pushedToFinishing: true,
+                status: "Dispatched" 
+            });
 
             addLog(`Dispatched ${finWorkOrderId} to Finishing Floor!`, "success");
             alert(`Successfully pushed ${finWorkOrderId} to Finishing Floor Setup Queue!`);
@@ -278,7 +296,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Shop Floor Custom Fabrication Queue?`)) return;
 
         try {
-            const { originalJob, svgUri, finishRecipe } = await fetchEnrichedJobData(hqOrder.hqJobId);
+            const { originalJob, svgUri, finishRecipe } = await fetchEnrichedJobData(hqOrder.hqJobId, orderType);
 
             let cpqSpecs = {};
             if (originalJob && originalJob.cpqData && originalJob.cpqData.breakdown) {
@@ -287,7 +305,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 });
             }
 
-            const shopJobId = orderType === 'sales' ? `SHOP-${hqOrder.soId || Date.now()}` : `SHOP-${hqOrder.woId || Date.now()}`;
+            const shopJobId = `SHOP-${hqOrder.id}`;
             
             const outSnap = await getDocs(collection(db, "hq_outsource_finishes"));
             const outsourceFinishes = outSnap.docs.map(d => d.data());
@@ -299,27 +317,36 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             const shopPayload = {
                 id: shopJobId,
                 woNum: shopJobId,
-                soNum: hqOrder.soId || 'N/A',
+                soNum: hqOrder.soId || hqOrder.woId || 'N/A',
                 isOutsourced: isOutsourced,
                 finishRecipe: finishRecipe,
                 outsourcePrice: outsourcePrice,
-                item: hqOrder.hqJobId || 'Custom App Order', 
+                // Ensure the itemName gets populated correctly for stock builds
+                item: originalJob?.itemName || originalJob?.name || hqOrder.variantErpId || hqOrder.rootItem || hqOrder.hqJobId || 'Custom App Order', 
                 qty: Number(hqOrder.totalParts) || 1,
                 reqDate: hqOrder.reqDate || "",
                 category: 'Custom Fabrication', 
                 status: 'Pending',
                 priority: 999,
+                brand: activeBrand, 
                 clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
                 note: hqOrder.memo || originalJob?.sidemark || "",
                 cpqSpecs: cpqSpecs, 
-                imageUrl: svgUri || null, 
+                imageUrl: svgUri || originalJob?.finalImageUrl || null, 
+                needsPhosphating: hqOrder.needsPhosphating || false, 
+                isPlatingDemand: hqOrder.isPlatingDemand || false,
+                rootItem: hqOrder.rootItem || '',
                 createdAt: Date.now()
             };
 
             await setDoc(doc(db, "shop_custom_orders", shopJobId), shopPayload);
 
+            // Change status to Dispatched so it leaves the RTG board
             const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
-            await updateDoc(doc(db, collectionName, hqOrder.id), { pushedToShop: true });
+            await updateDoc(doc(db, collectionName, hqOrder.id), { 
+                pushedToShop: true,
+                status: "Dispatched" 
+            });
 
             addLog(`Dispatched ${shopJobId} to Shop Floor!`, "success");
             alert(`Successfully pushed ${shopJobId} to Shop Floor Custom Fabrication Queue!`);
@@ -393,7 +420,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                         </div>
                                     )}
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                        <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(so)}>View</button>
+                                        <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(so, 'sales')}>View</button>
                                         <button style={{ ...btnStyle, flex: 1, background: so.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: so.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: so.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(so, 'sales')}>
                                             {so.pushedToFinishing ? 'Finishing Pushed ✓' : 'Push to Finishing'}
                                         </button>
@@ -421,10 +448,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                         <div>
                                             <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }}>WO: {wo.woId || wo.id}</div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Build to Stock</div>
+                                            {wo.needsPhosphating && <div style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 600, marginTop: '4px' }}>*REQUIRES PHOSPHATING*</div>}
+                                            {wo.isPlatingDemand && <div style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>*PLATING DEMAND STOCK*</div>}
                                         </div>
                                         <button onClick={() => deleteOrder('hq_work_orders', wo.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                        <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(wo, 'stock')}>View</button>
                                         <button style={{ ...btnStyle, flex: 1, background: wo.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: wo.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: wo.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(wo, 'stock')}>
                                             {wo.pushedToFinishing ? 'Finishing Pushed ✓' : 'Push to Finishing'}
                                         </button>
@@ -523,7 +553,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                         
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '20px', marginBottom: '30px' }}>
                             <div>
-                                <h2 style={{ color: 'var(--ink)', margin: 0, fontFamily: 'var(--serif)', fontSize: '2rem', fontWeight: 500 }}>Sales Order: {activeViewOrder.soId}</h2>
+                                <h2 style={{ color: 'var(--ink)', margin: 0, fontFamily: 'var(--serif)', fontSize: '2rem', fontWeight: 500 }}>
+                                    {activeViewOrder.orderType === 'sales' ? 'Sales Order' : 'Work Order'}: {activeViewOrder.soId || activeViewOrder.woId}
+                                </h2>
                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>CPQ App ID: {activeViewOrder.hqJobId || 'N/A'}</div>
                             </div>
                             <button onClick={() => setActiveViewOrder(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '2rem', cursor: 'pointer' }}>×</button>
@@ -541,9 +573,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '16px' }}>Engineering Drawing</div>
                                         <img src={activeJobDetails.svgUri} alt="Shop Drawing" style={{ width: '100%', maxHeight: '400px', objectFit: 'contain', background: '#fff', border: '1px solid var(--line)' }} />
                                     </div>
+                                ) : activeJobDetails.finalImageUrl ? (
+                                    <div style={{ border: '1px solid var(--line)', padding: '20px', background: 'var(--paper)' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '16px' }}>Library Image</div>
+                                        <img src={activeJobDetails.finalImageUrl} alt="Library Part" style={{ width: '100%', maxHeight: '400px', objectFit: 'contain', background: '#fff', border: '1px solid var(--line)' }} />
+                                    </div>
                                 ) : (
                                     <div style={{ padding: '20px', background: 'var(--paper)', color: 'var(--ink-soft)', fontStyle: 'italic', border: '1px solid var(--line)' }}>
-                                        No Shop Drawing attached to this configuration.
+                                        No visual assets attached to this configuration.
                                     </div>
                                 )}
 
@@ -577,19 +614,21 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                             </tbody>
                                         </table>
                                     ) : (
-                                        <div style={{ fontStyle: 'italic', color: 'var(--ink-soft)' }}>No itemized breakdown found in source document.</div>
+                                        <div style={{ fontStyle: 'italic', color: 'var(--ink-soft)' }}>
+                                            {activeJobDetails.itemName ? `Stock Item: ${activeJobDetails.itemName}` : 'No itemized breakdown found in source document.'}
+                                        </div>
                                     )}
                                 </div>
 
                                 <div style={{ display: 'flex', gap: '16px', marginTop: '10px' }}>
                                     <button 
-                                        onClick={() => { pushToFinishing(activeViewOrder, 'sales'); setActiveViewOrder(null); }} 
+                                        onClick={() => { pushToFinishing(activeViewOrder, activeViewOrder.orderType); setActiveViewOrder(null); }} 
                                         style={{ flex: 1, padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}
                                     >
                                         Push to Finishing Floor
                                     </button>
                                     <button 
-                                        onClick={() => { pushToShop(activeViewOrder, 'sales'); setActiveViewOrder(null); }} 
+                                        onClick={() => { pushToShop(activeViewOrder, activeViewOrder.orderType); setActiveViewOrder(null); }} 
                                         style={{ flex: 1, padding: '16px', background: 'var(--brass)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}
                                     >
                                         Push to Shop Floor
