@@ -95,6 +95,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     
     const [collectionsData, setCollectionsData] = useState([]);
     const [windowConfig, setWindowConfig] = useState({ system: DEFAULT_SYSTEM_WINDOWS, custom: [] });
+    const [newDictInput, setNewDictItem] = useState({ prodTypes: "", watchLists: "", collections: "" });
     const [customSchema, setCustomSchema] = useState([]);
     const [globalFinishes, setGlobalFinishes] = useState([]);
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);
