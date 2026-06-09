@@ -7,7 +7,7 @@ const H1AssemblyGenerator = () => {
     const [log, setLog] = useState("");
 
     const handleRunMassUpdate = async () => {
-        if (!window.confirm("Run one-time Dayton Grey backfill script? This will update thousands of records.")) return;
+        if (!window.confirm("Run one-time In-House Logistics backfill script?")) return;
         
         setIsRunning(true);
         setLog("Fetching all Approved Designs from database...");
@@ -16,8 +16,6 @@ const H1AssemblyGenerator = () => {
             const snap = await getDocs(collection(db, "Approved_Designs"));
             let updateCount = 0;
             let batches = [];
-            
-            // Firestore limits batches to 500 operations. We will chunk them.
             let currentBatch = writeBatch(db);
             let currentBatchCount = 0;
 
@@ -25,43 +23,48 @@ const H1AssemblyGenerator = () => {
                 const data = document.data();
                 const specs = data.manufacturingSpecs || {};
 
-                // 1. Identify Target Records
-                const isAssembly = data.partClass === 'Assembly' || data.partClass === 'Master Assembly';
-                const isOutsourced = specs.isInHouse === false;
-                
-                const outAction = (specs.outsourceAction || "").toUpperCase();
-                const isPlated = outAction === "PLATED" || outAction.includes("PLATING");
-
-                // If it matches the exact criteria requested
-                if (isAssembly && isOutsourced && isPlated) {
+                // 1. Target Only In-House Items
+                // (If isInHouse is explicitly false, it is outsourced. Otherwise, it's in-house).
+                if (specs.isInHouse !== false) {
+                    const isAssembly = data.partClass === 'Assembly' || data.partClass === 'Master Assembly';
+                    const pType = (specs.productType || "").toUpperCase();
                     
-                    const pType = specs.productType || "";
-                    const isBracket = pType.toUpperCase().includes("BRACKET");
+                    const isBracket = pType.includes("BRACKET");
+                    const isBackplate = pType.includes("BACKPLATE");
+                    const hasProjection = !!specs.customData?.projection;
 
-                    // 2. Build the exact field updates using Dot Notation 
-                    // (This safely updates nested fields without deleting sibling fields)
-                    const updates = {
-                        "manufacturingSpecs.vendorName": "Dayton Grey",
-                        "manufacturingSpecs.vendorId": pType,
-                        "manufacturingSpecs.leadTime": "14",
-                        "manufacturingSpecs.reorderPoint": isBracket ? "10" : "6"
-                    };
+                    const updates = {};
+                    let willUpdate = false;
 
-                    // 3. Conditional Bracket Logic
-                    if (isBracket && specs.customData?.projection) {
+                    // Rule 1: In-House Bracket Assemblies (With a Projection)
+                    if (isAssembly && isBracket && hasProjection) {
+                        updates["manufacturingSpecs.reorderPoint"] = "36";
                         updates["manufacturingSpecs.customData.bracketType"] = "WALL";
+                        willUpdate = true;
+                    } 
+                    // Rule 2: In-House Backplates
+                    else if (isBackplate) {
+                        updates["manufacturingSpecs.reorderPoint"] = "36";
+                        willUpdate = true;
+                    } 
+                    // Rule 3: All other In-House items/assemblies
+                    else {
+                        updates["manufacturingSpecs.reorderPoint"] = "18";
+                        willUpdate = true;
                     }
 
-                    // Add to the batch queue
-                    currentBatch.update(doc(db, "Approved_Designs", document.id), updates);
-                    updateCount++;
-                    currentBatchCount++;
+                    // Apply the batch payload
+                    if (willUpdate) {
+                        currentBatch.update(doc(db, "Approved_Designs", document.id), updates);
+                        updateCount++;
+                        currentBatchCount++;
 
-                    // Commit batch if we hit the 450 limit
-                    if (currentBatchCount >= 450) {
-                        batches.push(currentBatch.commit());
-                        currentBatch = writeBatch(db);
-                        currentBatchCount = 0;
+                        // Firestore batch limit safety chunking
+                        if (currentBatchCount >= 450) {
+                            batches.push(currentBatch.commit());
+                            currentBatch = writeBatch(db);
+                            currentBatchCount = 0;
+                        }
                     }
                 }
             });
@@ -72,7 +75,7 @@ const H1AssemblyGenerator = () => {
             }
 
             await Promise.all(batches);
-            setLog(`✅ Success! Updated ${updateCount} Plated Outsourced Assemblies.`);
+            setLog(`✅ Success! Updated ${updateCount} In-House Records.`);
 
         } catch (err) {
             console.error(err);
@@ -83,28 +86,26 @@ const H1AssemblyGenerator = () => {
     };
 
     return (
-        <div style={{ background: '#fdf2f2', border: '1px solid #d9534f', padding: '24px', marginBottom: '30px', borderRadius: '4px' }}>
-            <h3 style={{ margin: '0 0 12px 0', color: '#d9534f', fontFamily: 'var(--serif)', fontSize: '1.4rem' }}>
-                ⚠️ ONE-TIME DATA BACKFILL: Dayton Grey & Plating
+        <div style={{ background: '#f0f4f8', border: '1px solid #4a90e2', padding: '24px', marginBottom: '30px', borderRadius: '4px' }}>
+            <h3 style={{ margin: '0 0 12px 0', color: '#4a90e2', fontFamily: 'var(--serif)', fontSize: '1.4rem' }}>
+                ⚙️ ONE-TIME DATA BACKFILL: In-House ROP & Bracket Mounts
             </h3>
             <p style={{ fontSize: '0.95rem', marginBottom: '20px', color: 'var(--ink)', lineHeight: '1.6' }}>
-                This script finds all <strong>Outsourced Assemblies</strong> mapped to the <strong>Plated</strong> or <strong>PLATING</strong> Outsource Action and automatically sets:<br/><br/>
-                • <strong>Vendor:</strong> Dayton Grey<br/>
-                • <strong>Vendor Part # / SKU:</strong> [Injected from Product Type]<br/>
-                • <strong>Lead Time:</strong> 14 Days<br/>
-                • <strong>Reorder Pt (ROP):</strong> 10 (If Bracket) / 6 (All others)<br/>
-                • <strong>Bracket Mount:</strong> Wall (If Bracket AND has a Projection)
+                This script finds all <strong>In-House Items & Assemblies</strong> and updates them based on your rules:<br/><br/>
+                • <strong>In-House Bracket Assemblies (with Projection):</strong> Sets ROP to 36, Bracket Mount to WALL<br/>
+                • <strong>In-House Backplates:</strong> Sets ROP to 36<br/>
+                • <strong>All other In-House Items:</strong> Sets ROP to 18
             </p>
             <button
                 onClick={handleRunMassUpdate}
                 disabled={isRunning}
-                style={{ padding: '16px 32px', background: '#d9534f', color: '#fff', border: 'none', cursor: isRunning ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}
+                style={{ padding: '16px 32px', background: '#4a90e2', color: '#fff', border: 'none', cursor: isRunning ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}
             >
                 {isRunning ? 'Processing Database...' : 'Run Backfill Script'}
             </button>
             
             {log && (
-                <div style={{ marginTop: '20px', padding: '16px', background: '#fff', border: '1px solid #d9534f', color: log.includes('✅') ? '#28a745' : '#d9534f', fontWeight: 500, fontFamily: 'var(--mono)' }}>
+                <div style={{ marginTop: '20px', padding: '16px', background: '#fff', border: '1px solid #4a90e2', color: log.includes('✅') ? '#28a745' : '#d9534f', fontWeight: 500, fontFamily: 'var(--mono)' }}>
                     {log}
                 </div>
             )}

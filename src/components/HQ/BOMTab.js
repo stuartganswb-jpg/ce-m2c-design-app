@@ -166,7 +166,6 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       }
   }, [selectedAssemblyData, activeBrand]);
 
-  // 🚀 HELPER: Force React to display imported data even if it doesn't match the Master Lists perfectly
   const renderOptionFallback = (currentVal, optionsArray) => {
       const safeVal = String(currentVal || "").trim().toUpperCase();
       if (!safeVal || safeVal === "N/A" || safeVal === "UNASSIGNED" || safeVal === "NONE") return null;
@@ -935,12 +934,13 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
                             <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
                                 {editSpecs.isInHouse ? (
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                                         <div><label style={labelStyle}>Program #</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                         <div><label style={labelStyle}>Raw Mat</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                         <div><label style={labelStyle}>Weight (lbs)</label><input name="weight" type="number" step="0.01" value={editSpecs.weight || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                         <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                         <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                        <div><label style={labelStyle}>Reorder Pt (ROP)</label><input name="reorderPoint" type="number" value={editSpecs.reorderPoint || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                     </div>
                                 ) : (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
@@ -1138,7 +1138,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         ) : field.type === 'file' ? (
                                             <div style={{ background: 'var(--paper)', padding: '12px', border: '1px solid var(--line)' }}>
                                                 {editSpecs.customData?.[field.key] && <a href={editSpecs.customData[field.key]} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: 'var(--ink)', textDecoration: 'underline', display: 'block', marginBottom: '8px' }}>View Current File</a>}
-                                                <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0], false)} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
+                                                <input type="file" onChange={(e) => handleDynamicFileUpload(field.key, e.target.files[0])} style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)' }} />
+                                                {dynamicUploadProgress[field.key] > 0 && <progress value={dynamicUploadProgress[field.key]} max="100" style={{ width: '100%', marginTop: '8px' }} />}
                                             </div>
                                         ) : (
                                             <input type={field.type} value={editSpecs.customData?.[field.key] || ""} onChange={(e) => handleCustomFieldChange(field.key, e.target.value)} style={fieldStyle} />
@@ -1149,7 +1150,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 <div style={{ gridColumn: 'span 2' }}>
                                     <label style={labelStyle}>Assign to Watchlist</label>
                                     <select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={fieldStyle}>
-                                        <option value="NONE">None</option>{(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
+                                        <option value="NONE">None</option>
+                                        {(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
                                     </select>
                                 </div>
                             </div>
@@ -1181,7 +1183,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         {(globalLists.feeTypes || []).map(f => <option key={f} value={String(f).toUpperCase()}>{f}</option>)}
                                         {renderOptionFallback(editSpecs.customData?.feeType, globalLists.feeTypes)}
                                     </select>
-                                    <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', fontStyle: 'italic', display: 'block', marginTop: '6px' }}>If selected, the Vision System will automatically bill for this item when triggered.</span>
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic', display: 'block', marginTop: '6px' }}>If selected, the Vision System will automatically bill for this item when triggered.</span>
                                 </div>
                             </div>
                         </div>
@@ -1239,4 +1241,4 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   );
 };
 
-export default BOMTab;
+export default LibraryTab;
