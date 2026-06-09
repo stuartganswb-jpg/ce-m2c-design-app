@@ -23,7 +23,7 @@ const DEFAULT_SYSTEM_WINDOWS = {
   projections: ['ce', 'm2c', 'uniquity', 'leyla'],
   bins: ['ce', 'm2c', 'uniquity', 'leyla'],
   bracketMounts: ['ce', 'm2c', 'uniquity', 'leyla'], 
-  feeTypes: ['ce', 'm2c', 'uniquity', 'leyla']       
+  feeTypes: ['ce', 'm2c', 'uniquity', 'leyla']      
 };
 
 const LIST_LABELS = {
@@ -37,7 +37,7 @@ const LIST_LABELS = {
     projections: 'BRACKET PROJECTIONS',
     bins: 'WAREHOUSE BIN LOCATIONS',
     bracketMounts: 'BRACKET MOUNT TYPES', 
-    feeTypes: 'SERVICE / FEE TYPES'       
+    feeTypes: 'SERVICE / FEE TYPES'      
 };
 
 const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
@@ -166,6 +166,77 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
         return () => { unsubLists(); unsubCols(); unsubWin(); unsubSchema(); unsubFinishes(); unsubOutsource(); unsubAssets(); unsubVendors(); unsubCustomers(); unsubRecipes(); };
     }, [activeBrand]);
+
+    // 🚀 DYNAMIC ARRAYS FOR DROPDOWNS
+    const dynamicProdTypes = Array.from(new Set([
+        ...(globalLists.prodTypes || []).map(p => p.toUpperCase()), 
+        ...inventory.map(p => (p.productType || p.manufacturingSpecs?.productType || "").toUpperCase()).filter(Boolean)
+    ])).sort();
+
+    const dynamicCollections = Array.from(new Set([
+        ...collectionsData.map(c => c.name.toUpperCase()), 
+        ...inventory.flatMap(p => p.manufacturingSpecs?.collections ? p.manufacturingSpecs.collections.map(c => c.toUpperCase()) : (p.manufacturingSpecs?.customData?.collection && p.manufacturingSpecs.customData.collection !== 'N/A' ? [p.manufacturingSpecs.customData.collection.toUpperCase()] : []))
+    ])).sort();
+
+    const dynamicWatchlists = Array.from(new Set([
+        ...(globalLists.watchLists || []).map(w => w.toUpperCase()), 
+        ...inventory.map(p => {
+            const specs = p.manufacturingSpecs || {};
+            const nsWatchlist = specs.customData?.watchlist && specs.customData.watchlist !== 'N/A' ? specs.customData.watchlist.toUpperCase() : "NONE";
+            return specs.watchList ? specs.watchList.toUpperCase() : nsWatchlist;
+        }).filter(w => w !== "NONE")
+    ])).sort();
+
+    // 🚀 SYNC ERP DATA TO DICTIONARIES
+    const handleSyncDictionaries = async () => {
+        if (!window.confirm("Scan inventory for unmapped Product Types, Watchlists, and Collections to permanently add them to your Master Dictionaries?")) return;
+
+        let newProdTypes = new Set(globalLists.prodTypes || []);
+        let newWatchLists = new Set(globalLists.watchLists || []);
+        let currentCollections = collectionsData.map(c => c.name.toUpperCase());
+        let colsToAdd = new Set();
+
+        inventory.forEach(part => {
+            const specs = part.manufacturingSpecs || {};
+            
+            const pType = (specs.productType || part.productType || "").trim().toUpperCase();
+            if (pType && !newProdTypes.has(pType)) newProdTypes.add(pType);
+
+            const wl = (specs.watchList || specs.customData?.watchlist || "").trim().toUpperCase();
+            if (wl && wl !== 'NONE' && wl !== 'N/A' && !newWatchLists.has(wl)) newWatchLists.add(wl);
+
+            const partCols = specs.collections || [];
+            if (specs.customData?.collection && specs.customData.collection !== 'N/A') partCols.push(specs.customData.collection);
+            if (specs.collection && specs.collection !== 'N/A') partCols.push(specs.collection);
+            
+            partCols.forEach(c => {
+                const cName = c.trim().toUpperCase();
+                if (cName && !currentCollections.includes(cName)) {
+                    colsToAdd.add(cName);
+                }
+            });
+        });
+
+        // Update master_lists
+        const updatedLists = {
+            ...globalLists,
+            prodTypes: Array.from(newProdTypes),
+            watchLists: Array.from(newWatchLists)
+        };
+        await setDoc(doc(db, "system", "master_lists"), updatedLists, { merge: true });
+
+        // Add missing collections
+        const colPromises = Array.from(colsToAdd).map(cName => {
+            const safeId = `COL_${Date.now()}_${Math.random().toString(36).substring(2,7)}`;
+            return setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: cName, allowedCustomers: [], allowedFinishes: [] });
+        });
+        
+        if (colPromises.length > 0) {
+            await Promise.all(colPromises);
+        }
+
+        alert("✅ Dictionaries synced successfully with ERP data!");
+    };
 
     // --- CSV BULK UPLOAD & MAPPING LOGIC ---
     const handleDownloadCsvTemplate = () => {
@@ -470,7 +541,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const handleAddCollection = async () => {
         if (!newCollection.name) return alert("Collection name is required.");
         const safeId = `COL_${Date.now()}`;
-        await setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: newCollection.name, allowedCustomers: newCollection.allowedCustomers, allowedFinishes: newCollection.allowedFinishes });
+        await setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: newCollection.name.toUpperCase(), allowedCustomers: newCollection.allowedCustomers, allowedFinishes: newCollection.allowedFinishes });
         setNewCollection({ name: '', allowedCustomers: [], allowedFinishes: [] });
         setShowCollectionForm(false);
     };
@@ -757,7 +828,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </label>
                                 <select disabled={!updates.productType.active} value={updates.productType.value} onChange={(e) => handleUpdateChange('productType', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.productType.active ? 1 : 0.5 }}>
                                     <option value="">Select Type...</option>
-                                    {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt.toUpperCase()}>{pt}</option>)}
+                                    {dynamicProdTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
                                 </select>
                             </div>
                         )}
@@ -769,8 +840,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </label>
                             <select disabled={!updates.routingType.active} value={updates.routingType.value} onChange={(e) => handleUpdateChange('routingType', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.routingType.active ? 1 : 0.5 }}>
                                 <option value="">Select Routing...</option>
-                                <optgroup label="Raw Materials">{(globalLists.inventoryTypes || []).map(t => <option key={t} value={t}>{t}</option>)}</optgroup>
-                                <optgroup label="Assemblies">{(globalLists.assemblyTypes || []).map(t => <option key={t} value={t}>{t}</option>)}</optgroup>
+                                <optgroup label="Raw Materials">{(globalLists.inventoryTypes || []).map(t => <option key={t} value={t.toUpperCase()}>{t}</option>)}</optgroup>
+                                <optgroup label="Assemblies">{(globalLists.assemblyTypes || []).map(t => <option key={t} value={t.toUpperCase()}>{t}</option>)}</optgroup>
                             </select>
                         </div>
 
@@ -808,7 +879,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </label>
                                 <select disabled={!updates.watchList.active} value={updates.watchList.value} onChange={(e) => handleUpdateChange('watchList', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.watchList.active ? 1 : 0.5 }}>
                                     <option value="NONE">None</option>
-                                    {(globalLists.watchLists || []).map(w => <option key={w} value={w.toUpperCase()}>{w}</option>)}
+                                    {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
                                 </select>
                             </div>
                         )}
@@ -821,7 +892,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </label>
                                 <select disabled={!updates.partHandling.active} value={updates.partHandling.value} onChange={(e) => handleUpdateChange('partHandling', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.partHandling.active ? 1 : 0.5 }}>
                                     <option value="">Unassigned</option>
-                                    {(globalLists.partHandling || []).map(ph => <option key={ph} value={ph}>{ph}</option>)}
+                                    {(globalLists.partHandling || []).map(ph => <option key={ph} value={ph.toUpperCase()}>{ph}</option>)}
                                 </select>
                             </div>
                         )}
@@ -897,7 +968,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </label>
                             <select disabled={!updates.binLocation.active} value={updates.binLocation.value} onChange={(e) => handleUpdateChange('binLocation', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.binLocation.active ? 1 : 0.5, textTransform: 'uppercase' }}>
                                 <option value="">Select Bin...</option>
-                                {(globalLists.bins || []).map(b => <option key={b} value={b}>{b}</option>)}
+                                {(globalLists.bins || []).map(b => <option key={b} value={b.toUpperCase()}>{b}</option>)}
                             </select>
                         </div>
 
@@ -920,7 +991,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </label>
                                 <select disabled={!updates.outsourceAction.active} value={updates.outsourceAction.value} onChange={(e) => handleUpdateChange('outsourceAction', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.outsourceAction.active ? 1 : 0.5 }}>
                                     <option value="">Select Action...</option>
-                                    {(globalLists.outsourceActions || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                    {(globalLists.outsourceActions || []).map(x => <option key={x} value={x.toUpperCase()}>{x}</option>)}
                                 </select>
                             </div>
                         )}
@@ -933,7 +1004,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </label>
                                 <select disabled={!updates.pillowSize.active} value={updates.pillowSize.value} onChange={(e) => handleUpdateChange('pillowSize', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.pillowSize.active ? 1 : 0.5 }}>
                                     <option value="">Select Size...</option>
-                                    {(globalLists.pillowSizes || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                    {(globalLists.pillowSizes || []).map(x => <option key={x} value={x.toUpperCase()}>{x}</option>)}
                                 </select>
                             </div>
                         )}
@@ -946,7 +1017,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </label>
                                 <select disabled={!updates.fillType.active} value={updates.fillType.value} onChange={(e) => handleUpdateChange('fillType', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.fillType.active ? 1 : 0.5 }}>
                                     <option value="">Select Fill...</option>
-                                    {(globalLists.fillTypes || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                    {(globalLists.fillTypes || []).map(x => <option key={x} value={x.toUpperCase()}>{x}</option>)}
                                 </select>
                             </div>
                         )}
@@ -959,7 +1030,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </label>
                                 <select disabled={!updates.flangeStyle.active} value={updates.flangeStyle.value} onChange={(e) => handleUpdateChange('flangeStyle', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.flangeStyle.active ? 1 : 0.5 }}>
                                     <option value="">Select Style...</option>
-                                    {(globalLists.flangeStyles || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                    {(globalLists.flangeStyles || []).map(x => <option key={x} value={x.toUpperCase()}>{x}</option>)}
                                 </select>
                             </div>
                         )}
@@ -972,7 +1043,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </label>
                                 <select disabled={!updates.stitchType.active} value={updates.stitchType.value} onChange={(e) => handleUpdateChange('stitchType', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.stitchType.active ? 1 : 0.5 }}>
                                     <option value="">Select Routing...</option>
-                                    {(globalLists.stitchTypes || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                    {(globalLists.stitchTypes || []).map(x => <option key={x} value={x.toUpperCase()}>{x}</option>)}
                                 </select>
                             </div>
                         )}
@@ -985,7 +1056,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </label>
                                 <select disabled={!updates.seamCount.active} value={updates.seamCount.value} onChange={(e) => handleUpdateChange('seamCount', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.seamCount.active ? 1 : 0.5 }}>
                                     <option value="">Select Seam Count...</option>
-                                    {(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                    {(globalLists.seamCounts || []).map(x => <option key={x} value={x.toUpperCase()}>{x}</option>)}
                                 </select>
                             </div>
                         )}
@@ -998,7 +1069,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </label>
                                 <select disabled={!updates.projection.active} value={updates.projection.value} onChange={(e) => handleUpdateChange('projection', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.projection.active ? 1 : 0.5 }}>
                                     <option value="">Select Projection...</option>
-                                    {(globalLists.projections || []).map(x => <option key={x} value={x}>{x}</option>)}
+                                    {(globalLists.projections || []).map(x => <option key={x} value={x.toUpperCase()}>{x}</option>)}
                                 </select>
                             </div>
                         )}
@@ -1011,7 +1082,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 </label>
                                 <select disabled={!updates.collection.active} value={updates.collection.value} onChange={(e) => handleUpdateChange('collection', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.collection.active ? 1 : 0.5 }}>
                                     <option value="">Select Collection...</option>
-                                    {collectionsData.map(c => <option key={c.id} value={c.name.toUpperCase()}>{c.name}</option>)}
+                                    {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                             </div>
                         )}
@@ -1058,7 +1129,11 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                     </label>
                                 ))}
                             </div>
-                            <button onClick={() => setShowWindowManager(true)} style={{ marginLeft: 'auto', padding: '12px 24px', background: theme.paper2, color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Manage Brand Windows</button>
+                            
+                            <div style={{ marginLeft: 'auto', display: 'flex', gap: '12px' }}>
+                                <button onClick={handleSyncDictionaries} style={{ padding: '12px 24px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Sync ERP Data to Dictionaries</button>
+                                <button onClick={() => setShowWindowManager(true)} style={{ padding: '12px 24px', background: theme.paper2, color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Manage Brand Windows</button>
+                            </div>
                         </div>
                         
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
@@ -1152,70 +1227,6 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                 </div>
                             )}
-
-                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                                <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
-                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Master Collections</span>
-                                    <button onClick={() => setShowCollectionForm(!showCollectionForm)} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showCollectionForm ? 'Close' : 'Add Collection'}</button>
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                                    {showCollectionForm && (
-                                        <div style={{ padding: '30px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                                            <div>
-                                                <label style={labelStyle}>Collection Name</label>
-                                                <input value={newCollection.name} onChange={(e) => setNewCollection({...newCollection, name: e.target.value})} placeholder="e.g. Modern Industrial" style={fieldStyle} />
-                                            </div>
-                                            
-                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '16px', maxHeight: '250px', overflowY: 'auto' }}>
-                                                   <label style={labelStyle}>Restrict to Customers (Optional)</label>
-                                                    {liveCustomers.length === 0 && <span style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No customers in database.</span>}
-                                                    {liveCustomers.map(c => (
-                                                        <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', marginBottom: '8px', cursor: 'pointer', color: theme.ink }}>
-                                                            <input type="checkbox" checked={newCollection.allowedCustomers.includes(c.name)} onChange={() => toggleCollectionCustomer(c.name)} /> {c.name}
-                                                        </label>
-                                                    ))}
-                                                </div>
-
-                                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '16px', maxHeight: '250px', overflowY: 'auto' }}>
-                                                    <label style={labelStyle}>Allowed Finishes (Optional)</label>
-                                                    
-                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, background: theme.paper2, padding: '6px', marginBottom: '10px' }}>In-House Finishes</div>
-                                                    {globalFinishes.length === 0 && <span style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic', display: 'block', padding: '5px' }}>No in-house finishes.</span>}
-                                                    {globalFinishes.map(f => (
-                                                        <label key={`inhouse-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', marginBottom: '8px', cursor: 'pointer', color: theme.ink }}>
-                                                            <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name} {f.code && `(${f.code})`}
-                                                        </label>
-                                                    ))}
-
-                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, background: theme.paper2, padding: '6px', marginTop: '20px', marginBottom: '10px' }}>Outsourced Finishes</div>
-                                                    {outsourceFinishes.length === 0 && <span style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic', display: 'block', padding: '5px' }}>No outsourced finishes.</span>}
-                                                    {outsourceFinishes.map(f => (
-                                                        <label key={`outsource-${f.id}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', marginBottom: '8px', cursor: 'pointer', color: theme.ink }}>
-                                                            <input type="checkbox" checked={newCollection.allowedFinishes.includes(f.name)} onChange={() => toggleCollectionFinish(f.name)} /> {f.name}
-                                                        </label>
-                                                    ))}
-                                                </div>
-                                            </div>
-
-                                            <button onClick={handleAddCollection} style={{ padding: '16px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Collection</button>
-                                        </div>
-                                    )}
-                                    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
-                                        {collectionsData.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No collections mapped yet.</span>}
-                                        {collectionsData.map(col => (
-                                            <div key={col.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: theme.paper, padding: '20px', border: `1px solid ${theme.line}`, borderLeft: `2px solid ${theme.brass}` }}>
-                                                <div>
-                                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: theme.ink }}>{col.name}</div>
-                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '8px' }}>Customers: <span style={{color: theme.ink}}>{col.allowedCustomers?.length > 0 ? col.allowedCustomers.join(', ') : 'All (Unrestricted)'}</span></div>
-                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '4px' }}>Finishes: <span style={{color: theme.ink}}>{col.allowedFinishes?.length > 0 ? col.allowedFinishes.join(', ') : 'All (Unrestricted)'}</span></div>
-                                                </div>
-                                                <button onClick={() => handleDeleteCollection(col.id)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1rem', cursor: 'pointer', textDecoration: 'underline' }}>Del</button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
 
                             {windowConfig.system.outsourceFinishes?.includes(adminBrandFilter) && (
                                 <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
@@ -1431,6 +1442,84 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                         </div>
                     </div>
                 )}
+            </div>
+
+            {/* --- SYSTEM DATA & MASTER DICTIONARIES (Dynamic UI) --- */}
+            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', marginTop: '40px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
+                    <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Master Dictionaries</h3>
+                    <p style={{ margin: '8px 0 0 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Add or remove categories globally. Changes here sync instantly to the Library, BOM, and CPQ engines.</p>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '30px' }}>
+                    
+                    {/* PRODUCT TYPES / CATEGORIES */}
+                    <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
+                        <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)' }}>Product Types (Categories)</h4>
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                            <input 
+                                value={newDictInput.prodTypes} 
+                                onChange={e => setNewDictItem({...newDictInput, prodTypes: e.target.value})} 
+                                placeholder="New Product Type..." 
+                                style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', outline: 'none' }} 
+                            />
+                            <button onClick={() => handleAddMasterListItem('prodTypes')} style={{ padding: '0 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
+                        </div>
+                        <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', background: '#fff', padding: '12px', border: '1px solid var(--line)' }}>
+                            {(globalLists.prodTypes || []).length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>No product types.</span>}
+                            {(globalLists.prodTypes || []).map(pt => (
+                                <div key={pt} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', color: 'var(--ink)' }}>
+                                    {pt} <button onClick={() => handleRemoveMasterListItem('prodTypes', pt)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer' }}>×</button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* WATCHLISTS */}
+                    <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
+                        <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)' }}>Watchlists</h4>
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                            <input 
+                                value={newDictInput.watchLists} 
+                                onChange={e => setNewDictItem({...newDictInput, watchLists: e.target.value})} 
+                                placeholder="New Watchlist..." 
+                                style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', outline: 'none' }} 
+                            />
+                            <button onClick={() => handleAddMasterListItem('watchLists')} style={{ padding: '0 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
+                        </div>
+                        <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', background: '#fff', padding: '12px', border: '1px solid var(--line)' }}>
+                            {(globalLists.watchLists || []).length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>No watchlists.</span>}
+                            {(globalLists.watchLists || []).map(wl => (
+                                <div key={wl} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', color: 'var(--ink)' }}>
+                                    {wl} <button onClick={() => handleRemoveMasterListItem('watchLists', wl)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer' }}>×</button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* COLLECTIONS */}
+                    <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
+                        <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)' }}>Brand Collections</h4>
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                            <input 
+                                value={newDictInput.collections} 
+                                onChange={e => setNewDictItem({...newDictInput, collections: e.target.value})} 
+                                placeholder="New Collection..." 
+                                style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', outline: 'none' }} 
+                            />
+                            <button onClick={handleAddCollection} style={{ padding: '0 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
+                        </div>
+                        <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', background: '#fff', padding: '12px', border: '1px solid var(--line)' }}>
+                            {collectionsData.length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>No collections.</span>}
+                            {collectionsData.map(c => (
+                                <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', color: 'var(--ink)' }}>
+                                    {c.name} <button onClick={() => handleDeleteCollection(c.id, c.name)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer' }}>×</button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                </div>
             </div>
 
         </div>
