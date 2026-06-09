@@ -6,7 +6,17 @@ import AssetGalleryTab from '../Shared/AssetGalleryTab';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
-const TABS = ['QUEUE', 'PACKING', 'GALLERY', 'MESSAGING'];
+// TABS updated to include COUNT
+const TABS = ['QUEUE', 'PACKING', 'COUNT', 'GALLERY', 'MESSAGING'];
+const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
+
+// NetSuite Mapping Dictionary
+const BRAND_NETSUITE_MAP = {
+    'm2c': { subsidiary: "3", location: "19" },
+    'uniquity': { subsidiary: "6", location: "22" },
+    'ce': { subsidiary: "2", location: "17" },
+    'leyla': { subsidiary: "5", location: "18" }
+};
 
 const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [operator, setOperator] = useState(null);
@@ -21,6 +31,18 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [validation, setValidation] = useState({ bin: '', qty: '' });
     const [stagingScan, setStagingScan] = useState('');
     const [showNacho, setShowNacho] = useState(false);
+
+    // Counting State
+    const [hqParts, setHqParts] = useState([]);
+    const [nsStock, setNsStock] = useState({});
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [physicalCounts, setPhysicalCounts] = useState({});
+    const [showSynapsis, setShowSynapsis] = useState(false);
+    
+    // Counting Filter State
+    const [searchQuery, setSearchQuery] = useState("");
+    const [typeFilter, setTypeFilter] = useState("");
+    const [globalLists, setGlobalLists] = useState({});
 
     // SEAMLESS AUTO-LOGIN CHECK
     useEffect(() => {
@@ -45,16 +67,25 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         checkLocalSession();
     }, []);
 
+    // Fetch Global Lists & HQ Parts for cycle counting
+    useEffect(() => {
+        const unsubParts = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
+            let parts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(p => p.brandId === activeBrand || (p.sharedBrands && p.sharedBrands.includes(activeBrand))); 
+            setHqParts(parts);
+        });
+
+        const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
+            if (docSnap.exists()) setGlobalLists(docSnap.data());
+        });
+
+        return () => { unsubParts(); unsubLists(); };
+    }, [activeBrand]);
+
     const attemptLogin = async (e) => {
         e.preventDefault();
         if (!pinInput) return;
         try {
-            if (pinInput === "1032") {
-                setOperator({ name: "Master Admin", role: "admin" });
-                setPerms({ admin: TABS });
-                return;
-            }
-            
             const snap = await getDocs(query(collection(db, "hq_users"), where("pin", "==", pinInput)));
             if (!snap.empty) {
                 const uData = snap.docs[0].data();
@@ -93,6 +124,124 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         });
         return () => unsub();
     }, []);
+
+    // --- NETSUITE INVENTORY SYNC (PULL) ---
+    const pullNetSuiteStock = async () => {
+        setIsSyncing(true);
+        try {
+            const erpIds = hqParts.map(p => p.legacyErpId || p.itemId).filter(Boolean);
+            const locationId = BRAND_NETSUITE_MAP[activeBrand]?.location || "17";
+
+            if (erpIds.length > 0) {
+                const chunkSize = 500;
+                let allResults = [];
+                
+                for (let i = 0; i < erpIds.length; i += chunkSize) {
+                    const chunk = erpIds.slice(i, i + chunkSize);
+                    const idList = chunk.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
+
+                    const q = `
+                        SELECT 
+                            Item.itemid AS legacy_id,
+                            SUM(AggregateItemLocation.quantityonhand) AS onhand
+                        FROM Item
+                        LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id
+                        WHERE Item.itemid IN (${idList})
+                        AND AggregateItemLocation.location = ${locationId}
+                        GROUP BY Item.itemid
+                    `;
+                    
+                    const response = await fetch(FIREBASE_FUNCTION_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                            method: 'POST',
+                            payload: { q }
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(JSON.stringify(result));
+                    if (result.items) allResults = allResults.concat(result.items);
+                }
+                
+                const stockMap = {};
+                allResults.forEach(row => {
+                    if (row.legacy_id) stockMap[row.legacy_id.toUpperCase()] = { onHand: parseInt(row.onhand) || 0 };
+                });
+                
+                setNsStock(stockMap);
+            }
+        } catch (error) {
+            console.error("NetSuite Sync Error:", error);
+            alert("Failed to pull NetSuite Stock.");
+        }
+        setIsSyncing(false);
+    };
+
+    // --- NETSUITE INVENTORY ADJUSTMENT (PUSH) ---
+    const pushInventoryAdjustment = async () => {
+        const adjustments = baseFilteredItems.map(item => {
+            if (physicalCounts[item.id] === undefined) return null;
+            const delta = physicalCounts[item.id] - item.onHand;
+            if (delta === 0) return null;
+            
+            return {
+                internalId: item.netSuiteInternalId, 
+                binNumber: item.binLocation,
+                adjustQtyBy: delta
+            };
+        }).filter(Boolean);
+
+        if (adjustments.length === 0) return alert("No variances found to adjust.");
+
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+
+        try {
+            setIsSyncing(true);
+            const payload = {
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
+                method: 'POST',
+                payload: {
+                    account: { id: "123" }, // IMPORTANT: Update '123' to your specific NetSuite Inventory Adjustment Account Internal ID
+                    subsidiary: { id: nsConfig.subsidiary },
+                    location: { id: nsConfig.location },
+                    inventoryList: {
+                        items: adjustments.map(adj => ({
+                            item: { id: adj.internalId }, 
+                            adjustQtyBy: adj.adjustQtyBy,
+                            inventoryDetail: {
+                                inventoryAssignment: {
+                                    items: [{ receiptInventoryNumber: adj.binNumber, quantity: Math.abs(adj.adjustQtyBy) }]
+                                }
+                            }
+                        }))
+                    }
+                }
+            };
+
+            const response = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) throw new Error("Failed to post adjustment");
+
+            alert("✅ Inventory successfully adjusted in NetSuite.");
+            writeLog(`Pushed Inventory Adjustment for ${adjustments.length} lines.`, 'wms');
+            setPhysicalCounts({});
+            setShowSynapsis(false);
+            pullNetSuiteStock(); 
+        } catch (e) {
+            console.error(e);
+            alert("❌ Failed to push adjustment to NetSuite.");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
 
     const handlePickValidation = async (e) => {
         e.preventDefault();
@@ -140,6 +289,34 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const printZebraLabel = (job, type) => {
         console.log(`Spooled ZPL for ${type} - ${job.id}`);
     };
+
+    // Filter Logic for cycle counting
+    const dynamicProdTypes = Array.from(new Set([
+        ...(globalLists.prodTypes || []), 
+        ...hqParts.map(p => p.manufacturingSpecs?.productType || "").filter(Boolean)
+    ])).sort();
+
+    const baseFilteredItems = hqParts.filter(part => {
+        const term = searchQuery.toLowerCase();
+        const specs = part.manufacturingSpecs || {};
+        const erpId = (part.legacyErpId || part.itemId).toUpperCase();
+
+        const matchesSearch = part.itemName?.toLowerCase().includes(term) || erpId.toLowerCase().includes(term);
+        const matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase();
+        
+        const isInventory = part.partClass === "Inventory" && specs.isInHouse !== false;
+        
+        return matchesSearch && matchesType && isInventory;
+    }).map(part => {
+        const erpId = (part.legacyErpId || part.itemId).toUpperCase();
+        return {
+            ...part,
+            erpId: erpId,
+            netSuiteInternalId: part.netSuiteInternalId || part.id,
+            onHand: nsStock[erpId]?.onHand || 0,
+            binLocation: part.manufacturingSpecs?.binLocation || 'UNASSIGNED'
+        };
+    });
 
     const safeUserRole = operator?.role ? operator.role.toLowerCase() : 'operator';
     const myTabs = operator?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
@@ -228,7 +405,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     {TABS.filter(t => myTabs.includes(t)).map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '10px 16px', background: 'transparent', color: activeTab === tab ? theme.ink : theme.inkSoft, borderBottom: activeTab === tab ? `2px solid ${theme.brass}` : '2px solid transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
-                            {tab.replace('QUEUE', 'PICK QUEUE').replace('PACKING', 'PACKAGING PREP').replace('GALLERY', 'ASSET GALLERY')}
+                            {tab.replace('QUEUE', 'PICK QUEUE').replace('PACKING', 'PACKAGING PREP').replace('GALLERY', 'ASSET GALLERY').replace('COUNT', 'BIN COUNT')}
                         </button>
                     ))}
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
@@ -298,6 +475,121 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                             {jobs.filter(j => j.pickStatus === 'Staged_Ready_For_Finishing').length === 0 && (
                                 <div style={{ gridColumn: '1 / -1', color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No orders currently awaiting packaging prep.</div>
                             )}
+                        </div>
+                    </div>
+                )}
+
+                {/* 📋 TAB: BIN COUNT */}
+                {activeTab === 'COUNT' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
+                        
+                        {/* SYNAPSIS MODAL */}
+                        {showSynapsis && (
+                            <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <div style={{ background: '#fff', padding: '40px', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
+                                    <h2 style={{ margin: '0 0 20px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>Count Synapsis Review</h2>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '20px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
+                                        Target: Subsidiary {BRAND_NETSUITE_MAP[activeBrand]?.subsidiary} | Location {BRAND_NETSUITE_MAP[activeBrand]?.location}
+                                    </div>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginBottom: '30px' }}>
+                                        <thead style={{ borderBottom: `2px solid ${theme.ink}` }}>
+                                            <tr>
+                                                <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>Item</th>
+                                                <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>System O.H.</th>
+                                                <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Physical</th>
+                                                <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Net Delta</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {baseFilteredItems.filter(item => physicalCounts[item.id] !== undefined).map(item => {
+                                                const delta = physicalCounts[item.id] - item.onHand;
+                                                return (
+                                                    <tr key={item.id} style={{ borderBottom: `1px solid ${theme.line}` }}>
+                                                        <td style={{ padding: '15px 10px', fontFamily: theme.sans, fontSize: '0.9rem' }}>{item.itemName}</td>
+                                                        <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '1.1rem', textAlign: 'center' }}>{item.onHand}</td>
+                                                        <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '1.1rem', textAlign: 'center' }}>{physicalCounts[item.id]}</td>
+                                                        <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '1.1rem', textAlign: 'center', color: delta < 0 ? '#d9534f' : delta > 0 ? '#7dbb81' : theme.inkSoft }}>
+                                                            {delta > 0 ? `+${delta}` : delta}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                    <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
+                                        <button onClick={() => setShowSynapsis(false)} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Go Back</button>
+                                        <button onClick={pushInventoryAdjustment} disabled={isSyncing} style={{ padding: '15px 30px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
+                                            {isSyncing ? 'Pushing to ERP...' : 'Approve & Push Adjustment'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* HEADER FILTERS */}
+                        <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px', display: 'flex', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', background: theme.paper2, minWidth: '150px' }}>
+                                <option value="">All Categories</option>
+                                {dynamicProdTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                            </select>
+                            <input placeholder="Search Items..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', flex: 1 }} />
+                            <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '12px 20px', background: isSyncing ? theme.paper : theme.ink, color: isSyncing ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>
+                                {isSyncing ? 'Syncing...' : 'Pull Live Stock'}
+                            </button>
+                        </div>
+
+                        {/* COUNTING TABLE */}
+                        <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, overflowY: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                <thead style={{ background: theme.paper2, position: 'sticky', top: 0, zIndex: 10 }}>
+                                    <tr>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>ERP ID / Item</th>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Bin Location</th>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>System O.H.</th>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Physical Count</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {baseFilteredItems.map(item => (
+                                        <tr key={item.id} style={{ borderBottom: `1px solid ${theme.line}`, background: physicalCounts[item.id] !== undefined ? '#f8fdf8' : '#fff' }}>
+                                            <td style={{ padding: '16px' }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{item.erpId}</div>
+                                                <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{item.itemName}</div>
+                                            </td>
+                                            <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{item.binLocation}</td>
+                                            <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
+                                            <td style={{ padding: '16px', textAlign: 'center' }}>
+                                                <input 
+                                                    type="number" 
+                                                    placeholder="-"
+                                                    value={physicalCounts[item.id] !== undefined ? physicalCounts[item.id] : ''} 
+                                                    onChange={(e) => setPhysicalCounts(prev => ({ ...prev, [item.id]: e.target.value === "" ? undefined : Math.max(0, parseInt(e.target.value) || 0) }))}
+                                                    style={{ width: '100px', padding: '12px', textAlign: 'center', fontSize: '1.2rem', fontFamily: theme.mono, border: physicalCounts[item.id] !== undefined ? `2px solid ${theme.brass}` : `1px solid ${theme.line}`, outline: 'none' }}
+                                                />
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {baseFilteredItems.length === 0 && (
+                                        <tr>
+                                            <td colSpan="4" style={{ padding: '40px', textAlign: 'center', color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No inventory items matched your filter.</td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* BOTTOM ACTION BAR */}
+                        <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, textTransform: 'uppercase' }}>
+                                Items Counted: {Object.keys(physicalCounts).filter(k => physicalCounts[k] !== undefined).length}
+                            </div>
+                            <button 
+                                onClick={() => setShowSynapsis(true)} 
+                                disabled={Object.keys(physicalCounts).filter(k => physicalCounts[k] !== undefined).length === 0}
+                                style={{ padding: '15px 30px', background: Object.keys(physicalCounts).filter(k => physicalCounts[k] !== undefined).length > 0 ? theme.ink : theme.paper2, color: Object.keys(physicalCounts).filter(k => physicalCounts[k] !== undefined).length > 0 ? '#fff' : theme.inkSoft, border: 'none', cursor: Object.keys(physicalCounts).filter(k => physicalCounts[k] !== undefined).length > 0 ? 'pointer' : 'not-allowed', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}
+                            >
+                                Generate Synapsis
+                            </button>
                         </div>
                     </div>
                 )}
