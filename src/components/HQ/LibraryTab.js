@@ -3,7 +3,6 @@ import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
-import H1AssemblyGenerator from './H1AssemblyGenerator';
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -519,8 +518,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
-      <H1AssemblyGenerator />
-
       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Master Library</h2>
