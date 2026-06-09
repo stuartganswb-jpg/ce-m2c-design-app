@@ -17,6 +17,12 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
     
     const [adminForm, setAdminForm] = useState({ catName: '', catType: 'Manual', macName: '', macCat: '', scName: '' });
 
+    // --- NEW FILTER STATES ---
+    const [hqSearch, setHqSearch] = useState('');
+    const [filterWatchlist, setFilterWatchlist] = useState(false);
+    const [filterCollection, setFilterCollection] = useState('');
+    const [showMissingPrograms, setShowMissingPrograms] = useState(false);
+
     // ==========================================
     // 🚀 FORCE SYNC TO HQ LIBRARY
     // ==========================================
@@ -156,7 +162,31 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
     const btnStyle = { padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' };
 
     if (activeTab === 'routings') {
-        const hqInventory = hqParts; 
+        
+        // --- FILTERING LOGIC ---
+        const filteredHqInventory = hqParts.filter(p => {
+            const id = p.legacyErpId && p.legacyErpId !== "PENDING" ? p.legacyErpId : p.itemId || p.id;
+            const name = p.itemName || p.name || '';
+
+            // 1. Omit Finished Parts (Filters out anything with '/' like /EP1, /P)
+            if (id.includes('/')) return false;
+
+            // 2. Search Box Filter
+            if (hqSearch && !id.toLowerCase().includes(hqSearch.toLowerCase()) && !name.toLowerCase().includes(hqSearch.toLowerCase())) return false;
+
+            // 3. Collection & Watchlist Filter
+            if (filterWatchlist && !p.watchlist) return false;
+            if (filterCollection && !(p.collection || '').toLowerCase().includes(filterCollection.toLowerCase())) return false;
+
+            // 4. Missing Programs Filter
+            if (showMissingPrograms) {
+                const hasProgram = routings.some(r => r.partId === p.id && r.ops && r.ops.length > 0);
+                if (hasProgram) return false;
+            }
+
+            return true;
+        });
+
         return (
             <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
                 <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '30px' }}>
@@ -170,9 +200,44 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
                             <div>
                                 <h4 style={sectionHeaderStyle}>1. Select Master HQ Part</h4>
+                                
+                                {/* FILTER CONTROLS */}
+                                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
+                                    <input 
+                                        type="text" 
+                                        placeholder="Search Base Assemblies..." 
+                                        value={hqSearch} 
+                                        onChange={e => setHqSearch(e.target.value)} 
+                                        style={{ ...fieldStyle, flex: 2, padding: '8px 12px' }} 
+                                    />
+                                    <input 
+                                        type="text" 
+                                        placeholder="Collection..." 
+                                        value={filterCollection} 
+                                        onChange={e => setFilterCollection(e.target.value)} 
+                                        style={{ ...fieldStyle, flex: 1, padding: '8px 12px' }} 
+                                    />
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)', cursor: 'pointer' }}>
+                                        <input 
+                                            type="checkbox" 
+                                            checked={filterWatchlist} 
+                                            onChange={e => setFilterWatchlist(e.target.checked)} 
+                                        /> 
+                                        Watchlist
+                                    </label>
+                                </div>
+                                <div style={{ marginBottom: '16px' }}>
+                                    <button 
+                                        onClick={() => setShowMissingPrograms(!showMissingPrograms)} 
+                                        style={{ width: '100%', padding: '10px', background: showMissingPrograms ? 'var(--ink)' : 'var(--paper-2)', color: showMissingPrograms ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}
+                                    >
+                                        {showMissingPrograms ? 'Clear Missing Programs Filter' : 'Find Assemblies Missing Programs'}
+                                    </button>
+                                </div>
+
                                 <select value={routingForm.partId} onChange={e => setRoutingForm({...routingForm, partId: e.target.value})} style={{ ...fieldStyle, background: '#fff' }}>
                                     <option value="">Select HQ Part...</option>
-                                    {hqInventory.map(p => {
+                                    {filteredHqInventory.map(p => {
                                         const id = p.legacyErpId && p.legacyErpId !== "PENDING" ? p.legacyErpId : p.itemId || p.id;
                                         return <option key={p.id} value={p.id}>{id} - {p.itemName || p.name}</option>;
                                     })}
