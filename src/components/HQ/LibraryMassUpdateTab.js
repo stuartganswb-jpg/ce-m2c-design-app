@@ -1418,18 +1418,36 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                             <button onClick={handleQuickAddCollection} style={{ background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', padding: '0 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
                                         </div>
                                         <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                            {collectionsData.length === 0 && <div style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No collections.</div>}
-                                            {collectionsData.map(c => (
-                                                <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem', background: '#fff', padding: '12px 16px', border: `1px solid ${theme.line}`, color: theme.ink }}>
-                                                    <span>{c.name}</span>
-                                                    <span onClick={() => handleQuickDeleteCollection(c.id, c.name)} style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem', opacity: 0.7 }}>×</span>
-                                                </div>
-                                            ))}
+                                            {dynamicCollections.length === 0 && <div style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No collections.</div>}
+                                            {dynamicCollections.map(cName => {
+                                                const dbRecord = collectionsData.find(c => c.name.toUpperCase() === cName);
+                                                return (
+                                                    <div key={cName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem', background: '#fff', padding: '12px 16px', border: `1px solid ${theme.line}`, color: theme.ink }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                            <span>{cName}</span>
+                                                            {!dbRecord && (
+                                                                <span style={{ fontSize: '9px', background: 'var(--paper-2)', padding: '2px 6px', color: 'var(--ink-soft)', borderRadius: '2px' }}>ERP GHOST</span>
+                                                            )}
+                                                        </div>
+                                                        {dbRecord ? (
+                                                            <span onClick={() => handleQuickDeleteCollection(dbRecord.id, dbRecord.name)} style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }} title="Delete from App">×</span>
+                                                        ) : (
+                                                            <span style={{ fontSize: '10px', color: 'var(--ink-soft)', opacity: 0.6 }} title="Cannot delete ERP ghost here. Remove from inventory item.">LOCKED</span>
+                                                        )}
+                                                    </div>
+                                                )
+                                            })}
                                         </div>
                                     </div>
 
                                     {/* ALL OTHER GLOBAL LISTS UI */}
                                     {Object.keys(globalLists).filter(k => k !== 'cpqRoutingTypes' && k !== 'collections' && k !== 'bins').map(listKey => {
+                                        
+                                        // 🚀 Unify Admin rendering with dropdown dynamic lists
+                                        let mergedList = globalLists[listKey] || [];
+                                        if (listKey === 'prodTypes') mergedList = dynamicProdTypes;
+                                        if (listKey === 'watchLists') mergedList = dynamicWatchlists;
+
                                         return (
                                             <div key={listKey} style={{ background: theme.paper, border: `1px solid ${theme.line}`, padding: '24px', display: 'flex', flexDirection: 'column' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: `1px solid ${theme.line}`, paddingBottom: '12px', marginBottom: '20px' }}>
@@ -1441,21 +1459,29 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                     <button onClick={() => handleAddMasterListItem(listKey)} style={{ background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', padding: '0 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
                                                 </div>
                                                 <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                    {(globalLists[listKey] || []).length === 0 && <div style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>List is empty.</div>}
-                                                    {(globalLists[listKey] || []).map(item => (
-                                                        <div key={item} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem', background: '#fff', padding: '12px 16px', border: `1px solid ${theme.line}`, color: theme.ink }}>
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                                                {listKey === 'assemblyTypes' && (
-                                                                    <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: theme.inkSoft }}>
-                                                                        <input type="checkbox" checked={globalLists.cpqRoutingTypes?.includes(item) || false} onChange={(e) => handleToggleCpqRouting(item, e.target.checked)} />
-                                                                        CPQ Enabled
-                                                                    </label>
+                                                    {mergedList.length === 0 && <div style={{ fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>List is empty.</div>}
+                                                    {mergedList.map(item => {
+                                                        const isDbRecord = (globalLists[listKey] || []).includes(item);
+                                                        return (
+                                                            <div key={item} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9rem', background: '#fff', padding: '12px 16px', border: `1px solid ${theme.line}`, color: theme.ink }}>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                                    {listKey === 'assemblyTypes' && (
+                                                                        <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: theme.inkSoft }}>
+                                                                            <input type="checkbox" checked={globalLists.cpqRoutingTypes?.includes(item) || false} onChange={(e) => handleToggleCpqRouting(item, e.target.checked)} />
+                                                                            CPQ Enabled
+                                                                        </label>
+                                                                    )}
+                                                                    <span>{item}</span>
+                                                                    {!isDbRecord && <span style={{ fontSize: '9px', background: 'var(--paper-2)', padding: '2px 6px', color: 'var(--ink-soft)', borderRadius: '2px' }}>ERP GHOST</span>}
+                                                                </div>
+                                                                {isDbRecord ? (
+                                                                    <span onClick={() => handleRemoveMasterListItem(listKey, item)} style={{ color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem' }} title="Delete from App">×</span>
+                                                                ) : (
+                                                                    <span style={{ fontSize: '10px', color: 'var(--ink-soft)', opacity: 0.6 }} title="Cannot delete ERP ghost here. Remove from inventory item.">LOCKED</span>
                                                                 )}
-                                                                <span>{item}</span>
                                                             </div>
-                                                            <span onClick={() => handleRemoveMasterListItem(listKey, item)} style={{ color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.2rem', opacity: 0.7 }}>×</span>
-                                                        </div>
-                                                    ))}
+                                                        )
+                                                    })}
                                                 </div>
                                             </div>
                                         )
