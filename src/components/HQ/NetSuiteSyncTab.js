@@ -289,41 +289,46 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 addLog(`Fetching batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
                 
                 const q = `
-                    SELECT 
-                        item.id, 
-                        item.itemid, 
-                        item.displayname, 
-                        item.weight,
-                        BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
-                        BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
-                        BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
-                        BUILTIN.DF(item.custitem_bracket_projection) AS projection, 
-                        BUILTIN.DF(item.stockunit) AS uom,
-                        item.averagecost AS base_cost,
-                        Vendor.companyname AS vendor_name,
-                        ItemVendor.vendorcode AS vendor_part_number,
-                        ItemVendor.preferredvendor,
-                        Bin.binnumber,
-                        bom.id AS bom_id,
-                        bomrevision.name AS bom_revision,
-                        bomrevisioncomponent.item AS component_internal_id,
-                        bomrevisioncomponent.bomquantity AS component_qty
-                    FROM item
-                    LEFT JOIN ItemSubsidiaryMap ON ItemSubsidiaryMap.item = item.id
-                    LEFT JOIN ItemVendor ON ItemVendor.item = item.id
-                    LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id
-                    LEFT JOIN InventoryBalance ON InventoryBalance.item = item.id
-                    LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
-                    LEFT JOIN bom ON bom.item = item.id
-                    LEFT JOIN bomrevision ON bomrevision.bom = bom.id AND bomrevision.isactive = 'T'
-                    LEFT JOIN bomrevisioncomponent ON bomrevisioncomponent.bomrevision = bomrevision.id
-                    WHERE item.custitem_sync_to_cpq = 'T' 
-                    AND item.isinactive = 'F' 
-                    AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
-                    AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')
-                    AND item.id > ${lastId}
-                    ORDER BY item.id ASC
-                `;
+    SELECT 
+        item.id, 
+        item.itemid, 
+        item.displayname, 
+        item.weight,
+        BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
+        BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
+        BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
+        BUILTIN.DF(item.custitem_bracket_projection) AS projection, 
+        BUILTIN.DF(item.stockunit) AS uom,
+        item.averagecost AS base_cost,
+        Vendor.companyname AS vendor_name,
+        ItemVendor.vendorcode AS vendor_part_number,
+        ItemVendor.preferredvendor,
+        Bin.binnumber,
+        bom.id AS bom_id,
+        bomrevision.name AS bom_revision,
+        bomrevisioncomponentmember.item AS component_internal_id,
+        bomrevisioncomponentmember.bomquantity AS component_qty
+    FROM item
+    LEFT JOIN ItemSubsidiaryMap ON ItemSubsidiaryMap.item = item.id
+    LEFT JOIN ItemVendor ON ItemVendor.item = item.id
+    LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id
+    LEFT JOIN InventoryBalance ON InventoryBalance.item = item.id
+    LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
+    
+    /* ADVANCED BOM RELATIONAL JOINS */
+    LEFT JOIN bomassembly ON bomassembly.assembly = item.id AND bomassembly.masterdefault = 'T'
+    LEFT JOIN bom ON bom.id = bomassembly.billofmaterials
+    LEFT JOIN bomrevision ON bomrevision.billofmaterials = bom.id 
+        AND (bomrevision.effectivestartdate <= SYSDATE AND (bomrevision.effectiveenddate IS NULL OR bomrevision.effectiveenddate >= SYSDATE))
+    LEFT JOIN bomrevisioncomponentmember ON bomrevisioncomponentmember.bomrevision = bomrevision.id
+    
+    WHERE item.custitem_sync_to_cpq = 'T' 
+    AND item.isinactive = 'F' 
+    AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
+    AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')
+    AND item.id > ${lastId}
+    ORDER BY item.id ASC
+`;
 
                 const result = await executeSuiteQL(q);
                 const batch = result.items || [];
