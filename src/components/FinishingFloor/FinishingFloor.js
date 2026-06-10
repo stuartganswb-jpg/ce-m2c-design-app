@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { finishingDb as db } from '../../firebase'; 
-import { collection, onSnapshot, query, doc, getDoc, addDoc, serverTimestamp, getDocs, where, orderBy, limit } from "firebase/firestore";
+import { finishingDb as db, auth, functions } from '../../firebase';
+import { collection, onSnapshot, query, doc, getDoc, addDoc, serverTimestamp, orderBy, limit } from "firebase/firestore";
+import { signInWithCustomToken } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
 import SetupQueue from './SetupQueue';
 import ActiveFloor from './ActiveFloor';
 import Recipes from './Recipes';
@@ -36,29 +38,7 @@ const FinishingFloor = () => {
   const [qcModal, setQcModal] = useState(null); 
 
   useEffect(() => {
-    const checkLocalSession = async () => {
-      const session = localStorage.getItem('hq_session');
-      if (session) {
-        try {
-          const parsedUser = JSON.parse(session);
-          const pSnap = await getDoc(doc(db, "fin_config", "permissions"));
-          let pData = pSnap.exists() ? pSnap.data() : {};
-          
-          setPerms(pData);
-          setUser(parsedUser);
-          
-          const r = parsedUser.role ? parsedUser.role.toLowerCase() : 'operator';
-          setActiveTab(pData[r]?.includes('ACTIVE FLOOR') ? 'ACTIVE FLOOR' : (pData[r]?.[0] || 'ACTIVE FLOOR'));
-        } catch (e) {
-          console.error("Failed to restore session.", e);
-        }
-      }
-    };
-    checkLocalSession();
-  }, []);
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000); 
+    const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer); 
   }, []);
 
@@ -86,27 +66,30 @@ const FinishingFloor = () => {
     e.preventDefault();
     if (!pinInput) return;
     try {
-      if (pinInput === "1032") {
-        setUser({ name: "Master Admin", role: "admin" });
-        setPerms({ admin: TABS });
-        return;
-      }
-      
-      const uSnap = await getDocs(query(collection(db, "hq_users"), where("pin", "==", pinInput)));
-      if (!uSnap.empty) {
-        const uData = uSnap.docs[0].data();
-        const pSnap = await getDoc(doc(db, "fin_config", "permissions"));
-        let pData = pSnap.exists() ? pSnap.data() : {};
-        
-        setPerms(pData);
-        setUser(uData);
+      // 🔐 Same secure flow as HQ: mint a custom token server-side, then sign in.
+      const authenticatePin = httpsCallable(functions, 'authenticatePin');
+      const result = await authenticatePin({ pin: pinInput });
+      const { token, user: userData } = result.data;
 
-        const r = uData.role ? uData.role.toLowerCase() : 'operator';
-        setActiveTab(pData[r]?.includes('ACTIVE FLOOR') ? 'ACTIVE FLOOR' : (pData[r]?.[0] || 'ACTIVE FLOOR'));
+      await signInWithCustomToken(auth, token);
+
+      if (pinInput === "1032") {
+        setUser(userData);
+        setPerms({ admin: TABS });
       } else {
-        alert("Invalid PIN.");
+        const pSnap = await getDoc(doc(db, "fin_config", "permissions"));
+        const pData = pSnap.exists() ? pSnap.data() : {};
+        setPerms(pData);
+        setUser(userData);
+
+        const r = userData.role ? userData.role.toLowerCase() : 'operator';
+        setActiveTab(pData[r]?.includes('ACTIVE FLOOR') ? 'ACTIVE FLOOR' : (pData[r]?.[0] || 'ACTIVE FLOOR'));
       }
-    } catch (err) { console.error(err); alert("Authentication failed."); }
+    } catch (err) {
+      console.error(err);
+      alert("Authentication failed: " + (err.message || "Invalid PIN"));
+      setPinInput("");
+    }
   };
 
   const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';

@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc, getDoc, getDocs, query, where, addDoc, serverTimestamp } from "firebase/firestore";
+import { db, auth, functions } from '../../firebase';
+import { collection, onSnapshot, doc, updateDoc, getDoc, addDoc, serverTimestamp } from "firebase/firestore";
+import { signInWithCustomToken } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 
@@ -44,29 +46,6 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [typeFilter, setTypeFilter] = useState("");
     const [globalLists, setGlobalLists] = useState({});
 
-    // SEAMLESS AUTO-LOGIN CHECK
-    useEffect(() => {
-        const checkLocalSession = async () => {
-            const session = localStorage.getItem('hq_session');
-            if (session) {
-                try {
-                    const parsedUser = JSON.parse(session);
-                    const pSnap = await getDoc(doc(db, "pick_config", "permissions"));
-                    let pData = pSnap.exists() ? pSnap.data() : {};
-                    
-                    setPerms(pData);
-                    setOperator(parsedUser);
-                    
-                    const r = parsedUser.role ? parsedUser.role.toLowerCase() : 'operator';
-                    setActiveTab(pData[r]?.includes('QUEUE') ? 'QUEUE' : (pData[r]?.[0] || 'QUEUE'));
-                } catch (e) {
-                    console.error("Failed to restore session. Manual PIN entry required.", e);
-                }
-            }
-        };
-        checkLocalSession();
-    }, []);
-
     // Fetch Global Lists & HQ Parts for cycle counting
     useEffect(() => {
         const unsubParts = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
@@ -86,24 +65,29 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         e.preventDefault();
         if (!pinInput) return;
         try {
-            const snap = await getDocs(query(collection(db, "hq_users"), where("pin", "==", pinInput)));
-            if (!snap.empty) {
-                const uData = snap.docs[0].data();
-                const pSnap = await getDoc(doc(db, "pick_config", "permissions"));
-                let pData = pSnap.exists() ? pSnap.data() : {};
-                
-                setPerms(pData);
-                setOperator(uData);
+            // 🔐 Same secure flow as HQ: mint a custom token server-side, then sign in.
+            const authenticatePin = httpsCallable(functions, 'authenticatePin');
+            const result = await authenticatePin({ pin: pinInput });
+            const { token, user: userData } = result.data;
 
-                const r = uData.role ? uData.role.toLowerCase() : 'operator';
-                setActiveTab(pData[r]?.includes('QUEUE') ? 'QUEUE' : (pData[r]?.[0] || 'QUEUE'));
-                setPinInput("");
+            await signInWithCustomToken(auth, token);
+
+            if (pinInput === "1032") {
+                setOperator(userData);
+                setPerms({ admin: TABS });
             } else {
-                alert("Invalid PIN. Access Denied.");
+                const pSnap = await getDoc(doc(db, "pick_config", "permissions"));
+                const pData = pSnap.exists() ? pSnap.data() : {};
+                setPerms(pData);
+                setOperator(userData);
+                const r = userData.role ? userData.role.toLowerCase() : 'operator';
+                setActiveTab(pData[r]?.includes('QUEUE') ? 'QUEUE' : (pData[r]?.[0] || 'QUEUE'));
             }
-        } catch (error) { 
-            console.error("Authentication failed:", error); 
-            alert("Authentication failed."); 
+            setPinInput("");
+        } catch (error) {
+            console.error("Authentication failed:", error);
+            alert("Authentication failed: " + (error.message || "Invalid PIN"));
+            setPinInput("");
         }
     };
 

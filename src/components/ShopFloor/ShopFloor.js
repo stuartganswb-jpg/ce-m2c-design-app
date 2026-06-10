@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { db, storage } from '../../firebase';
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, where, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, increment } from "firebase/firestore";
+import { db, auth, functions, storage } from '../../firebase';
+import { collection, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, query, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, increment } from "firebase/firestore";
+import { signInWithCustomToken } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import './shopStyles.css';
 
@@ -60,44 +62,33 @@ const ShopFloor = () => {
     // PERMISSIONS BYPASS: Admins ALWAYS see all tabs
     const myTabs = user?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
-    // SEAMLESS AUTO-LOGIN CHECK
-    useEffect(() => {
-        const checkLocalSession = async () => {
-            const session = localStorage.getItem('hq_session');
-            if (session) {
-                try {
-                    const parsedUser = JSON.parse(session);
-                    const pSnap = await getDoc(doc(shopDb.collection("config"), "permissions"));
-                    let pData = pSnap.exists() ? pSnap.data() : {};
-                    
-                    setPerms(pData);
-                    setUser(parsedUser);
-                    
-                    const r = parsedUser.role ? parsedUser.role.toLowerCase() : 'operator';
-                    setActiveTab(pData[r]?.includes('floor') ? 'floor' : (pData[r]?.[0] || 'scheduler'));
-                } catch (e) {
-                    console.error("Failed to restore session. Manual PIN entry required.", e);
-                }
-            }
-        };
-        checkLocalSession();
-    }, []);
-
     const attemptLogin = async (e) => {
         e.preventDefault();
         if (!pinInput) return;
         try {
-            const snap = await getDocs(query(collection(db, "hq_users"), where("pin", "==", pinInput)));
-            if (!snap.empty) {
-                const uData = snap.docs[0].data();
+            // 🔐 Same secure flow as HQ: mint a custom token server-side, then sign in.
+            const authenticatePin = httpsCallable(functions, 'authenticatePin');
+            const result = await authenticatePin({ pin: pinInput });
+            const { token, user: userData } = result.data;
+
+            await signInWithCustomToken(auth, token);
+
+            if (pinInput === "1032") {
+                setUser(userData);
+                setPerms({ admin: TABS });
+            } else {
                 const pSnap = await getDoc(doc(shopDb.collection("config"), "permissions"));
-                let pData = pSnap.exists() ? pSnap.data() : {};
-                
-                setPerms(pData); setUser(uData);
-                const r = uData.role ? uData.role.toLowerCase() : 'operator';
+                const pData = pSnap.exists() ? pSnap.data() : {};
+                setPerms(pData);
+                setUser(userData);
+                const r = userData.role ? userData.role.toLowerCase() : 'operator';
                 setActiveTab(pData[r]?.includes('floor') ? 'floor' : (pData[r]?.[0] || 'scheduler'));
-            } else { alert("Invalid PIN. Access Denied."); }
-        } catch (error) { console.error(error); alert("Authentication failed."); }
+            }
+        } catch (error) {
+            console.error(error);
+            alert("Authentication failed: " + (error.message || "Invalid PIN"));
+            setPinInput("");
+        }
     };
 
     useEffect(() => {
