@@ -9,12 +9,10 @@ admin.initializeApp();
 // 1. SECURE AUTHENTICATION FUNCTION (MINTING PRESS & GATEKEEPER)
 // ============================================================================
 
-exports.authenticatePin = onCall({ 
-    enforceAppCheck: false, // 🚀 SHIELD DOWN: Lets traffic through
-    cors: true 
+exports.authenticatePin = onCall({
+    enforceAppCheck: true, // 🛡️ Requires a valid App Check (reCAPTCHA) token
+    cors: true
 }, async (request) => {
-    
-    // 🚀 BYPASSED: Removed the manual request.app token check so it doesn't block you
 
     const { pin } = request.data;
     const clientIp = request.rawRequest.ip;
