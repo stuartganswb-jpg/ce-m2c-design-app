@@ -508,6 +508,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
             // Unified contract (§4). No SO for stock builds -> orderKey falls back to the WO/quote id.
             const orderKey = (orderType === 'sales' ? hqOrder.soId : null) || hqOrder.hqJobId || hqOrder.id;
+            // §12.3: stock replenishment goes into the milling pipeline (milling backlog ->
+            // scheduler), NOT the custom-fab finish flow. Tag it so the Shop Floor routes it
+            // to the Milling tab's intake instead of the Custom tab's Start/Complete cards.
+            const isStock = orderType === 'stock';
             const shopPayload = {
                 id: shopJobId,
                 woNum: shopJobId,
@@ -517,6 +521,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 finSiblingId: null,
                 hasSmallSibling: false,
                 soNum: hqOrder.soId || hqOrder.woId || 'N/A',
+                isStock,
+                routeTo: isStock ? 'MILLING' : 'CUSTOM_FAB',
+                partNum: hqOrder.rootItem || hqOrder.variantErpId || '',
                 isOutsourced: isOutsourced,
                 finishRecipe: finishRecipe,
                 outsourcePrice: outsourcePrice,
@@ -524,7 +531,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 item: originalJob?.itemName || originalJob?.name || hqOrder.variantErpId || hqOrder.rootItem || hqOrder.hqJobId || 'Custom App Order',
                 qty: Number(hqOrder.totalParts) || 1,
                 reqDate: hqOrder.reqDate || "",
-                category: 'Custom Fabrication',
+                category: isStock ? 'Stock Milling' : 'Custom Fabrication',
                 status: 'Pending',
                 priority: 999,
                 brand: activeBrand,

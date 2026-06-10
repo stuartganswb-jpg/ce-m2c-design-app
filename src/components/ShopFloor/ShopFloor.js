@@ -580,10 +580,10 @@ const ShopFloor = () => {
                         <select onChange={(e) => {
                             const order = customOrders.find(o => o.id === e.target.value);
                             if (order) {
-                                const matchedRouting = routings.find(r => r.displayName === order.item || r.partId === order.item);
+                                const matchedRouting = routings.find(r => r.displayName === order.item || r.partId === order.item || (order.partNum && r.partId === order.partNum));
                                 setMillForm({
-                                    ...millForm, 
-                                    partNum: matchedRouting ? matchedRouting.partId : '', 
+                                    ...millForm,
+                                    partNum: matchedRouting ? matchedRouting.partId : (order.partNum || ''),
                                     woNum: order.woNum, 
                                     soNum: order.soNum, 
                                     qty: order.qty, 
@@ -595,7 +595,7 @@ const ShopFloor = () => {
                         }} style={{ padding: '16px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '1rem', outline: 'none', background: '#fff' }}>
                             <option value="">-- Select Pending Order from RTG Dispatch --</option>
                             {customOrders.filter(o => o.status === 'Pending').map(o => (
-                                <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
+                                <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty}){(o.routeTo === 'MILLING' || o.isStock) ? ' [STOCK → MILLING]' : ''}</option>
                             ))}
                         </select>
                         <button onClick={handleAcceptHQOrder} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', marginTop: '16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Accept HQ Order to Machine Backlog</button>
