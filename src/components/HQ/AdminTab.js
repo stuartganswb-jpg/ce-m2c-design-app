@@ -429,12 +429,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   geometryMap: {},
                   targetNodes: pin.targetNode || pin.partName, 
                   linkedPinId: pin.partId,
-                  linkedItemId: pin.partId, 
+                  linkedItemId: pin.partId,
                   basePrice: bp,
                   allowedOptions: [],
                   useClientPricing: false,
                   priceOverride: '',
-                  partHandling: '',
+                  // Default the small/custom division flag from the linked part so
+                  // auto-generated flows are tagged at authoring time (WORK_ORDER_CONTRACT §7).
+                  partHandling: libPart?.manufacturingSpecs?.partHandling || '',
                   calculatorTemplate: '',
                   qtyHelperText: ''
               };

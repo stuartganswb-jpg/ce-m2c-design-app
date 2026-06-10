@@ -539,7 +539,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (!activeAssembly && activeFlow.basePrice) baseAssemblyPrice = parseFloat(activeFlow.basePrice);
 
       if (baseAssemblyPrice > 0) {
-          breakdown.push({ name: activeAssembly ? activeAssembly.itemName : activeFlow.name, qty: 1, price: baseAssemblyPrice, total: baseAssemblyPrice });
+          breakdown.push({
+              name: activeAssembly ? activeAssembly.itemName : activeFlow.name,
+              qty: 1, price: baseAssemblyPrice, total: baseAssemblyPrice,
+              partHandling: activeAssembly?.manufacturingSpecs?.partHandling || activeFlow.partHandling || '',
+              partId: activeAssembly?.id || null
+          });
       }
 
       let total = baseAssemblyPrice;
@@ -615,7 +620,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               let lineTotal = stepPrice * multiplier * qty;
               
               if (lineTotal > 0 || stepPrice > 0 || step.type === 'STATIC_FEE') {
-                  breakdown.push({ name: itemName, qty: qty, price: stepPrice * multiplier, total: lineTotal });
+                  // Carry the generated cut geometry (from Vision -> dimensionInputs) onto
+                  // dimension-driven lines so the shop work order gets a cutLength and the
+                  // fin work order gets dimensions. See WORK_ORDER_CONTRACT.md §6/§7.
+                  const dimInput = dimensionInputs[step.id];
+                  const cutLength = dimInput ? (dimInput.calc_cutLength || dimInput.length || null) : null;
+                  breakdown.push({
+                      name: itemName, qty: qty, price: stepPrice * multiplier, total: lineTotal,
+                      partHandling: step.partHandling || '',
+                      partId: selectedValue || step.linkedItemId || null,
+                      cutLength: cutLength,
+                      dimensions: dimInput ? { length: dimInput.length || null, wallA: dimInput.wallA || null, wallB: dimInput.wallB || null, wallC: dimInput.wallC || null } : null
+                  });
               }
 
               total += lineTotal;
@@ -624,7 +640,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       setPricing({ base: total, finalPrice: total });
       setPricingBreakdown(breakdown);
-  }, [dynamicConfigParams, stepQuantities, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, liveAssemblies, activeBomPins, globalFinishes]);
+  }, [dynamicConfigParams, stepQuantities, dimensionInputs, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, liveAssemblies, activeBomPins, globalFinishes]);
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
 
@@ -706,7 +722,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   name: `  - ${line.name}`,
                   qty: line.qty * item.qty,
                   price: line.price,
-                  total: line.total * item.qty
+                  total: line.total * item.qty,
+                  partHandling: line.partHandling || '',
+                  partId: line.partId || null,
+                  cutLength: line.cutLength || null,
+                  dimensions: line.dimensions || null
               });
           });
 
