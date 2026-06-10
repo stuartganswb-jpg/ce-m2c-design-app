@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, updateDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, onSnapshot } from "firebase/firestore";
+import { doc, updateDoc, setDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
 import { btnStyle, inputStyle, labelStyle, sectionHeaderStyle, cardStyle } from './finishingStyles';
+import { makeFullTasks } from '../Shared/workOrderContract';
 
 const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
   const getThreeWeeksOut = () => {
@@ -25,18 +26,9 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
   const [reqDate, setReqDate] = useState(getThreeWeeksOut());
   const [aiOptimized, setAiOptimized] = useState(false);
 
-  const [alerts, setAlerts] = useState([]);
   const [activeSpecs, setActiveSpecs] = useState(null);
 
   useEffect(() => { setReqDate(getThreeWeeksOut()); }, [orderType]);
-
-  useEffect(() => {
-      const q = query(collection(db, "shop_finishing_alerts"), where("read", "==", false));
-      const unsub = onSnapshot(q, snap => {
-          setAlerts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      });
-      return () => unsub();
-  }, []);
 
   const handleCreateOrder = async () => {
       if(!woId || !recipe) return alert("Work Order # and Recipe are strictly required.");
@@ -61,17 +53,35 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
           extraData = { stock: { qty: totalPartsCalc } };
       }
       
+      const orderKey = (orderType === 'sales' ? soId : null) || woId;
       const newWO = {
-          id: woId, 
+          id: woId,
+          woNum: woId,
           displayId: woId,
-          type: orderType,
+          orderKey,
+          quoteId: null,
+          salesOrderId: orderType === 'sales' ? soId : null,
+          orderType: orderType,
+          type: orderType, // kept for this card's existing reads
           soId: orderType === 'sales' ? soId : 'N/A',
           customer: orderType === 'sales' ? customer : 'Internal Stock',
+          customerName: orderType === 'sales' ? customer : 'Internal Stock',
+          clientName: orderType === 'sales' ? customer : 'Internal Stock',
           reqDate: reqDate || getThreeWeeksOut(),
           recipe: recipe,
           totalParts: totalPartsCalc,
+          partsList: [],
           currentPhase: 'Setup',
           stepStatus: 'Pending',
+          currentStepIndex: 0,
+          tasks: makeFullTasks(),
+          machineAssigned: null,
+          redlineAlert: false,
+          sentToPickPack: false,
+          pickStatus: 'Pending',
+          shopSiblingId: null,
+          hasCustomSibling: false,
+          customFabStatus: 'Pending',
           createdAt: serverTimestamp(),
           ...extraData
       };
@@ -87,11 +97,6 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
           console.error("Firebase Write Error:", err);
           alert(`Creation Failed! Error: ${err.message}`);
       }
-  };
-
-  const handleClearAlert = async (alertId) => {
-      await updateDoc(doc(db, "shop_finishing_alerts", alertId), { read: true });
-      if (writeLog) writeLog(`Acknowledged Shop Floor transfer alert ${alertId}`, 'setup');
   };
 
   let pendingOrders = workOrders.filter(w => w.currentPhase === "Setup" || w.currentPhase === "setup");
@@ -143,19 +148,6 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
 
   return (
     <div style={{ padding: '30px', fontFamily: 'var(--sans)' }}>
-      
-      {/* CROSS-APP ALERTS BANNER */}
-      {alerts.length > 0 && (
-          <div style={{ background: 'var(--paper-2)', border: '1px solid var(--brass)', padding: '24px', marginBottom: '24px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-              <h3 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: '10px' }}>Incoming Parts from Shop Floor</h3>
-              {alerts.map(a => (
-                  <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', padding: '16px', marginBottom: '8px', border: '1px solid var(--line)' }}>
-                      <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>{a.msg}</span>
-                      <button onClick={() => handleClearAlert(a.id)} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '8px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Acknowledge & Clear</button>
-                  </div>
-              ))}
-          </div>
-      )}
 
       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', borderRadius: '2px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
@@ -241,6 +233,17 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
                         </div>
                     )}
                 </div>
+
+                {wo.hasCustomSibling && (() => {
+                    const cf = wo.customFabStatus || 'Pending';
+                    const cfColor = cf === 'Complete' ? 'var(--ink)' : (cf === 'In Process' ? 'var(--brass)' : 'var(--ink-soft)');
+                    return (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '14px', padding: '10px 12px', background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Custom Parts (Shop)</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', fontWeight: 600, color: cfColor }}>● {cf}</span>
+                        </div>
+                    );
+                })()}
                 
                 <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
                     <button onClick={() => setActiveSpecs(wo)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>Specs</button>

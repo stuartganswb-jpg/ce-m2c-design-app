@@ -2,17 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { classifyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
-
-// Canonical finishing task object the floor actually renders (ActiveFloor spin/pole/hand).
-// See WORK_ORDER_CONTRACT.md §3.
-const makeFullTasks = () => ({
-    spinSetup: { status: 'Pending', assignedTo: null },
-    spinSpray: { status: 'Pending', assignedTo: null },
-    spinBake:  { status: 'Pending', assignedTo: null },
-    poleSpray: { status: 'Pending', assignedTo: null },
-    poleBake:  { status: 'Pending', assignedTo: null },
-    hand:      { status: 'Pending', assignedTo: null }
-});
+import { makeFullTasks } from '../Shared/workOrderContract';
 
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers).
 const getJobLines = (job) => (job?.cpqData?.breakdown || []).filter(l => l && !l.isHeader);

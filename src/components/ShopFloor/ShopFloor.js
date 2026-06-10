@@ -11,6 +11,7 @@ import './shopStyles.css';
 import ShopEngineering from './ShopEngineering';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import SharedMessaging from '../Shared/SharedMessaging';
+import { mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
 
@@ -779,7 +780,7 @@ const ShopFloor = () => {
                     ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
                     ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
                     ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
-                    ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.woNum}^FS
+                    ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.orderKey || order.woNum}^FS
                     ^XZ
                 `;
                 console.log("Sending ZPL to Zebra Printer:", zpl);
@@ -788,9 +789,11 @@ const ShopFloor = () => {
 
             const handleStartProcess = async () => {
                 await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process' });
-                await addDoc(collection(db, "global_messages"), { 
-                    sender: 'System', sourceApp: 'SHOP', target: 'FINISHING', 
-                    msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true 
+                // §5: mirror onto the sibling fin WO so the Setup Queue flips to "In Process".
+                await mirrorCustomStatusToSibling(order, 'In Process');
+                await addDoc(collection(db, "global_messages"), {
+                    sender: 'System', sourceApp: 'SHOP', target: 'FINISHING',
+                    msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true
                 });
             };
 
@@ -801,11 +804,13 @@ const ShopFloor = () => {
                 printZebraLabel(order);
                 const finalStatus = order.isOutsourced ? 'Sent to Plating' : 'Completed';
                 await updateDoc(doc(db, "shop_custom_orders", order.id), { status: finalStatus, completedAt: serverTimestamp(), completedBy: user.name });
+                // §5: custom fabrication is done from the finishing floor's perspective.
+                await mirrorCustomStatusToSibling(order, 'Complete');
 
                 if (order.isOutsourced) {
                     await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `🚚 OUTSOURCE DISPATCH: Custom parts for ${order.woNum} sent to plating/finishing vendor.`, t: serverTimestamp(), isSystem: true });
                 } else {
-                    await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', msg: `STAGING ALERT: Custom parts for ${order.woNum} are arriving at staging.`, t: serverTimestamp(), isSystem: true });
+                    await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', msg: `STAGING ALERT: Custom parts for order ${order.orderKey || order.woNum} are arriving at staging.`, t: serverTimestamp(), isSystem: true });
                 }
             };
 
