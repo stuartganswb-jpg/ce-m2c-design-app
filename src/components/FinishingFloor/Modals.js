@@ -124,10 +124,10 @@ export const QcModal = ({ qcModal, setQcModal, writeLog, user, setUser, workOrde
         }
 
         // Normal Completion Processing
-        const updates = { 
+        const updates = {
             [`tasks.${qcModal.taskType}.status`]: 'Complete',
             completedParts: Number(good),
-            scrapParts: Number(scrap)
+            scrapReported: Number(scrap) // §10: name Summary actually reads (was scrapParts)
         };
         
         // Move to oven if required by station
