@@ -75,7 +75,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const BRANDS_LIST = ['m2c', 'uniquity', 'ce', 'leyla']; 
 
   const currentActiveUser = users.find(u => u.name === currentUser);
-  const isSuperAdmin = currentUser === "Master Admin" || currentActiveUser?.role === "superadmin" || currentActiveUser?.superAdmin === true;
+  const isSuperAdmin = currentActiveUser?.role === "superadmin" || currentActiveUser?.superAdmin === true;
 
   useEffect(() => {
       const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));

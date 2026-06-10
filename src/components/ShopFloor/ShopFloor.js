@@ -60,7 +60,7 @@ const ShopFloor = () => {
     const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';
     
     // PERMISSIONS BYPASS: Admins ALWAYS see all tabs
-    const myTabs = user?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
+    const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
     const attemptLogin = async (e) => {
         e.preventDefault();

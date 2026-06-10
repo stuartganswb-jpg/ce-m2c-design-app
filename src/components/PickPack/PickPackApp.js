@@ -303,7 +303,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     });
 
     const safeUserRole = operator?.role ? operator.role.toLowerCase() : 'operator';
-    const myTabs = operator?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
+    const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
     if (!operator) {
         return (

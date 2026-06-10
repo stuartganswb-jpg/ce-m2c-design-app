@@ -1,0 +1,95 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- Helpers ----
+    function isAuth() {
+      return request.auth != null;
+    }
+    function isSuper() {
+      // role claim is set by the authenticatePin Cloud Function at login.
+      return request.auth != null && request.auth.token.role == 'superadmin';
+    }
+
+    // 🔒 SUPERADMIN-ONLY VAULT
+    // Confidential data lives here. This is the ONLY rule that matches this path,
+    // and there is no catch-all admin rule anywhere below — so admins cannot read it,
+    // not just in the UI but at the database layer.
+    match /superadmin_vault/{document=**} {
+      allow read, write: if isSuper();
+    }
+
+    // 🚫 Server-only. Written by Cloud Functions via the Admin SDK (which bypasses
+    // these rules). No client should ever touch it.
+    match /security_logs/{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---- Configuration & system ----
+    match /system/{document=**}                 { allow read, write: if isAuth(); }
+    match /hq_config/{document=**}              { allow read, write: if isAuth(); }
+    match /shop_config/{document=**}            { allow read, write: if isAuth(); }
+    match /fin_config/{document=**}             { allow read, write: if isAuth(); }
+    match /pick_config/{document=**}            { allow read, write: if isAuth(); }
+    match /hq_users/{document=**}               { allow read, write: if isAuth(); }
+
+    // ---- Core PLM / CPQ ----
+    match /Approved_Designs/{document=**}       { allow read, write: if isAuth(); }
+    match /assembly_pins/{document=**}          { allow read, write: if isAuth(); }
+    match /Design_Library/{document=**}         { allow read, write: if isAuth(); }
+    match /jobs/{document=**}                   { allow read, write: if isAuth(); }
+    match /cpq_flows/{document=**}              { allow read, write: if isAuth(); }
+    match /cpq_drafts/{document=**}             { allow read, write: if isAuth(); }
+    match /crm_records/{document=**}            { allow read, write: if isAuth(); }
+    match /crm_files/{document=**}              { allow read, write: if isAuth(); }
+
+    // ---- Shared assets, finishes, collections ----
+    match /global_assets/{document=**}          { allow read, write: if isAuth(); }
+    match /global_messages/{document=**}        { allow read, write: if isAuth(); }
+    match /hq_collections/{document=**}         { allow read, write: if isAuth(); }
+    match /hq_dynamic_data/{document=**}        { allow read, write: if isAuth(); }
+    match /hq_global_finishes/{document=**}     { allow read, write: if isAuth(); }
+    match /hq_inhouse_finishes/{document=**}    { allow read, write: if isAuth(); }
+    match /hq_outsource_finishes/{document=**}  { allow read, write: if isAuth(); }
+    match /packaging_templates/{document=**}    { allow read, write: if isAuth(); }
+    match /standard_boxes/{document=**}         { allow read, write: if isAuth(); }
+    match /project_images/{document=**}         { allow read, write: if isAuth(); }
+    match /markups/{document=**}                { allow read, write: if isAuth(); }
+
+    // ---- HQ logs, orders, inventory ----
+    match /hq_logs/{document=**}                { allow read, write: if isAuth(); }
+    match /hq_work_orders/{document=**}         { allow read, write: if isAuth(); }
+    match /hq_sales_orders/{document=**}        { allow read, write: if isAuth(); }
+    match /hq_purchase_orders/{document=**}     { allow read, write: if isAuth(); }
+    match /hq_inventory_tasks/{document=**}     { allow read, write: if isAuth(); }
+
+    // ---- Shop Floor ----
+    match /shop_logs/{document=**}              { allow read, write: if isAuth(); }
+    match /shop_custom_orders/{document=**}     { allow read, write: if isAuth(); }
+    match /shop_routings/{document=**}          { allow read, write: if isAuth(); }
+    match /shop_programs/{document=**}          { allow read, write: if isAuth(); }
+    match /shop_machines/{document=**}          { allow read, write: if isAuth(); }
+    match /shop_machine_categories/{document=**}{ allow read, write: if isAuth(); }
+    match /shop_setup_codes/{document=**}       { allow read, write: if isAuth(); }
+    match /shop_schedule/{document=**}          { allow read, write: if isAuth(); }
+    match /shop_milling/{document=**}           { allow read, write: if isAuth(); }
+    match /shop_tooling/{document=**}           { allow read, write: if isAuth(); }
+    match /shop_materials/{document=**}         { allow read, write: if isAuth(); }
+    match /shop_material_history/{document=**}  { allow read, write: if isAuth(); }
+    match /shop_failures/{document=**}          { allow read, write: if isAuth(); }
+    match /shop_finishing_alerts/{document=**}  { allow read, write: if isAuth(); }
+    match /shop_livio/{document=**}             { allow read, write: if isAuth(); }
+
+    // ---- Finishing Floor ----
+    match /fin_workorders/{document=**}         { allow read, write: if isAuth(); }
+    match /fin_recipes/{document=**}            { allow read, write: if isAuth(); }
+    match /fin_paint_profiles/{document=**}     { allow read, write: if isAuth(); }
+    match /fin_pots/{document=**}               { allow read, write: if isAuth(); }
+    match /fin_supplies/{document=**}           { allow read, write: if isAuth(); }
+    match /fin_logs/{document=**}               { allow read, write: if isAuth(); }
+    match /fin_messaging/{document=**}          { allow read, write: if isAuth(); }
+    match /fin_users/{document=**}              { allow read, write: if isAuth(); }
+
+    // Anything not explicitly listed above is denied by default.
+  }
+}

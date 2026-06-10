@@ -93,7 +93,7 @@ const FinishingFloor = () => {
   };
 
   const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';
-  const myTabs = user?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
+  const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
   const handleLogout = () => {
     localStorage.removeItem('hq_session');

@@ -148,7 +148,7 @@ function HQ() {
     localStorage.setItem('m2c_brand', brand.id);
     
     const safeRole = user?.role ? user.role.toLowerCase() : 'operator';
-    const authorizedTabs = user?.role === 'admin' ? TABS : (perms[safeRole] || []);
+    const authorizedTabs = ['admin', 'superadmin'].includes(safeRole) ? TABS : (perms[safeRole] || []);
     setActiveTab(authorizedTabs[0] || TABS[0]); 
 
     // 🚀 Auto-log brand switching
@@ -239,7 +239,7 @@ function HQ() {
   }
 
   const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';
-  const myTabs = user?.role === 'admin' ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
+  const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
   return (
     <div className="App" style={{ minHeight: '100vh', backgroundColor: theme.paper, fontFamily: theme.sans, display: 'flex', flexDirection: 'column' }}>
