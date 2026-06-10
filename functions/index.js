@@ -1,6 +1,15 @@
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const CryptoJS = require("crypto-js");
+
+// 🔐 NetSuite credentials — stored as Firebase secrets, never in source.
+// Set each once:  firebase functions:secrets:set NS_CONSUMER_KEY   (and the rest)
+const NS_ACCOUNT = defineSecret("NS_ACCOUNT");
+const NS_CONSUMER_KEY = defineSecret("NS_CONSUMER_KEY");
+const NS_CONSUMER_SECRET = defineSecret("NS_CONSUMER_SECRET");
+const NS_TOKEN_ID = defineSecret("NS_TOKEN_ID");
+const NS_TOKEN_SECRET = defineSecret("NS_TOKEN_SECRET");
 
 // Initialize Firebase Admin to securely access Firestore and Auth
 admin.initializeApp();
@@ -87,34 +96,30 @@ exports.authenticatePin = onCall({
 // 2. NETSUITE API PROXY
 // ============================================================================
 
-// --- SECURE VAULT: NETSUITE CREDENTIALS ---
-const NS_ACCOUNT = "3728153";
-const NS_CONSUMER_KEY = "0979687669fe99f5869793e3a911daeb062b779c4801817c86b494ccde1e0db4";
-const NS_CONSUMER_SECRET = "4f88d6f93c57a1b9e0ffb29ff71831d47b075dcdf609cdb028dd305cb552c243";
-const NS_TOKEN_ID = "2e5ce04cce902b621aad683d91e08674631cc7c9dd07edaae07cdc12e12f57ad";
-const NS_TOKEN_SECRET = "f5c98c85514f46fc67674d822b6d70461e5407da13c84c2db6c7c9c4e7f29a72";
-
-const generateNetSuiteHeader = (method, url) => {
+const generateNetSuiteHeader = (method, url, creds) => {
     const oauth_nonce = Math.random().toString(36).substring(2, 15);
     const oauth_timestamp = Math.floor(Date.now() / 1000).toString();
-    
+
     const baseString = `${method}&${encodeURIComponent(url)}&` + encodeURIComponent(
-        `oauth_consumer_key=${NS_CONSUMER_KEY}&` +
+        `oauth_consumer_key=${creds.consumerKey}&` +
         `oauth_nonce=${oauth_nonce}&` +
         `oauth_signature_method=HMAC-SHA256&` +
         `oauth_timestamp=${oauth_timestamp}&` +
-        `oauth_token=${NS_TOKEN_ID}&` +
+        `oauth_token=${creds.tokenId}&` +
         `oauth_version=1.0`
     );
-    
-    const signingKey = `${encodeURIComponent(NS_CONSUMER_SECRET)}&${encodeURIComponent(NS_TOKEN_SECRET)}`;
+
+    const signingKey = `${encodeURIComponent(creds.consumerSecret)}&${encodeURIComponent(creds.tokenSecret)}`;
     const hash = CryptoJS.HmacSHA256(baseString, signingKey);
     const oauth_signature = CryptoJS.enc.Base64.stringify(hash);
-    
-    return `OAuth realm="${NS_ACCOUNT}", oauth_consumer_key="${NS_CONSUMER_KEY}", oauth_token="${NS_TOKEN_ID}", oauth_nonce="${oauth_nonce}", oauth_timestamp="${oauth_timestamp}", oauth_signature_method="HMAC-SHA256", oauth_signature="${encodeURIComponent(oauth_signature)}", oauth_version="1.0"`;
+
+    return `OAuth realm="${creds.account}", oauth_consumer_key="${creds.consumerKey}", oauth_token="${creds.tokenId}", oauth_nonce="${oauth_nonce}", oauth_timestamp="${oauth_timestamp}", oauth_signature_method="HMAC-SHA256", oauth_signature="${encodeURIComponent(oauth_signature)}", oauth_version="1.0"`;
 };
 
-exports.netsuiteProxy = onRequest({ cors: true }, async (req, res) => {
+exports.netsuiteProxy = onRequest({
+    cors: true,
+    secrets: [NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET]
+}, async (req, res) => {
     try {
         const { targetUrl, method, payload } = req.body;
 
@@ -122,7 +127,15 @@ exports.netsuiteProxy = onRequest({ cors: true }, async (req, res) => {
             return res.status(400).send({ error: "Missing targetUrl or method in request." });
         }
 
-        const authHeader = generateNetSuiteHeader(method, targetUrl);
+        const creds = {
+            account: NS_ACCOUNT.value(),
+            consumerKey: NS_CONSUMER_KEY.value(),
+            consumerSecret: NS_CONSUMER_SECRET.value(),
+            tokenId: NS_TOKEN_ID.value(),
+            tokenSecret: NS_TOKEN_SECRET.value()
+        };
+
+        const authHeader = generateNetSuiteHeader(method, targetUrl, creds);
 
         const fetchOptions = {
             method: method,
