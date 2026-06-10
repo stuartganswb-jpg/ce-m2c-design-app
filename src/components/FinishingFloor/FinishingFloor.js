@@ -82,15 +82,6 @@ const FinishingFloor = () => {
     catch (error) { console.error("Failed to write log:", error); }
   };
 
-  const attemptLogin = async (e) => {
-    e.preventDefault();
-    if (!pinInput) return;
-    try {
-      if (pinInput === "1032") {
-        setUser({ name: "Master Admin", role: "admin" });
-        setPerms({ admin: TABS });
-        return;
-      }
       
       const uSnap = await getDocs(query(collection(db, "hq_users"), where("pin", "==", pinInput)));
       if (!uSnap.empty) {
