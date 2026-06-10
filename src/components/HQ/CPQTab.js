@@ -704,12 +704,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       
       let grandTotal = 0;
       let mergedBreakdown = [];
-      let mergedNotesObj = null; 
-      let allDraftSvgs = []; 
+      let mergedNotesObj = null;
+      let allDraftSvgs = [];
+
+      // Per-step maps the ERP push (ERPPushPullTab.getJobLineItems) resolves physical
+      // NetSuite inventory from. Without these, a finalized quote has no mapped inventory
+      // and the push is rejected. Keyed by stepId, merged across all cart assemblies.
+      const mergedConfiguration = {};
+      const mergedQuantities = {};
+      const mergedDimensions = {};
 
       cart.forEach((item) => {
           grandTotal += item.pricing.finalPrice * item.qty;
-          
+
+          Object.assign(mergedConfiguration, item.dynamicConfigParams || {});
+          Object.assign(mergedQuantities, item.stepQuantities || {});
+          Object.assign(mergedDimensions, item.dimensionInputs || {});
+
           mergedBreakdown.push({
               name: `▶ ${item.assemblyName} [${item.sidemark}]`,
               qty: item.qty,
@@ -753,11 +764,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           shippingAddressId: jobData.shippingAddressId || null,
           customShippingAddress: jobData.shippingMethod === 'CUSTOM' ? jobData.customShippingAddress : null,
 
-          cpqData: { 
-              totalPrice: grandTotal, 
+          cpqData: {
+              totalPrice: grandTotal,
               appliedRules: engineFlags.warnings,
               breakdown: mergedBreakdown,
-              cartItems: cart 
+              cartItems: cart,
+              // Consumed by ERPPushPullTab to map lines -> physical NetSuite inventory.
+              configuration: mergedConfiguration,
+              quantities: mergedQuantities,
+              dimensions: mergedDimensions
           },
           engineeringNotes: mergedNotesObj, 
           dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, sewing: false, packing: false },
