@@ -54,6 +54,12 @@ const cleanCadName = (raw) => {
     return s.replace(/\s{2,}/g, ' ').replace(/\s*\.\s*$/, '').trim();
 };
 
+// Normalize a node name for cross-cluster matching. Older clusters stored sanitized
+// names ("1in_Loop_Bracket_Ext_v41", "Body1017"); Auto-Group stores raw glb names
+// ("1in Loop Bracket Ext. v4:1", "Body1.017"). Sanitizing both sides lets us tell when
+// a new proposal covers the same geometry as an existing cluster, regardless of format.
+const sanitizeNodeName = (n) => String(n || '').replace(/\s+/g, '_').replace(/[^A-Za-z0-9_]/g, '');
+
 // Walk down single-child wrapper nodes (Scene -> RootNode -> "Assembly v5") until we
 // reach the node whose children are the real top-level sub-assemblies.
 const findAssemblyRoot = (scene) => {
@@ -478,19 +484,49 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         setAutoNames(names);
     }, [autoProposals]);
 
-    const handleAutoSaveSelected = async () => {
+    // Match each selected proposal to an existing cluster by sanitized node overlap so
+    // re-running Auto-Group REPLACES the old grouping in place (reusing its id) instead
+    // of appending a duplicate. Reusing the id means assembly_pins stay linked and pick
+    // up the refreshed name/label automatically — no re-assigning needed.
+    const autoSavePlan = useMemo(() => {
         const chosen = autoProposals.filter(p => autoChecked[p.id]);
-        if (chosen.length === 0) return alert("No proposals are selected.");
-        const stamp = Date.now();
-        const newClusters = chosen.map((p, i) => ({
-            id: `CLUSTER-${stamp}-${i}`,
-            name: (autoNames[p.id] || p.suggestedName).toUpperCase().trim(),
-            nodes: p.nodes,
-        }));
-        try {
-            await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), {
-                nodeClusters: [...existingClusters, ...newClusters],
+        const sanSets = existingClusters.map(c => new Set((c.nodes || []).map(sanitizeNodeName)));
+        const claimed = new Set();
+        const plan = chosen.map(p => {
+            const pset = new Set(p.nodes.map(sanitizeNodeName));
+            let bestIdx = -1, bestScore = 0;
+            existingClusters.forEach((c, idx) => {
+                if (claimed.has(idx)) return;
+                const cs = sanSets[idx];
+                let shared = 0;
+                pset.forEach(n => { if (cs.has(n)) shared++; });
+                const score = shared / Math.max(1, Math.min(pset.size, cs.size));
+                if (score > bestScore) { bestScore = score; bestIdx = idx; }
             });
+            let matchedId = null;
+            if (bestIdx >= 0 && bestScore >= 0.6) { claimed.add(bestIdx); matchedId = existingClusters[bestIdx].id; }
+            return { p, matchedId, name: (autoNames[p.id] || p.suggestedName).toUpperCase().trim() };
+        });
+        return { plan, replaceCount: plan.filter(x => x.matchedId).length, newCount: plan.filter(x => !x.matchedId).length };
+    }, [autoProposals, autoChecked, autoNames, existingClusters]);
+
+    const handleAutoSaveSelected = async () => {
+        const { plan } = autoSavePlan;
+        if (plan.length === 0) return alert("No proposals are selected.");
+        const stamp = Date.now();
+        const updatedById = {};
+        const additions = [];
+        plan.forEach((x, i) => {
+            if (x.matchedId) {
+                const ex = existingClusters.find(c => c.id === x.matchedId);
+                updatedById[x.matchedId] = { ...ex, name: x.name, nodes: x.p.nodes };
+            } else {
+                additions.push({ id: `CLUSTER-${stamp}-${i}`, name: x.name, nodes: x.p.nodes });
+            }
+        });
+        const merged = existingClusters.map(c => updatedById[c.id] || c).concat(additions);
+        try {
+            await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: merged });
             setShowAutoPanel(false);
             setSelectedNodes([]);
         } catch (err) { console.error(err); alert("Failed to save auto-groups."); }
@@ -741,6 +777,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                                                 <input value={autoNames[p.id] ?? p.suggestedName} onChange={(e) => setAutoNames(prev => ({ ...prev, [p.id]: e.target.value }))} style={{ flex: 1, padding: '8px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', textTransform: 'uppercase', outline: 'none' }} />
                                                 {p.pos && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: 'var(--paper-2)', color: 'var(--brass)', padding: '4px 8px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>{p.pos}</span>}
+                                                {on && autoSavePlan.plan.find(x => x.p.id === p.id)?.matchedId && <span title="Updates an existing cluster in place (keeps its id, refreshes name + nodes)" style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: 'var(--brass)', color: '#fff', padding: '4px 8px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>↻ updates existing</span>}
                                             </div>
                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '6px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
                                                 {p.nodes.length} nodes · {p.meshCount} mesh{p.meshCount === 1 ? '' : 'es'}
@@ -759,10 +796,11 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                         <div style={{ padding: '20px 28px', borderTop: '1px solid var(--line)', background: 'var(--paper)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                                 {autoProposals.filter(p => autoChecked[p.id]).length} of {autoProposals.length} selected
+                                {autoSavePlan.replaceCount > 0 && <span style={{ color: 'var(--brass)' }}> · {autoSavePlan.replaceCount} replace existing · {autoSavePlan.newCount} new</span>}
                             </div>
                             <div style={{ display: 'flex', gap: '12px' }}>
                                 <button onClick={() => setShowAutoPanel(false)} style={{ padding: '14px 24px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Cancel</button>
-                                <button onClick={handleAutoSaveSelected} style={{ padding: '14px 28px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Selected as Clusters</button>
+                                <button onClick={handleAutoSaveSelected} style={{ padding: '14px 28px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{autoSavePlan.replaceCount > 0 ? `Save (${autoSavePlan.replaceCount} replace · ${autoSavePlan.newCount} new)` : 'Save Selected as Clusters'}</button>
                             </div>
                         </div>
                     </div>
