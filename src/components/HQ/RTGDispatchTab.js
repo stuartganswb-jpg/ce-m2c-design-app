@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { classifyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
+import { makeFullTasks } from '../Shared/workOrderContract';
+
+// Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers).
+const getJobLines = (job) => (job?.cpqData?.breakdown || []).filter(l => l && !l.isHeader);
+
+// Strip the "  - " display prefix CPQTab adds when merging cart lines.
+const cleanLineName = (name) => String(name || '').replace(/^\s*[-▶]\s*/, '').trim();
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3" },
@@ -64,18 +72,24 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
             addLog(`Initiating Diagnostic Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
+            // custbody50 (our QUOTE- job id) is set on the Estimate and, as a stored body
+            // field, copies to the Sales Order when the estimate is transformed. The earlier
+            // miss was the unordered 1000-row page cap hiding a fresh SO — so narrow to app
+            // orders (custbody50 LIKE 'QUOTE-%') and sort newest-first.
             const q = `
-                SELECT 
+                SELECT
                     transaction.id AS ns_id,
                     transaction.tranid AS so_num,
-                    transaction.custbody50 AS hq_job_id,
+                    transaction.custbody50 AS so_job_id,
                     transaction.entity AS customer_id,
                     transaction.trandate,
                     transaction.memo,
                     transaction.status AS raw_status
-                FROM Transaction
-                WHERE transaction.type = 'SalesOrd' 
+                FROM transaction
+                WHERE transaction.type = 'SalesOrd'
                 AND transaction.subsidiary = ${subsidiaryId}
+                AND transaction.custbody50 LIKE 'QUOTE-%'
+                ORDER BY transaction.id DESC
             `;
             
             addLog("Executing SuiteQL: Pulling Sales Orders to evaluate locally...", "info");
@@ -101,7 +115,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             let skippedStatus = 0;
             
             for (const row of records) {
-                const hqJobId = row.hq_job_id;
+                const hqJobId = row.so_job_id;
                 const rawStatus = row.raw_status || 'UNKNOWN';
 
                 if (!hqJobId || !hqJobId.startsWith('QUOTE-')) {
@@ -141,6 +155,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 }
             }
             
+            if (skippedStatus > 0) addLog(`Skipped ${skippedStatus} order(s): status not awaiting dispatch (A/B).`, "info");
+            if (skippedOrganic > 0) addLog(`Skipped ${skippedOrganic} order(s): no QUOTE- link (not app-originated).`, "info");
             addLog(`✅ Sync complete. Added ${newOrders} new orders.`, "success");
             loadRTGOrders();
         } catch(e) {
@@ -220,6 +236,202 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         }
     };
 
+    // Load every part referenced by a set of lines into a Map (id -> part doc), de-duped.
+    const loadPartsForLines = async (lines) => {
+        const ids = [...new Set(lines.map(l => l.partId).filter(Boolean))];
+        const cache = new Map();
+        await Promise.all(ids.map(async (pid) => {
+            try {
+                const snap = await getDoc(doc(db, "Approved_Designs", pid));
+                if (snap.exists()) cache.set(pid, { id: snap.id, ...snap.data() });
+            } catch (e) { /* missing part -> resolved fields fall back below */ }
+        }));
+        return cache;
+    };
+
+    // Map associated part id -> reference image url, from the shared asset gallery.
+    const loadAssetMap = async () => {
+        const map = new Map();
+        try {
+            const snap = await getDocs(collection(db, "global_assets"));
+            snap.docs.forEach(d => {
+                const a = d.data();
+                const url = a.thumbnailUrl || a.url || a.originalUrl || null;
+                if (url && Array.isArray(a.associatedParts)) {
+                    a.associatedParts.forEach(pid => { if (!map.has(pid)) map.set(pid, url); });
+                }
+            });
+        } catch (e) { /* gallery unavailable -> assetUrl stays null */ }
+        return map;
+    };
+
+    // Build the §6 small-parts pick list from the small lines.
+    const buildPartsList = (smallLines, partCache, assetMap, customerId) => smallLines.map(line => {
+        const part = line.partId ? partCache.get(line.partId) : null;
+        const cp = part?.clientPricing?.find(c => c.customerId === customerId);
+        return {
+            partId: line.partId || null,
+            name: cleanLineName(line.name),
+            clientSku: cp?.clientSku || '',
+            qty: Number(line.qty) || 1,
+            binLocation: part?.manufacturingSpecs?.binLocation || 'UNASSIGNED',
+            assetUrl: (line.partId && assetMap.get(line.partId)) || null
+        };
+    });
+
+    // §6: import a confirmed Sales Order and fan it out into the two linked work orders.
+    const autoSplitSalesOrder = async (so) => {
+        if (!so.hqJobId) return alert("This SO has no linked CPQ job (custbody50). Cannot auto-split.");
+        if (!window.confirm(`Import SO ${so.soId || so.id} and auto-split into Finishing + Shop work orders?`)) return;
+
+        try {
+            const jobSnap = await getDoc(doc(db, "jobs", so.hqJobId));
+            if (!jobSnap.exists()) return alert(`Linked job ${so.hqJobId} not found.`);
+            const job = jobSnap.data();
+
+            const lines = getJobLines(job);
+            if (lines.length === 0) return alert("Linked job has no CPQ lines to split.");
+
+            const orderKey = so.soId || so.id || so.hqJobId;
+            const customerId = job.customer?.id || null;
+            const customerName = job.customer?.name || so.customer || "Unknown";
+
+            const partCache = await loadPartsForLines(lines);
+
+            const smallLines = [];
+            const customLines = [];
+            lines.forEach(line => {
+                const part = line.partId ? partCache.get(line.partId) : null;
+                (classifyLine(line, part) === DIVISION_CUSTOM ? customLines : smallLines).push(line);
+            });
+
+            const { svgUri, finishRecipe } = await fetchEnrichedJobData(so.hqJobId, 'sales');
+
+            // Vision-computed fabrication geometry (bend vs splice vs miter, shape, O2O) lives
+            // on the job's engineeringNotes. Carry it to the floors so the shop knows HOW to
+            // make the pole, and the drawing rides along to both halves (it shows placement).
+            const eng = job.engineeringNotes || {};
+            const fabNotes = {
+                shape: eng.shape || null,
+                qtyBends: eng.qtyBends || 0,
+                qtySplices: eng.qtySplices || 0,
+                qtyMiters: eng.qtyMiters || 0,
+                qtyMiterReturns: eng.qtyMiterReturns || 0,
+                poleO2O: eng.poleO2O || null,
+                totalSystemO2O: eng.totalSystemO2O || null
+            };
+            const fabMethod = eng.qtyBends > 0 ? 'BEND' : (eng.qtySplices > 0 ? 'SPLICE' : (eng.qtyMiters > 0 ? 'MITER' : null));
+            const drawingUrl = svgUri
+                || (eng.svgString ? "data:image/svg+xml;charset=utf-8," + encodeURIComponent(eng.svgString) : null)
+                || job.finalImageUrl || null;
+
+            const finId = `WO-${orderKey}`;
+            const shopId = `SHOP-${orderKey}`;
+            const hasCustom = customLines.length > 0;
+            const hasSmall = smallLines.length > 0;
+
+            // --- Finishing (small parts) ---
+            if (hasSmall) {
+                const assetMap = await loadAssetMap();
+                const partsList = buildPartsList(smallLines, partCache, assetMap, customerId);
+                const cpqSpecs = {};
+                smallLines.forEach(l => { cpqSpecs[cleanLineName(l.name)] = `Qty: ${l.qty}`; });
+                const totalParts = smallLines.reduce((s, l) => s + (Number(l.qty) || 0), 0) || smallLines.length;
+
+                await setDoc(doc(db, "fin_workorders", finId), {
+                    id: finId, woNum: finId, displayId: finId,
+                    orderKey, quoteId: so.hqJobId, salesOrderId: so.soId || null,
+                    estimateId: job.netsuiteEstimateId || null,
+                    brand: activeBrand,
+                    customerId, customerName, clientName: customerName,
+                    orderType: 'sales',
+                    type: job.cpqData?.cartItems?.[0]?.assemblyName || "Mixed",
+                    recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : (so.recipe || "PENDING-RECIPE"),
+                    totalParts,
+                    dimensions: { length: Number(so.length) || 0, width: Number(so.width) || 0, height: Number(so.height) || 0 },
+                    cpqSpecs,
+                    imageUrl: drawingUrl,
+                    fabNotes, fabMethod,
+                    note: so.memo || job.sidemark || "",
+                    reqDate: so.reqDate || "",
+                    partsList,
+                    currentPhase: "Setup", stepStatus: 'Pending', currentStepIndex: 0,
+                    tasks: makeFullTasks(),
+                    machineAssigned: null, redlineAlert: false,
+                    sentToPickPack: false, pickStatus: 'Pending',
+                    shopSiblingId: hasCustom ? shopId : null, hasCustomSibling: hasCustom,
+                    customFabStatus: 'Pending',
+                    createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser
+                });
+                addLog(`Created Finishing WO ${finId} (${partsList.length} small lines).`, "success");
+            }
+
+            // --- Shop (custom fabrication) ---
+            if (hasCustom) {
+                const outSnap = await getDocs(collection(db, "hq_outsource_finishes"));
+                const outsourceFinishes = outSnap.docs.map(d => d.data());
+                const matchedOutsource = outsourceFinishes.find(f => finishRecipe.toUpperCase().includes(String(f.name).toUpperCase()));
+                const isOutsourced = !!matchedOutsource;
+                const cutLine = customLines.find(l => l.cutLength);
+                const cpqSpecs = {};
+                customLines.forEach(l => { cpqSpecs[cleanLineName(l.name)] = `Qty: ${l.qty}`; });
+                // Structured per-line cut list the Shop custom card renders.
+                const cutList = customLines.map(l => ({
+                    name: cleanLineName(l.name),
+                    qty: Number(l.qty) || 1,
+                    cutLength: l.cutLength || null,
+                    partId: l.partId || null
+                }));
+                const qty = customLines.reduce((s, l) => s + (Number(l.qty) || 0), 0) || customLines.length;
+
+                await setDoc(doc(db, "shop_custom_orders", shopId), {
+                    id: shopId, woNum: shopId,
+                    orderKey, quoteId: so.hqJobId, salesOrderId: so.soId || null,
+                    finSiblingId: hasSmall ? finId : null, hasSmallSibling: hasSmall,
+                    status: 'Pending',
+                    item: cleanLineName(customLines[0]?.name) || job.cpqData?.cartItems?.[0]?.assemblyName || 'Custom App Order',
+                    partNum: customLines[0]?.partId || '',
+                    qty,
+                    cutLength: cutLine?.cutLength || null,
+                    cutList,
+                    clientName: customerName, customerId,
+                    isOutsourced, finishRecipe,
+                    outsourcePrice: isOutsourced ? (matchedOutsource.multiplier || 0) : 0,
+                    category: 'Custom Fabrication',
+                    priority: 999,
+                    brand: activeBrand,
+                    note: so.memo || job.sidemark || "",
+                    cpqSpecs,
+                    imageUrl: drawingUrl,
+                    fabNotes, fabMethod,
+                    reqDate: so.reqDate || "",
+                    createdAt: Date.now(), createdBy: currentUser
+                });
+                addLog(`Created Shop custom order ${shopId}${fabMethod ? ` [${fabMethod}]` : ''} (${customLines.length} custom lines).`, "success");
+            }
+
+            // Mark the originating job + SO board entry as imported.
+            await updateDoc(doc(db, "jobs", so.hqJobId), {
+                salesOrderId: so.soId || null,
+                status: 'SO_CONFIRMED',
+                dateImported: new Date().toISOString().split('T')[0]
+            });
+            await updateDoc(doc(db, "hq_sales_orders", so.id), {
+                status: "Dispatched",
+                pushedToFinishing: hasSmall,
+                pushedToShop: hasCustom,
+                autoSplit: true
+            });
+
+            alert(`✅ SO ${orderKey} split: ${hasSmall ? 'Finishing ✓' : '—'}  ${hasCustom ? 'Shop ✓' : '—'}`);
+            loadRTGOrders();
+        } catch (error) {
+            console.error("Auto-Split Error:", error);
+            addLog(`Auto-Split Failed: ${error.message}`, "error");
+            alert("Failed to auto-split Sales Order. Check console.");
+        }
+    };
+
     const pushToFinishing = async (hqOrder, orderType) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
 
@@ -239,37 +451,53 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 finWorkOrderId = `WO-${hqOrder.soId || hqOrder.id}`;
             }
             
+            // Unified contract (§3). No SO for stock builds -> orderKey falls back to the WO/quote id.
+            const orderKey = (orderType === 'sales' ? hqOrder.soId : null) || hqOrder.hqJobId || hqOrder.id;
             const finPayload = {
                 id: finWorkOrderId,
-                displayId: finWorkOrderId, 
+                displayId: finWorkOrderId,
                 woNum: finWorkOrderId,
+                orderKey,
+                quoteId: hqOrder.hqJobId || null,
+                salesOrderId: (orderType === 'sales' ? hqOrder.soId : null) || null,
+                estimateId: originalJob?.netsuiteEstimateId || null,
                 orderType: orderType,
                 soId: hqOrder.soId || null,
                 soNum: hqOrder.soId || null,
-                customer: originalJob?.customer?.name || hqOrder.customer || "Internal Stock", 
-                clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock", 
-                recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : (hqOrder.recipe || "PENDING-RECIPE"), 
+                customerId: originalJob?.customer?.id || null,
+                customerName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
+                customer: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
+                clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
+                recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : (hqOrder.recipe || "PENDING-RECIPE"),
                 reqDate: hqOrder.reqDate || "",
-                type: hqOrder.type || "Mixed", 
+                type: hqOrder.type || "Mixed",
                 totalParts: Number(hqOrder.totalParts) || 1,
-                note: hqOrder.memo || originalJob?.sidemark || "", 
-                cpqSpecs: cpqSpecs, 
-                imageUrl: svgUri || originalJob?.finalImageUrl || null, 
-                
+                note: hqOrder.memo || originalJob?.sidemark || "",
+                cpqSpecs: cpqSpecs,
+                imageUrl: svgUri || originalJob?.finalImageUrl || null,
+
                 dimensions: {
                     length: Number(hqOrder.length) || 10,
                     width: Number(hqOrder.width) || 5,
                     height: Number(hqOrder.height) || 2
                 },
-                
+
+                partsList: [],
                 currentPhase: "Setup",
-                stepStatus: 'Pending', 
+                stepStatus: 'Pending',
                 currentStepIndex: 0,
-                tasks: {
-                    setup: { status: 'Pending', assignedTo: null }
-                },
+                tasks: makeFullTasks(),
+                machineAssigned: null,
+                redlineAlert: false,
+                sentToPickPack: false,
+                pickStatus: 'Pending',
+                shopSiblingId: null,
+                hasCustomSibling: false,
+                customFabStatus: 'Pending',
                 brand: activeBrand,
-                createdAt: Date.now()
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+                createdBy: currentUser
             };
 
             await setDoc(doc(db, "fin_workorders", finWorkOrderId), finPayload);
@@ -314,29 +542,45 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             const isOutsourced = !!matchedOutsource;
             const outsourcePrice = isOutsourced ? (matchedOutsource.multiplier || 0) : 0;
 
+            // Unified contract (§4). No SO for stock builds -> orderKey falls back to the WO/quote id.
+            const orderKey = (orderType === 'sales' ? hqOrder.soId : null) || hqOrder.hqJobId || hqOrder.id;
+            // §12.3: stock replenishment goes into the milling pipeline (milling backlog ->
+            // scheduler), NOT the custom-fab finish flow. Tag it so the Shop Floor routes it
+            // to the Milling tab's intake instead of the Custom tab's Start/Complete cards.
+            const isStock = orderType === 'stock';
             const shopPayload = {
                 id: shopJobId,
                 woNum: shopJobId,
+                orderKey,
+                quoteId: hqOrder.hqJobId || null,
+                salesOrderId: (orderType === 'sales' ? hqOrder.soId : null) || null,
+                finSiblingId: null,
+                hasSmallSibling: false,
                 soNum: hqOrder.soId || hqOrder.woId || 'N/A',
+                isStock,
+                routeTo: isStock ? 'MILLING' : 'CUSTOM_FAB',
+                partNum: hqOrder.rootItem || hqOrder.variantErpId || '',
                 isOutsourced: isOutsourced,
                 finishRecipe: finishRecipe,
                 outsourcePrice: outsourcePrice,
                 // Ensure the itemName gets populated correctly for stock builds
-                item: originalJob?.itemName || originalJob?.name || hqOrder.variantErpId || hqOrder.rootItem || hqOrder.hqJobId || 'Custom App Order', 
+                item: originalJob?.itemName || originalJob?.name || hqOrder.variantErpId || hqOrder.rootItem || hqOrder.hqJobId || 'Custom App Order',
                 qty: Number(hqOrder.totalParts) || 1,
                 reqDate: hqOrder.reqDate || "",
-                category: 'Custom Fabrication', 
+                category: isStock ? 'Stock Milling' : 'Custom Fabrication',
                 status: 'Pending',
                 priority: 999,
-                brand: activeBrand, 
+                brand: activeBrand,
+                customerId: originalJob?.customer?.id || null,
                 clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
                 note: hqOrder.memo || originalJob?.sidemark || "",
-                cpqSpecs: cpqSpecs, 
-                imageUrl: svgUri || originalJob?.finalImageUrl || null, 
-                needsPhosphating: hqOrder.needsPhosphating || false, 
+                cpqSpecs: cpqSpecs,
+                imageUrl: svgUri || originalJob?.finalImageUrl || null,
+                needsPhosphating: hqOrder.needsPhosphating || false,
                 isPlatingDemand: hqOrder.isPlatingDemand || false,
                 rootItem: hqOrder.rootItem || '',
-                createdAt: Date.now()
+                createdAt: Date.now(),
+                createdBy: currentUser
             };
 
             await setDoc(doc(db, "shop_custom_orders", shopJobId), shopPayload);
@@ -419,14 +663,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                             "{so.memo}"
                                         </div>
                                     )}
+                                    {/* Sales orders fan out to BOTH floors in one click — the split
+                                        builds the cut list, parts list, drawing + links the halves.
+                                        (Manual single-floor pushes live on the Work Order / stock cards.) */}
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                        <button style={{ ...btnStyle, flex: 2, background: so.autoSplit ? 'var(--paper-2)' : 'var(--ink)', color: so.autoSplit ? 'var(--ink-soft)' : '#fff', border: so.autoSplit ? '1px solid var(--line)' : 'none' }} onClick={() => autoSplitSalesOrder(so)}>
+                                            {so.autoSplit ? 'Auto-Split ✓' : '⚡ Import & Auto-Split to Floors'}
+                                        </button>
                                         <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(so, 'sales')}>View</button>
-                                        <button style={{ ...btnStyle, flex: 1, background: so.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: so.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: so.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(so, 'sales')}>
-                                            {so.pushedToFinishing ? 'Finishing Pushed ✓' : 'Push to Finishing'}
-                                        </button>
-                                        <button style={{ ...btnStyle, flex: 1, background: so.pushedToShop ? 'var(--paper-2)' : 'var(--brass)', color: so.pushedToShop ? 'var(--ink-soft)' : '#fff', border: so.pushedToShop ? '1px solid var(--line)' : 'none' }} onClick={() => pushToShop(so, 'sales')}>
-                                            {so.pushedToShop ? 'Shop Pushed ✓' : 'Push to Shop'}
-                                        </button>
                                     </div>
                                 </div>
                             ))}

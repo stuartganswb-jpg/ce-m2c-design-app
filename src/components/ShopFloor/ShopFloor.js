@@ -11,6 +11,7 @@ import './shopStyles.css';
 import ShopEngineering from './ShopEngineering';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import SharedMessaging from '../Shared/SharedMessaging';
+import { mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
 
@@ -579,10 +580,10 @@ const ShopFloor = () => {
                         <select onChange={(e) => {
                             const order = customOrders.find(o => o.id === e.target.value);
                             if (order) {
-                                const matchedRouting = routings.find(r => r.displayName === order.item || r.partId === order.item);
+                                const matchedRouting = routings.find(r => r.displayName === order.item || r.partId === order.item || (order.partNum && r.partId === order.partNum));
                                 setMillForm({
-                                    ...millForm, 
-                                    partNum: matchedRouting ? matchedRouting.partId : '', 
+                                    ...millForm,
+                                    partNum: matchedRouting ? matchedRouting.partId : (order.partNum || ''),
                                     woNum: order.woNum, 
                                     soNum: order.soNum, 
                                     qty: order.qty, 
@@ -594,7 +595,7 @@ const ShopFloor = () => {
                         }} style={{ padding: '16px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '1rem', outline: 'none', background: '#fff' }}>
                             <option value="">-- Select Pending Order from RTG Dispatch --</option>
                             {customOrders.filter(o => o.status === 'Pending').map(o => (
-                                <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty})</option>
+                                <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty}){(o.routeTo === 'MILLING' || o.isStock) ? ' [STOCK → MILLING]' : ''}</option>
                             ))}
                         </select>
                         <button onClick={handleAcceptHQOrder} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', marginTop: '16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Accept HQ Order to Machine Backlog</button>
@@ -779,7 +780,7 @@ const ShopFloor = () => {
                     ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
                     ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
                     ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
-                    ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.woNum}^FS
+                    ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.orderKey || order.woNum}^FS
                     ^XZ
                 `;
                 console.log("Sending ZPL to Zebra Printer:", zpl);
@@ -788,9 +789,11 @@ const ShopFloor = () => {
 
             const handleStartProcess = async () => {
                 await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process' });
-                await addDoc(collection(db, "global_messages"), { 
-                    sender: 'System', sourceApp: 'SHOP', target: 'FINISHING', 
-                    msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true 
+                // §5: mirror onto the sibling fin WO so the Setup Queue flips to "In Process".
+                await mirrorCustomStatusToSibling(order, 'In Process');
+                await addDoc(collection(db, "global_messages"), {
+                    sender: 'System', sourceApp: 'SHOP', target: 'FINISHING',
+                    msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true
                 });
             };
 
@@ -801,11 +804,13 @@ const ShopFloor = () => {
                 printZebraLabel(order);
                 const finalStatus = order.isOutsourced ? 'Sent to Plating' : 'Completed';
                 await updateDoc(doc(db, "shop_custom_orders", order.id), { status: finalStatus, completedAt: serverTimestamp(), completedBy: user.name });
+                // §5: custom fabrication is done from the finishing floor's perspective.
+                await mirrorCustomStatusToSibling(order, 'Complete');
 
                 if (order.isOutsourced) {
                     await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `🚚 OUTSOURCE DISPATCH: Custom parts for ${order.woNum} sent to plating/finishing vendor.`, t: serverTimestamp(), isSystem: true });
                 } else {
-                    await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', msg: `STAGING ALERT: Custom parts for ${order.woNum} are arriving at staging.`, t: serverTimestamp(), isSystem: true });
+                    await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', msg: `STAGING ALERT: Custom parts for order ${order.orderKey || order.woNum} are arriving at staging.`, t: serverTimestamp(), isSystem: true });
                 }
             };
 
@@ -826,6 +831,50 @@ const ShopFloor = () => {
                         <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.qty}</span></div>
                         {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
                     </div>
+
+                    {(order.fabMethod || order.fabNotes) && (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '20px', padding: '12px 16px', background: 'var(--ink)', color: '#fff' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600 }}>
+                                {order.fabMethod === 'BEND' ? '↳ BEND THE POLE' : order.fabMethod === 'SPLICE' ? '✂ SPLICE THE POLE' : order.fabMethod === 'MITER' ? '∠ MITER THE POLE' : 'FABRICATION'}
+                            </span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', opacity: 0.85, whiteSpace: 'nowrap' }}>
+                                {order.fabNotes?.shape ? `${order.fabNotes.shape}` : ''}
+                                {order.fabNotes?.qtyBends ? ` · ${order.fabNotes.qtyBends} bend` : ''}
+                                {order.fabNotes?.qtySplices ? ` · ${order.fabNotes.qtySplices} splice` : ''}
+                                {order.fabNotes?.qtyMiters ? ` · ${order.fabNotes.qtyMiters} miter` : ''}
+                                {order.fabNotes?.poleO2O ? ` · O2O ${order.fabNotes.poleO2O}"` : ''}
+                            </span>
+                        </div>
+                    )}
+
+                    {Array.isArray(order.cutList) && order.cutList.length > 0 && (
+                        <div style={{ marginBottom: '20px' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Cut List</div>
+                            {order.cutList.map((c, i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'var(--paper)', border: '1px solid var(--line)', marginBottom: '6px', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>
+                                    <span style={{ color: 'var(--ink)' }}>{c.name}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>Qty {c.qty}{c.cutLength ? ` · ${c.cutLength}"` : ''}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {(!order.cutList || order.cutList.length === 0) && order.cpqSpecs && Object.keys(order.cpqSpecs).length > 0 && (
+                        <div style={{ marginBottom: '20px' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Specs</div>
+                            {Object.entries(order.cpqSpecs).map(([k, v], i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 12px', background: 'var(--paper)', border: '1px solid var(--line)', marginBottom: '6px', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                                    <span style={{ color: 'var(--ink)' }}>{k}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{String(v)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {order.imageUrl && (
+                        <a href={order.imageUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginBottom: '16px', padding: '10px 16px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textDecoration: 'none' }}>📐 View Vision Drawing</a>
+                    )}
+
                     <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
                         {!isRunning ? (
                             <button onClick={handleStartProcess} style={{ flex: 1.5, background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Start Process</button>

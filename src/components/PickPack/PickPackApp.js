@@ -5,6 +5,7 @@ import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
+import { stagingScanMatches } from '../Shared/workOrderContract';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -258,7 +259,8 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
     const handleStagingMatch = async (e) => {
         e.preventDefault();
-        const matchedJob = jobs.find(j => j.id.includes(stagingScan) || (j.soNum && j.soNum.includes(stagingScan)));
+        // §8: re-pair on the shared orderKey the shop label encodes (falls back to soNum/id).
+        const matchedJob = jobs.find(j => stagingScanMatches(j, stagingScan));
         
         if (!matchedJob) return alert("❌ No matching Picked order found for this Shop Label.");
         if (matchedJob.pickStatus !== 'Picked_Awaiting_Staging') return alert("❌ Small parts are not yet picked for this order.");

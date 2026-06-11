@@ -9,6 +9,21 @@ const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 
 const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'OS COMMS', 'ASSET GALLERY', 'MANAGEMENT', 'DAILY SUMMARY'];
 const PICK_TABS = ['QUEUE', 'PACKING', 'GALLERY', 'MESSAGING']; // 🚀 ADDED PICK AND PACK TABS
 
+// NetSuite plumbing (mirror of ERPPushPullTab) for creating a flow's rollup item.
+const BRAND_NETSUITE_MAP = {
+    'm2c': { subsidiary: "3", location: "19" },
+    'uniquity': { subsidiary: "6", location: "22" },
+    'ce': { subsidiary: "2", location: "17" },
+    'leyla': { subsidiary: "5", location: "18" }
+};
+const NS_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
+const NS_REST_BASE = "https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1";
+const NS_SUITEQL_URL = "https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql";
+// Income account every rollup (non-inventory sale) item posts to: 4001 SALES-HOUSE, acctid 249.
+const NS_ROLLUP_INCOME_ACCT = "249";
+// Tax schedule for rollup items: "No Taxable", NetSuite id 2.
+const NS_ROLLUP_TAX_SCHEDULE = "2";
+
 const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
   
@@ -49,8 +64,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   });
 
   const [newFlowName, setNewFlowName] = useState("");
-  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '' });
+  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '' });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
+  const [isCreatingRollup, setIsCreatingRollup] = useState(false);
 
   const [inspectedNodes, setInspectedNodes] = useState([]);
   const [isInspecting, setIsInspecting] = useState(false);
@@ -175,11 +191,16 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       if (activeFlowId && cpqFlows.length > 0) {
           const flow = cpqFlows.find(f => f.id === activeFlowId);
           if (flow) {
-              setFlowSettings({ 
-                  name: flow.name || '', 
-                  legacyErpId: flow.legacyErpId || '', 
+              setFlowSettings({
+                  name: flow.name || '',
+                  legacyErpId: flow.legacyErpId || '',
                   basePrice: flow.basePrice || '',
-                  linkedAssemblyId: flow.linkedAssemblyId || ''
+                  linkedAssemblyId: flow.linkedAssemblyId || '',
+                  nsRollupItemId: flow.nsRollupItemId || '',
+                  nsRollupItemName: flow.nsRollupItemName || '',
+                  fabEndStyle: flow.fabEndStyle || '',
+                  fabProjection: flow.fabProjection !== undefined && flow.fabProjection !== null ? flow.fabProjection : '',
+                  fabShape: flow.fabShape || ''
               });
               setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
           }
@@ -365,6 +386,81 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   };
 
+  // Create a 1:1 NetSuite non-inventory (sale) item for this flow, so the ERP push has a
+  // dedicated rollup line to bundle all labor + fees into. Stores the returned internal
+  // id on the flow doc -> ERPPushPullTab maps to it instead of the hardcoded default.
+  // Look up an item's internal id by its (unique) name via SuiteQL. NetSuite returns the
+  // id of a newly-created item only in a Location header the proxy doesn't forward, so we
+  // resolve the id this way — which also makes create idempotent (re-clicks re-map instead
+  // of erroring on NetSuite's unique-itemid rule).
+  const findNsItemIdByName = async (name) => {
+      const resp = await fetch(NS_FUNCTION_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+              targetUrl: NS_SUITEQL_URL,
+              method: 'POST',
+              payload: { q: `SELECT id FROM item WHERE itemid = '${name.replace(/'/g, "''")}'` }
+          })
+      });
+      const data = await resp.json();
+      if (resp.ok && Array.isArray(data.items) && data.items.length > 0) {
+          return String(data.items[data.items.length - 1].id);
+      }
+      return null;
+  };
+
+  const handleCreateRollupItem = async () => {
+      if (!activeFlowId) return;
+      const flowName = (flowSettings.name || '').trim().toUpperCase();
+      if (!flowName) return alert("Give the flow a name first — the rollup item is named to match it.");
+      if (!window.confirm(`Create / map the NetSuite rollup item "${flowName}" for this flow? (Safe to re-run — it maps to the existing item if one already exists.)`)) return;
+
+      setIsCreatingRollup(true);
+      try {
+          // 1. If an item with this name already exists (e.g. a prior attempt created it but
+          //    we couldn't read the id), map to it instead of creating a duplicate.
+          let newId = await findNsItemIdByName(flowName);
+
+          // 2. Otherwise create it, then resolve the id by name.
+          if (!newId) {
+              const sub = (BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2" }).subsidiary;
+              const payload = {
+                  itemid: flowName,
+                  displayname: flowName,
+                  subsidiary: { items: [{ id: sub }] },
+                  incomeaccount: { id: NS_ROLLUP_INCOME_ACCT },
+                  taxschedule: { id: NS_ROLLUP_TAX_SCHEDULE }
+              };
+              const response = await fetch(NS_FUNCTION_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ targetUrl: `${NS_REST_BASE}/nonInventorySaleItem`, method: 'POST', payload })
+              });
+              const result = await response.json();
+              if (!response.ok) throw new Error(`NetSuite rejected [${response.status}]: ${JSON.stringify(result)}`);
+
+              newId = result.id || result.recordId || result.internalId ||
+                  (result.links && result.links[0]?.href ? result.links[0].href.split('/').pop() : null) ||
+                  await findNsItemIdByName(flowName);
+          }
+
+          if (!newId) throw new Error(`Item created but couldn't resolve its internal id. Look up "${flowName}" in NetSuite and set it manually.`);
+
+          await setDoc(doc(db, "cpq_flows", activeFlowId), {
+              nsRollupItemId: String(newId),
+              nsRollupItemName: flowName
+          }, { merge: true });
+          setFlowSettings(prev => ({ ...prev, nsRollupItemId: String(newId), nsRollupItemName: flowName }));
+          alert(`✅ Rollup item "${flowName}" mapped to this flow (NetSuite internal id ${newId}).`);
+      } catch (err) {
+          console.error("Rollup item create failed:", err);
+          alert(`Failed to create the NetSuite rollup item.\n\n${err.message}`);
+      } finally {
+          setIsCreatingRollup(false);
+      }
+  };
+
   const handleDeleteFlow = async () => {
       if (!activeFlowId) return;
       if (!window.confirm("Are you sure you want to delete this CPQ Flow? This will remove all configuration steps for this product.")) return;
@@ -381,7 +477,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
           await deleteDoc(doc(db, "cpq_flows", activeFlowId));
           setActiveFlowId(null);
-          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '' });
+          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '' });
       } catch (err) {
           console.error("Error deleting flow:", err);
           alert("Failed to delete the CPQ Flow.");
@@ -429,12 +525,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   geometryMap: {},
                   targetNodes: pin.targetNode || pin.partName, 
                   linkedPinId: pin.partId,
-                  linkedItemId: pin.partId, 
+                  linkedItemId: pin.partId,
                   basePrice: bp,
                   allowedOptions: [],
                   useClientPricing: false,
                   priceOverride: '',
-                  partHandling: '',
+                  // Default the small/custom division flag from the linked part so
+                  // auto-generated flows are tagged at authoring time (WORK_ORDER_CONTRACT §7).
+                  partHandling: libPart?.manufacturingSpecs?.partHandling || '',
                   calculatorTemplate: '',
                   qtyHelperText: ''
               };
@@ -451,7 +549,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   const handleAddStepToFlow = async (flow) => {
       if (!newStep.title) return alert("Step title is required");
-      if (!newStep.partHandling) return alert("❌ ERROR: Part Handling / Routing is required for every step.");
+      // Fees roll into the flow's NetSuite rollup item, so they don't map to a physical
+      // part and don't need a Part Handling / Routing division.
+      if (newStep.type !== 'STATIC_FEE' && !newStep.partHandling) return alert("❌ ERROR: Part Handling / Routing is required for every step.");
 
       try {
           let updatedSteps;
@@ -795,6 +895,51 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     </div>
                                 </div>
                                 
+                                <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
+                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Fabrication Preset (drives the Vision Hardware tool)</label>
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>This flow is 1:1 with a bay configuration + end style + bracket projection — set it here and Vision auto-applies it. CPQ item/finish picks never change fabrication.</span>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                                        <div>
+                                            <label style={{ fontSize: '0.8rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Bay Configuration</label>
+                                            <select value={flowSettings.fabShape || ''} onChange={e => setFlowSettings({...flowSettings, fabShape: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
+                                                <option value="">-- None (auto) --</option>
+                                                <option value="STRAIGHT">Straight Pole</option>
+                                                <option value="MITERED">Mitered Bay</option>
+                                                <option value="BOW">Curved Bay</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style={{ fontSize: '0.8rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>End Style</label>
+                                            <select value={flowSettings.fabEndStyle || ''} onChange={e => setFlowSettings({...flowSettings, fabEndStyle: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
+                                                <option value="">-- None (auto-detect) --</option>
+                                                <option value="RETURN_BEND">Bent Return (FR)</option>
+                                                <option value="RETURN_MITER">Mitered Return</option>
+                                                <option value="FINIAL">Finial</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style={{ fontSize: '0.8rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Bracket Projection (")</label>
+                                            <input type="number" step="0.125" value={flowSettings.fabProjection} onChange={e => setFlowSettings({...flowSettings, fabProjection: e.target.value})} placeholder="e.g. 3.5" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div style={{ marginTop: '20px', padding: '16px 20px', background: flowSettings.nsRollupItemId ? 'var(--paper)' : '#fff7ed', border: `1px solid ${flowSettings.nsRollupItemId ? 'var(--line)' : 'var(--brass)'}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
+                                    <div>
+                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>NetSuite Rollup Item (labor + fees bundle)</label>
+                                        {flowSettings.nsRollupItemId ? (
+                                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink)' }}>
+                                                <strong>{flowSettings.nsRollupItemName || 'Mapped'}</strong> · internal id <span style={{ fontFamily: 'var(--mono)' }}>{flowSettings.nsRollupItemId}</span> ✓
+                                            </span>
+                                        ) : (
+                                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>No rollup item yet — the ERP push will fall back to the shared default (61502). Create a 1:1 item so pricing maps cleanly.</span>
+                                        )}
+                                    </div>
+                                    <button onClick={handleCreateRollupItem} disabled={isCreatingRollup} style={{ flexShrink: 0, padding: '12px 18px', background: flowSettings.nsRollupItemId ? 'transparent' : 'var(--brass)', color: flowSettings.nsRollupItemId ? 'var(--ink)' : '#fff', border: flowSettings.nsRollupItemId ? '1px solid var(--line)' : 'none', cursor: isCreatingRollup ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                                        {isCreatingRollup ? 'Creating…' : (flowSettings.nsRollupItemId ? 'Re-create Item' : 'Create Rollup Item in NetSuite')}
+                                    </button>
+                                </div>
+
                                 <div style={{ display: 'flex', gap: '15px', marginTop: '24px' }}>
                                     <button onClick={handleSaveFlowSettings} style={{ flex: 2, padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                                         {isSavingFlowSettings ? "Syncing..." : "Save and Cascade to Master"}
@@ -831,13 +976,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                                         <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value, dataSource: e.target.value === 'STATIC_FEE' ? '' : newStep.dataSource})} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                                             <option value="DROPDOWN">Dropdown List</option>
+                                            <option value="STYLE_SWAP">Choose / Swap Style</option>
                                             <option value="VISUAL_GRID">Visual Grid (Images/Textures)</option>
                                             <option value="VISUAL_DIMENSIONS">Visual Grid + Dimensions</option>
                                             <option value="DIMENSIONS">Dimensional Input Only</option>
                                             <option value="STATIC_FEE">Static Fee / Quantity</option>
                                         </select>
                                         
-                                        <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} disabled={newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE'} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: (newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') ? 0.5 : 1 }}>
+                                        <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} disabled={newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE' || newStep.type === 'STYLE_SWAP'} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: (newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE' || newStep.type === 'STYLE_SWAP') ? 0.5 : 1 }}>
                                             <option value="">-- SELECT DATA SOURCE --</option>
                                             <optgroup label="Core Libraries">
                                                 <option value="master_finishes">Master Finishes</option>
@@ -888,6 +1034,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         />
                                     </div>
 
+                                    {newStep.type !== 'STYLE_SWAP' && (
                                     <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '15px' }}>Item Mapping & Base Price</label>
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
@@ -939,6 +1086,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             </div>
                                         </div>
                                     </div>
+                                    )}
 
                                     {newStep.dataSource && availableSourceItems.length > 0 && newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && (
                                         <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px' }}>
@@ -965,6 +1113,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         </div>
                                     )}
                                     
+                                    {newStep.type !== 'STYLE_SWAP' && (
                                     <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                                             <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Target 3D Mesh / Node</label>
@@ -1012,7 +1161,88 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
                                         <input value={newStep.targetNodes || ''} onChange={e => setNewStep({...newStep, targetNodes: e.target.value})} placeholder="e.g., Pole_Top, Bracket_Base" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
+                                    )}
 
+                                    {newStep.type === 'STYLE_SWAP' && (
+                                        <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
+                                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Style Options — choose which BOM items can be swapped</label>
+                                            <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Items and their 3D mesh nodes come from this assembly's BOM (set in Node Cluster / BOM Engine). Not listed? Add it to the BOM first.</span>
+                                            {!flowSettings.linkedAssemblyId ? (
+                                                <div style={{ fontSize: '0.9rem', color: '#d9534f', fontStyle: 'italic' }}>Link a Master Assembly to this flow first (in the settings above).</div>
+                                            ) : linkedBomPins.length === 0 ? (
+                                                <div style={{ fontSize: '0.9rem', color: '#d9534f', fontStyle: 'italic' }}>No BOM components found for this assembly. Add them in Node Cluster / BOM Engine.</div>
+                                            ) : (
+                                                <div>
+                                                    {linkedBomPins.map(pin => {
+                                                        const sel = (newStep.styleOptions || []).find(o => o.partId === pin.partId);
+                                                        const part = allApprovedDesigns.find(d => d.id === pin.partId || d.legacyErpId === pin.partId || d.itemId === pin.partId);
+                                                        const defaultPrice = parseFloat(part?.manufacturingSpecs?.basePrice) || 0;
+                                                        const meshNode = pin.targetNode || pin.partName;
+                                                        return (
+                                                            <div key={pin.partId} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
+                                                                <input type="checkbox" checked={!!sel} onChange={(e) => {
+                                                                    setNewStep(prev => {
+                                                                        const opts = (prev.styleOptions || []).filter(o => o.partId !== pin.partId);
+                                                                        if (e.target.checked) opts.push({ partId: pin.partId, partName: pin.partName, targetNode: meshNode, price: defaultPrice });
+                                                                        const geometryMap = {};
+                                                                        opts.forEach(o => { geometryMap[o.partId] = o.targetNode; });
+                                                                        return { ...prev, styleOptions: opts, geometryMap };
+                                                                    });
+                                                                }} />
+                                                                <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--ink)' }}>{pin.partName}</span>
+                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>mesh: {meshNode}</span>
+                                                                <span style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>$</span>
+                                                                <input type="number" step="0.01" disabled={!sel} value={sel ? (sel.price ?? defaultPrice) : defaultPrice} onChange={(e) => {
+                                                                    const v = parseFloat(e.target.value) || 0;
+                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => o.partId === pin.partId ? { ...o, price: v } : o) }));
+                                                                }} style={{ width: '90px', padding: '6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: sel ? 1 : 0.4 }} />
+                                                                <span style={{ color: 'var(--ink-soft)', fontSize: '0.7rem', fontFamily: 'var(--mono)', textTransform: 'uppercase' }} title="2D layer stacking order — higher paints on top of the pole">Z</span>
+                                                                <input type="number" disabled={!sel} value={sel && sel.layerZ !== undefined && sel.layerZ !== null ? sel.layerZ : ''} placeholder={String(parseInt(part?.manufacturingSpecs?.layeringSequence) || 10)} onChange={(e) => {
+                                                                    const v = e.target.value;
+                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => o.partId === pin.partId ? { ...o, layerZ: v === '' ? '' : (parseInt(v) || 0) } : o) }));
+                                                                }} style={{ width: '56px', padding: '6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: sel ? 1 : 0.4 }} />
+                                                            </div>
+                                                        );
+                                                    })}
+                                                    <label style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--ink)' }}>
+                                                        <input type="checkbox" checked={!!newStep.finishDataSource} onChange={(e) => setNewStep({...newStep, finishDataSource: e.target.checked ? 'master_finishes' : '', finishAllowedOptions: e.target.checked ? (newStep.finishAllowedOptions || []) : []})} />
+                                                        Also let the customer pick a Finish for the chosen style (applied to its mesh)
+                                                    </label>
+
+                                                    {newStep.finishDataSource && (
+                                                        <div style={{ marginTop: '12px', marginLeft: '28px', padding: '12px 16px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Available Finishes for this step</div>
+                                                            <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Check the finishes to offer. Leave all unchecked to allow every finish.</span>
+                                                            <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 16px' }}>
+                                                                {getDataSourceItems('master_finishes').map(f => {
+                                                                    const checked = (newStep.finishAllowedOptions || []).includes(f.id);
+                                                                    return (
+                                                                        <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer' }}>
+                                                                            <input type="checkbox" checked={checked} onChange={(e) => {
+                                                                                setNewStep(prev => {
+                                                                                    const set = new Set(prev.finishAllowedOptions || []);
+                                                                                    if (e.target.checked) set.add(f.id); else set.delete(f.id);
+                                                                                    return { ...prev, finishAllowedOptions: [...set] };
+                                                                                });
+                                                                            }} />
+                                                                            {f.name}
+                                                                        </label>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {newStep.type === 'STATIC_FEE' ? (
+                                        <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
+                                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Fee Step</label>
+                                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>This is a fee — it rolls into the flow's NetSuite rollup item, so it needs no part, routing, or item association. Just set the amount under Pricing Rules.</span>
+                                        </div>
+                                    ) : (
                                     <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Part Handling & Routing</label>
                                         <select value={newStep.partHandling || ''} onChange={e => setNewStep({...newStep, partHandling: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
@@ -1022,6 +1252,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             ))}
                                         </select>
                                     </div>
+                                    )}
 
                                     <div style={{ background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '15px' }}>Pricing Rules</label>
@@ -1077,7 +1308,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     </label>
                                     
                                     <div style={{ display: 'flex', gap: '15px', marginTop: '10px' }}>
-                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={(newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE') && !newStep.dataSource} style={{ flex: 1, padding: '15px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: ((newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') || newStep.dataSource) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', opacity: ((newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') || newStep.dataSource) ? 1 : 0.5 }}>
+                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={newStep.type === 'STYLE_SWAP' ? !(newStep.styleOptions && newStep.styleOptions.length) : ((newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE') && !newStep.dataSource)} style={{ flex: 1, padding: '15px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                                             {newStep.id ? "Save Edits to Step" : "Add Step"}
                                         </button>
                                         {newStep.id && (

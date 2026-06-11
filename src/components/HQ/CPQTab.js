@@ -72,7 +72,17 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
     useEffect(() => {
         clonedScene.traverse((child) => {
             if (child.isMesh && child.userData.originalMaterial === undefined) {
-                child.userData.originalMaterial = child.material.clone();
+                const orig = child.material.clone();
+                // Export artifact fix: a material flagged transparent (alphaMode BLEND) but
+                // actually fully opaque (opacity 1, no alpha map) only breaks three.js depth
+                // sorting — e.g. a steel ring rendering behind the pole instead of the pole
+                // threading through it. Force it opaque so true geometry depth is used.
+                if (orig.transparent && (orig.opacity === undefined || orig.opacity >= 1) && !orig.alphaMap) {
+                    orig.transparent = false;
+                    orig.depthWrite = true;
+                    orig.needsUpdate = true;
+                }
+                child.userData.originalMaterial = orig;
                 child.userData.originalVisible = child.visible;
             }
         });
@@ -244,7 +254,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
 
       const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
-          const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER');
+          // Brand isolation: only this brand's (subsidiary's) customers, matching ClientVisionTab.
+          const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r =>
+              r.type === 'CUSTOMER' &&
+              (r.brandId === activeBrand || (r.sharedBrands && r.sharedBrands.includes(activeBrand)))
+          );
           setLiveCustomers(customers);
       });
 
@@ -298,6 +312,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const availableProductTypes = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.productType).filter(Boolean))];
 
   const getOptionsForStep = (step) => {
+      // Choose / Swap Style: options are the curated BOM items on the step itself.
+      if (step?.type === 'STYLE_SWAP') {
+          return (step.styleOptions || []).map(o => ({ id: o.partId, itemName: o.partName, price: o.price }));
+      }
       if (!step || !step.dataSource) return [];
       let options = [];
 
@@ -539,7 +557,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (!activeAssembly && activeFlow.basePrice) baseAssemblyPrice = parseFloat(activeFlow.basePrice);
 
       if (baseAssemblyPrice > 0) {
-          breakdown.push({ name: activeAssembly ? activeAssembly.itemName : activeFlow.name, qty: 1, price: baseAssemblyPrice, total: baseAssemblyPrice });
+          breakdown.push({
+              name: activeAssembly ? activeAssembly.itemName : activeFlow.name,
+              qty: 1, price: baseAssemblyPrice, total: baseAssemblyPrice,
+              partHandling: activeAssembly?.manufacturingSpecs?.partHandling || activeFlow.partHandling || '',
+              partId: activeAssembly?.id || null
+          });
       }
 
       let total = baseAssemblyPrice;
@@ -589,6 +612,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       else if (partObj.basePrice) optionNativePrice = parseFloat(partObj.basePrice);
                   }
 
+                  // Choose / Swap Style: price at the per-option base price set in the builder.
+                  if (step.type === 'STYLE_SWAP') {
+                      const styleOpt = (step.styleOptions || []).find(o => o.partId === selectedValue);
+                      if (styleOpt && styleOpt.price !== undefined && styleOpt.price !== '') optionNativePrice = parseFloat(styleOpt.price) || 0;
+                  }
+
                   if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
                       const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
                       if (cp && cp.price !== undefined && cp.price !== "") {
@@ -615,7 +644,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               let lineTotal = stepPrice * multiplier * qty;
               
               if (lineTotal > 0 || stepPrice > 0 || step.type === 'STATIC_FEE') {
-                  breakdown.push({ name: itemName, qty: qty, price: stepPrice * multiplier, total: lineTotal });
+                  // Carry the generated cut geometry (from Vision -> dimensionInputs) onto
+                  // dimension-driven lines so the shop work order gets a cutLength and the
+                  // fin work order gets dimensions. See WORK_ORDER_CONTRACT.md §6/§7.
+                  const dimInput = dimensionInputs[step.id];
+                  const cutLength = dimInput ? (dimInput.calc_cutLength || dimInput.length || null) : null;
+                  breakdown.push({
+                      name: itemName, qty: qty, price: stepPrice * multiplier, total: lineTotal,
+                      partHandling: step.partHandling || '',
+                      partId: selectedValue || step.linkedItemId || null,
+                      cutLength: cutLength,
+                      dimensions: dimInput ? { length: dimInput.length || null, wallA: dimInput.wallA || null, wallB: dimInput.wallB || null, wallC: dimInput.wallC || null } : null
+                  });
               }
 
               total += lineTotal;
@@ -624,7 +664,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       setPricing({ base: total, finalPrice: total });
       setPricingBreakdown(breakdown);
-  }, [dynamicConfigParams, stepQuantities, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, liveAssemblies, activeBomPins, globalFinishes]);
+  }, [dynamicConfigParams, stepQuantities, dimensionInputs, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, liveAssemblies, activeBomPins, globalFinishes]);
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
 
@@ -688,12 +728,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       
       let grandTotal = 0;
       let mergedBreakdown = [];
-      let mergedNotesObj = null; 
-      let allDraftSvgs = []; 
+      let mergedNotesObj = null;
+      let allDraftSvgs = [];
+
+      // Per-step maps the ERP push (ERPPushPullTab.getJobLineItems) resolves physical
+      // NetSuite inventory from. Without these, a finalized quote has no mapped inventory
+      // and the push is rejected. Keyed by stepId, merged across all cart assemblies.
+      const mergedConfiguration = {};
+      const mergedQuantities = {};
+      const mergedDimensions = {};
 
       cart.forEach((item) => {
           grandTotal += item.pricing.finalPrice * item.qty;
-          
+
+          Object.assign(mergedConfiguration, item.dynamicConfigParams || {});
+          Object.assign(mergedQuantities, item.stepQuantities || {});
+          Object.assign(mergedDimensions, item.dimensionInputs || {});
+
           mergedBreakdown.push({
               name: `▶ ${item.assemblyName} [${item.sidemark}]`,
               qty: item.qty,
@@ -706,7 +757,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   name: `  - ${line.name}`,
                   qty: line.qty * item.qty,
                   price: line.price,
-                  total: line.total * item.qty
+                  total: line.total * item.qty,
+                  partHandling: line.partHandling || '',
+                  partId: line.partId || null,
+                  cutLength: line.cutLength || null,
+                  dimensions: line.dimensions || null
               });
           });
 
@@ -733,11 +788,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           shippingAddressId: jobData.shippingAddressId || null,
           customShippingAddress: jobData.shippingMethod === 'CUSTOM' ? jobData.customShippingAddress : null,
 
-          cpqData: { 
-              totalPrice: grandTotal, 
+          cpqData: {
+              totalPrice: grandTotal,
               appliedRules: engineFlags.warnings,
               breakdown: mergedBreakdown,
-              cartItems: cart 
+              cartItems: cart,
+              // Consumed by ERPPushPullTab to map lines -> physical NetSuite inventory.
+              configuration: mergedConfiguration,
+              quantities: mergedQuantities,
+              dimensions: mergedDimensions
           },
           engineeringNotes: mergedNotesObj, 
           dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, sewing: false, packing: false },
@@ -1013,6 +1072,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               const libPart = allParts.find(p => p.id === valueId);
               if (libPart) { foundAsset = libPart; zIdx = parseInt(libPart.manufacturingSpecs?.layeringSequence) || 10; }
           }
+          // Choose / Swap Style: per-option Layer Z override (set in the flow builder) wins,
+          // so you control bracket-vs-pole stacking without editing the part.
+          const swapStep = activeFlow?.steps?.find(s => s.id === stepId && s.type === 'STYLE_SWAP');
+          if (swapStep) {
+              const opt = (swapStep.styleOptions || []).find(o => o.partId === valueId);
+              if (opt && opt.layerZ !== undefined && opt.layerZ !== '' && opt.layerZ !== null) zIdx = parseInt(opt.layerZ) || zIdx;
+          }
           if (foundAsset) {
               const tex = foundAsset.textureUrl || foundAsset.finalImageUrl;
               if (tex) layers.push({ textureUrl: tex, zIndex: zIdx, name: foundAsset.itemName || foundAsset.name });
@@ -1031,8 +1097,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               const allF = [...globalFinishes, ...outsourceFinishes];
               const dynamicF = dynamicAssets;
               const fData = allF.find(f => f.id === selectedValueId) || dynamicF.find(d => d.id === selectedValueId);
-              
+
               if (fData?.textureUrl) overrides[step.targetNodes] = fData.textureUrl;
+          }
+          // Compound/style step: apply the Finish selection to the SELECTED style's mesh
+          // (auto-resolved from the BOM-derived geometryMap — no manual node needed).
+          if (step.finishDataSource) {
+              const finishId = dynamicConfigParams[`${step.id}__finish`];
+              const selectedStyleId = dynamicConfigParams[step.id];
+              const targetNode = (step.geometryMap && step.geometryMap[selectedStyleId])
+                  || (step.styleOptions || []).find(o => o.partId === selectedStyleId)?.targetNode
+                  || step.finishTargetNodes;
+              if (finishId && targetNode) {
+                  const fData = [...globalFinishes, ...outsourceFinishes, ...dynamicAssets].find(f => f.id === finishId);
+                  if (fData?.textureUrl) overrides[targetNode] = fData.textureUrl;
+              }
           }
       });
       return overrides;
@@ -1169,13 +1248,27 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               </div>
                           )}
 
-                          {currentStep.type === 'DROPDOWN' && currentStep.dataSource && (
-                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: '20px', outline: 'none' }}>
-                                  <option value="">-- Select Option --</option>
+                          {((currentStep.type === 'DROPDOWN' && currentStep.dataSource) || currentStep.type === 'STYLE_SWAP') && (
+                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: currentStep.finishDataSource ? '12px' : '20px', outline: 'none' }}>
+                                  <option value="">{currentStep.type === 'STYLE_SWAP' ? '-- Choose Style --' : '-- Select Option --'}</option>
                                   {getOptionsForStep(currentStep).map(opt => (
                                       <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</option>
                                   ))}
                               </select>
+                          )}
+
+                          {/* Compound step: an optional second "Finish" dropdown sharing one finish
+                              set, applied to the selected (visible) item's mesh. */}
+                          {currentStep.finishDataSource && (
+                              <div style={{ marginBottom: '20px' }}>
+                                  <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Finish</label>
+                                  <select value={dynamicConfigParams[`${currentStep.id}__finish`] || ''} onChange={(e) => handleParamChange(`${currentStep.id}__finish`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none' }}>
+                                      <option value="">-- Select Finish --</option>
+                                      {getOptionsForStep({ ...currentStep, type: 'DROPDOWN', dataSource: currentStep.finishDataSource, allowedOptions: currentStep.finishAllowedOptions || [], geometryMap: {}, styleOptions: [] }).map(opt => (
+                                          <option key={opt.id} value={opt.id}>{opt.itemName}</option>
+                                      ))}
+                                  </select>
+                              </div>
                           )}
 
                           {currentStep.type === 'STATIC_FEE' && (

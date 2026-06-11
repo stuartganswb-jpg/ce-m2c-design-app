@@ -23,6 +23,7 @@ const ExplodableModel = ({ url, explodeFactor, explodeMode, nodeClusters, onMesh
     const { originalData, sceneSize } = useMemo(() => {
         const data = new Map();
         let count = 0;
+        clonedScene.updateMatrixWorld(true);
         const sceneBox = new THREE.Box3().setFromObject(clonedScene);
         const size = sceneBox.getSize(new THREE.Vector3()).length();
         const sceneCenter = new THREE.Vector3();
@@ -36,7 +37,7 @@ const ExplodableModel = ({ url, explodeFactor, explodeMode, nodeClusters, onMesh
                 const cBox = new THREE.Box3();
                 let hasMeshes = false;
                 clonedScene.traverse((child) => {
-                    if (child.isMesh && cluster.meshes.includes(child.name)) {
+                    if (child.isMesh && (cluster.meshes || []).includes(child.name)) {
                         child.geometry.computeBoundingBox();
                         const meshBox = child.geometry.boundingBox.clone();
                         meshBox.applyMatrix4(child.matrixWorld);
@@ -67,7 +68,9 @@ const ExplodableModel = ({ url, explodeFactor, explodeMode, nodeClusters, onMesh
                 }
                 const direction = moveCenter.clone().sub(sceneCenter).normalize();
                 if (direction.lengthSq() === 0) direction.set(0, 1, 0);
-                data.set(child.uuid, { initialPosition: child.position.clone(), direction: direction });
+                const initialWorldPos = new THREE.Vector3();
+                child.getWorldPosition(initialWorldPos);
+                data.set(child.uuid, { initialPosition: child.position.clone(), initialWorldPos, direction });
             }
         });
 
@@ -81,8 +84,16 @@ const ExplodableModel = ({ url, explodeFactor, explodeMode, nodeClusters, onMesh
             if (child.isMesh) {
                 const data = originalData.get(child.uuid);
                 if (data) {
-                    const pushDistance = (explodeFactor / 100) * (sceneSize * 0.8); 
-                    child.position.copy(data.initialPosition).add(data.direction.clone().multiplyScalar(pushDistance));
+                    const pushDistance = (explodeFactor / 100) * (sceneSize * 0.8);
+                    if (pushDistance === 0 || !child.parent) {
+                        child.position.copy(data.initialPosition);
+                    } else {
+                        // Spread in WORLD space, then convert back to the mesh's local frame so
+                        // deeply-nested / scaled .glb hierarchies (e.g. Fusion exports) move the
+                        // intended amount instead of ~1/scale of it.
+                        const targetWorld = data.initialWorldPos.clone().add(data.direction.clone().multiplyScalar(pushDistance));
+                        child.position.copy(child.parent.worldToLocal(targetWorld));
+                    }
                 }
             }
         });

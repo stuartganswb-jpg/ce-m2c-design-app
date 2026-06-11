@@ -34,8 +34,10 @@ const Summary = ({ workOrders }) => {
                     <tbody>
                         {completed.length === 0 && <tr><td colSpan="10" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>No work orders have been completed today.</td></tr>}
                         {completed.map(wo => {
+                            // §10: contract WOs carry orderType ('sales'|'stock'); type is now a category.
+                            const woKind = wo.orderType || wo.type;
                             let p=0, b=0, r=0, f=0;
-                            if(wo.type === 'sales') {
+                            if(woKind === 'sales') {
                                 p = wo.poles?.qty || 0; b = wo.smallParts?.brk || 0; r = wo.smallParts?.rng || 0; f = wo.smallParts?.fin || 0;
                             } else { p = wo.stock?.qty || 0; }
                             
@@ -49,7 +51,7 @@ const Summary = ({ workOrders }) => {
                                     <td style={{ padding: '16px 20px', fontWeight: 500, color: 'var(--ink)' }}>{wo.id}</td>
                                     <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{wo.soId || '-'}</td>
                                     <td style={{ padding: '16px 20px', color: 'var(--ink-soft)' }}>{wo.custPo || '-'}</td>
-                                    <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{wo.type === 'stock' ? <span style={{fontFamily: 'var(--mono)', fontSize: '10px'}}>{p} (STOCK)</span> : p}</td>
+                                    <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{woKind === 'stock' ? <span style={{fontFamily: 'var(--mono)', fontSize: '10px'}}>{p} (STOCK)</span> : p}</td>
                                     <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{b}</td>
                                     <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{r}</td>
                                     <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{f}</td>
