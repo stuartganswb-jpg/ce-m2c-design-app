@@ -1126,6 +1126,26 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <input value={newStep.targetNodes || ''} onChange={e => setNewStep({...newStep, targetNodes: e.target.value})} placeholder="e.g., Pole_Top, Bracket_Base" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
 
+                                    {newStep.type === 'DROPDOWN' && (
+                                        <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
+                                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Compound: Add a Finish Dropdown (optional)</label>
+                                            <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Turns this into a "pick item + pick finish" step (e.g. Bracket Style + Finish). Leave blank for a normal dropdown.</span>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                                <div>
+                                                    <label style={{ fontSize: '0.8rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Finish Source</label>
+                                                    <select value={newStep.finishDataSource || ''} onChange={e => setNewStep({...newStep, finishDataSource: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
+                                                        <option value="">-- None --</option>
+                                                        <option value="master_finishes">Master Finishes</option>
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label style={{ fontSize: '0.8rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Finish Target Mesh</label>
+                                                    <input value={newStep.finishTargetNodes || ''} onChange={e => setNewStep({...newStep, finishTargetNodes: e.target.value})} placeholder="e.g., Bracket_Surface" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
                                     {newStep.type === 'STATIC_FEE' ? (
                                         <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
                                             <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Fee Step</label>

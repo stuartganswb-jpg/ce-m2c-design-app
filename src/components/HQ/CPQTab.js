@@ -1066,8 +1066,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               const allF = [...globalFinishes, ...outsourceFinishes];
               const dynamicF = dynamicAssets;
               const fData = allF.find(f => f.id === selectedValueId) || dynamicF.find(d => d.id === selectedValueId);
-              
+
               if (fData?.textureUrl) overrides[step.targetNodes] = fData.textureUrl;
+          }
+          // Compound step: apply the secondary Finish selection to its own target mesh.
+          if (step.finishDataSource && step.finishTargetNodes) {
+              const finishId = dynamicConfigParams[`${step.id}__finish`];
+              if (finishId) {
+                  const fData = [...globalFinishes, ...outsourceFinishes, ...dynamicAssets].find(f => f.id === finishId);
+                  if (fData?.textureUrl) overrides[step.finishTargetNodes] = fData.textureUrl;
+              }
           }
       });
       return overrides;
@@ -1205,12 +1213,26 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           )}
 
                           {currentStep.type === 'DROPDOWN' && currentStep.dataSource && (
-                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: '20px', outline: 'none' }}>
+                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: currentStep.finishDataSource ? '12px' : '20px', outline: 'none' }}>
                                   <option value="">-- Select Option --</option>
                                   {getOptionsForStep(currentStep).map(opt => (
                                       <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</option>
                                   ))}
                               </select>
+                          )}
+
+                          {/* Compound step: an optional second "Finish" dropdown sharing one finish
+                              set, applied to the selected (visible) item's mesh. */}
+                          {currentStep.type === 'DROPDOWN' && currentStep.finishDataSource && (
+                              <div style={{ marginBottom: '20px' }}>
+                                  <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Finish</label>
+                                  <select value={dynamicConfigParams[`${currentStep.id}__finish`] || ''} onChange={(e) => handleParamChange(`${currentStep.id}__finish`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none' }}>
+                                      <option value="">-- Select Finish --</option>
+                                      {getOptionsForStep({ ...currentStep, dataSource: currentStep.finishDataSource, allowedOptions: [], geometryMap: {} }).map(opt => (
+                                          <option key={opt.id} value={opt.id}>{opt.itemName}</option>
+                                      ))}
+                                  </select>
+                              </div>
                           )}
 
                           {currentStep.type === 'STATIC_FEE' && (
