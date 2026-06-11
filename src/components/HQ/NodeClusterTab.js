@@ -128,7 +128,7 @@ const SceneNodeTree = ({ node, level = 0, selectedNodes, hiddenNodes, onToggleSe
 };
 
 // --- 3D INTERACTIVE HIGHLIGHT & VISIBILITY MODEL ---
-const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, highlightUnassigned, onMeshClick, onLoaded, onComponents }) => {
+const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, highlightUnassigned, locatingNodes = [], onMeshClick, onLoaded, onComponents }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
@@ -196,7 +196,17 @@ const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, hi
                 child.visible = true;
 
                 if (!child.userData.originalMaterial) child.userData.originalMaterial = child.material;
-                
+
+                // Locate mode: isolate one saved cluster — light it up, fade everything else.
+                if (locatingNodes.length > 0) {
+                    if (isDescendantOf(child, locatingNodes)) {
+                        child.material = new THREE.MeshStandardMaterial({ color: '#b08d57', emissive: '#b08d57', emissiveIntensity: 0.6, transparent: true, opacity: 0.95 });
+                    } else {
+                        child.material = new THREE.MeshBasicMaterial({ color: '#cccccc', transparent: true, opacity: 0.12 });
+                    }
+                    return;
+                }
+
                 const isSelected = isDescendantOf(child, selectedNodes);
                 const isClustered = existingClusters.some(cl => isDescendantOf(child, cl.nodes));
 
@@ -213,7 +223,7 @@ const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, hi
                 }
             }
         });
-    }, [clonedScene, selectedNodes, existingClusters, hiddenNodes, highlightUnassigned]);
+    }, [clonedScene, selectedNodes, existingClusters, hiddenNodes, highlightUnassigned, locatingNodes]);
 
     return (
         <primitive 
@@ -245,6 +255,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [interactionMode, setInteractionMode] = useState("select");
     const [hiddenNodes, setHiddenNodes] = useState([]);
     const [highlightUnassigned, setHighlightUnassigned] = useState(false);
+    const [locatingClusterId, setLocatingClusterId] = useState(null); // visual confirm: isolate a saved cluster in 3D
 
     // --- AUTO-GROUP STATE ---
     const [cadComponents, setCadComponents] = useState([]); // raw top-level subassemblies from the model
@@ -362,6 +373,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     };
 
     const existingClusters = activeAssembly?.nodeClusters || [];
+    const locatingNodes = existingClusters.find(c => c.id === locatingClusterId)?.nodes || [];
 
     // --- AUTO-GROUP PROPOSALS ---
     // Turn the raw CAD sub-assemblies into reviewable cluster proposals: clean name,
@@ -533,7 +545,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                         }
 
                         return (
-                            <div key={asm.id} onClick={() => { setActiveAssembly(asm); setSelectedNodes([]); setSceneGraph(null); setHiddenNodes([]); setHighlightUnassigned(false); setCadComponents([]); setShowAutoPanel(false); }} style={{ background: activeAssembly?.id === asm.id ? 'var(--paper-2)' : '#fff', border: activeAssembly?.id === asm.id ? '1px solid var(--brass)' : '1px solid var(--line)', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', boxShadow: activeAssembly?.id === asm.id ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}>
+                            <div key={asm.id} onClick={() => { setActiveAssembly(asm); setSelectedNodes([]); setSceneGraph(null); setHiddenNodes([]); setHighlightUnassigned(false); setCadComponents([]); setShowAutoPanel(false); setLocatingClusterId(null); }} style={{ background: activeAssembly?.id === asm.id ? 'var(--paper-2)' : '#fff', border: activeAssembly?.id === asm.id ? '1px solid var(--brass)' : '1px solid var(--line)', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', boxShadow: activeAssembly?.id === asm.id ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}>
                                 <div style={{ padding: '8px 12px', background: 'var(--paper)', color: statusColor, fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', borderBottom: '1px solid var(--line)' }}>
                                     {statusText}
                                 </div>
@@ -614,6 +626,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         onMeshClick={handleMeshClick}
                                         onLoaded={setSceneGraph}
                                         onComponents={setCadComponents}
+                                        locatingNodes={locatingNodes}
                                     />
                                 </Bounds>
                             </Canvas>
@@ -664,15 +677,21 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                 <h3 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Saved BOM Bindings ({existingClusters.length})</h3>
                                 {existingClusters.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', fontFamily: 'var(--serif)' }}>No meshes bound to BOM components yet.</div>}
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                    {existingClusters.map(cl => (
-                                        <div key={cl.id} style={{ border: '1px solid var(--line)', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper)', borderLeft: '2px solid var(--brass)' }}>
+                                    {existingClusters.map(cl => {
+                                        const isLocating = locatingClusterId === cl.id;
+                                        return (
+                                        <div key={cl.id} style={{ border: `1px solid ${isLocating ? 'var(--brass)' : 'var(--line)'}`, padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: isLocating ? 'var(--paper-2)' : 'var(--paper)', borderLeft: '2px solid var(--brass)' }}>
                                             <div>
                                                 <div style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '1rem' }}>{cl.name}</div>
                                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginTop: '6px' }}>{cl.nodes?.length || 0} Nodes Attached</div>
                                             </div>
-                                            <button onClick={() => handleDeleteCluster(cl.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
+                                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                <button onClick={() => setLocatingClusterId(isLocating ? null : cl.id)} title="Highlight this group in the 3D view" style={{ background: isLocating ? 'var(--brass)' : '#fff', color: isLocating ? '#fff' : 'var(--ink)', border: '1px solid var(--brass)', padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer' }}>{isLocating ? '◉ Locating' : 'Locate'}</button>
+                                                <button onClick={() => handleDeleteCluster(cl.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
+                                            </div>
                                         </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             </div>
                         </div>
