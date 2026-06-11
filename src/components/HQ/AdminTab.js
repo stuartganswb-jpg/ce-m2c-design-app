@@ -64,7 +64,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   });
 
   const [newFlowName, setNewFlowName] = useState("");
-  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '' });
+  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [] });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
   const [isCreatingRollup, setIsCreatingRollup] = useState(false);
 
@@ -200,7 +200,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   nsRollupItemName: flow.nsRollupItemName || '',
                   fabEndStyle: flow.fabEndStyle || '',
                   fabProjection: flow.fabProjection !== undefined && flow.fabProjection !== null ? flow.fabProjection : '',
-                  fabShape: flow.fabShape || ''
+                  fabShape: flow.fabShape || '',
+                  defaultFinishOptions: flow.defaultFinishOptions || []
               });
               setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
           }
@@ -386,6 +387,30 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   };
 
+  // Push the flow-level default finishes down onto every Choose/Swap (STYLE_SWAP) step
+  // as its starting finish set. Most collections offer the same finishes across all
+  // steps, so this seeds them all at once; operators then deselect the rare exceptions
+  // per step. Persists the defaults on the flow doc at the same time.
+  const handleApplyFinishesToSteps = async () => {
+      if (!activeFlowId || !activeFlow) return;
+      const def = flowSettings.defaultFinishOptions || [];
+      const styleSteps = (activeFlow.steps || []).filter(s => s.type === 'STYLE_SWAP');
+      if (styleSteps.length === 0) return alert("This flow has no Choose / Swap Style steps to apply finishes to.");
+      if (!window.confirm(`Apply ${def.length} default finish(es) to all ${styleSteps.length} Choose/Swap step(s)? This overwrites each step's current finish list.`)) return;
+      const updatedSteps = (activeFlow.steps || []).map(s =>
+          s.type === 'STYLE_SWAP'
+              ? { ...s, finishDataSource: 'master_finishes', finishAllowedOptions: [...def] }
+              : s
+      );
+      try {
+          await updateDoc(doc(db, "cpq_flows", activeFlowId), { steps: updatedSteps, defaultFinishOptions: def });
+          alert(`Applied default finishes to ${styleSteps.length} step(s).`);
+      } catch (err) {
+          console.error("Error applying finishes to steps:", err);
+          alert("Failed to apply finishes to steps.");
+      }
+  };
+
   // Create a 1:1 NetSuite non-inventory (sale) item for this flow, so the ERP push has a
   // dedicated rollup line to bundle all labor + fees into. Stores the returned internal
   // id on the flow doc -> ERPPushPullTab maps to it instead of the hardcoded default.
@@ -477,7 +502,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
           await deleteDoc(doc(db, "cpq_flows", activeFlowId));
           setActiveFlowId(null);
-          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '' });
+          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [] });
       } catch (err) {
           console.error("Error deleting flow:", err);
           alert("Failed to delete the CPQ Flow.");
@@ -739,9 +764,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       if (!source) return [];
       if (source === 'master_finishes') {
           return [
-              ...globalFinishes.map(f => ({ id: f.id, name: f.name })), 
+              ...globalFinishes.map(f => ({ id: f.id, name: f.name })),
               ...outsourceFinishes.map(f => ({ id: f.id, name: f.name }))
-          ];
+          ].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       }
       
       if (globalLists.prodTypes?.includes(source)) {
@@ -854,7 +879,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem', height: '100%' }}>Select or create a flow to edit.</div>
                     ) : (
                         <div>
-                            <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '24px', marginBottom: '30px', borderRadius: '2px' }}>
+                            <div id="main-assembly-settings" style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '24px', marginBottom: '30px', borderRadius: '2px', scrollMarginTop: '20px' }}>
                                 <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '20px' }}>
                                     <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>File Cabinet Link (Master Assembly)</h4>
                                 </div>
@@ -924,6 +949,30 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     </div>
                                 </div>
 
+                                <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
+                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Default Finishes (cascade to every step)</label>
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Pick the finishes this collection offers. "Apply to all steps" seeds every Choose/Swap step with these — then deselect the rare exceptions on individual steps. Leave empty to allow every finish.</span>
+                                    <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 16px', background: '#fff', border: '1px solid var(--line)', padding: '12px' }}>
+                                        {getDataSourceItems('master_finishes').map(f => {
+                                            const checked = (flowSettings.defaultFinishOptions || []).includes(f.id);
+                                            return (
+                                                <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer' }}>
+                                                    <input type="checkbox" checked={checked} onChange={(e) => {
+                                                        const set = new Set(flowSettings.defaultFinishOptions || []);
+                                                        if (e.target.checked) set.add(f.id); else set.delete(f.id);
+                                                        setFlowSettings({ ...flowSettings, defaultFinishOptions: [...set] });
+                                                    }} />
+                                                    {f.name}
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{(flowSettings.defaultFinishOptions || []).length} finish(es) selected</span>
+                                        <button onClick={handleApplyFinishesToSteps} style={{ padding: '10px 18px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Apply to all steps ↓</button>
+                                    </div>
+                                </div>
+
                                 <div style={{ marginTop: '20px', padding: '16px 20px', background: flowSettings.nsRollupItemId ? 'var(--paper)' : '#fff7ed', border: `1px solid ${flowSettings.nsRollupItemId ? 'var(--line)' : 'var(--brass)'}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
                                     <div>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>NetSuite Rollup Item (labor + fees bundle)</label>
@@ -950,7 +999,10 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 </div>
                             </div>
 
-                            <h3 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '15px' }}>Configure Steps</h3>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 20px 0', borderBottom: '1px solid var(--line)', paddingBottom: '15px' }}>
+                                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Configure Steps</h3>
+                                <button onClick={() => document.getElementById('main-assembly-settings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} style={{ padding: '10px 16px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>↑ Main Assembly Settings</button>
+                            </div>
                             
                             {flowSettings.linkedAssemblyId && (
                                 <div style={{ background: 'var(--paper)', border: '1px solid var(--brass)', padding: '20px', marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -966,9 +1018,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
                             {/* MANUAL STEP BUILDER */}
                             <div style={{ background: newStep.id ? 'var(--paper-2)' : '#fff', padding: '24px', border: newStep.id ? '1px solid var(--brass)' : '1px solid var(--line)', marginBottom: '30px', borderRadius: '2px' }}>
-                                <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: newStep.id ? 'var(--brass)' : 'var(--ink)' }}>
-                                    {newStep.id ? "Edit Step" : "Manual Step Builder"}
-                                </h4>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 20px 0' }}>
+                                    <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: newStep.id ? 'var(--brass)' : 'var(--ink)' }}>
+                                        {newStep.id ? "Edit Step" : "Manual Step Builder"}
+                                    </h4>
+                                    {newStep.id && (
+                                        <button onClick={() => document.getElementById('main-assembly-settings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} style={{ padding: '8px 14px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>↑ Main Assembly Settings</button>
+                                    )}
+                                </div>
                                 
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                                     <input value={newStep.title} onChange={e => setNewStep({...newStep, title: e.target.value})} placeholder="Step Title (e.g. Select Bracket Style)" style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
@@ -1173,39 +1230,51 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                 <div style={{ fontSize: '0.9rem', color: '#d9534f', fontStyle: 'italic' }}>No BOM components found for this assembly. Add them in Node Cluster / BOM Engine.</div>
                                             ) : (
                                                 <div>
-                                                    {linkedBomPins.map(pin => {
-                                                        const sel = (newStep.styleOptions || []).find(o => o.partId === pin.partId);
+                                                    {linkedBomPins.map((pin, pinIdx) => {
+                                                        // A part can repeat at several positions (Left/Center/Right). Each pin
+                                                        // is its own instance, so identify options by clusterId/targetNode —
+                                                        // NOT partId, which collapses repeats into one all-or-nothing checkbox.
+                                                        const optId = pin.targetNode || pin.clusterId || pin.partId;
+                                                        // The cluster name carries the Auto-Group position label; use it to tell
+                                                        // the three instances apart in the builder.
+                                                        const cluster = linkedAsm?.nodeClusters?.find(c => c.id === pin.clusterId);
+                                                        const locLabel = (cluster?.name || pin.partName || '').replace(/_/g, ' ');
+                                                        const matches = (o) => (o.optId ? o.optId === optId : o.partId === pin.partId);
+                                                        const sel = (newStep.styleOptions || []).find(matches);
                                                         const part = allApprovedDesigns.find(d => d.id === pin.partId || d.legacyErpId === pin.partId || d.itemId === pin.partId);
                                                         const defaultPrice = parseFloat(part?.manufacturingSpecs?.basePrice) || 0;
                                                         const meshNode = pin.targetNode || pin.partName;
                                                         return (
-                                                            <div key={pin.partId} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
+                                                            <div key={`${optId}-${pinIdx}`} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
                                                                 <input type="checkbox" checked={!!sel} onChange={(e) => {
                                                                     setNewStep(prev => {
-                                                                        const opts = (prev.styleOptions || []).filter(o => o.partId !== pin.partId);
-                                                                        if (e.target.checked) opts.push({ partId: pin.partId, partName: pin.partName, targetNode: meshNode, price: defaultPrice });
+                                                                        const opts = (prev.styleOptions || []).filter(o => !matches(o));
+                                                                        if (e.target.checked) opts.push({ optId, partId: pin.partId, partName: pin.partName, targetNode: meshNode, price: defaultPrice });
                                                                         const geometryMap = {};
-                                                                        opts.forEach(o => { geometryMap[o.partId] = o.targetNode; });
+                                                                        opts.forEach(o => { geometryMap[o.optId || o.partId] = o.targetNode; });
                                                                         return { ...prev, styleOptions: opts, geometryMap };
                                                                     });
                                                                 }} />
-                                                                <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--ink)' }}>{pin.partName}</span>
-                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>mesh: {meshNode}</span>
+                                                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                                                    <span style={{ fontSize: '0.9rem', color: 'var(--ink)', fontWeight: 500 }}>{locLabel}</span>
+                                                                    {cluster && cluster.name !== pin.partName && <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{pin.partName}</span>}
+                                                                </div>
+                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={meshNode}>mesh: {meshNode}</span>
                                                                 <span style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>$</span>
                                                                 <input type="number" step="0.01" disabled={!sel} value={sel ? (sel.price ?? defaultPrice) : defaultPrice} onChange={(e) => {
                                                                     const v = parseFloat(e.target.value) || 0;
-                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => o.partId === pin.partId ? { ...o, price: v } : o) }));
+                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => matches(o) ? { ...o, price: v } : o) }));
                                                                 }} style={{ width: '90px', padding: '6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: sel ? 1 : 0.4 }} />
                                                                 <span style={{ color: 'var(--ink-soft)', fontSize: '0.7rem', fontFamily: 'var(--mono)', textTransform: 'uppercase' }} title="2D layer stacking order — higher paints on top of the pole">Z</span>
                                                                 <input type="number" disabled={!sel} value={sel && sel.layerZ !== undefined && sel.layerZ !== null ? sel.layerZ : ''} placeholder={String(parseInt(part?.manufacturingSpecs?.layeringSequence) || 10)} onChange={(e) => {
                                                                     const v = e.target.value;
-                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => o.partId === pin.partId ? { ...o, layerZ: v === '' ? '' : (parseInt(v) || 0) } : o) }));
+                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => matches(o) ? { ...o, layerZ: v === '' ? '' : (parseInt(v) || 0) } : o) }));
                                                                 }} style={{ width: '56px', padding: '6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: sel ? 1 : 0.4 }} />
                                                             </div>
                                                         );
                                                     })}
                                                     <label style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--ink)' }}>
-                                                        <input type="checkbox" checked={!!newStep.finishDataSource} onChange={(e) => setNewStep({...newStep, finishDataSource: e.target.checked ? 'master_finishes' : '', finishAllowedOptions: e.target.checked ? (newStep.finishAllowedOptions || []) : []})} />
+                                                        <input type="checkbox" checked={!!newStep.finishDataSource} onChange={(e) => setNewStep({...newStep, finishDataSource: e.target.checked ? 'master_finishes' : '', finishAllowedOptions: e.target.checked ? ((newStep.finishAllowedOptions && newStep.finishAllowedOptions.length) ? newStep.finishAllowedOptions : [...(flowSettings.defaultFinishOptions || [])]) : []})} />
                                                         Also let the customer pick a Finish for the chosen style (applied to its mesh)
                                                     </label>
 

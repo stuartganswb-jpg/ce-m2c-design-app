@@ -310,7 +310,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const getOptionsForStep = (step) => {
       // Choose / Swap Style: options are the curated BOM items on the step itself.
       if (step?.type === 'STYLE_SWAP') {
-          return (step.styleOptions || []).map(o => ({ id: o.partId, itemName: o.partName, price: o.price }));
+          // Identify each option by optId (unique per instance) so a part repeated at
+          // multiple positions stays distinct; fall back to partId for legacy flows.
+          return (step.styleOptions || []).map(o => ({ id: o.optId || o.partId, itemName: o.partName, price: o.price }));
       }
       if (!step || !step.dataSource) return [];
       let options = [];
@@ -593,14 +595,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
               let multiplier = 1.0;
               let itemName = step.title;
+              // For STYLE_SWAP the selected value is the per-instance optId, not the part id.
+              // Resolve the real part id so the part lookup, line item, and ERP push are correct.
+              let resolvedPartId = selectedValue;
 
               if (selectedValue) {
-                  const partObj = allParts.find(p => p.id === selectedValue) || 
-                                  dynamicAssets.find(a => a.id === selectedValue) ||
-                                  globalFinishes.find(f => f.id === selectedValue) ||
-                                  outsourceFinishes.find(f => f.id === selectedValue);
+                  const styleOpt = step.type === 'STYLE_SWAP' ? (step.styleOptions || []).find(o => (o.optId || o.partId) === selectedValue) : null;
+                  resolvedPartId = styleOpt ? (styleOpt.partId || selectedValue) : selectedValue;
+
+                  const partObj = allParts.find(p => p.id === resolvedPartId) ||
+                                  dynamicAssets.find(a => a.id === resolvedPartId) ||
+                                  globalFinishes.find(f => f.id === resolvedPartId) ||
+                                  outsourceFinishes.find(f => f.id === resolvedPartId);
 
                   if (partObj) itemName = `${step.title} (${partObj.itemName || partObj.name})`;
+                  else if (styleOpt) itemName = `${step.title} (${styleOpt.partName})`;
 
                   let optionNativePrice = 0;
                   if (partObj) {
@@ -609,10 +618,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   }
 
                   // Choose / Swap Style: price at the per-option base price set in the builder.
-                  if (step.type === 'STYLE_SWAP') {
-                      const styleOpt = (step.styleOptions || []).find(o => o.partId === selectedValue);
-                      if (styleOpt && styleOpt.price !== undefined && styleOpt.price !== '') optionNativePrice = parseFloat(styleOpt.price) || 0;
-                  }
+                  if (styleOpt && styleOpt.price !== undefined && styleOpt.price !== '') optionNativePrice = parseFloat(styleOpt.price) || 0;
 
                   if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
                       const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
@@ -648,7 +654,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   breakdown.push({
                       name: itemName, qty: qty, price: stepPrice * multiplier, total: lineTotal,
                       partHandling: step.partHandling || '',
-                      partId: selectedValue || step.linkedItemId || null,
+                      partId: resolvedPartId || step.linkedItemId || null,
                       cutLength: cutLength,
                       dimensions: dimInput ? { length: dimInput.length || null, wallA: dimInput.wallA || null, wallB: dimInput.wallB || null, wallC: dimInput.wallC || null } : null
                   });
@@ -1078,7 +1084,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // so you control bracket-vs-pole stacking without editing the part.
           const swapStep = activeFlow?.steps?.find(s => s.id === stepId && s.type === 'STYLE_SWAP');
           if (swapStep) {
-              const opt = (swapStep.styleOptions || []).find(o => o.partId === valueId);
+              const opt = (swapStep.styleOptions || []).find(o => (o.optId || o.partId) === valueId);
               if (opt && opt.layerZ !== undefined && opt.layerZ !== '' && opt.layerZ !== null) zIdx = parseInt(opt.layerZ) || zIdx;
           }
           if (foundAsset) {
@@ -1108,7 +1114,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               const finishId = dynamicConfigParams[`${step.id}__finish`];
               const selectedStyleId = dynamicConfigParams[step.id];
               const targetNode = (step.geometryMap && step.geometryMap[selectedStyleId])
-                  || (step.styleOptions || []).find(o => o.partId === selectedStyleId)?.targetNode
+                  || (step.styleOptions || []).find(o => (o.optId || o.partId) === selectedStyleId)?.targetNode
                   || step.finishTargetNodes;
               if (finishId && targetNode) {
                   const fData = [...globalFinishes, ...outsourceFinishes, ...dynamicAssets].find(f => f.id === finishId);
