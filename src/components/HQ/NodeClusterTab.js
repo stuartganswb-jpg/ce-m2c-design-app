@@ -42,12 +42,16 @@ const getAncestors = (tree, targetName, currentPath = []) => {
 // clean human BOM name. Iterative because several can stack.
 const cleanCadName = (raw) => {
     if (!raw) return raw || '';
-    let s = String(raw), prev;
+    // Handle BOTH raw glb names ("1in Loop Bracket Ext. v4:1") and sanitized exports
+    // ("1in_Loop_Bracket_Ext_v41"). Normalizing underscores to spaces first lets the
+    // version/instance suffix (v4, v41) strip cleanly so repeats collapse to one base
+    // name and get grouped into Left/Center/Right.
+    let s = String(raw).replace(/_/g, ' '), prev;
     do {
         prev = s;
         s = s.replace(/\s*:\d+$/, '')
              .replace(/\.\d{3,}$/, '')
-             .replace(/_[0-9a-f]{6,}$/i, '')
+             .replace(/\s+[0-9a-f]{6,}$/i, '')
              .replace(/\s*\bv\d+\b/gi, ' ')
              .trim();
     } while (s !== prev);
