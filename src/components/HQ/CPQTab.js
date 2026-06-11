@@ -1058,6 +1058,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               const libPart = allParts.find(p => p.id === valueId);
               if (libPart) { foundAsset = libPart; zIdx = parseInt(libPart.manufacturingSpecs?.layeringSequence) || 10; }
           }
+          // Choose / Swap Style: per-option Layer Z override (set in the flow builder) wins,
+          // so you control bracket-vs-pole stacking without editing the part.
+          const swapStep = activeFlow?.steps?.find(s => s.id === stepId && s.type === 'STYLE_SWAP');
+          if (swapStep) {
+              const opt = (swapStep.styleOptions || []).find(o => o.partId === valueId);
+              if (opt && opt.layerZ !== undefined && opt.layerZ !== '' && opt.layerZ !== null) zIdx = parseInt(opt.layerZ) || zIdx;
+          }
           if (foundAsset) {
               const tex = foundAsset.textureUrl || foundAsset.finalImageUrl;
               if (tex) layers.push({ textureUrl: tex, zIndex: zIdx, name: foundAsset.itemName || foundAsset.name });

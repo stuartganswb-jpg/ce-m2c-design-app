@@ -1196,6 +1196,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                     const v = parseFloat(e.target.value) || 0;
                                                                     setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => o.partId === pin.partId ? { ...o, price: v } : o) }));
                                                                 }} style={{ width: '90px', padding: '6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: sel ? 1 : 0.4 }} />
+                                                                <span style={{ color: 'var(--ink-soft)', fontSize: '0.7rem', fontFamily: 'var(--mono)', textTransform: 'uppercase' }} title="2D layer stacking order — higher paints on top of the pole">Z</span>
+                                                                <input type="number" disabled={!sel} value={sel && sel.layerZ !== undefined && sel.layerZ !== null ? sel.layerZ : ''} placeholder={String(parseInt(part?.manufacturingSpecs?.layeringSequence) || 10)} onChange={(e) => {
+                                                                    const v = e.target.value;
+                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => o.partId === pin.partId ? { ...o, layerZ: v === '' ? '' : (parseInt(v) || 0) } : o) }));
+                                                                }} style={{ width: '56px', padding: '6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: sel ? 1 : 0.4 }} />
                                                             </div>
                                                         );
                                                     })}
