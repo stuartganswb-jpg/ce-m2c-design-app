@@ -163,7 +163,14 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           if (nsCustomerId.startsWith('CUST-')) nsCustomerId = nsCustomerId.replace('CUST-', '');
           const brandMapping = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2", location: "17" };
 
-          const flowName = cpqFlows.find(f => f.id === job.flowId)?.name || 'Custom Assembly';
+          const flowDoc = cpqFlows.find(f => f.id === job.flowId);
+          const flowName = flowDoc?.name || 'Custom Assembly';
+          // The flow's dedicated NetSuite rollup item (set in the CPQ Flow Builder). Falls
+          // back to the shared default 61502 for flows that haven't created one yet.
+          const rollupItemId = flowDoc?.nsRollupItemId || '61502';
+          if (!flowDoc?.nsRollupItemId) {
+              addLog(`⚠️ Flow "${flowName}" has no dedicated rollup item — using shared default 61502. Create one in the CPQ Flow Builder for clean 1:1 mapping.`, 'warn');
+          }
           const headerDesc = `${flowName} labor portion of quote# ${job.jobId || job.id} for Job: ${job.jobName || 'N/A'} Sidemark: ${job.sidemark || 'N/A'}`;
 
           const shippingPayload = {};
@@ -198,10 +205,10 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               item: {
                   items: [
                       {
-                          item: { id: "61502" }, 
+                          item: { id: rollupItemId },
                           quantity: 1,
-                          rate: parseFloat(silentFeeBalance.toFixed(2)), 
-                          price: { id: "-1" }, 
+                          rate: parseFloat(silentFeeBalance.toFixed(2)),
+                          price: { id: "-1" },
                           description: headerDesc
                       },
                       ...lineItems

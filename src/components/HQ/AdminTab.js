@@ -9,6 +9,16 @@ const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 
 const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'OS COMMS', 'ASSET GALLERY', 'MANAGEMENT', 'DAILY SUMMARY'];
 const PICK_TABS = ['QUEUE', 'PACKING', 'GALLERY', 'MESSAGING']; // 🚀 ADDED PICK AND PACK TABS
 
+// NetSuite plumbing (mirror of ERPPushPullTab) for creating a flow's rollup item.
+const BRAND_NETSUITE_MAP = {
+    'm2c': { subsidiary: "3", location: "19" },
+    'uniquity': { subsidiary: "6", location: "22" },
+    'ce': { subsidiary: "2", location: "17" },
+    'leyla': { subsidiary: "5", location: "18" }
+};
+const NS_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
+const NS_REST_BASE = "https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1";
+
 const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
   
@@ -49,8 +59,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   });
 
   const [newFlowName, setNewFlowName] = useState("");
-  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '' });
+  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '' });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
+  const [isCreatingRollup, setIsCreatingRollup] = useState(false);
 
   const [inspectedNodes, setInspectedNodes] = useState([]);
   const [isInspecting, setIsInspecting] = useState(false);
@@ -175,11 +186,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       if (activeFlowId && cpqFlows.length > 0) {
           const flow = cpqFlows.find(f => f.id === activeFlowId);
           if (flow) {
-              setFlowSettings({ 
-                  name: flow.name || '', 
-                  legacyErpId: flow.legacyErpId || '', 
+              setFlowSettings({
+                  name: flow.name || '',
+                  legacyErpId: flow.legacyErpId || '',
                   basePrice: flow.basePrice || '',
-                  linkedAssemblyId: flow.linkedAssemblyId || ''
+                  linkedAssemblyId: flow.linkedAssemblyId || '',
+                  nsRollupItemId: flow.nsRollupItemId || '',
+                  nsRollupItemName: flow.nsRollupItemName || ''
               });
               setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
           }
@@ -365,6 +378,64 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   };
 
+  // Create a 1:1 NetSuite non-inventory (sale) item for this flow, so the ERP push has a
+  // dedicated rollup line to bundle all labor + fees into. Stores the returned internal
+  // id on the flow doc -> ERPPushPullTab maps to it instead of the hardcoded default.
+  const handleCreateRollupItem = async () => {
+      if (!activeFlowId) return;
+      const flowName = (flowSettings.name || '').trim().toUpperCase();
+      if (!flowName) return alert("Give the flow a name first — the rollup item is named to match it.");
+
+      if (flowSettings.nsRollupItemId) {
+          if (!window.confirm(`This flow already maps to NetSuite rollup item "${flowSettings.nsRollupItemName || flowSettings.nsRollupItemId}" (id ${flowSettings.nsRollupItemId}). Create a NEW item anyway?`)) return;
+      } else {
+          if (!window.confirm(`Create a NetSuite non-inventory sale item named "${flowName}" and map this flow to it? This writes a live record to NetSuite.`)) return;
+      }
+
+      setIsCreatingRollup(true);
+      try {
+          const sub = (BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2" }).subsidiary;
+          // Non-inventory item for sale. itemid = the flow name; subsidiary scoped to the
+          // active brand. NOTE: if your NetSuite requires an income account on item create,
+          // it will reject this and the error is shown verbatim — tell me and I'll add it.
+          const payload = {
+              itemid: flowName,
+              displayname: flowName,
+              subsidiary: { items: [{ id: sub }] }
+          };
+
+          const response = await fetch(NS_FUNCTION_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  targetUrl: `${NS_REST_BASE}/nonInventorySaleItem`,
+                  method: 'POST',
+                  payload
+              })
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(`NetSuite rejected [${response.status}]: ${JSON.stringify(result)}`);
+
+          // With Prefer: return=representation the body carries the new record; otherwise
+          // NetSuite returns the internal id in a Location header the proxy may echo.
+          const newId = result.id || result.recordId || result.internalId ||
+              (result.links && result.links[0]?.href ? result.links[0].href.split('/').pop() : null);
+          if (!newId) throw new Error(`Item created but no internal id returned: ${JSON.stringify(result)}`);
+
+          await setDoc(doc(db, "cpq_flows", activeFlowId), {
+              nsRollupItemId: String(newId),
+              nsRollupItemName: flowName
+          }, { merge: true });
+          setFlowSettings(prev => ({ ...prev, nsRollupItemId: String(newId), nsRollupItemName: flowName }));
+          alert(`✅ Rollup item "${flowName}" created in NetSuite (internal id ${newId}) and mapped to this flow.`);
+      } catch (err) {
+          console.error("Rollup item create failed:", err);
+          alert(`Failed to create the NetSuite rollup item.\n\n${err.message}`);
+      } finally {
+          setIsCreatingRollup(false);
+      }
+  };
+
   const handleDeleteFlow = async () => {
       if (!activeFlowId) return;
       if (!window.confirm("Are you sure you want to delete this CPQ Flow? This will remove all configuration steps for this product.")) return;
@@ -381,7 +452,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
           await deleteDoc(doc(db, "cpq_flows", activeFlowId));
           setActiveFlowId(null);
-          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '' });
+          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '' });
       } catch (err) {
           console.error("Error deleting flow:", err);
           alert("Failed to delete the CPQ Flow.");
@@ -453,7 +524,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   const handleAddStepToFlow = async (flow) => {
       if (!newStep.title) return alert("Step title is required");
-      if (!newStep.partHandling) return alert("❌ ERROR: Part Handling / Routing is required for every step.");
+      // Fees roll into the flow's NetSuite rollup item, so they don't map to a physical
+      // part and don't need a Part Handling / Routing division.
+      if (newStep.type !== 'STATIC_FEE' && !newStep.partHandling) return alert("❌ ERROR: Part Handling / Routing is required for every step.");
 
       try {
           let updatedSteps;
@@ -797,6 +870,22 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     </div>
                                 </div>
                                 
+                                <div style={{ marginTop: '20px', padding: '16px 20px', background: flowSettings.nsRollupItemId ? 'var(--paper)' : '#fff7ed', border: `1px solid ${flowSettings.nsRollupItemId ? 'var(--line)' : 'var(--brass)'}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
+                                    <div>
+                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>NetSuite Rollup Item (labor + fees bundle)</label>
+                                        {flowSettings.nsRollupItemId ? (
+                                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink)' }}>
+                                                <strong>{flowSettings.nsRollupItemName || 'Mapped'}</strong> · internal id <span style={{ fontFamily: 'var(--mono)' }}>{flowSettings.nsRollupItemId}</span> ✓
+                                            </span>
+                                        ) : (
+                                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>No rollup item yet — the ERP push will fall back to the shared default (61502). Create a 1:1 item so pricing maps cleanly.</span>
+                                        )}
+                                    </div>
+                                    <button onClick={handleCreateRollupItem} disabled={isCreatingRollup} style={{ flexShrink: 0, padding: '12px 18px', background: flowSettings.nsRollupItemId ? 'transparent' : 'var(--brass)', color: flowSettings.nsRollupItemId ? 'var(--ink)' : '#fff', border: flowSettings.nsRollupItemId ? '1px solid var(--line)' : 'none', cursor: isCreatingRollup ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                                        {isCreatingRollup ? 'Creating…' : (flowSettings.nsRollupItemId ? 'Re-create Item' : 'Create Rollup Item in NetSuite')}
+                                    </button>
+                                </div>
+
                                 <div style={{ display: 'flex', gap: '15px', marginTop: '24px' }}>
                                     <button onClick={handleSaveFlowSettings} style={{ flex: 2, padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                                         {isSavingFlowSettings ? "Syncing..." : "Save and Cascade to Master"}
@@ -1015,6 +1104,12 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <input value={newStep.targetNodes || ''} onChange={e => setNewStep({...newStep, targetNodes: e.target.value})} placeholder="e.g., Pole_Top, Bracket_Base" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
 
+                                    {newStep.type === 'STATIC_FEE' ? (
+                                        <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
+                                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Fee Step</label>
+                                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>This is a fee — it rolls into the flow's NetSuite rollup item, so it needs no part, routing, or item association. Just set the amount under Pricing Rules.</span>
+                                        </div>
+                                    ) : (
                                     <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Part Handling & Routing</label>
                                         <select value={newStep.partHandling || ''} onChange={e => setNewStep({...newStep, partHandling: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
@@ -1024,6 +1119,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             ))}
                                         </select>
                                     </div>
+                                    )}
 
                                     <div style={{ background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '15px' }}>Pricing Rules</label>
