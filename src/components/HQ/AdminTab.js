@@ -18,6 +18,8 @@ const BRAND_NETSUITE_MAP = {
 };
 const NS_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 const NS_REST_BASE = "https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1";
+// Income account every rollup (non-inventory sale) item posts to: 4001 SALES-HOUSE, acctid 249.
+const NS_ROLLUP_INCOME_ACCT = "249";
 
 const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
@@ -396,12 +398,12 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       try {
           const sub = (BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2" }).subsidiary;
           // Non-inventory item for sale. itemid = the flow name; subsidiary scoped to the
-          // active brand. NOTE: if your NetSuite requires an income account on item create,
-          // it will reject this and the error is shown verbatim — tell me and I'll add it.
+          // active brand; posts to the SALES-HOUSE income account.
           const payload = {
               itemid: flowName,
               displayname: flowName,
-              subsidiary: { items: [{ id: sub }] }
+              subsidiary: { items: [{ id: sub }] },
+              incomeaccount: { id: NS_ROLLUP_INCOME_ACCT }
           };
 
           const response = await fetch(NS_FUNCTION_URL, {
