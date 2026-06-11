@@ -1230,33 +1230,45 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                 <div style={{ fontSize: '0.9rem', color: '#d9534f', fontStyle: 'italic' }}>No BOM components found for this assembly. Add them in Node Cluster / BOM Engine.</div>
                                             ) : (
                                                 <div>
-                                                    {linkedBomPins.map(pin => {
-                                                        const sel = (newStep.styleOptions || []).find(o => o.partId === pin.partId);
+                                                    {linkedBomPins.map((pin, pinIdx) => {
+                                                        // A part can repeat at several positions (Left/Center/Right). Each pin
+                                                        // is its own instance, so identify options by clusterId/targetNode —
+                                                        // NOT partId, which collapses repeats into one all-or-nothing checkbox.
+                                                        const optId = pin.targetNode || pin.clusterId || pin.partId;
+                                                        // The cluster name carries the Auto-Group position label; use it to tell
+                                                        // the three instances apart in the builder.
+                                                        const cluster = linkedAsm?.nodeClusters?.find(c => c.id === pin.clusterId);
+                                                        const locLabel = (cluster?.name || pin.partName || '').replace(/_/g, ' ');
+                                                        const matches = (o) => (o.optId ? o.optId === optId : o.partId === pin.partId);
+                                                        const sel = (newStep.styleOptions || []).find(matches);
                                                         const part = allApprovedDesigns.find(d => d.id === pin.partId || d.legacyErpId === pin.partId || d.itemId === pin.partId);
                                                         const defaultPrice = parseFloat(part?.manufacturingSpecs?.basePrice) || 0;
                                                         const meshNode = pin.targetNode || pin.partName;
                                                         return (
-                                                            <div key={pin.partId} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
+                                                            <div key={`${optId}-${pinIdx}`} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
                                                                 <input type="checkbox" checked={!!sel} onChange={(e) => {
                                                                     setNewStep(prev => {
-                                                                        const opts = (prev.styleOptions || []).filter(o => o.partId !== pin.partId);
-                                                                        if (e.target.checked) opts.push({ partId: pin.partId, partName: pin.partName, targetNode: meshNode, price: defaultPrice });
+                                                                        const opts = (prev.styleOptions || []).filter(o => !matches(o));
+                                                                        if (e.target.checked) opts.push({ optId, partId: pin.partId, partName: pin.partName, targetNode: meshNode, price: defaultPrice });
                                                                         const geometryMap = {};
-                                                                        opts.forEach(o => { geometryMap[o.partId] = o.targetNode; });
+                                                                        opts.forEach(o => { geometryMap[o.optId || o.partId] = o.targetNode; });
                                                                         return { ...prev, styleOptions: opts, geometryMap };
                                                                     });
                                                                 }} />
-                                                                <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--ink)' }}>{pin.partName}</span>
-                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>mesh: {meshNode}</span>
+                                                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                                                    <span style={{ fontSize: '0.9rem', color: 'var(--ink)', fontWeight: 500 }}>{locLabel}</span>
+                                                                    {cluster && cluster.name !== pin.partName && <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{pin.partName}</span>}
+                                                                </div>
+                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={meshNode}>mesh: {meshNode}</span>
                                                                 <span style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>$</span>
                                                                 <input type="number" step="0.01" disabled={!sel} value={sel ? (sel.price ?? defaultPrice) : defaultPrice} onChange={(e) => {
                                                                     const v = parseFloat(e.target.value) || 0;
-                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => o.partId === pin.partId ? { ...o, price: v } : o) }));
+                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => matches(o) ? { ...o, price: v } : o) }));
                                                                 }} style={{ width: '90px', padding: '6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: sel ? 1 : 0.4 }} />
                                                                 <span style={{ color: 'var(--ink-soft)', fontSize: '0.7rem', fontFamily: 'var(--mono)', textTransform: 'uppercase' }} title="2D layer stacking order — higher paints on top of the pole">Z</span>
                                                                 <input type="number" disabled={!sel} value={sel && sel.layerZ !== undefined && sel.layerZ !== null ? sel.layerZ : ''} placeholder={String(parseInt(part?.manufacturingSpecs?.layeringSequence) || 10)} onChange={(e) => {
                                                                     const v = e.target.value;
-                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => o.partId === pin.partId ? { ...o, layerZ: v === '' ? '' : (parseInt(v) || 0) } : o) }));
+                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => matches(o) ? { ...o, layerZ: v === '' ? '' : (parseInt(v) || 0) } : o) }));
                                                                 }} style={{ width: '56px', padding: '6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: sel ? 1 : 0.4 }} />
                                                             </div>
                                                         );
