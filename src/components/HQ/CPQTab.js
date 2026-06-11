@@ -72,7 +72,17 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
     useEffect(() => {
         clonedScene.traverse((child) => {
             if (child.isMesh && child.userData.originalMaterial === undefined) {
-                child.userData.originalMaterial = child.material.clone();
+                const orig = child.material.clone();
+                // Export artifact fix: a material flagged transparent (alphaMode BLEND) but
+                // actually fully opaque (opacity 1, no alpha map) only breaks three.js depth
+                // sorting — e.g. a steel ring rendering behind the pole instead of the pole
+                // threading through it. Force it opaque so true geometry depth is used.
+                if (orig.transparent && (orig.opacity === undefined || orig.opacity >= 1) && !orig.alphaMap) {
+                    orig.transparent = false;
+                    orig.depthWrite = true;
+                    orig.needsUpdate = true;
+                }
+                child.userData.originalMaterial = orig;
                 child.userData.originalVisible = child.visible;
             }
         });
