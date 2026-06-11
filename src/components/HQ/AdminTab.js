@@ -18,6 +18,7 @@ const BRAND_NETSUITE_MAP = {
 };
 const NS_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 const NS_REST_BASE = "https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1";
+const NS_SUITEQL_URL = "https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql";
 // Income account every rollup (non-inventory sale) item posts to: 4001 SALES-HOUSE, acctid 249.
 const NS_ROLLUP_INCOME_ACCT = "249";
 // Tax schedule for rollup items: "No Taxable", NetSuite id 2.
@@ -385,54 +386,70 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   // Create a 1:1 NetSuite non-inventory (sale) item for this flow, so the ERP push has a
   // dedicated rollup line to bundle all labor + fees into. Stores the returned internal
   // id on the flow doc -> ERPPushPullTab maps to it instead of the hardcoded default.
+  // Look up an item's internal id by its (unique) name via SuiteQL. NetSuite returns the
+  // id of a newly-created item only in a Location header the proxy doesn't forward, so we
+  // resolve the id this way — which also makes create idempotent (re-clicks re-map instead
+  // of erroring on NetSuite's unique-itemid rule).
+  const findNsItemIdByName = async (name) => {
+      const resp = await fetch(NS_FUNCTION_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+              targetUrl: NS_SUITEQL_URL,
+              method: 'POST',
+              payload: { q: `SELECT id FROM item WHERE itemid = '${name.replace(/'/g, "''")}'` }
+          })
+      });
+      const data = await resp.json();
+      if (resp.ok && Array.isArray(data.items) && data.items.length > 0) {
+          return String(data.items[data.items.length - 1].id);
+      }
+      return null;
+  };
+
   const handleCreateRollupItem = async () => {
       if (!activeFlowId) return;
       const flowName = (flowSettings.name || '').trim().toUpperCase();
       if (!flowName) return alert("Give the flow a name first — the rollup item is named to match it.");
-
-      if (flowSettings.nsRollupItemId) {
-          if (!window.confirm(`This flow already maps to NetSuite rollup item "${flowSettings.nsRollupItemName || flowSettings.nsRollupItemId}" (id ${flowSettings.nsRollupItemId}). Create a NEW item anyway?`)) return;
-      } else {
-          if (!window.confirm(`Create a NetSuite non-inventory sale item named "${flowName}" and map this flow to it? This writes a live record to NetSuite.`)) return;
-      }
+      if (!window.confirm(`Create / map the NetSuite rollup item "${flowName}" for this flow? (Safe to re-run — it maps to the existing item if one already exists.)`)) return;
 
       setIsCreatingRollup(true);
       try {
-          const sub = (BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2" }).subsidiary;
-          // Non-inventory item for sale. itemid = the flow name; subsidiary scoped to the
-          // active brand; posts to the SALES-HOUSE income account.
-          const payload = {
-              itemid: flowName,
-              displayname: flowName,
-              subsidiary: { items: [{ id: sub }] },
-              incomeaccount: { id: NS_ROLLUP_INCOME_ACCT },
-              taxschedule: { id: NS_ROLLUP_TAX_SCHEDULE }
-          };
+          // 1. If an item with this name already exists (e.g. a prior attempt created it but
+          //    we couldn't read the id), map to it instead of creating a duplicate.
+          let newId = await findNsItemIdByName(flowName);
 
-          const response = await fetch(NS_FUNCTION_URL, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                  targetUrl: `${NS_REST_BASE}/nonInventorySaleItem`,
+          // 2. Otherwise create it, then resolve the id by name.
+          if (!newId) {
+              const sub = (BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2" }).subsidiary;
+              const payload = {
+                  itemid: flowName,
+                  displayname: flowName,
+                  subsidiary: { items: [{ id: sub }] },
+                  incomeaccount: { id: NS_ROLLUP_INCOME_ACCT },
+                  taxschedule: { id: NS_ROLLUP_TAX_SCHEDULE }
+              };
+              const response = await fetch(NS_FUNCTION_URL, {
                   method: 'POST',
-                  payload
-              })
-          });
-          const result = await response.json();
-          if (!response.ok) throw new Error(`NetSuite rejected [${response.status}]: ${JSON.stringify(result)}`);
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ targetUrl: `${NS_REST_BASE}/nonInventorySaleItem`, method: 'POST', payload })
+              });
+              const result = await response.json();
+              if (!response.ok) throw new Error(`NetSuite rejected [${response.status}]: ${JSON.stringify(result)}`);
 
-          // With Prefer: return=representation the body carries the new record; otherwise
-          // NetSuite returns the internal id in a Location header the proxy may echo.
-          const newId = result.id || result.recordId || result.internalId ||
-              (result.links && result.links[0]?.href ? result.links[0].href.split('/').pop() : null);
-          if (!newId) throw new Error(`Item created but no internal id returned: ${JSON.stringify(result)}`);
+              newId = result.id || result.recordId || result.internalId ||
+                  (result.links && result.links[0]?.href ? result.links[0].href.split('/').pop() : null) ||
+                  await findNsItemIdByName(flowName);
+          }
+
+          if (!newId) throw new Error(`Item created but couldn't resolve its internal id. Look up "${flowName}" in NetSuite and set it manually.`);
 
           await setDoc(doc(db, "cpq_flows", activeFlowId), {
               nsRollupItemId: String(newId),
               nsRollupItemName: flowName
           }, { merge: true });
           setFlowSettings(prev => ({ ...prev, nsRollupItemId: String(newId), nsRollupItemName: flowName }));
-          alert(`✅ Rollup item "${flowName}" created in NetSuite (internal id ${newId}) and mapped to this flow.`);
+          alert(`✅ Rollup item "${flowName}" mapped to this flow (NetSuite internal id ${newId}).`);
       } catch (err) {
           console.error("Rollup item create failed:", err);
           alert(`Failed to create the NetSuite rollup item.\n\n${err.message}`);
