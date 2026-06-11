@@ -1186,9 +1186,33 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                         );
                                                     })}
                                                     <label style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--ink)' }}>
-                                                        <input type="checkbox" checked={!!newStep.finishDataSource} onChange={(e) => setNewStep({...newStep, finishDataSource: e.target.checked ? 'master_finishes' : ''})} />
+                                                        <input type="checkbox" checked={!!newStep.finishDataSource} onChange={(e) => setNewStep({...newStep, finishDataSource: e.target.checked ? 'master_finishes' : '', finishAllowedOptions: e.target.checked ? (newStep.finishAllowedOptions || []) : []})} />
                                                         Also let the customer pick a Finish for the chosen style (applied to its mesh)
                                                     </label>
+
+                                                    {newStep.finishDataSource && (
+                                                        <div style={{ marginTop: '12px', marginLeft: '28px', padding: '12px 16px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Available Finishes for this step</div>
+                                                            <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Check the finishes to offer. Leave all unchecked to allow every finish.</span>
+                                                            <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 16px' }}>
+                                                                {getDataSourceItems('master_finishes').map(f => {
+                                                                    const checked = (newStep.finishAllowedOptions || []).includes(f.id);
+                                                                    return (
+                                                                        <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer' }}>
+                                                                            <input type="checkbox" checked={checked} onChange={(e) => {
+                                                                                setNewStep(prev => {
+                                                                                    const set = new Set(prev.finishAllowedOptions || []);
+                                                                                    if (e.target.checked) set.add(f.id); else set.delete(f.id);
+                                                                                    return { ...prev, finishAllowedOptions: [...set] };
+                                                                                });
+                                                                            }} />
+                                                                            {f.name}
+                                                                        </label>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>

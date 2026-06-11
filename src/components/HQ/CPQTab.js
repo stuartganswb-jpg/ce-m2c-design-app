@@ -1243,7 +1243,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Finish</label>
                                   <select value={dynamicConfigParams[`${currentStep.id}__finish`] || ''} onChange={(e) => handleParamChange(`${currentStep.id}__finish`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none' }}>
                                       <option value="">-- Select Finish --</option>
-                                      {getOptionsForStep({ ...currentStep, type: 'DROPDOWN', dataSource: currentStep.finishDataSource, allowedOptions: [], geometryMap: {}, styleOptions: [] }).map(opt => (
+                                      {getOptionsForStep({ ...currentStep, type: 'DROPDOWN', dataSource: currentStep.finishDataSource, allowedOptions: currentStep.finishAllowedOptions || [], geometryMap: {}, styleOptions: [] }).map(opt => (
                                           <option key={opt.id} value={opt.id}>{opt.itemName}</option>
                                       ))}
                                   </select>
