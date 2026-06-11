@@ -143,6 +143,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       const hasPresetProj = activeFlow.fabProjection !== undefined && activeFlow.fabProjection !== '' && activeFlow.fabProjection !== null;
       const presetProj = hasPresetProj ? parseFloat(activeFlow.fabProjection) : null;
       const presetEndStyle = activeFlow.fabEndStyle || null;
+      const presetShape = activeFlow.fabShape || null; // bay configuration: STRAIGHT | MITERED | BOW
 
       let detectedProj = presetProj;
       let detectedEndStyle = presetEndStyle;
@@ -169,6 +170,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           // A flow preset wins even when a bracket is selected; detection only seeds when unset.
           if (detectedProj !== null && prev.proj !== detectedProj && (hasPresetProj || !prev.bracketId)) { updates.proj = detectedProj; changed = true; }
           if (detectedEndStyle && prev.endStyle !== detectedEndStyle) { updates.endStyle = detectedEndStyle; changed = true; }
+          if (presetShape && prev.shape !== presetShape) { updates.shape = presetShape; changed = true; }
           return changed ? updates : prev;
       });
 
@@ -746,7 +748,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     <select value={engData.shape} onChange={e => setEngData({...engData, shape: e.target.value})} style={fieldStyle}>
                                         <option value="STRAIGHT">Straight Pole</option>
                                         <option value="MITERED">Mitered Bay (3-Seg)</option>
-                                        <option value="BOW">Curved Bow</option>
+                                        <option value="BOW">Curved Bay</option>
                                     </select>
                                 </div>
                                 <div style={{ flex: 1 }}>

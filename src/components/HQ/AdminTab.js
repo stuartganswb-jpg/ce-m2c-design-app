@@ -64,7 +64,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   });
 
   const [newFlowName, setNewFlowName] = useState("");
-  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '' });
+  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '' });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
   const [isCreatingRollup, setIsCreatingRollup] = useState(false);
 
@@ -199,7 +199,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   nsRollupItemId: flow.nsRollupItemId || '',
                   nsRollupItemName: flow.nsRollupItemName || '',
                   fabEndStyle: flow.fabEndStyle || '',
-                  fabProjection: flow.fabProjection !== undefined && flow.fabProjection !== null ? flow.fabProjection : ''
+                  fabProjection: flow.fabProjection !== undefined && flow.fabProjection !== null ? flow.fabProjection : '',
+                  fabShape: flow.fabShape || ''
               });
               setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
           }
@@ -476,7 +477,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
           await deleteDoc(doc(db, "cpq_flows", activeFlowId));
           setActiveFlowId(null);
-          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '' });
+          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '' });
       } catch (err) {
           console.error("Error deleting flow:", err);
           alert("Failed to delete the CPQ Flow.");
@@ -896,8 +897,17 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 
                                 <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                                     <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Fabrication Preset (drives the Vision Hardware tool)</label>
-                                    <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>This flow is 1:1 with a bracket projection — set it here and Vision auto-applies it. CPQ item/finish picks never change fabrication.</span>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>This flow is 1:1 with a bay configuration + end style + bracket projection — set it here and Vision auto-applies it. CPQ item/finish picks never change fabrication.</span>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                                        <div>
+                                            <label style={{ fontSize: '0.8rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Bay Configuration</label>
+                                            <select value={flowSettings.fabShape || ''} onChange={e => setFlowSettings({...flowSettings, fabShape: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
+                                                <option value="">-- None (auto) --</option>
+                                                <option value="STRAIGHT">Straight Pole</option>
+                                                <option value="MITERED">Mitered Bay</option>
+                                                <option value="BOW">Curved Bay</option>
+                                            </select>
+                                        </div>
                                         <div>
                                             <label style={{ fontSize: '0.8rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>End Style</label>
                                             <select value={flowSettings.fabEndStyle || ''} onChange={e => setFlowSettings({...flowSettings, fabEndStyle: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
