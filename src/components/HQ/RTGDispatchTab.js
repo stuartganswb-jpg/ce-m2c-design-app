@@ -72,26 +72,24 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             const subsidiaryId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3";
             addLog(`Initiating Diagnostic Net Pull from NetSuite (Sub: ${subsidiaryId})...`, 'info');
             
-            // custbody50 (our QUOTE- job id) is set on the Estimate but does NOT carry to the
-            // Sales Order when the estimate is transformed. So we follow the SO's createdFrom
-            // link back to the originating estimate and read ITS custbody50. Narrow to app
-            // orders and sort newest-first so a fresh SO is never beyond the 1000-row page cap.
+            // custbody50 (our QUOTE- job id) is set on the Estimate and, as a stored body
+            // field, copies to the Sales Order when the estimate is transformed. The earlier
+            // miss was the unordered 1000-row page cap hiding a fresh SO — so narrow to app
+            // orders (custbody50 LIKE 'QUOTE-%') and sort newest-first.
             const q = `
                 SELECT
-                    so.id AS ns_id,
-                    so.tranid AS so_num,
-                    so.custbody50 AS so_job_id,
-                    est.custbody50 AS est_job_id,
-                    so.entity AS customer_id,
-                    so.trandate,
-                    so.memo,
-                    so.status AS raw_status
-                FROM Transaction so
-                LEFT JOIN Transaction est ON est.id = so.createdfrom
-                WHERE so.type = 'SalesOrd'
-                AND so.subsidiary = ${subsidiaryId}
-                AND (so.custbody50 LIKE 'QUOTE-%' OR est.custbody50 LIKE 'QUOTE-%')
-                ORDER BY so.id DESC
+                    transaction.id AS ns_id,
+                    transaction.tranid AS so_num,
+                    transaction.custbody50 AS so_job_id,
+                    transaction.entity AS customer_id,
+                    transaction.trandate,
+                    transaction.memo,
+                    transaction.status AS raw_status
+                FROM transaction
+                WHERE transaction.type = 'SalesOrd'
+                AND transaction.subsidiary = ${subsidiaryId}
+                AND transaction.custbody50 LIKE 'QUOTE-%'
+                ORDER BY transaction.id DESC
             `;
             
             addLog("Executing SuiteQL: Pulling Sales Orders to evaluate locally...", "info");
@@ -117,7 +115,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             let skippedStatus = 0;
             
             for (const row of records) {
-                const hqJobId = row.so_job_id || row.est_job_id;
+                const hqJobId = row.so_job_id;
                 const rawStatus = row.raw_status || 'UNKNOWN';
 
                 if (!hqJobId || !hqJobId.startsWith('QUOTE-')) {
