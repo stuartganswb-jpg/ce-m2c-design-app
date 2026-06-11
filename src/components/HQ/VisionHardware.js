@@ -137,33 +137,42 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   useEffect(() => {
       if (!activeFlow) return;
 
-      let detectedProj = null;
-      let detectedEndStyle = null;
+      // Flow-level fabrication preset is AUTHORITATIVE (one CPQ flow per bracket
+      // projection; CPQ item/finish selections must never change fabrication). When set,
+      // it seeds Vision's projection + end style and the bracket selection can't override.
+      const hasPresetProj = activeFlow.fabProjection !== undefined && activeFlow.fabProjection !== '' && activeFlow.fabProjection !== null;
+      const presetProj = hasPresetProj ? parseFloat(activeFlow.fabProjection) : null;
+      const presetEndStyle = activeFlow.fabEndStyle || null;
 
-      flowPins.forEach(pin => {
-          const part = libraryParts.find(p => p.id === pin.partId || p.legacyErpId === pin.legacyErpId);
-          if (part) {
-              const cData = part.manufacturingSpecs?.customData || {};
-              if (!detectedProj && cData.projection) detectedProj = parseFloat(cData.projection);
-              if (cData.feeType === 'BENT_RETURN') detectedEndStyle = 'RETURN_BEND';
-              if (cData.feeType === 'MITER_RETURN') detectedEndStyle = 'RETURN_MITER';
-              if (!detectedEndStyle && part.manufacturingSpecs?.productType === 'FINIAL') detectedEndStyle = 'FINIAL';
+      let detectedProj = presetProj;
+      let detectedEndStyle = presetEndStyle;
+
+      if (detectedProj === null || !detectedEndStyle) {
+          flowPins.forEach(pin => {
+              const part = libraryParts.find(p => p.id === pin.partId || p.legacyErpId === pin.legacyErpId);
+              if (part) {
+                  const cData = part.manufacturingSpecs?.customData || {};
+                  if (detectedProj === null && cData.projection) detectedProj = parseFloat(cData.projection);
+                  if (!detectedEndStyle && cData.feeType === 'BENT_RETURN') detectedEndStyle = 'RETURN_BEND';
+                  if (!detectedEndStyle && cData.feeType === 'MITER_RETURN') detectedEndStyle = 'RETURN_MITER';
+                  if (!detectedEndStyle && part.manufacturingSpecs?.productType === 'FINIAL') detectedEndStyle = 'FINIAL';
+              }
+          });
+          if (!detectedEndStyle && activeFlow.name.toUpperCase().includes("FRENCH RETURN")) {
+              detectedEndStyle = 'RETURN_BEND';
           }
-      });
-
-      if (!detectedEndStyle && activeFlow.name.toUpperCase().includes("FRENCH RETURN")) {
-          detectedEndStyle = 'RETURN_BEND';
       }
 
       setEngData(prev => {
           const updates = { ...prev };
           let changed = false;
-          if (detectedProj && !prev.bracketId && prev.proj !== detectedProj) { updates.proj = detectedProj; changed = true; }
+          // A flow preset wins even when a bracket is selected; detection only seeds when unset.
+          if (detectedProj !== null && prev.proj !== detectedProj && (hasPresetProj || !prev.bracketId)) { updates.proj = detectedProj; changed = true; }
           if (detectedEndStyle && prev.endStyle !== detectedEndStyle) { updates.endStyle = detectedEndStyle; changed = true; }
           return changed ? updates : prev;
       });
-      
-      if (detectedProj && !engData.bracketId) setIsCustomProj(false);
+
+      if (detectedProj !== null && (hasPresetProj || !engData.bracketId)) setIsCustomProj(false);
   }, [activeFlow, flowPins, libraryParts]);
 
   useEffect(() => {
@@ -178,7 +187,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           if (part) {
               const cData = part.manufacturingSpecs?.customData || {};
               const pData = part.manufacturingSpecs?.parametric || {};
-              const proj = parseFloat(cData.projection) || parseFloat(engData.proj) || 0;
+              // Flow preset projection wins; otherwise take it from the selected bracket.
+              const hasPresetProj = activeFlow?.fabProjection !== undefined && activeFlow?.fabProjection !== '' && activeFlow?.fabProjection !== null;
+              const proj = hasPresetProj ? parseFloat(activeFlow.fabProjection) : (parseFloat(cData.projection) || parseFloat(engData.proj) || 0);
               const bw = parseFloat(cData.bracketW || pData.width || pData.bracketW) || 3.0;
               const bt = parseFloat(cData.bracketThickness || pData.thickness || pData.bracketThickness) || 0.25;
 
@@ -193,7 +204,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               if (proj) setIsCustomProj(false);
           }
       }
-  }, [engData.bracketId, libraryParts]);
+  }, [engData.bracketId, libraryParts, activeFlow]);
 
   const safeProj = parseFloat(engData.proj) || 0;
 
