@@ -966,13 +966,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                                         <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value, dataSource: e.target.value === 'STATIC_FEE' ? '' : newStep.dataSource})} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                                             <option value="DROPDOWN">Dropdown List</option>
+                                            <option value="STYLE_SWAP">Choose / Swap Style</option>
                                             <option value="VISUAL_GRID">Visual Grid (Images/Textures)</option>
                                             <option value="VISUAL_DIMENSIONS">Visual Grid + Dimensions</option>
                                             <option value="DIMENSIONS">Dimensional Input Only</option>
                                             <option value="STATIC_FEE">Static Fee / Quantity</option>
                                         </select>
                                         
-                                        <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} disabled={newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE'} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: (newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') ? 0.5 : 1 }}>
+                                        <select value={newStep.dataSource} onChange={e => setNewStep({...newStep, dataSource: e.target.value, allowedOptions: []})} disabled={newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE' || newStep.type === 'STYLE_SWAP'} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: (newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE' || newStep.type === 'STYLE_SWAP') ? 0.5 : 1 }}>
                                             <option value="">-- SELECT DATA SOURCE --</option>
                                             <optgroup label="Core Libraries">
                                                 <option value="master_finishes">Master Finishes</option>
@@ -1148,23 +1149,48 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <input value={newStep.targetNodes || ''} onChange={e => setNewStep({...newStep, targetNodes: e.target.value})} placeholder="e.g., Pole_Top, Bracket_Base" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
 
-                                    {newStep.type === 'DROPDOWN' && (
+                                    {newStep.type === 'STYLE_SWAP' && (
                                         <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
-                                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Compound: Add a Finish Dropdown (optional)</label>
-                                            <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Turns this into a "pick item + pick finish" step (e.g. Bracket Style + Finish). Leave blank for a normal dropdown.</span>
-                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Style Options — choose which BOM items can be swapped</label>
+                                            <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Items and their 3D mesh nodes come from this assembly's BOM (set in Node Cluster / BOM Engine). Not listed? Add it to the BOM first.</span>
+                                            {!flowSettings.linkedAssemblyId ? (
+                                                <div style={{ fontSize: '0.9rem', color: '#d9534f', fontStyle: 'italic' }}>Link a Master Assembly to this flow first (in the settings above).</div>
+                                            ) : linkedBomPins.length === 0 ? (
+                                                <div style={{ fontSize: '0.9rem', color: '#d9534f', fontStyle: 'italic' }}>No BOM components found for this assembly. Add them in Node Cluster / BOM Engine.</div>
+                                            ) : (
                                                 <div>
-                                                    <label style={{ fontSize: '0.8rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Finish Source</label>
-                                                    <select value={newStep.finishDataSource || ''} onChange={e => setNewStep({...newStep, finishDataSource: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
-                                                        <option value="">-- None --</option>
-                                                        <option value="master_finishes">Master Finishes</option>
-                                                    </select>
+                                                    {linkedBomPins.map(pin => {
+                                                        const sel = (newStep.styleOptions || []).find(o => o.partId === pin.partId);
+                                                        const part = allApprovedDesigns.find(d => d.id === pin.partId || d.legacyErpId === pin.partId || d.itemId === pin.partId);
+                                                        const defaultPrice = parseFloat(part?.manufacturingSpecs?.basePrice) || 0;
+                                                        const meshNode = pin.targetNode || pin.partName;
+                                                        return (
+                                                            <div key={pin.partId} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
+                                                                <input type="checkbox" checked={!!sel} onChange={(e) => {
+                                                                    setNewStep(prev => {
+                                                                        const opts = (prev.styleOptions || []).filter(o => o.partId !== pin.partId);
+                                                                        if (e.target.checked) opts.push({ partId: pin.partId, partName: pin.partName, targetNode: meshNode, price: defaultPrice });
+                                                                        const geometryMap = {};
+                                                                        opts.forEach(o => { geometryMap[o.partId] = o.targetNode; });
+                                                                        return { ...prev, styleOptions: opts, geometryMap };
+                                                                    });
+                                                                }} />
+                                                                <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--ink)' }}>{pin.partName}</span>
+                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>mesh: {meshNode}</span>
+                                                                <span style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>$</span>
+                                                                <input type="number" step="0.01" disabled={!sel} value={sel ? (sel.price ?? defaultPrice) : defaultPrice} onChange={(e) => {
+                                                                    const v = parseFloat(e.target.value) || 0;
+                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => o.partId === pin.partId ? { ...o, price: v } : o) }));
+                                                                }} style={{ width: '90px', padding: '6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: sel ? 1 : 0.4 }} />
+                                                            </div>
+                                                        );
+                                                    })}
+                                                    <label style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--ink)' }}>
+                                                        <input type="checkbox" checked={!!newStep.finishDataSource} onChange={(e) => setNewStep({...newStep, finishDataSource: e.target.checked ? 'master_finishes' : ''})} />
+                                                        Also let the customer pick a Finish for the chosen style (applied to its mesh)
+                                                    </label>
                                                 </div>
-                                                <div>
-                                                    <label style={{ fontSize: '0.8rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Finish Target Mesh</label>
-                                                    <input value={newStep.finishTargetNodes || ''} onChange={e => setNewStep({...newStep, finishTargetNodes: e.target.value})} placeholder="e.g., Bracket_Surface" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
-                                                </div>
-                                            </div>
+                                            )}
                                         </div>
                                     )}
 
@@ -1239,7 +1265,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     </label>
                                     
                                     <div style={{ display: 'flex', gap: '15px', marginTop: '10px' }}>
-                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={(newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE') && !newStep.dataSource} style={{ flex: 1, padding: '15px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: ((newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') || newStep.dataSource) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', opacity: ((newStep.type === 'DIMENSIONS' || newStep.type === 'STATIC_FEE') || newStep.dataSource) ? 1 : 0.5 }}>
+                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={newStep.type === 'STYLE_SWAP' ? !(newStep.styleOptions && newStep.styleOptions.length) : ((newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE') && !newStep.dataSource)} style={{ flex: 1, padding: '15px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                                             {newStep.id ? "Save Edits to Step" : "Add Step"}
                                         </button>
                                         {newStep.id && (

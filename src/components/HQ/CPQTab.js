@@ -298,6 +298,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const availableProductTypes = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.productType).filter(Boolean))];
 
   const getOptionsForStep = (step) => {
+      // Choose / Swap Style: options are the curated BOM items on the step itself.
+      if (step?.type === 'STYLE_SWAP') {
+          return (step.styleOptions || []).map(o => ({ id: o.partId, itemName: o.partName, price: o.price }));
+      }
       if (!step || !step.dataSource) return [];
       let options = [];
 
@@ -592,6 +596,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (partObj) {
                       if (partObj.manufacturingSpecs?.basePrice) optionNativePrice = parseFloat(partObj.manufacturingSpecs.basePrice);
                       else if (partObj.basePrice) optionNativePrice = parseFloat(partObj.basePrice);
+                  }
+
+                  // Choose / Swap Style: price at the per-option base price set in the builder.
+                  if (step.type === 'STYLE_SWAP') {
+                      const styleOpt = (step.styleOptions || []).find(o => o.partId === selectedValue);
+                      if (styleOpt && styleOpt.price !== undefined && styleOpt.price !== '') optionNativePrice = parseFloat(styleOpt.price) || 0;
                   }
 
                   if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
@@ -1069,12 +1079,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
               if (fData?.textureUrl) overrides[step.targetNodes] = fData.textureUrl;
           }
-          // Compound step: apply the secondary Finish selection to its own target mesh.
-          if (step.finishDataSource && step.finishTargetNodes) {
+          // Compound/style step: apply the Finish selection to the SELECTED style's mesh
+          // (auto-resolved from the BOM-derived geometryMap — no manual node needed).
+          if (step.finishDataSource) {
               const finishId = dynamicConfigParams[`${step.id}__finish`];
-              if (finishId) {
+              const selectedStyleId = dynamicConfigParams[step.id];
+              const targetNode = (step.geometryMap && step.geometryMap[selectedStyleId])
+                  || (step.styleOptions || []).find(o => o.partId === selectedStyleId)?.targetNode
+                  || step.finishTargetNodes;
+              if (finishId && targetNode) {
                   const fData = [...globalFinishes, ...outsourceFinishes, ...dynamicAssets].find(f => f.id === finishId);
-                  if (fData?.textureUrl) overrides[step.finishTargetNodes] = fData.textureUrl;
+                  if (fData?.textureUrl) overrides[targetNode] = fData.textureUrl;
               }
           }
       });
@@ -1212,9 +1227,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               </div>
                           )}
 
-                          {currentStep.type === 'DROPDOWN' && currentStep.dataSource && (
+                          {((currentStep.type === 'DROPDOWN' && currentStep.dataSource) || currentStep.type === 'STYLE_SWAP') && (
                               <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: currentStep.finishDataSource ? '12px' : '20px', outline: 'none' }}>
-                                  <option value="">-- Select Option --</option>
+                                  <option value="">{currentStep.type === 'STYLE_SWAP' ? '-- Choose Style --' : '-- Select Option --'}</option>
                                   {getOptionsForStep(currentStep).map(opt => (
                                       <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</option>
                                   ))}
@@ -1223,12 +1238,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
                           {/* Compound step: an optional second "Finish" dropdown sharing one finish
                               set, applied to the selected (visible) item's mesh. */}
-                          {currentStep.type === 'DROPDOWN' && currentStep.finishDataSource && (
+                          {currentStep.finishDataSource && (
                               <div style={{ marginBottom: '20px' }}>
                                   <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Finish</label>
                                   <select value={dynamicConfigParams[`${currentStep.id}__finish`] || ''} onChange={(e) => handleParamChange(`${currentStep.id}__finish`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none' }}>
                                       <option value="">-- Select Finish --</option>
-                                      {getOptionsForStep({ ...currentStep, dataSource: currentStep.finishDataSource, allowedOptions: [], geometryMap: {} }).map(opt => (
+                                      {getOptionsForStep({ ...currentStep, type: 'DROPDOWN', dataSource: currentStep.finishDataSource, allowedOptions: [], geometryMap: {}, styleOptions: [] }).map(opt => (
                                           <option key={opt.id} value={opt.id}>{opt.itemName}</option>
                                       ))}
                                   </select>
