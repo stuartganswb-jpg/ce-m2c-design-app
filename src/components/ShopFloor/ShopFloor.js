@@ -831,6 +831,35 @@ const ShopFloor = () => {
                         <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.qty}</span></div>
                         {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
                     </div>
+
+                    {Array.isArray(order.cutList) && order.cutList.length > 0 && (
+                        <div style={{ marginBottom: '20px' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Cut List</div>
+                            {order.cutList.map((c, i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'var(--paper)', border: '1px solid var(--line)', marginBottom: '6px', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>
+                                    <span style={{ color: 'var(--ink)' }}>{c.name}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>Qty {c.qty}{c.cutLength ? ` · ${c.cutLength}"` : ''}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {(!order.cutList || order.cutList.length === 0) && order.cpqSpecs && Object.keys(order.cpqSpecs).length > 0 && (
+                        <div style={{ marginBottom: '20px' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Specs</div>
+                            {Object.entries(order.cpqSpecs).map(([k, v], i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 12px', background: 'var(--paper)', border: '1px solid var(--line)', marginBottom: '6px', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                                    <span style={{ color: 'var(--ink)' }}>{k}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{String(v)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {order.imageUrl && (
+                        <a href={order.imageUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginBottom: '16px', padding: '10px 16px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textDecoration: 'none' }}>📐 View Vision Drawing</a>
+                    )}
+
                     <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
                         {!isRunning ? (
                             <button onClick={handleStartProcess} style={{ flex: 1.5, background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Start Process</button>

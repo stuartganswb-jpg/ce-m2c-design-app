@@ -356,6 +356,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 const cutLine = customLines.find(l => l.cutLength);
                 const cpqSpecs = {};
                 customLines.forEach(l => { cpqSpecs[cleanLineName(l.name)] = `Qty: ${l.qty}`; });
+                // Structured per-line cut list the Shop custom card renders.
+                const cutList = customLines.map(l => ({
+                    name: cleanLineName(l.name),
+                    qty: Number(l.qty) || 1,
+                    cutLength: l.cutLength || null,
+                    partId: l.partId || null
+                }));
                 const qty = customLines.reduce((s, l) => s + (Number(l.qty) || 0), 0) || customLines.length;
 
                 await setDoc(doc(db, "shop_custom_orders", shopId), {
@@ -367,6 +374,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     partNum: customLines[0]?.partId || '',
                     qty,
                     cutLength: cutLine?.cutLength || null,
+                    cutList,
                     clientName: customerName, customerId,
                     isOutsourced, finishRecipe,
                     outsourcePrice: isOutsourced ? (matchedOutsource.multiplier || 0) : 0,
@@ -635,17 +643,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                             "{so.memo}"
                                         </div>
                                     )}
+                                    {/* Sales orders fan out to BOTH floors in one click — the split
+                                        builds the cut list, parts list, drawing + links the halves.
+                                        (Manual single-floor pushes live on the Work Order / stock cards.) */}
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                        <button style={{ ...btnStyle, flexBasis: '100%', background: so.autoSplit ? 'var(--paper-2)' : 'var(--ink)', color: so.autoSplit ? 'var(--ink-soft)' : '#fff', border: so.autoSplit ? '1px solid var(--line)' : 'none' }} onClick={() => autoSplitSalesOrder(so)}>
+                                        <button style={{ ...btnStyle, flex: 2, background: so.autoSplit ? 'var(--paper-2)' : 'var(--ink)', color: so.autoSplit ? 'var(--ink-soft)' : '#fff', border: so.autoSplit ? '1px solid var(--line)' : 'none' }} onClick={() => autoSplitSalesOrder(so)}>
                                             {so.autoSplit ? 'Auto-Split ✓' : '⚡ Import & Auto-Split to Floors'}
                                         </button>
                                         <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(so, 'sales')}>View</button>
-                                        <button style={{ ...btnStyle, flex: 1, background: so.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: so.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: so.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(so, 'sales')}>
-                                            {so.pushedToFinishing ? 'Finishing Pushed ✓' : 'Push to Finishing'}
-                                        </button>
-                                        <button style={{ ...btnStyle, flex: 1, background: so.pushedToShop ? 'var(--paper-2)' : 'var(--brass)', color: so.pushedToShop ? 'var(--ink-soft)' : '#fff', border: so.pushedToShop ? '1px solid var(--line)' : 'none' }} onClick={() => pushToShop(so, 'sales')}>
-                                            {so.pushedToShop ? 'Shop Pushed ✓' : 'Push to Shop'}
-                                        </button>
                                     </div>
                                 </div>
                             ))}
