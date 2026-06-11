@@ -36,7 +36,7 @@ const ExplodableModel = ({ url, explodeFactor, explodeMode, nodeClusters, onMesh
                 const cBox = new THREE.Box3();
                 let hasMeshes = false;
                 clonedScene.traverse((child) => {
-                    if (child.isMesh && cluster.meshes.includes(child.name)) {
+                    if (child.isMesh && (cluster.meshes || []).includes(child.name)) {
                         child.geometry.computeBoundingBox();
                         const meshBox = child.geometry.boundingBox.clone();
                         meshBox.applyMatrix4(child.matrixWorld);

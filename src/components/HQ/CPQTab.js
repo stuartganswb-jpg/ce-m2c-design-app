@@ -254,7 +254,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
 
       const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
-          const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER');
+          // Brand isolation: only this brand's (subsidiary's) customers, matching ClientVisionTab.
+          const customers = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r =>
+              r.type === 'CUSTOMER' &&
+              (r.brandId === activeBrand || (r.sharedBrands && r.sharedBrands.includes(activeBrand)))
+          );
           setLiveCustomers(customers);
       });
 
