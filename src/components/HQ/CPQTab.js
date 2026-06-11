@@ -265,15 +265,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); };
   }, [activeBrand]);
 
-  const combinedCustomers = useMemo(() => {
-      const merged = [...liveCustomers];
-      (globalLists.customers || []).forEach(cName => {
-          if (!merged.some(c => c.name === cName || c.id === cName)) {
-              merged.push({ id: cName, name: cName });
-          }
-      });
-      return merged;
-  }, [liveCustomers, globalLists.customers]);
+  // Brand isolation: the CPQ customer dropdown is ONLY this brand's crm_records
+  // (filtered above). Legacy master_lists.customers are plain strings with no
+  // brandId, so they can't be brand-scoped and would leak other brands' names
+  // into the dropdown — dropped intentionally.
+  const combinedCustomers = useMemo(() => liveCustomers, [liveCustomers]);
 
   const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
 
