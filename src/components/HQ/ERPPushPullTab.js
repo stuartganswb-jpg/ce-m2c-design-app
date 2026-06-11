@@ -125,8 +125,15 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
           for (const line of linesToPush) {
               if (line.nsId !== 'UNMAPPED' && line.nsId !== 'PENDING') {
-                  const rawRate = line.masterPart.manufacturingSpecs?.basePrice || 0;
-                  const itemRate = parseFloat(rawRate); 
+                  // Rate = the customer's negotiated price for this part if one exists,
+                  // otherwise the part's base price. This mirrors how CPQ built the quote
+                  // total, so the line rates + rollup line always sum to the quoted total.
+                  // A part with neither lands at 0 and its value rolls into the rollup.
+                  let itemRate = parseFloat(line.masterPart.manufacturingSpecs?.basePrice || 0) || 0;
+                  const cp = line.masterPart.clientPricing?.find(c => c.customerId === job.customer?.id);
+                  if (cp && cp.price !== undefined && cp.price !== '' && !isNaN(parseFloat(cp.price))) {
+                      itemRate = parseFloat(cp.price);
+                  }
                   const lineTotal = itemRate * line.qty;
                   physicalItemsTotal += lineTotal;
 
