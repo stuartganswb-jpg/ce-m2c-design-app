@@ -1043,6 +1043,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           else if (partObj.basePrice) nativeP = parseFloat(partObj.basePrice);
       }
 
+      // Choose / Swap Style: display the per-option base price set in the builder,
+      // mirroring the live pricing calc (opt.price comes through getStepOptions).
+      if (currentStep.type === 'STYLE_SWAP' && opt.price !== undefined && opt.price !== '') {
+          nativeP = parseFloat(opt.price) || 0;
+      }
+
       if (currentStep.useClientPricing && jobData.customerId && partObj?.clientPricing) {
           const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
           if (cp && cp.price !== undefined && cp.price !== "") nativeP = parseFloat(cp.price);
