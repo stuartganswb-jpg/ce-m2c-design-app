@@ -265,15 +265,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); };
   }, [activeBrand]);
 
-  const combinedCustomers = useMemo(() => {
-      const merged = [...liveCustomers];
-      (globalLists.customers || []).forEach(cName => {
-          if (!merged.some(c => c.name === cName || c.id === cName)) {
-              merged.push({ id: cName, name: cName });
-          }
-      });
-      return merged;
-  }, [liveCustomers, globalLists.customers]);
+  // Brand isolation: the CPQ customer dropdown is ONLY this brand's crm_records
+  // (filtered above). Legacy master_lists.customers are plain strings with no
+  // brandId, so they can't be brand-scoped and would leak other brands' names
+  // into the dropdown — dropped intentionally.
+  const combinedCustomers = useMemo(() => liveCustomers, [liveCustomers]);
 
   const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
 
@@ -1041,6 +1037,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (partObj) {
           if (partObj.manufacturingSpecs?.basePrice) nativeP = parseFloat(partObj.manufacturingSpecs.basePrice);
           else if (partObj.basePrice) nativeP = parseFloat(partObj.basePrice);
+      }
+
+      // Choose / Swap Style: display the per-option base price set in the builder,
+      // mirroring the live pricing calc (opt.price comes through getStepOptions).
+      if (currentStep.type === 'STYLE_SWAP' && opt.price !== undefined && opt.price !== '') {
+          nativeP = parseFloat(opt.price) || 0;
       }
 
       if (currentStep.useClientPricing && jobData.customerId && partObj?.clientPricing) {
