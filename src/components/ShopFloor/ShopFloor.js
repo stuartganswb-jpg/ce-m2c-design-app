@@ -832,6 +832,21 @@ const ShopFloor = () => {
                         {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
                     </div>
 
+                    {(order.fabMethod || order.fabNotes) && (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '20px', padding: '12px 16px', background: 'var(--ink)', color: '#fff' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600 }}>
+                                {order.fabMethod === 'BEND' ? '↳ BEND THE POLE' : order.fabMethod === 'SPLICE' ? '✂ SPLICE THE POLE' : order.fabMethod === 'MITER' ? '∠ MITER THE POLE' : 'FABRICATION'}
+                            </span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', opacity: 0.85, whiteSpace: 'nowrap' }}>
+                                {order.fabNotes?.shape ? `${order.fabNotes.shape}` : ''}
+                                {order.fabNotes?.qtyBends ? ` · ${order.fabNotes.qtyBends} bend` : ''}
+                                {order.fabNotes?.qtySplices ? ` · ${order.fabNotes.qtySplices} splice` : ''}
+                                {order.fabNotes?.qtyMiters ? ` · ${order.fabNotes.qtyMiters} miter` : ''}
+                                {order.fabNotes?.poleO2O ? ` · O2O ${order.fabNotes.poleO2O}"` : ''}
+                            </span>
+                        </div>
+                    )}
+
                     {Array.isArray(order.cutList) && order.cutList.length > 0 && (
                         <div style={{ marginBottom: '20px' }}>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Cut List</div>

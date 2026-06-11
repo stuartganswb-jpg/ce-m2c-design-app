@@ -307,6 +307,24 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
             const { svgUri, finishRecipe } = await fetchEnrichedJobData(so.hqJobId, 'sales');
 
+            // Vision-computed fabrication geometry (bend vs splice vs miter, shape, O2O) lives
+            // on the job's engineeringNotes. Carry it to the floors so the shop knows HOW to
+            // make the pole, and the drawing rides along to both halves (it shows placement).
+            const eng = job.engineeringNotes || {};
+            const fabNotes = {
+                shape: eng.shape || null,
+                qtyBends: eng.qtyBends || 0,
+                qtySplices: eng.qtySplices || 0,
+                qtyMiters: eng.qtyMiters || 0,
+                qtyMiterReturns: eng.qtyMiterReturns || 0,
+                poleO2O: eng.poleO2O || null,
+                totalSystemO2O: eng.totalSystemO2O || null
+            };
+            const fabMethod = eng.qtyBends > 0 ? 'BEND' : (eng.qtySplices > 0 ? 'SPLICE' : (eng.qtyMiters > 0 ? 'MITER' : null));
+            const drawingUrl = svgUri
+                || (eng.svgString ? "data:image/svg+xml;charset=utf-8," + encodeURIComponent(eng.svgString) : null)
+                || job.finalImageUrl || null;
+
             const finId = `WO-${orderKey}`;
             const shopId = `SHOP-${orderKey}`;
             const hasCustom = customLines.length > 0;
@@ -332,7 +350,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     totalParts,
                     dimensions: { length: Number(so.length) || 0, width: Number(so.width) || 0, height: Number(so.height) || 0 },
                     cpqSpecs,
-                    imageUrl: svgUri || job.finalImageUrl || null,
+                    imageUrl: drawingUrl,
+                    fabNotes, fabMethod,
                     note: so.memo || job.sidemark || "",
                     reqDate: so.reqDate || "",
                     partsList,
@@ -383,11 +402,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     brand: activeBrand,
                     note: so.memo || job.sidemark || "",
                     cpqSpecs,
-                    imageUrl: svgUri || job.finalImageUrl || null,
+                    imageUrl: drawingUrl,
+                    fabNotes, fabMethod,
                     reqDate: so.reqDate || "",
                     createdAt: Date.now(), createdBy: currentUser
                 });
-                addLog(`Created Shop custom order ${shopId} (${customLines.length} custom lines).`, "success");
+                addLog(`Created Shop custom order ${shopId}${fabMethod ? ` [${fabMethod}]` : ''} (${customLines.length} custom lines).`, "success");
             }
 
             // Mark the originating job + SO board entry as imported.
