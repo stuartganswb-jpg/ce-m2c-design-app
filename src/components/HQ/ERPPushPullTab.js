@@ -48,52 +48,68 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       setSyncLog(prev => [{ time, msg, type }, ...prev]);
   };
 
-  const getJobLineItems = (job) => {
-      if (!job || !job.cpqData) return [];
-      
+  // Resolve a job's CPQ selections into physical-inventory lines, while tracking what
+  // could NOT be resolved so the push can report a specific reason instead of a generic
+  // "no inventory" popup.
+  const resolveJobLines = (job) => {
+      const result = { lines: [], stepsConsidered: 0, unresolved: [], hasConfig: false };
+      if (!job || !job.cpqData) return result;
+
       const flow = cpqFlows.find(f => f.id === job.flowId);
-      
       const activeStepIds = new Set([
           ...Object.keys(job.cpqData?.configuration || {}),
           ...Object.keys(job.cpqData?.quantities || {})
       ]);
-
-      const lines = [];
+      result.hasConfig = activeStepIds.size > 0;
 
       activeStepIds.forEach(stepId => {
           const step = flow?.steps?.find(s => s.id === stepId);
           const userSelectionId = job.cpqData.configuration?.[stepId];
           let qty = job.cpqData.quantities?.[stepId];
-
           if (qty === undefined || qty === null || qty === '') qty = 1;
 
           const targetPartId = step?.linkedItemId || step?.linkedPinId || userSelectionId;
+          if (!targetPartId) return;
 
-          if (targetPartId) {
-              const masterPart = libraryParts.find(p => p.id === targetPartId || p.itemId === targetPartId || p.legacyErpId === targetPartId);
-              
-              if (masterPart) {
-                  lines.push({
-                      stepId,
-                      masterPart,
-                      qty: parseInt(qty) || 1,
-                      nsId: masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED',
-                      partCategory: masterPart.manufacturingSpecs?.partHandling || '',
-                      projection: job.cpqData.dimensions?.[stepId]?.length || ''
-                  });
-              }
+          result.stepsConsidered++;
+          const masterPart = libraryParts.find(p => p.id === targetPartId || p.itemId === targetPartId || p.legacyErpId === targetPartId);
+          if (!masterPart) {
+              result.unresolved.push({ stepTitle: step?.title || stepId, partId: targetPartId });
+              return;
           }
+          result.lines.push({
+              stepId,
+              masterPart,
+              qty: parseInt(qty) || 1,
+              nsId: masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED',
+              partCategory: masterPart.manufacturingSpecs?.partHandling || '',
+              projection: job.cpqData.dimensions?.[stepId]?.length || ''
+          });
       });
-
-      return lines;
+      return result;
   };
 
+  const getJobLineItems = (job) => resolveJobLines(job).lines;
+
   const handlePushToNetSuite = async (job) => {
-      const linesToPush = getJobLineItems(job);
-      
+      const { lines: linesToPush, stepsConsidered, unresolved, hasConfig } = resolveJobLines(job);
+
       if (linesToPush.length === 0) {
-          addLog(`❌ FAILED: Job ${job.jobId || job.id} has no mapped physical inventory.`, 'error');
-          alert("Hold up! We couldn't find any physical NetSuite inventory linked to this configuration.");
+          if (!hasConfig) {
+              // No per-step configuration/quantities at all — almost always a stale quote
+              // saved before CPQ wrote those maps, or a flow with no priced steps.
+              addLog(`❌ FAILED: Job ${job.jobId || job.id} carries no CPQ configuration map. Re-save it as a fresh quote (older quotes lack the mapping the push needs).`, 'error');
+              alert("Hold up! This quote has no CPQ configuration data attached.\n\nIt was likely saved before the latest CPQ update. Re-build and finalize it as a NEW quote, then push.");
+          } else if (stepsConsidered === 0) {
+              // Steps exist but none link to a physical part.
+              addLog(`❌ FAILED: Job ${job.jobId || job.id} — flow steps aren't linked to physical parts (no Linked Item / Auto-Sync BOM).`, 'error');
+              alert("Hold up! This flow's steps aren't linked to physical parts.\n\nIn System Admin → CPQ Flow Builder, set each step's Linked Item (or run Auto-Sync BOM against the linked Master Assembly), then re-save the quote.");
+          } else {
+              // Steps point to part IDs that don't exist in Approved_Designs for this brand.
+              const refs = unresolved.map(u => `• ${u.stepTitle}  →  ${u.partId}`).join('\n');
+              addLog(`❌ FAILED: Job ${job.jobId || job.id} — ${stepsConsidered} step(s) configured, 0 resolve to a library part. Unresolved IDs: ${unresolved.map(u => u.partId).join(', ')}`, 'error');
+              alert(`Hold up! ${stepsConsidered} configured step(s), but none point to a part in the library (Approved_Designs):\n\n${refs}\n\nLink these steps to existing library parts, or check the part IDs / brand.`);
+          }
           return;
       }
 
@@ -105,7 +121,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       try {
           const lineItems = [];
           let physicalItemsTotal = 0;
-          
+          const unmappedNames = [];
+
           for (const line of linesToPush) {
               if (line.nsId !== 'UNMAPPED' && line.nsId !== 'PENDING') {
                   const rawRate = line.masterPart.manufacturingSpecs?.basePrice || 0;
@@ -128,11 +145,14 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
                   lineItems.push(linePayload);
               } else {
+                  unmappedNames.push(line.masterPart.itemName || line.masterPart.id);
                   addLog(`WARNING: Skipping "${line.masterPart.itemName}". No NetSuite ID mapped.`, 'warn');
               }
           }
 
           if (lineItems.length === 0) {
+              addLog(`❌ FAILED: ${linesToPush.length} part(s) resolved but none have a NetSuite ID: ${unmappedNames.join(', ')}`, 'error');
+              alert(`Hold up! ${linesToPush.length} part(s) resolved, but none have a NetSuite internal ID yet:\n\n${unmappedNames.map(n => `• ${n}`).join('\n')}\n\nSync these items to NetSuite (Library → NetSuite Sync) so they have an internal ID, then push again.`);
               throw new Error("No valid NetSuite IDs were found to push. Sync aborted.");
           }
 
