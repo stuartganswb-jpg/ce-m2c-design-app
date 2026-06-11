@@ -1024,6 +1024,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         />
                                     </div>
 
+                                    {newStep.type !== 'STYLE_SWAP' && (
                                     <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '15px' }}>Item Mapping & Base Price</label>
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
@@ -1075,6 +1076,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             </div>
                                         </div>
                                     </div>
+                                    )}
 
                                     {newStep.dataSource && availableSourceItems.length > 0 && newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && (
                                         <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px' }}>
@@ -1101,6 +1103,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         </div>
                                     )}
                                     
+                                    {newStep.type !== 'STYLE_SWAP' && (
                                     <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                                             <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Target 3D Mesh / Node</label>
@@ -1148,6 +1151,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
                                         <input value={newStep.targetNodes || ''} onChange={e => setNewStep({...newStep, targetNodes: e.target.value})} placeholder="e.g., Pole_Top, Bracket_Base" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
+                                    )}
 
                                     {newStep.type === 'STYLE_SWAP' && (
                                         <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
