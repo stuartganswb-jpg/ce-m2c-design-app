@@ -20,6 +20,8 @@ const NS_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 const NS_REST_BASE = "https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1";
 // Income account every rollup (non-inventory sale) item posts to: 4001 SALES-HOUSE, acctid 249.
 const NS_ROLLUP_INCOME_ACCT = "249";
+// Tax schedule for rollup items: "No Taxable", NetSuite id 2.
+const NS_ROLLUP_TAX_SCHEDULE = "2";
 
 const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
@@ -403,7 +405,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               itemid: flowName,
               displayname: flowName,
               subsidiary: { items: [{ id: sub }] },
-              incomeaccount: { id: NS_ROLLUP_INCOME_ACCT }
+              incomeaccount: { id: NS_ROLLUP_INCOME_ACCT },
+              taxschedule: { id: NS_ROLLUP_TAX_SCHEDULE }
           };
 
           const response = await fetch(NS_FUNCTION_URL, {
