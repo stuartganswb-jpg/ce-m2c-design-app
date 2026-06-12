@@ -1283,6 +1283,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                     const v = e.target.value;
                                                                     setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => matches(o) ? { ...o, layerZ: v === '' ? '' : (parseInt(v) || 0) } : o) }));
                                                                 }} style={{ width: '56px', padding: '6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: sel ? 1 : 0.4 }} />
+                                                                <span style={{ color: 'var(--ink-soft)', fontSize: '0.7rem', fontFamily: 'var(--mono)', textTransform: 'uppercase' }} title="Bracket projection (in) for this option — drives Vision fabrication math (e.g. 4.25 standard vs 4.125 mini). Blank = use the flow's projection.">Proj″</span>
+                                                                <input type="number" step="0.125" disabled={!sel} value={sel && sel.projection !== undefined && sel.projection !== null ? sel.projection : ''} placeholder="flow" onChange={(e) => {
+                                                                    const v = e.target.value;
+                                                                    setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(o => matches(o) ? { ...o, projection: v === '' ? '' : (parseFloat(v) || 0) } : o) }));
+                                                                }} style={{ width: '64px', padding: '6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: sel ? 1 : 0.4 }} />
                                                             </div>
                                                         );
                                                     })}
