@@ -1138,8 +1138,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               });
           }
       });
+
+      // Flow-level hidden geometry: when one CAD file holds several configs (wall /
+      // ceiling / end brackets), hide the clusters this flow doesn't use so only this
+      // config's parts render — e.g. the wall flow never shows ceiling/end brackets.
+      (activeFlow.hiddenClusters || []).forEach(cid => {
+          const cl = (activeAssembly?.nodeClusters || []).find(c => c.id === cid);
+          (cl?.nodes || []).forEach(n => { if (n) overrides[n] = false; });
+      });
+
       return overrides;
-  }, [dynamicConfigParams, activeFlow]);
+  }, [dynamicConfigParams, activeFlow, activeAssembly]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>

@@ -64,7 +64,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   });
 
   const [newFlowName, setNewFlowName] = useState("");
-  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [] });
+  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
   const [isCreatingRollup, setIsCreatingRollup] = useState(false);
 
@@ -201,7 +201,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                   fabEndStyle: flow.fabEndStyle || '',
                   fabProjection: flow.fabProjection !== undefined && flow.fabProjection !== null ? flow.fabProjection : '',
                   fabShape: flow.fabShape || '',
-                  defaultFinishOptions: flow.defaultFinishOptions || []
+                  defaultFinishOptions: flow.defaultFinishOptions || [],
+                  hiddenClusters: flow.hiddenClusters || []
               });
               setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
           }
@@ -515,7 +516,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
           await deleteDoc(doc(db, "cpq_flows", activeFlowId));
           setActiveFlowId(null);
-          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [] });
+          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
       } catch (err) {
           console.error("Error deleting flow:", err);
           alert("Failed to delete the CPQ Flow.");
@@ -985,6 +986,29 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <button onClick={handleApplyFinishesToSteps} style={{ padding: '10px 18px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Apply to all steps ↓</button>
                                     </div>
                                 </div>
+
+                                {linkedAsm?.nodeClusters?.length > 0 && (
+                                <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
+                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Hide Geometry (other configs)</label>
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>When one CAD file holds several configs (e.g. wall / ceiling / end brackets), check the clusters this flow should NOT show. They'll be hidden in the 3D view for this flow — so the wall flow never shows ceiling or end brackets.</span>
+                                    <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 16px', background: '#fff', border: '1px solid var(--line)', padding: '12px' }}>
+                                        {linkedAsm.nodeClusters.map(cl => {
+                                            const checked = (flowSettings.hiddenClusters || []).includes(cl.id);
+                                            return (
+                                                <label key={cl.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer' }}>
+                                                    <input type="checkbox" checked={checked} onChange={(e) => {
+                                                        const set = new Set(flowSettings.hiddenClusters || []);
+                                                        if (e.target.checked) set.add(cl.id); else set.delete(cl.id);
+                                                        setFlowSettings({ ...flowSettings, hiddenClusters: [...set] });
+                                                    }} />
+                                                    {cl.name}
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', display: 'block', marginTop: '10px' }}>{(flowSettings.hiddenClusters || []).length} cluster(s) hidden in this flow · Save and Cascade to apply</span>
+                                </div>
+                                )}
 
                                 <div style={{ marginTop: '20px', padding: '16px 20px', background: flowSettings.nsRollupItemId ? 'var(--paper)' : '#fff7ed', border: `1px solid ${flowSettings.nsRollupItemId ? 'var(--line)' : 'var(--brass)'}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
                                     <div>
