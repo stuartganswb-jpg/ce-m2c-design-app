@@ -147,6 +147,9 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [zoomTrigger, setZoomTrigger] = useState(null);
 
   const [isCanvasMaximized, setIsCanvasMaximized] = useState(false);
+  const [showAutoAssign, setShowAutoAssign] = useState(false);
+  const [autoAssignPart, setAutoAssignPart] = useState({});    // clusterId -> chosen partId
+  const [autoAssignChecked, setAutoAssignChecked] = useState({});
   const [isCanvasLocked, setIsCanvasLocked] = useState(true); 
 
   const [isFrozen, setIsFrozen] = useState(false);
@@ -594,6 +597,66 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const unassignedClusters = (activeAssembly?.nodeClusters || []).filter(cluster => {
       return !pins.some(pin => pin.clusterId === cluster.id || pin.targetNode === cluster.nodes?.join(', '));
   });
+
+  // --- AUTO-ASSIGN BOM ---
+  // Match each unassigned cluster to a library part by its code/pattern name (e.g.
+  // cluster "FIVBP — LEFT" -> the part whose itemId/legacyErpId/itemName is FIVBP),
+  // so the whole BOM can be built in one reviewed pass instead of pin-by-pin.
+  const normCode = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const stripPosition = (name) => String(name || '').replace(/\s*[—–-]\s*(LEFT|CENTER|RIGHT|MID|#?\d+)\b.*$/i, '').trim();
+  const autoAssignProposals = useMemo(() => {
+      return unassignedClusters.map(cl => {
+          const base = normCode(stripPosition(cl.name));
+          let best = null, bestScore = 0;
+          if (base) {
+              libraryParts.forEach(p => {
+                  if (p.id === activeAssembly?.id) return; // skip the assembly itself
+                  const codes = [p.legacyErpId, p.itemId, p.itemName].map(normCode).filter(Boolean);
+                  let s = 0;
+                  codes.forEach(c => {
+                      if (c === base) s = Math.max(s, 1);
+                      else if (c.startsWith(base) || base.startsWith(c)) s = Math.max(s, 0.85);
+                      else if (c.includes(base) || base.includes(c)) s = Math.max(s, 0.6);
+                  });
+                  if (s > bestScore) { bestScore = s; best = p; }
+              });
+          }
+          return { cluster: cl, part: best, score: bestScore };
+      });
+  }, [unassignedClusters, libraryParts, activeAssembly]);
+
+  useEffect(() => {
+      const chk = {}, prt = {};
+      autoAssignProposals.forEach(p => {
+          chk[p.cluster.id] = p.score >= 0.85 && !!p.part;
+          prt[p.cluster.id] = p.part?.id || '';
+      });
+      setAutoAssignChecked(chk);
+      setAutoAssignPart(prt);
+  }, [autoAssignProposals]);
+
+  const handleAutoAssign = async () => {
+      const chosen = autoAssignProposals.filter(p => autoAssignChecked[p.cluster.id] && autoAssignPart[p.cluster.id]);
+      if (chosen.length === 0) return alert("Nothing selected to assign.");
+      if (!window.confirm(`Create ${chosen.length} BOM component(s) by matching clusters to library parts?`)) return;
+      try {
+          for (const p of chosen) {
+              const part = libraryParts.find(lp => lp.id === autoAssignPart[p.cluster.id]);
+              if (!part) continue;
+              await addDoc(collection(db, "assembly_pins"), {
+                  assemblyId: selectedAssemblyId,
+                  x: 0, y: 0, z: 0,
+                  targetNode: (p.cluster.nodes || []).join(', '),
+                  clusterId: p.cluster.id,
+                  imageUrl: '3D_CAD',
+                  partName: part.itemName, partId: part.itemId, legacyErpId: part.legacyErpId || "N/A",
+                  isExistingLibraryPart: true, specs: part.manufacturingSpecs || {}, status: "SPECS_LOCKED",
+                  author: currentUser, defaultQty: 1, createdAt: serverTimestamp()
+              });
+          }
+          setShowAutoAssign(false);
+      } catch (err) { console.error(err); alert("Auto-assign failed."); }
+  };
   
   // Resolve the nodes to highlight for "Locate". Works for an unassigned cluster (by id)
   // and for an already-assigned BOM pin (by its clusterId, or its own targetNode) — so
@@ -893,8 +956,9 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
                 {viewMode === '3D' && unassignedClusters.length > 0 && (
                     <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', borderRadius: '2px' }}>
-                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '8px' }}>
-                            Unassigned Clusters
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Unassigned Clusters</span>
+                            <button onClick={() => setShowAutoAssign(true)} title="Match these clusters to library parts by name and build the BOM in one pass" style={{ padding: '10px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600, whiteSpace: 'nowrap' }}>⚡ Auto-Assign BOM</button>
                         </div>
                         <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>These 3D groupings have not been converted into BOM items yet. <strong>Locate</strong> highlights one in the 3D view.</div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '32vh', overflowY: 'auto' }}>
@@ -1145,6 +1209,61 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                 </div>
               )}
             </div>
+        </div>
+      )}
+
+      {/* AUTO-ASSIGN BOM REVIEW MODAL */}
+      {showAutoAssign && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.55)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }} onClick={() => setShowAutoAssign(false)}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', border: '1px solid var(--line)', width: '820px', maxWidth: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', borderRadius: '2px' }}>
+            <div style={{ padding: '24px 28px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Match Clusters to Library Parts</span>
+                  <h2 style={{ margin: '4px 0 0 0', fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Auto-Assign BOM</h2>
+                </div>
+                <button onClick={() => setShowAutoAssign(false)} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+              </div>
+              <div style={{ display: 'flex', gap: '12px', marginTop: '12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                <button onClick={() => setAutoAssignChecked(Object.fromEntries(autoAssignProposals.filter(p => autoAssignPart[p.cluster.id]).map(p => [p.cluster.id, true])))} style={{ background: 'none', border: 'none', color: 'var(--brass)', cursor: 'pointer' }}>Select all matched</button>
+                <span style={{ color: 'var(--line)' }}>|</span>
+                <button onClick={() => setAutoAssignChecked({})} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer' }}>None</button>
+              </div>
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '20px 28px' }}>
+              {autoAssignProposals.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>No unassigned clusters — the BOM is fully assigned.</div>}
+              {autoAssignProposals.map(p => {
+                const on = !!autoAssignChecked[p.cluster.id];
+                const conf = p.score >= 1 ? 'exact' : p.score >= 0.85 ? 'strong' : p.score > 0 ? 'weak' : 'none';
+                const confColor = p.score >= 0.85 ? 'var(--brass)' : p.score > 0 ? '#b9770e' : '#d9534f';
+                return (
+                  <div key={p.cluster.id} style={{ display: 'flex', gap: '14px', alignItems: 'center', padding: '12px 0', borderBottom: '1px solid var(--line)', opacity: on ? 1 : 0.6 }}>
+                    <input type="checkbox" checked={on} onChange={(e) => setAutoAssignChecked(prev => ({ ...prev, [p.cluster.id]: e.target.checked }))} style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--brass)' }} />
+                    <div style={{ width: '230px', flexShrink: 0 }}>
+                      <div style={{ fontSize: '0.9rem', color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.cluster.name}</div>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: confColor, textTransform: 'uppercase', marginTop: '2px' }}>{conf === 'none' ? '⚠ no match — pick one' : `${conf} match`}</div>
+                    </div>
+                    <span style={{ color: 'var(--ink-soft)' }}>→</span>
+                    <select value={autoAssignPart[p.cluster.id] || ''} onChange={(e) => setAutoAssignPart(prev => ({ ...prev, [p.cluster.id]: e.target.value }))} style={{ flex: 1, padding: '8px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }}>
+                      <option value="">-- pick a library part --</option>
+                      {libraryParts.filter(lp => lp.id !== activeAssembly?.id).map(lp => (
+                        <option key={lp.id} value={lp.id}>{lp.itemName} {lp.legacyErpId && lp.legacyErpId !== 'PENDING' ? `[${lp.legacyErpId}]` : ''}</option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ padding: '20px 28px', borderTop: '1px solid var(--line)', background: 'var(--paper)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                {autoAssignProposals.filter(p => autoAssignChecked[p.cluster.id] && autoAssignPart[p.cluster.id]).length} of {autoAssignProposals.length} will be assigned
+              </div>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button onClick={() => setShowAutoAssign(false)} style={{ padding: '14px 24px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Cancel</button>
+                <button onClick={handleAutoAssign} style={{ padding: '14px 28px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Assign Selected to BOM</button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
