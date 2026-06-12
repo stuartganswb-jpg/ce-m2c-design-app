@@ -93,12 +93,18 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
             clonedScene.traverse((child) => {
                 if (child.isMesh && child.userData.originalMaterial) {
                     const meshName = child.name.toLowerCase();
+                    // Format-agnostic key: strip non-alphanumerics so a sanitized cluster/pin
+                    // node ("body1048", "ficpba_v71") matches a raw model mesh ("Body1.048",
+                    // "FICPBA v7:1") and vice-versa. Without this, a sanitized-vs-raw export
+                    // mismatch makes every hide/geometry-swap silently no-op.
+                    const meshKey = meshName.replace(/[^a-z0-9]/g, '');
+                    const hitTarget = (t) => meshName === t || meshName.startsWith(t + '_') || meshName.startsWith(t + '.') || (t && meshKey === t.replace(/[^a-z0-9]/g, ''));
 
                     let isVis = child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
                             const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-                            if (targets.some(t => meshName === t || meshName.startsWith(t + '_') || meshName.startsWith(t + '.'))) {
+                            if (targets.some(hitTarget)) {
                                 isVis = isVisibleFlag;
                             }
                         }
@@ -109,7 +115,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
                         for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
                             const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-                            if (targets.some(t => meshName === t || meshName.startsWith(t + '_') || meshName.startsWith(t + '.'))) {
+                            if (targets.some(hitTarget)) {
                                 matchedTexUrl = texUrl;
                             }
                         }
