@@ -847,6 +847,19 @@ const ShopFloor = () => {
                         </div>
                     )}
 
+                    {Array.isArray(order.fabNotes?.hangerLocations) && order.fabNotes.hangerLocations.length > 0 && (
+                        <div style={{ marginBottom: '20px', border: '1px solid var(--line)' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', background: 'var(--ink-soft)', padding: '6px 12px' }}>Hidden Hanger Locations</div>
+                            {order.fabNotes.hangerLocations.map((h, i) => (
+                                <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '8px 12px', borderTop: i ? '1px solid var(--line)' : 'none' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 600, color: 'var(--ink)', minWidth: '64px' }}>{h.code}</span>
+                                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)', flex: 1 }}>{h.anchor}</span>
+                                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500, color: 'var(--ink)', textAlign: 'right' }}>{h.position}{h.note ? ` — ${h.note}` : ''}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
                     {Array.isArray(order.cutList) && order.cutList.length > 0 && (
                         <div style={{ marginBottom: '20px' }}>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Cut List</div>
