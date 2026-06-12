@@ -595,7 +595,21 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       return !pins.some(pin => pin.clusterId === cluster.id || pin.targetNode === cluster.nodes?.join(', '));
   });
   
-  const activeLocatingNodes = activeAssembly?.nodeClusters?.find(c => c.id === locatingClusterId)?.nodes || [];
+  // Resolve the nodes to highlight for "Locate". Works for an unassigned cluster (by id)
+  // and for an already-assigned BOM pin (by its clusterId, or its own targetNode) — so
+  // you can confirm any assignment visually without building the BOM.
+  const activeLocatingNodes = (() => {
+      if (!locatingClusterId) return [];
+      const cl = activeAssembly?.nodeClusters?.find(c => c.id === locatingClusterId);
+      if (cl) return cl.nodes || [];
+      const pin = pins.find(p => p.id === locatingClusterId || p.clusterId === locatingClusterId);
+      if (pin) {
+          const byCluster = activeAssembly?.nodeClusters?.find(c => c.id === pin.clusterId)?.nodes;
+          if (byCluster?.length) return byCluster;
+          if (pin.targetNode) return pin.targetNode.split(',').map(s => s.trim()).filter(Boolean);
+      }
+      return [];
+  })();
 
   const canvasContainerStyle = isCanvasMaximized ? {
       position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 9999, 
@@ -640,8 +654,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           </div>
       )}
 
-      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1 }}>
-        
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1, height: isCanvasMaximized ? 'auto' : 'calc(100vh - 150px)', minHeight: '600px' }}>
+
         {viewMode === '3D' && activeAssembly && (
             <div style={{ width: '280px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', flexShrink: 0, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                 <div style={{ padding: '16px 20px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
@@ -875,15 +889,15 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
         </div>
 
         {!isCanvasMaximized && (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px', minHeight: 0 }}>
+
                 {viewMode === '3D' && unassignedClusters.length > 0 && (
                     <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', borderRadius: '2px' }}>
                         <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '8px' }}>
                             Unassigned Clusters
                         </div>
-                        <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>These 3D groupings have not been converted into BOM items yet.</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>These 3D groupings have not been converted into BOM items yet. <strong>Locate</strong> highlights one in the 3D view.</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '32vh', overflowY: 'auto' }}>
                             {unassignedClusters.map(cl => {
                                 const isLocating = locatingClusterId === cl.id;
                                 return (
@@ -941,9 +955,22 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                         </div>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                                        
-                                        <button 
-                                            onClick={() => { setIsFrozen(true); setInteractionMode('crop'); setCropState({ pinId: pin.id, x: 50, y: 50, w: 250, h: 250, action: null }); }} 
+
+                                        {viewMode === '3D' && (pin.clusterId || pin.targetNode) && (() => {
+                                            const isLoc = locatingClusterId === (pin.clusterId || pin.id);
+                                            return (
+                                                <button
+                                                    onClick={() => setLocatingClusterId(isLoc ? null : (pin.clusterId || pin.id))}
+                                                    title="Highlight this part in the 3D view to confirm the assignment"
+                                                    style={{ background: isLoc ? 'var(--brass)' : 'transparent', border: '1px solid var(--brass)', color: isLoc ? '#fff' : 'var(--brass)', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer', padding: '8px 12px' }}
+                                                >
+                                                    {isLoc ? '◉ Locating' : 'Locate'}
+                                                </button>
+                                            );
+                                        })()}
+
+                                        <button
+                                            onClick={() => { setIsFrozen(true); setInteractionMode('crop'); setCropState({ pinId: pin.id, x: 50, y: 50, w: 250, h: 250, action: null }); }}
                                             style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer', padding: '8px 12px' }}
                                         >
                                             Crop
