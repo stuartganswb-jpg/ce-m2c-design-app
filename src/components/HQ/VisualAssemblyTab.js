@@ -5,6 +5,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import * as THREE from 'three';
+import { loadGLBScene, buildComponentFiles } from '../Shared/componentExport';
 
 class ErrorBoundary extends React.Component {
     constructor(props) { super(props); this.state = { hasError: false }; }
@@ -150,6 +151,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [showAutoAssign, setShowAutoAssign] = useState(false);
   const [autoAssignPart, setAutoAssignPart] = useState({});    // clusterId -> chosen partId
   const [autoAssignChecked, setAutoAssignChecked] = useState({});
+  const [genState, setGenState] = useState(null);              // {done,total,label} while generating component files
   const [isCanvasLocked, setIsCanvasLocked] = useState(true); 
 
   const [isFrozen, setIsFrozen] = useState(false);
@@ -657,6 +659,82 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           setShowAutoAssign(false);
       } catch (err) { console.error(err); alert("Auto-assign failed."); }
   };
+
+  // --- GENERATE PER-COMPONENT FILES ---
+  // For each cluster: isolate it from the master .glb, lay it FLAT, and emit a standalone
+  // .glb + a thumbnail PNG. The PNG becomes the item image (auto-generated, no manual
+  // screenshot); the .glb is reusable and feeds the Packaging tab's foam-cut tracer. Names
+  // by the matched part code so repeats (L/C/R) share one file. Retrofits existing
+  // assemblies — it just iterates whatever clusters are already there, and is re-runnable.
+  const handleGenerateComponentFiles = async () => {
+      const cadUrl = activeAssembly?.manufacturingSpecs?.cadUrl;
+      const clusters = activeAssembly?.nodeClusters || [];
+      if (!cadUrl) return alert("This assembly has no 3D CAD (.glb). Upload one in Inception first.");
+      if (clusters.length === 0) return alert("No clusters to export — run Auto-Group first.");
+      if (!window.confirm(`Generate a flat per-component .glb + thumbnail for ${clusters.length} cluster(s)?\nThis loads the model and renders each part — may take a minute.`)) return;
+
+      const codeForCluster = (cl) => {
+          const pin = pins.find(p => p.clusterId === cl.id);
+          const fromPin = pin && pin.legacyErpId && !['N/A', 'PENDING', ''].includes(pin.legacyErpId) ? pin.legacyErpId : '';
+          return normCode(fromPin) || normCode(stripPosition(cl.name)) || cl.id;
+      };
+
+      setGenState({ done: 0, total: clusters.length, label: 'Loading model…' });
+      try {
+          const scene = await loadGLBScene(cadUrl);
+
+          // Dedupe by code — L/C/R repeats share identical geometry, so build the files once.
+          const built = {};          // code -> { glbUrl, imageUrl } | null
+          const clusterUpdates = {}; // clusterId -> { glbUrl, imageUrl }
+          let done = 0, made = 0, empty = 0;
+
+          for (const cl of clusters) {
+              const code = codeForCluster(cl);
+              setGenState({ done, total: clusters.length, label: code });
+              if (!(code in built)) {
+                  const files = await buildComponentFiles(scene, cl.nodes || []);
+                  if (files) {
+                      const glbRef = ref(storage, `component_models/${activeBrand}_${code}.glb`);
+                      const pngRef = ref(storage, `component_images/${activeBrand}_${code}.png`);
+                      await uploadBytes(glbRef, files.glbBlob, { contentType: 'model/gltf-binary' });
+                      await uploadBytes(pngRef, files.pngBlob, { contentType: 'image/png' });
+                      built[code] = { glbUrl: await getDownloadURL(glbRef), imageUrl: await getDownloadURL(pngRef) };
+                      made++;
+                  } else { built[code] = null; empty++; }
+              }
+              if (built[code]) clusterUpdates[cl.id] = built[code];
+              done++;
+              setGenState({ done, total: clusters.length, label: code });
+          }
+
+          // Stamp the generated files onto each cluster.
+          const newClusters = clusters.map(cl => clusterUpdates[cl.id]
+              ? { ...cl, glbUrl: clusterUpdates[cl.id].glbUrl, imageUrl: clusterUpdates[cl.id].imageUrl }
+              : cl);
+          await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: newClusters });
+
+          // Carry to the matched library parts: always record component artefacts; only set the
+          // primary item image when the part doesn't already have a curated one (non-destructive
+          // on retrofit). One write per part.
+          const seenPart = new Set();
+          for (const cl of clusters) {
+              const u = clusterUpdates[cl.id]; if (!u) continue;
+              const pin = pins.find(p => p.clusterId === cl.id); if (!pin?.partId) continue;
+              const part = libraryParts.find(lp => lp.itemId === pin.partId || lp.id === pin.partId);
+              if (!part || seenPart.has(part.id)) continue;
+              seenPart.add(part.id);
+              const patch = { componentGlbUrl: u.glbUrl, componentImageUrl: u.imageUrl };
+              if (!part.finalImageUrl) patch.finalImageUrl = u.imageUrl;
+              await updateDoc(doc(db, "Approved_Designs", part.id), patch);
+          }
+
+          setGenState(null);
+          alert(`✅ Generated ${made} component file set(s)${empty ? ` (${empty} cluster(s) had no mesh — skipped)` : ''}.\nFlat .glb + thumbnails saved; .glb's are ready for foam tracing in Packaging.`);
+      } catch (err) {
+          console.error(err); setGenState(null);
+          alert(`Generate failed: ${err.message || err}`);
+      }
+  };
   
   // Resolve the nodes to highlight for "Locate". Works for an unassigned cluster (by id)
   // and for an already-assigned BOM pin (by its clusterId, or its own targetNode) — so
@@ -959,6 +1037,9 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                             <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Unassigned Clusters</span>
                             <button onClick={() => setShowAutoAssign(true)} title="Match these clusters to library parts by name and build the BOM in one pass" style={{ padding: '10px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600, whiteSpace: 'nowrap' }}>⚡ Auto-Assign BOM</button>
+                            <button onClick={handleGenerateComponentFiles} disabled={!!genState || !activeAssembly?.manufacturingSpecs?.cadUrl} title="Isolate each cluster from the .glb, lay it flat, and save a per-component .glb + thumbnail. The PNG becomes the item image; the .glb feeds foam-cut tracing in Packaging." style={{ padding: '10px 16px', background: genState ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', border: 'none', cursor: genState || !activeAssembly?.manufacturingSpecs?.cadUrl ? 'not-allowed' : 'pointer', opacity: !activeAssembly?.manufacturingSpecs?.cadUrl ? 0.5 : 1, fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                {genState ? `⚙ ${genState.done}/${genState.total} ${genState.label}` : '⚙ Generate Component Files'}
+                            </button>
                         </div>
                         <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>These 3D groupings have not been converted into BOM items yet. <strong>Locate</strong> highlights one in the 3D view.</div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '32vh', overflowY: 'auto' }}>
