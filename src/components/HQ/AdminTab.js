@@ -481,15 +481,16 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
           if (!newId) throw new Error(`Item created but couldn't resolve its internal id. Look up "${flowName}" in NetSuite and set it manually.`);
 
-          // Mirror the NetSuite internal id into the flow's ERP Item ID so the top-of-page
-          // field is filled automatically (and cascades to the master assembly on Save).
+          // Fill the flow's ERP Item ID with the item NAME/CODE (= flowName, derived from
+          // the master assembly name and used as the rollup item's NetSuite itemid), so the
+          // top-of-page field populates automatically and cascades to the master on Save.
           await setDoc(doc(db, "cpq_flows", activeFlowId), {
               nsRollupItemId: String(newId),
               nsRollupItemName: flowName,
-              legacyErpId: String(newId)
+              legacyErpId: flowName
           }, { merge: true });
-          setFlowSettings(prev => ({ ...prev, nsRollupItemId: String(newId), nsRollupItemName: flowName, legacyErpId: String(newId) }));
-          alert(`✅ Rollup item "${flowName}" mapped to this flow (NetSuite internal id ${newId}). The ERP Item ID has been set to ${newId}.`);
+          setFlowSettings(prev => ({ ...prev, nsRollupItemId: String(newId), nsRollupItemName: flowName, legacyErpId: flowName }));
+          alert(`✅ Rollup item "${flowName}" mapped to this flow (NetSuite internal id ${newId}). The ERP Item ID has been set to "${flowName}".`);
       } catch (err) {
           console.error("Rollup item create failed:", err);
           alert(`Failed to create the NetSuite rollup item.\n\n${err.message}`);
