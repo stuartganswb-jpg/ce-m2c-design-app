@@ -1343,6 +1343,47 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                             </div>
                                                         </div>
                                                     )}
+
+                                                    {/* Per-style finish overrides: scope the finish list to an individual
+                                                        style option (e.g. Wood rod -> wood-clear finishes, Metal rod ->
+                                                        metal finishes). An option with its own list overrides the step
+                                                        default above; left empty it inherits the step default. Iterates
+                                                        styleOptions directly, so hand-authored options (not BOM pins) edit here too. */}
+                                                    {newStep.finishDataSource && (newStep.styleOptions || []).length > 0 && (
+                                                        <div style={{ marginTop: '12px', marginLeft: '28px', padding: '12px 16px', background: 'var(--paper)', border: '1px dashed var(--line)' }}>
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Per-style finish overrides (optional)</div>
+                                                            <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Scope finishes per style — e.g. a Wood rod offers wood-clear finishes, a Metal rod offers metal finishes. Leave a style's list empty to use the step default above.</span>
+                                                            {(newStep.styleOptions || []).map((o, oi) => {
+                                                                const okey = o.optId || o.partId;
+                                                                const list = o.finishAllowedOptions || [];
+                                                                return (
+                                                                    <details key={okey || oi} style={{ marginBottom: '8px', border: '1px solid var(--line)', background: '#fff' }}>
+                                                                        <summary style={{ cursor: 'pointer', padding: '8px 12px', fontSize: '0.85rem', color: 'var(--ink)', fontWeight: 500 }}>
+                                                                            {o.partName || okey} <span style={{ color: 'var(--ink-soft)', fontWeight: 400 }}>— {list.length ? `${list.length} finish(es)` : 'step default'}</span>
+                                                                        </summary>
+                                                                        <div style={{ maxHeight: '160px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 16px', padding: '8px 12px', borderTop: '1px solid var(--line)' }}>
+                                                                            {getDataSourceItems('master_finishes').map(f => {
+                                                                                const checked = list.includes(f.id);
+                                                                                return (
+                                                                                    <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer' }}>
+                                                                                        <input type="checkbox" checked={checked} onChange={(e) => {
+                                                                                            setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(so => {
+                                                                                                if ((so.optId || so.partId) !== okey) return so;
+                                                                                                const set = new Set(so.finishAllowedOptions || []);
+                                                                                                if (e.target.checked) set.add(f.id); else set.delete(f.id);
+                                                                                                return { ...so, finishAllowedOptions: [...set] };
+                                                                                            }) }));
+                                                                                        }} />
+                                                                                        {f.name}
+                                                                                    </label>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+                                                                    </details>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>
