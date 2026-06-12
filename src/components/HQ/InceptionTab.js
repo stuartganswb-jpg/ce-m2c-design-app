@@ -215,7 +215,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
     if (isAddingNewCollection && newCollectionName.trim()) {
         finalCollection = newCollectionName.trim().toUpperCase();
         const safeId = `COL_${Date.now()}`;
-        await setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: finalCollection, allowedCustomers: [], allowedFinishes: [] });
+        await setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: finalCollection, brandId: activeBrand, allowedCustomers: [], allowedFinishes: [] });
     }
     
     let finalProductType = formData.productType;
@@ -507,7 +507,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                         <select value={formData.collection} onChange={(e) => { if (e.target.value === "ADD_NEW") { setIsAddingNewCollection(true); setFormData({...formData, collection: ""}); } else { setFormData({...formData, collection: e.target.value}); } }} style={fieldStyle}>
                             <option value="ADD_NEW">+ Add New Collection...</option>
                             <option value="N/A">N/A</option>
-                            {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                            {collectionsData.filter(c => c.brandId === activeBrand).map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                         </select>
                     ) : (
                         <div style={{ display: 'flex', gap: '12px' }}>
