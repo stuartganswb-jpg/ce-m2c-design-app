@@ -208,6 +208,24 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       }
   }, [engData.bracketId, libraryParts, activeFlow]);
 
+  // Per-option projection: a Choose/Swap bracket option can carry its own projection
+  // (e.g. standard 4.25" vs mini 4.125" backplate — same rendering, different fab).
+  // When such an option is selected, its projection drives the fabrication math,
+  // overriding the flow preset. Blank option projection = fall back to the preset.
+  useEffect(() => {
+      if (!bracketStep || bracketStep.type !== 'STYLE_SWAP') return;
+      const selId = dynamicConfigParams[bracketStep.id];
+      if (!selId) return;
+      const opt = (bracketStep.styleOptions || []).find(o => (o.optId || o.partId) === selId);
+      if (opt && opt.projection !== undefined && opt.projection !== '' && opt.projection !== null) {
+          const p = parseFloat(opt.projection);
+          if (!isNaN(p)) {
+              setEngData(prev => prev.proj === p ? prev : { ...prev, proj: p });
+              setIsCustomProj(false);
+          }
+      }
+  }, [bracketStep, dynamicConfigParams]);
+
   const safeProj = parseFloat(engData.proj) || 0;
 
   const allBrackets = useMemo(() => {
