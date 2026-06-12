@@ -387,24 +387,33 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   };
 
-  // Push the flow-level default finishes down onto every Choose/Swap (STYLE_SWAP) step
-  // as its starting finish set. Most collections offer the same finishes across all
-  // steps, so this seeds them all at once; operators then deselect the rare exceptions
-  // per step. Persists the defaults on the flow doc at the same time.
+  // Push the flow-level default finishes down onto EVERY step (most collections offer
+  // the same finishes across all steps). The finish picker renders whenever a step has
+  // finishDataSource set (CPQTab), so it isn't STYLE_SWAP-only:
+  //  - a finish-list step (dataSource === 'master_finishes') -> scope its own options
+  //    via allowedOptions
+  //  - any other component step (STYLE_SWAP, part dropdown, dimensions, visual) -> add
+  //    the finish sub-picker via finishDataSource + finishAllowedOptions
+  // Fees (STATIC_FEE) are skipped. Operators then deselect the rare exceptions per step.
   const handleApplyFinishesToSteps = async () => {
       if (!activeFlowId || !activeFlow) return;
       const def = flowSettings.defaultFinishOptions || [];
-      const styleSteps = (activeFlow.steps || []).filter(s => s.type === 'STYLE_SWAP');
-      if (styleSteps.length === 0) return alert("This flow has no Choose / Swap Style steps to apply finishes to.");
-      if (!window.confirm(`Apply ${def.length} default finish(es) to all ${styleSteps.length} Choose/Swap step(s)? This overwrites each step's current finish list.`)) return;
-      const updatedSteps = (activeFlow.steps || []).map(s =>
-          s.type === 'STYLE_SWAP'
-              ? { ...s, finishDataSource: 'master_finishes', finishAllowedOptions: [...def] }
-              : s
-      );
+      const steps = activeFlow.steps || [];
+      const eligible = steps.filter(s => s.type !== 'STATIC_FEE');
+      if (eligible.length === 0) return alert("This flow has no steps that can carry a finish (only fees).");
+      if (!window.confirm(`Apply ${def.length} default finish(es) to all ${eligible.length} step(s)? This overwrites each step's current finish list.`)) return;
+      const updatedSteps = steps.map(s => {
+          if (s.type === 'STATIC_FEE') return s;
+          if (s.dataSource === 'master_finishes') {
+              // The step's own options ARE finishes — scope them directly.
+              return { ...s, allowedOptions: [...def] };
+          }
+          // Component step — offer the finishes as a secondary picker on the selection.
+          return { ...s, finishDataSource: 'master_finishes', finishAllowedOptions: [...def] };
+      });
       try {
           await updateDoc(doc(db, "cpq_flows", activeFlowId), { steps: updatedSteps, defaultFinishOptions: def });
-          alert(`Applied default finishes to ${styleSteps.length} step(s).`);
+          alert(`Applied default finishes to ${eligible.length} step(s).`);
       } catch (err) {
           console.error("Error applying finishes to steps:", err);
           alert("Failed to apply finishes to steps.");
@@ -472,12 +481,15 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
           if (!newId) throw new Error(`Item created but couldn't resolve its internal id. Look up "${flowName}" in NetSuite and set it manually.`);
 
+          // Mirror the NetSuite internal id into the flow's ERP Item ID so the top-of-page
+          // field is filled automatically (and cascades to the master assembly on Save).
           await setDoc(doc(db, "cpq_flows", activeFlowId), {
               nsRollupItemId: String(newId),
-              nsRollupItemName: flowName
+              nsRollupItemName: flowName,
+              legacyErpId: String(newId)
           }, { merge: true });
-          setFlowSettings(prev => ({ ...prev, nsRollupItemId: String(newId), nsRollupItemName: flowName }));
-          alert(`✅ Rollup item "${flowName}" mapped to this flow (NetSuite internal id ${newId}).`);
+          setFlowSettings(prev => ({ ...prev, nsRollupItemId: String(newId), nsRollupItemName: flowName, legacyErpId: String(newId) }));
+          alert(`✅ Rollup item "${flowName}" mapped to this flow (NetSuite internal id ${newId}). The ERP Item ID has been set to ${newId}.`);
       } catch (err) {
           console.error("Rollup item create failed:", err);
           alert(`Failed to create the NetSuite rollup item.\n\n${err.message}`);
@@ -1312,9 +1324,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>This is a fee — it rolls into the flow's NetSuite rollup item, so it needs no part, routing, or item association. Just set the amount under Pricing Rules.</span>
                                         </div>
                                     ) : (
-                                    <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
-                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Part Handling & Routing</label>
-                                        <select value={newStep.partHandling || ''} onChange={e => setNewStep({...newStep, partHandling: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
+                                    <div style={{ background: '#fff', padding: '20px', border: `1px solid ${!newStep.partHandling ? '#d9534f' : 'var(--line)'}`, marginTop: '10px' }}>
+                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Part Handling & Routing <span style={{ color: '#d9534f' }}>* Required</span></label>
+                                        <select value={newStep.partHandling || ''} onChange={e => setNewStep({...newStep, partHandling: e.target.value})} style={{ width: '100%', padding: '12px', border: `1px solid ${!newStep.partHandling ? '#d9534f' : 'var(--line)'}`, outline: 'none', fontFamily: 'var(--sans)' }}>
                                             <option value="">-- SELECT ROUTING --</option>
                                             {(globalLists.partHandling || ['Small Parts', 'Custom']).map(ph => (
                                                 <option key={ph} value={ph}>{ph}</option>
@@ -1377,7 +1389,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     </label>
                                     
                                     <div style={{ display: 'flex', gap: '15px', marginTop: '10px' }}>
-                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={newStep.type === 'STYLE_SWAP' ? !(newStep.styleOptions && newStep.styleOptions.length) : ((newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE') && !newStep.dataSource)} style={{ flex: 1, padding: '15px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={(newStep.type !== 'STATIC_FEE' && !newStep.partHandling) || (newStep.type === 'STYLE_SWAP' ? !(newStep.styleOptions && newStep.styleOptions.length) : ((newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE') && !newStep.dataSource))} style={{ flex: 1, padding: '15px', background: (newStep.type !== 'STATIC_FEE' && !newStep.partHandling) ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', border: 'none', cursor: (newStep.type !== 'STATIC_FEE' && !newStep.partHandling) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                                             {newStep.id ? "Save Edits to Step" : "Add Step"}
                                         </button>
                                         {newStep.id && (
