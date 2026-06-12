@@ -654,10 +654,10 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           </div>
       )}
 
-      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1, height: isCanvasMaximized ? 'auto' : 'calc(100vh - 150px)', minHeight: '600px' }}>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', height: isCanvasMaximized ? 'auto' : 'calc(100vh - 150px)', minHeight: isCanvasMaximized ? 'auto' : '600px', overflow: isCanvasMaximized ? 'visible' : 'hidden' }}>
 
         {viewMode === '3D' && activeAssembly && (
-            <div style={{ width: '280px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', flexShrink: 0, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+            <div style={{ width: '280px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                 <div style={{ padding: '16px 20px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
                     <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Evil Eye</span>
                     <button onClick={() => setHiddenNodes([])} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Show All</button>
@@ -927,7 +927,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                     </div>
                 )}
 
-                <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <div style={{ flex: 1, minHeight: 0, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                     <div style={{ padding: '20px 24px', background: 'var(--paper-2)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Master BOM</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>{pins.length} Components</span>
