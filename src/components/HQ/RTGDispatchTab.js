@@ -442,6 +442,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 sidemark: job.sidemark || "", reqDate: so.reqDate || "", note: so.memo || "",
                 status: 'pending',
                 items: pkgItems,
+                // Fab geometry drives the pole box width: french-return bends need the wider 8" box.
+                fab: { shape: fabNotes.shape, qtyBends: fabNotes.qtyBends || 0, qtyMiterReturns: fabNotes.qtyMiterReturns || 0 },
                 cpqData: job.cpqData || null,
                 finSiblingId: hasSmall ? finId : null, shopSiblingId: hasCustom ? shopId : null,
                 createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser

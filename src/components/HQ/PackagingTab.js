@@ -857,7 +857,11 @@ const PackagingTab = ({ activeBrand }) => {
             const poleCount = poleItems.reduce((s, i) => s + (Number(i.qty) || 1), 0);
             const maxPoleLen = poleItems.reduce((m, i) => Math.max(m, Number(i.cutLength) || Number(i.dimensions?.length) || 0), 0);
             const smallBox = standardBoxes.find(b => b.usage === 'small_parts') || { name: 'Small Parts Box', w: 18, h: 12, d: 4 };
-            const poleBox = poleItems.length ? { name: poleCount > 1 ? 'Pole Box (Large)' : 'Pole Box (Small)', w: poleCount > 1 ? 8 : 3, h: 3, len: +(maxPoleLen + 1.25).toFixed(2) } : null;
+            // Pole box width: french-return bends (or >1 pole side-by-side) need the wide 8" box;
+            // a single straight pole fits the 3" box.
+            const fab = activeJob.fab || {};
+            const wideBox = (fab.qtyBends || 0) > 0 || (fab.qtyMiterReturns || 0) > 0 || poleCount > 1;
+            const poleBox = poleItems.length ? { name: wideBox ? 'Pole Box (Large)' : 'Pole Box (Small)', w: wideBox ? 8 : 3, h: 3, len: +(maxPoleLen + 1.25).toFixed(2) } : null;
             const itemRow = (it, i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: theme.ink, padding: '4px 0', borderTop: i ? `1px solid ${theme.line}` : 'none' }}>
                 <span>{it.qty > 1 ? `${it.qty}× ` : ''}{it.partName}</span>
