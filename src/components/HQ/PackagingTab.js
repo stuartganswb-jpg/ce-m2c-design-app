@@ -372,6 +372,12 @@ const PackagingTab = ({ activeBrand }) => {
   // Canvas State
   const [foamW,  setFoamW]  = useState(90);
   const [foamH,  setFoamH]  = useState(8);
+  // Pole bore profile (cross-section of the pole the foam supports): FI poles are flat bars
+  // (1.5 x 0.5), round poles use equal w/h = diameter. Each bore = profile + 0.125" clearance.
+  const [boreW, setBoreW] = useState(1.5);
+  const [boreH, setBoreH] = useState(0.5);
+  const [boreShape, setBoreShape] = useState('rect');   // 'rect' (flat bar) | 'round' (dowel)
+  const [boreCount, setBoreCount] = useState(2);
   const [shapes, setShapes] = useState([]);
   const [sel,    setSel]    = useState(new Set());
   const [tool,   setTool]   = useState("select");
@@ -565,6 +571,32 @@ const PackagingTab = ({ activeBrand }) => {
     });
   };
 
+  // Lay out N pole bores across the box cross-section (boxW x boxH). Each bore = the pole
+  // profile + 0.125" clearance; rounded bars -> rect, dowels -> ellipse. Bores sit side by
+  // side along the width with a 0.125" gap (and from the walls), wrapping to a new row up if
+  // the row overflows. The poles then float in these bores, foam extruded the box length.
+  const generatePoleBores = (count, boxW, boxH) => {
+    const CL = 0.125, GAP = 0.125;
+    const bw = (parseFloat(boreW) || 1) + CL;
+    const bh = (parseFloat(boreH) || (parseFloat(boreW) || 1)) + CL;
+    const perRow = Math.max(1, Math.floor((boxW - GAP) / (bw + GAP)));
+    const rows = Math.ceil(count / perRow);
+    const totalH = rows * bh + (rows - 1) * GAP;
+    const out = [];
+    let startY = Math.max(GAP, (boxH - totalH) / 2);
+    for (let i = 0; i < count; i++) {
+      const r = Math.floor(i / perRow), col = i % perRow;
+      const rowCount = Math.min(perRow, count - r * perRow);
+      const rowW = rowCount * bw + (rowCount - 1) * GAP;
+      const startX = Math.max(GAP, (boxW - rowW) / 2);
+      const x = startX + col * (bw + GAP);
+      const y = startY + r * (bh + GAP);
+      if (boreShape === 'round') out.push({ id: uid(), type: 'ellipse', cx: x + bw / 2, cy: y + bh / 2, rx: bw / 2, ry: bh / 2 });
+      else out.push({ id: uid(), type: 'rect', x, y, width: bw, height: bh });
+    }
+    return out;
+  };
+
   // --- Rendering Helpers ---
   const renderShape = (s) => {
     const selected = sel.has(s.id);
@@ -746,8 +778,25 @@ const PackagingTab = ({ activeBrand }) => {
             </div>
           </div>
 
+          {/* Pole bore profile — generates the foam cross-section bores the poles float in. */}
+          <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '10px', marginBottom: '15px' }}>
+            <div style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase', color: theme.inkSoft, marginBottom: '8px' }}>Pole Bores (cross-section)</div>
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+              <div style={{ flex: 1 }}><label style={{ fontSize: '0.62rem', color: theme.inkSoft }}>Pole W</label><input type="number" step="0.125" value={boreW} onChange={e => setBoreW(e.target.value)} style={{ ...inpStyle, padding: '5px' }} /></div>
+              <div style={{ flex: 1 }}><label style={{ fontSize: '0.62rem', color: theme.inkSoft }}>Pole H/Ø</label><input type="number" step="0.125" value={boreH} onChange={e => setBoreH(e.target.value)} style={{ ...inpStyle, padding: '5px' }} /></div>
+              <div style={{ width: '52px' }}><label style={{ fontSize: '0.62rem', color: theme.inkSoft }}>Qty</label><input type="number" min="1" value={boreCount} onChange={e => setBoreCount(parseInt(e.target.value) || 1)} style={{ ...inpStyle, padding: '5px' }} /></div>
+            </div>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <select value={boreShape} onChange={e => setBoreShape(e.target.value)} style={{ ...inpStyle, padding: '5px', flex: 1 }}>
+                <option value="rect">Flat bar (rect)</option>
+                <option value="round">Round (circle)</option>
+              </select>
+              <button onClick={() => setShapes(generatePoleBores(boreCount, foamW, foamH))} title="Lay out the pole bores (+0.125 in clearance) in the current cross-section" style={{ flex: 1, padding: '6px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>Bores</button>
+            </div>
+          </div>
+
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <select 
+            <select
               onChange={(e) => {
                 const box = standardBoxes.find(b => b.id === e.target.value);
                 if (box) { setFoamW(box.w); setFoamH(box.h); }
@@ -803,7 +852,7 @@ const PackagingTab = ({ activeBrand }) => {
               <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto' }}>
                 {/* Pole box loads the cross-section (W×H, e.g. 8×3) into the workspace — the foam is
                     cut as a side-extrusion of that profile (bores per pole), run the box length. */}
-                {poleBox && boxCard(`${poleBox.name} · ${poleCount} pole(s)`, `${poleBox.len}"L × ${poleBox.w}"W × ${poleBox.h}"H`, poleItems.map(itemRow), () => { setFoamW(poleBox.w); setFoamH(poleBox.h); })}
+                {poleBox && boxCard(`${poleBox.name} · ${poleCount} pole(s)`, `${poleBox.len}"L × ${poleBox.w}"W × ${poleBox.h}"H`, poleItems.map(itemRow), () => { setFoamW(poleBox.w); setFoamH(poleBox.h); setShapes(generatePoleBores(poleCount, poleBox.w, poleBox.h)); })}
                 {smallItems.length > 0 && boxCard(smallBox.name, `${smallBox.w}" × ${smallBox.h}"${smallBox.d ? ` × ${smallBox.d}"` : ''}`, smallItems.map(itemRow), () => { setFoamW(smallBox.w); setFoamH(smallBox.h); })}
                 {items.length === 0 && <div style={{ fontSize: '0.8rem', color: theme.inkSoft, fontStyle: 'italic' }}>No items on this order.</div>}
               </div>
