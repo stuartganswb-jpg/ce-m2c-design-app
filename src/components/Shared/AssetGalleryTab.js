@@ -87,9 +87,13 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     useEffect(() => {
         let unsub1, unsub2, unsub3;
         try {
-            unsub1 = onSnapshot(collection(db, "hq_global_finishes"), snap => setGlobalFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Global Finishes Missing"));
+            // In-house/global master finishes live in the system/master_finishes doc (canonical
+            // source used by CPQ, Vision, Admin + the Mass-Update tab). The old hq_global_finishes /
+            // hq_inhouse_finishes collections are dead (nothing writes them) — reading them left the
+            // finish picker empty so assets couldn't be aligned to the master library finishes.
+            unsub1 = onSnapshot(doc(db, "system", "master_finishes"), d => setGlobalFinishes((d.exists() && Array.isArray(d.data().finishes)) ? d.data().finishes : []), e => console.warn("Master Finishes Missing"));
             unsub2 = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Outsource Finishes Missing"));
-            unsub3 = onSnapshot(collection(db, "hq_inhouse_finishes"), snap => setInhouseFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Inhouse Finishes Missing"));
+            setInhouseFinishes([]);   // legacy collection, folded into master_finishes above
         } catch (err) { console.error("Finishes DB Error:", err); }
         return () => { 
             if (typeof unsub1 === 'function') unsub1(); 
@@ -147,11 +151,19 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
         
         const matchParts = Array.isArray(asset?.associatedParts) && asset.associatedParts.some(partId => {
             const partObj = safeHqParts.find(hp => hp.id === partId || hp.itemId === partId || hp.legacyErpId === partId);
-            if (!partObj) return String(partId).toLowerCase().includes(q); 
+            if (!partObj) return String(partId).toLowerCase().includes(q);
             return JSON.stringify(partObj).toLowerCase().includes(q);
         });
 
-        return n.includes(q) || p.includes(q) || f.includes(q) || custId.includes(q) || sku.includes(q) || c.includes(q) || t.includes(q) || notes.includes(q) || matchParts;
+        // Also match the linked master finishes by id / code / descriptive name so a finish search
+        // resolves against the master library (not just the asset's parsed finishId string).
+        const matchFinishes = Array.isArray(asset?.associatedFinishes) && asset.associatedFinishes.some(finId => {
+            const finObj = allFinishes.find(fo => fo.id === finId);
+            if (!finObj) return String(finId).toLowerCase().includes(q);
+            return [finObj.code, finObj.name, finObj.id].filter(Boolean).some(v => String(v).toLowerCase().includes(q));
+        });
+
+        return n.includes(q) || p.includes(q) || f.includes(q) || custId.includes(q) || sku.includes(q) || c.includes(q) || t.includes(q) || notes.includes(q) || matchParts || matchFinishes;
     });
 
     const MAX_DISPLAY = 100;
@@ -470,10 +482,10 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                     >
                         <option value="">+ Link to Master Finish...</option>
                         <optgroup label="In-House & Global Finishes">
-                            {[...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])].map(f => <option key={f.id} value={f.id}>{String(f.name || f.id)}</option>)}
+                            {[...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])].map(f => <option key={f.id} value={f.id}>{[f.code, f.name].filter(Boolean).join(' · ') || f.id}</option>)}
                         </optgroup>
                         <optgroup label="Outsourced Finishes">
-                            {(Array.isArray(outsourceFinishes)?outsourceFinishes:[]).map(f => <option key={f.id} value={f.id}>{String(f.name || f.id)}</option>)}
+                            {(Array.isArray(outsourceFinishes)?outsourceFinishes:[]).map(f => <option key={f.id} value={f.id}>{[f.code, f.name].filter(Boolean).join(' · ') || f.id}</option>)}
                         </optgroup>
                     </select>
 

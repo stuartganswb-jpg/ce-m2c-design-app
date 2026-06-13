@@ -73,9 +73,13 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     useEffect(() => {
         let unsub1, unsub2, unsub3;
         try {
-            unsub1 = onSnapshot(collection(db, "hq_global_finishes"), snap => setGlobalFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Missing Global Finishes"));
+            // In-house/global master finishes live in the system/master_finishes doc (the canonical
+            // source CPQ, Vision, Admin + the Mass-Update tab all read). The old hq_global_finishes /
+            // hq_inhouse_finishes collections are dead (nothing writes them), so reading them left the
+            // finish picker empty and unable to align to the master library.
+            unsub1 = onSnapshot(doc(db, "system", "master_finishes"), d => setGlobalFinishes((d.exists() && Array.isArray(d.data().finishes)) ? d.data().finishes : []), e => console.warn("Missing Master Finishes"));
             unsub2 = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Missing Outsource Finishes"));
-            unsub3 = onSnapshot(collection(db, "hq_inhouse_finishes"), snap => setInhouseFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Missing Inhouse Finishes"));
+            setInhouseFinishes([]);   // legacy collection, folded into master_finishes above
         } catch (err) { console.error("Finishes DB Error:", err); }
         return () => { 
             if (typeof unsub1 === 'function') unsub1(); 
@@ -444,10 +448,10 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                         >
                             <option value="">+ Link to Master Finish...</option>
                             <optgroup label="In-House & Global Finishes">
-                                {[...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])].map(f => <option key={f.id} value={f.id}>{String(f.name || f.id)}</option>)}
+                                {[...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])].map(f => <option key={f.id} value={f.id}>{[f.code, f.name].filter(Boolean).join(' · ') || f.id}</option>)}
                             </optgroup>
                             <optgroup label="Outsourced Finishes">
-                                {(Array.isArray(outsourceFinishes)?outsourceFinishes:[]).map(f => <option key={f.id} value={f.id}>{String(f.name || f.id)}</option>)}
+                                {(Array.isArray(outsourceFinishes)?outsourceFinishes:[]).map(f => <option key={f.id} value={f.id}>{[f.code, f.name].filter(Boolean).join(' · ') || f.id}</option>)}
                             </optgroup>
                         </select>
 
