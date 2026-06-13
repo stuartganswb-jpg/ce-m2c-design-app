@@ -114,12 +114,16 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             
             if (parts.length > 1 && parts[parts.length - 1].length <= 6) {
                 setFinishId(parts.pop());
-                setPatternId(parts.join('-')); 
+                setPatternId(parts.join('-'));
             } else {
                 setPatternId(rawName);
                 setFinishId("");
             }
-            
+            // Each image carries its own finish — clear the prior image's linked finish so the
+            // auto-link effect re-resolves from this image's detected code. (Parts intentionally
+            // persist across a batch, e.g. many finish shots of the same part.)
+            setAssociatedFinishes([]);
+
             if (idInputRef.current) idInputRef.current.focus();
 
             return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
@@ -265,11 +269,30 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
     const safeHqParts = Array.isArray(hqParts) ? hqParts : [];
     const isLibraryMatch = Boolean(
-        patternId && safeHqParts.some(p => 
-            String(p?.id || "").toUpperCase().includes(String(patternId).toUpperCase()) || 
+        patternId && safeHqParts.some(p =>
+            String(p?.id || "").toUpperCase().includes(String(patternId).toUpperCase()) ||
             (p?.legacyErpId && String(p.legacyErpId).toUpperCase().includes(String(patternId).toUpperCase()))
         )
     );
+
+    // Align the detected finish code to a master finish: normalize (EP zero-strip + alphanumeric)
+    // and match on the finish's Code or Descriptive Name. Drives the indicator + auto-link below.
+    const normFin = (s) => String(s || "").toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1').replace(/[^A-Z0-9]/g, '');
+    const matchedFinish = (() => {
+        const fc = normFin(finishId);
+        if (!fc) return null;
+        return allFinishes.find(f => normFin(f.code) === fc || normFin(f.name) === fc) || null;
+    })();
+
+    // Auto-link the matched master finish when the detected code resolves to one. Keyed on the
+    // matched id so it fires once per detection; removing the chip afterward won't re-add it
+    // (the id is unchanged), and the per-image reset in the file-load effect clears stale links.
+    useEffect(() => {
+        if (matchedFinish && !associatedFinishes.includes(matchedFinish.id)) {
+            setAssociatedFinishes(prev => prev.includes(matchedFinish.id) ? prev : [...prev, matchedFinish.id]);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [matchedFinish?.id]);
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', backgroundColor: theme.paper, minHeight: '100vh', fontFamily: theme.sans }}>
@@ -362,6 +385,13 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                 />
                                 {/^EP0+\d+$/.test(String(finishId).toUpperCase().trim()) && (
                                     <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginTop: '5px', letterSpacing: '.05em' }}>↳ EP leading zero auto-removed → {String(finishId).toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1')}</div>
+                                )}
+                                {finishId && (
+                                    matchedFinish ? (
+                                        <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginTop: '5px', letterSpacing: '.05em' }}>✓ Auto-linked to Master Finish: {[matchedFinish.code, matchedFinish.name].filter(Boolean).join(' · ')}</div>
+                                    ) : (
+                                        <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '5px', letterSpacing: '.05em' }}>⚠ No master finish matches this code yet</div>
+                                    )
                                 )}
                             </div>
                         </div>

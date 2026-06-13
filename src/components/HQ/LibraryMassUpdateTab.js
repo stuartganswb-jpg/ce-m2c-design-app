@@ -645,8 +645,11 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         if (!window.confirm("Scan the Finishing Floor database and import missing recipes to HQ?")) return;
         let currentFinishes = [...globalFinishes]; let addedCount = 0;
         floorRecipeData.forEach(recipe => {
-            if (!currentFinishes.find(f => f.name.toUpperCase() === recipe.id.toUpperCase() || (f.code && f.code.toUpperCase() === recipe.id.toUpperCase()))) {
-                currentFinishes.push({ id: `FIN-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`, name: recipe.id.toUpperCase(), code: recipe.id.substring(0, 5).toUpperCase(), type: 'MIXED', textureUrl: '', status: 'Production Ready', clientMapping: [] });
+            if (!currentFinishes.find(f => (f.name || '').toUpperCase() === recipe.id.toUpperCase() || (f.code && f.code.toUpperCase() === recipe.id.toUpperCase()))) {
+                // Floor recipes are keyed by their code (fin_recipes doc id). Carry the FULL code as
+                // the finish ID/Code (was truncated to 5 chars, which broke code-based dedup on
+                // re-sync for longer codes); name seeds the same value as an editable placeholder.
+                currentFinishes.push({ id: `FIN-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`, name: recipe.id.toUpperCase(), code: recipe.id.toUpperCase(), type: 'MIXED', textureUrl: '', status: 'Production Ready', clientMapping: [] });
                 addedCount++;
             }
         });
