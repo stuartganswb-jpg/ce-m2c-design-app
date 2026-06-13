@@ -392,10 +392,12 @@ const PackagingTab = ({ activeBrand }) => {
 
   // --- Real-time Firebase Subscriptions ---
   useEffect(() => {
-    // 1. Listen to jobs that require packaging
-    const qJobs = query(collection(db, "jobs"), where("status", "==", "PACKAGING"));
+    // 1. Listen to packaging orders needing packing (created by the SO split, shared orderKey).
+    //    Filter brand client-side to avoid a composite index.
+    const qJobs = query(collection(db, "packaging_orders"), where("status", "==", "pending"));
     const unsubJobs = onSnapshot(qJobs, (snap) => {
-      const liveJobs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      let liveJobs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      if (activeBrand) liveJobs = liveJobs.filter(j => !j.brand || j.brand === activeBrand);
       setJobs(liveJobs);
       if (liveJobs.length > 0 && !activeJobId) setActiveJobId(liveJobs[0].id);
     });

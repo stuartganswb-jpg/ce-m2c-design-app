@@ -413,6 +413,37 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 addLog(`Created Shop custom order ${shopId}${fabMethod ? ` [${fabMethod}]` : ''} (${customLines.length} custom lines).`, "success");
             }
 
+            // Packaging: create the packaging order alongside finishing + shop (shared orderKey)
+            // so it lands in the Packaging inbox the moment the SO is split. Carries every line
+            // (poles = Custom division, small parts) plus the CPQ config — the paired CPQ steps
+            // are what decide which pieces bolt together / pack as one assembled (T-shaped) unit.
+            const pkgId = `PKG-${orderKey}`;
+            const pkgItems = lines.map(l => {
+                const part = l.partId ? partCache.get(l.partId) : null;
+                const isCustom = classifyLine(l, part) === DIVISION_CUSTOM;
+                return {
+                    partId: l.partId || null,
+                    partName: cleanLineName(l.name),
+                    legacyErpId: l.legacyErpId || part?.legacyErpId || null,
+                    qty: Number(l.qty) || 1,
+                    division: isCustom ? 'pole' : 'small',
+                    partHandling: l.partHandling || (isCustom ? 'Custom' : 'Small Parts'),
+                    cutLength: l.cutLength || null,
+                    dimensions: l.dimensions || null,
+                };
+            });
+            await setDoc(doc(db, "packaging_orders", pkgId), {
+                id: pkgId, orderKey, quoteId: so.hqJobId, salesOrderId: so.soId || null,
+                brand: activeBrand, customerId, customerName, customer: customerName,
+                sidemark: job.sidemark || "", reqDate: so.reqDate || "", note: so.memo || "",
+                status: 'pending',
+                items: pkgItems,
+                cpqData: job.cpqData || null,
+                finSiblingId: hasSmall ? finId : null, shopSiblingId: hasCustom ? shopId : null,
+                createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser
+            });
+            addLog(`Created Packaging order ${pkgId} (${pkgItems.length} lines).`, "success");
+
             // Mark the originating job + SO board entry as imported.
             await updateDoc(doc(db, "jobs", so.hqJobId), {
                 salesOrderId: so.soId || null,
