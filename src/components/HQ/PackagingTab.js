@@ -314,11 +314,11 @@ function GLBModal({ gltfScene, foamW, foamH, onClose, onTrace }) {
     const box = new THREE.Box3().setFromObject(model), center = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
     model.position.sub(center);
     // Auto-fill the part's true dimensions so the foam cutout is true-to-size instead of the
-    // 6x4 placeholder. Component .glb's are exported in meters; the tracer projects top-down,
-    // so screen W = world X, screen H = world Z. Guarded to a sane range so an oddly-scaled
-    // manual upload keeps the editable default rather than a wild value.
-    const IN_PER_M = 39.3701;
-    const autoW = +(size.x * IN_PER_M).toFixed(2), autoH = +(size.z * IN_PER_M).toFixed(2);
+    // 6x4 placeholder. Component .glb's are inch-authored (CAD masters keep inch units); the
+    // tracer projects top-down, so screen W = world X, screen H = world Z. Guarded to a sane
+    // range so an oddly-scaled manual upload keeps the editable default rather than a wild value.
+    const CAD_TO_IN = 1; // inch-authored CAD (was 39.3701 when masters were in meters)
+    const autoW = +(size.x * CAD_TO_IN).toFixed(2), autoH = +(size.z * CAD_TO_IN).toFixed(2);
     if (autoW >= 0.1 && autoW <= 120) setPartW(autoW);
     if (autoH >= 0.1 && autoH <= 120) setPartH(autoH);
     const cam = new THREE.PerspectiveCamera(38, 400/300, 0.001, 10000); camRef.current = cam;
@@ -635,15 +635,58 @@ const PackagingTab = ({ activeBrand }) => {
     return out;
   };
 
+  // FI brackets ship ASSEMBLED — a backplate bolts to an arm into a T. Detect the two by part code
+  // (legacyErpId, then name): backplate = FIVBP/FIHBP + mini FIMVBP/FIMHBP; arm = passing FIWPBA/
+  // FICPBA + end-return FIWERA/FICERA/FIIM. (BRIMAR is unaffected — its bracket+backplate is one
+  // cluster, so neither code matches and it nests as a single silhouette.)
+  const isFiBackplate = (it) => /^FI[M]?[VH]BP/i.test(it.legacyErpId || '') || /backplate/i.test(it.partName || '');
+  const isFiArm = (it) => /^FI[WC](PBA|ERA)/i.test(it.legacyErpId || '') || /^FIIM/i.test(it.legacyErpId || '') || /\barm\b/i.test(it.partName || '');
+  // Compose one backplate + one arm into a T outline (local 0..w / 0..h). Per the spec the foam only
+  // needs the envelope: backplate cross-bar = width × thickness, arm stem = length × thickness (the
+  // ~0.5" bar width), stem centered under and projecting from the bar. footprint = {w,h,thick}.
+  const composeT = (bp, arm) => {
+    const b = bp.footprint || {}, a = arm.footprint || {};
+    const barW = Math.max(b.w || 3, b.h || 1.5);                          // cross-bar length (visible width)
+    const barT = b.thick || 0.5;                                         // cross-bar depth (plate thickness)
+    const stemL = Math.max(a.w || 3, a.h || 1.5);                        // stem length (arm projection)
+    const stemW = a.thick || Math.min(a.w || 0.5, a.h || 0.5) || 0.5;    // stem width (arm bar width ~0.5")
+    const w = Math.max(barW, stemW), h = +(barT + stemL).toFixed(3);
+    const cx = w / 2, hs = stemW / 2;
+    const poly = [
+      { x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: barT },
+      { x: cx + hs, y: barT }, { x: cx + hs, y: h },
+      { x: cx - hs, y: h }, { x: cx - hs, y: barT }, { x: 0, y: barT },
+    ];
+    return { w: +w.toFixed(3), h, poly };
+  };
+  // Pull FI backplate+arm pairs out of the item list and compose each into one T unit; pool-pair 1:1
+  // by qty (any backplate with any arm — typical orders use one style of each), leftovers fall back
+  // to singles. Returns { tUnits:[{w,h,poly}], singles:[item] }.
+  const pairFiBrackets = (items) => {
+    const expand = (list) => list.flatMap(it => Array.from({ length: Number(it.qty) || 1 }, () => it));
+    const bps = [], arms = [], singles = [];
+    (items || []).forEach(it => { if (isFiBackplate(it)) bps.push(it); else if (isFiArm(it)) arms.push(it); else singles.push(it); });
+    const bpI = expand(bps), armI = expand(arms), n = Math.min(bpI.length, armI.length);
+    const tUnits = [];
+    for (let i = 0; i < n; i++) tUnits.push(composeT(bpI[i], armI[i]));
+    bpI.slice(n).forEach(it => singles.push({ ...it, qty: 1 }));   // unpaired backplates -> singles
+    armI.slice(n).forEach(it => singles.push({ ...it, qty: 1 }));  // unpaired arms -> singles
+    return { tUnits, singles };
+  };
+
   // True-silhouette nest: same shelf packing as nestSmallParts, but each part's cut is its
   // actual traced outline (placed/rotated at its cell) instead of a bounding rect. Traces each
   // unique part's component .glb once (cached by partId); parts without a glb / that fail to
-  // trace fall back to a rect. Async (offscreen renders), so it sets `nesting` while it runs.
+  // trace fall back to a rect. FI backplate+arm pairs pack as one composed T. Async (offscreen
+  // renders), so it sets `nesting` while it runs.
   const autoNestSilhouettes = async (items, boxW, boxH, margin = 0.5) => {
     setNesting(true);
     try {
+      const { tUnits, singles } = pairFiBrackets(items);
       const units = [];
-      (items || []).forEach(it => {
+      // Assembled FI T-units: pre-composed outline, packed by its bbox; no glb trace.
+      tUnits.forEach(t => units.push({ w: t.w, h: t.h, cw: t.w + 2 * margin, ch: t.h + 2 * margin, poly: t.poly }));
+      singles.forEach(it => {
         // Rings pack on their SKINNY side — cut a thin slot (0.25" thick × the ring's diameter)
         // so many fit. They're cut as a rect (no silhouette), regardless of any glb.
         const isRing = /\bring\b/i.test(it.partName || '');
@@ -671,7 +714,8 @@ const PackagingTab = ({ activeBrand }) => {
         if (x + cw > boxW + 1e-6 && canRotate && ch <= boxW + 1e-6) { [cw, ch] = [ch, cw]; rot = true; }
         if (x + cw > boxW + 1e-6 || y + ch > boxH + 1e-6) { unplaced++; continue; }
         const ox = x + margin, oy = y + margin;
-        const c = contour.get(u.partId || u.glbUrl);
+        // Outline source: a pre-composed FI T (u.poly) or the traced silhouette; else a bounding rect.
+        const c = u.poly || contour.get(u.partId || u.glbUrl);
         if (c && c.length >= 3) {
           // drop the outline at the cell; rotate 90° (w x h -> h x w) when the cell was rotated
           const pts = c.map(p => rot ? { x: fmt(ox + p.y), y: fmt(oy + (u.w - p.x)) } : { x: fmt(ox + p.x), y: fmt(oy + p.y) });

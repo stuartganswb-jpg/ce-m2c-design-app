@@ -364,84 +364,86 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (!draft) return;
 
       let targetFlow = null;
-      if (draft.category === 'PILLOW') targetFlow = cpqFlows.find(f => f.name.includes("PILLOW"));
-      if (draft.category === 'HARDWARE') {
+      if (draft.category === 'PILLOW') targetFlow = cpqFlows.find(f => (f.name || '').includes("PILLOW"));
+      if (draft.category === 'HARDWARE' || !draft.category) {
           targetFlow = cpqFlows.find(f => f.id === draft.cpqFlowId || f.id === draft.flowId || f.id === draft.linkedCpqFlowId);
-          if (!targetFlow) targetFlow = cpqFlows.find(f => f.name.includes("HARDWARE"));
+          if (!targetFlow) targetFlow = cpqFlows.find(f => (f.name || '').includes("HARDWARE"));
       }
 
-      if (!targetFlow) return alert("Cannot resume draft: No matching CPQ flow setup for this category.");
+      if (!targetFlow) return alert("Cannot resume draft: No matching CPQ flow setup for this category. The flow may have been renamed or deleted.");
 
-      setActiveFlowId(targetFlow.id);
-      setActiveDraftId(draft.id);
-      
-      if (draft.masterQuoteId) {
-          setActiveMasterQuoteId(draft.masterQuoteId);
-      }
-
-      if (draft.specs?.engineeringNotes?.svgString) {
-          setActiveDraftSvg(draft.specs.engineeringNotes.svgString);
-      } else {
-          setActiveDraftSvg(null);
-      }
-      
-      setJobData(prev => ({
-          ...prev,
-          customerId: draft.customerId || prev.customerId, 
-          jobName: draft.jobName || prev.jobName,
-      }));
-      
       const translatedParams = {};
       const newStepQuantities = {};
       const newDimensionInputs = {};
       const engineeringNotes = draft.specs?.engineeringNotes;
 
-      targetFlow.steps.forEach(step => {
-          if (draft.category === 'PILLOW') {
-              if (step.title.toLowerCase().includes("size")) translatedParams[step.id] = draft.specs?.size;
-              if (step.title.toLowerCase().includes("fill")) translatedParams[step.id] = draft.specs?.fill;
-              if (step.title.toLowerCase().includes("fabric")) translatedParams[step.id] = draft.specs?.fabrics?.[0]; 
-              if (step.title.toLowerCase().includes("flange") || step.title.toLowerCase().includes("edge")) translatedParams[step.id] = draft.specs?.flange;
-              if (step.title.toLowerCase().includes("trim") && draft.specs?.outerTrim?.trimId) translatedParams[step.id] = draft.specs.outerTrim.trimId;
-              if (step.title.toLowerCase().includes("stitch")) translatedParams[step.id] = draft.specs?.stitch;
-              if (step.title.toLowerCase().includes("seam") && draft.specs?.seamCount) translatedParams[step.id] = draft.specs.seamCount;
-          }
-          
-          if (engineeringNotes) {
-              const lowerTitle = step.title.toLowerCase();
-              if (lowerTitle.includes("bracket")) {
-                  newStepQuantities[step.id] = engineeringNotes.qtyBrackets !== undefined ? engineeringNotes.qtyBrackets : 0;
+      // Translate the saved draft into step params. Wrapped + null-guarded so a malformed step
+      // (e.g. missing title) or a bad draft can't throw mid-handler — that used to leave the flow
+      // half-loaded (modal open, step index never reset), so the Resume/Configure button looked dead.
+      try {
+          (Array.isArray(targetFlow.steps) ? targetFlow.steps : []).forEach(step => {
+              const lowerTitle = (step.title || '').toLowerCase();
+              if (draft.category === 'PILLOW') {
+                  if (lowerTitle.includes("size")) translatedParams[step.id] = draft.specs?.size;
+                  if (lowerTitle.includes("fill")) translatedParams[step.id] = draft.specs?.fill;
+                  if (lowerTitle.includes("fabric")) translatedParams[step.id] = draft.specs?.fabrics?.[0];
+                  if (lowerTitle.includes("flange") || lowerTitle.includes("edge")) translatedParams[step.id] = draft.specs?.flange;
+                  if (lowerTitle.includes("trim") && draft.specs?.outerTrim?.trimId) translatedParams[step.id] = draft.specs.outerTrim.trimId;
+                  if (lowerTitle.includes("stitch")) translatedParams[step.id] = draft.specs?.stitch;
+                  if (lowerTitle.includes("seam") && draft.specs?.seamCount) translatedParams[step.id] = draft.specs.seamCount;
               }
-              if (lowerTitle.includes("ring")) {
-                  newStepQuantities[step.id] = engineeringNotes.recRings !== undefined ? engineeringNotes.recRings : 0;
-              }
-              if (lowerTitle.includes("finial") || lowerTitle.includes("endcap")) {
-                  newStepQuantities[step.id] = engineeringNotes.qtyFinials !== undefined ? engineeringNotes.qtyFinials : 0;
-              }
-              if (lowerTitle.includes("splice") || lowerTitle.includes("connector")) {
-                  newStepQuantities[step.id] = engineeringNotes.qtySplices !== undefined ? engineeringNotes.qtySplices : 0;
-              }
-              
-              if (step.calculatorTemplate) {
-                  newDimensionInputs[step.id] = {
-                      type: 'O2O',
-                      length: engineeringNotes.poleO2O || '',
-                      wallA: engineeringNotes.pole1 || '',
-                      wallB: engineeringNotes.pole2 || '',
-                      wallC: engineeringNotes.pole3 || '',
-                      calc_cutLength: engineeringNotes.totalPoleRawInches || engineeringNotes.poleO2O,
-                  };
-              }
-          }
-      });
 
-      if (draft.category === 'HARDWARE' || !draft.category) {
-          Object.assign(translatedParams, draft.specs);
+              if (engineeringNotes) {
+                  if (lowerTitle.includes("bracket")) {
+                      newStepQuantities[step.id] = engineeringNotes.qtyBrackets !== undefined ? engineeringNotes.qtyBrackets : 0;
+                  }
+                  if (lowerTitle.includes("ring")) {
+                      newStepQuantities[step.id] = engineeringNotes.recRings !== undefined ? engineeringNotes.recRings : 0;
+                  }
+                  if (lowerTitle.includes("finial") || lowerTitle.includes("endcap")) {
+                      newStepQuantities[step.id] = engineeringNotes.qtyFinials !== undefined ? engineeringNotes.qtyFinials : 0;
+                  }
+                  if (lowerTitle.includes("splice") || lowerTitle.includes("connector")) {
+                      newStepQuantities[step.id] = engineeringNotes.qtySplices !== undefined ? engineeringNotes.qtySplices : 0;
+                  }
+
+                  if (step.calculatorTemplate) {
+                      newDimensionInputs[step.id] = {
+                          type: 'O2O',
+                          length: engineeringNotes.poleO2O || '',
+                          wallA: engineeringNotes.pole1 || '',
+                          wallB: engineeringNotes.pole2 || '',
+                          wallC: engineeringNotes.pole3 || '',
+                          calc_cutLength: engineeringNotes.totalPoleRawInches || engineeringNotes.poleO2O,
+                      };
+                  }
+              }
+          });
+
+          if (draft.category === 'HARDWARE' || !draft.category) {
+              // draft.specs carries the step selections plus metadata (engineeringNotes/collection/
+              // bracketId) — copy only the step-keyed params so dynamicConfigParams stays clean.
+              const { engineeringNotes: _en, collection: _c, bracketId: _b, ...stepParams } = draft.specs || {};
+              Object.assign(translatedParams, stepParams);
+          }
+      } catch (e) {
+          console.error("Resume draft: param translation failed; opening the flow with defaults.", e);
       }
 
+      // Apply UI state last and unconditionally so the configurator always opens at step 1, even if
+      // the translation above hit a snag.
+      setActiveFlowId(targetFlow.id);
+      setActiveDraftId(draft.id);
+      if (draft.masterQuoteId) setActiveMasterQuoteId(draft.masterQuoteId);
+      setActiveDraftSvg(draft.specs?.engineeringNotes?.svgString || null);
+      setJobData(prev => ({
+          ...prev,
+          customerId: draft.customerId || prev.customerId,
+          jobName: draft.jobName || prev.jobName,
+      }));
       setDynamicConfigParams(translatedParams);
-      setStepQuantities(prev => ({...prev, ...newStepQuantities}));
-      setDimensionInputs(prev => ({...prev, ...newDimensionInputs}));
+      setStepQuantities(prev => ({ ...prev, ...newStepQuantities }));
+      setDimensionInputs(prev => ({ ...prev, ...newDimensionInputs }));
       setShowCloneModal(false);
       setCurrentStepIndex(0);
   };
@@ -572,7 +574,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       let total = baseAssemblyPrice;
       const allParts = [...libraryParts, ...liveAssemblies];
 
-      activeFlow.steps.forEach(step => {
+      (activeFlow.steps || []).forEach(step => {
           const selectedValue = dynamicConfigParams[step.id];
           
           let rawQty = stepQuantities[step.id];
@@ -687,11 +689,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
   const handleNextStep = () => {
       if (!activeFlow) return;
+      const steps = activeFlow.steps || [];
       let nextIndex = currentStepIndex + 1;
-      while (nextIndex < activeFlow.steps.length && engineFlags.disabledSteps.includes(activeFlow.steps[nextIndex].title)) {
+      while (nextIndex < steps.length && engineFlags.disabledSteps.includes(steps[nextIndex]?.title)) {
           nextIndex++;
       }
-      if (nextIndex < activeFlow.steps.length) setCurrentStepIndex(nextIndex);
+      if (nextIndex < steps.length) setCurrentStepIndex(nextIndex);
   };
 
   const handleAddToCart = async () => {
@@ -1629,6 +1632,41 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   </div>
               </div>
           </div>
+      )}
+
+      {showCloneModal && (
+        <div onClick={() => setShowCloneModal(false)} style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000 }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid var(--line)', width: '560px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.15)', borderRadius: '2px' }}>
+                <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
+                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Resume a Saved Draft</h2>
+                    <button onClick={() => setShowCloneModal(false)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+                </div>
+                <div style={{ padding: '20px 30px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {previousDrafts.length === 0 && (
+                        <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic', padding: '20px 0', textAlign: 'center' }}>No saved drafts for this brand.</div>
+                    )}
+                    {[...previousDrafts]
+                        .sort((a, b) => (a.status === 'CONFIGURED' ? 1 : 0) - (b.status === 'CONFIGURED' ? 1 : 0))
+                        .map(draft => {
+                            const isConfigured = draft.status === 'CONFIGURED';
+                            return (
+                                <div key={draft.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', border: `1px solid ${isConfigured ? '#4CAF50' : 'var(--line)'}`, background: isConfigured ? '#f0fdf4' : 'var(--paper-2)', padding: '12px 14px' }}>
+                                    <div style={{ minWidth: 0 }}>
+                                        <div style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{draft.sidemark || draft.jobName || 'Unnamed Line'}</div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)', marginTop: '4px' }}>
+                                            {draft.category || 'HARDWARE'}{draft.jobName && draft.sidemark ? ` · ${draft.jobName}` : ''}{isConfigured ? ' · ✅ Configured' : ''}
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                                        <button onClick={() => handleResumeDraft(draft.id)} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{isConfigured ? 'Reopen' : 'Configure'}</button>
+                                        <button onClick={() => handleDeleteDraft(draft.id)} title="Delete draft" style={{ padding: '8px 10px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '12px' }}>×</button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                </div>
+            </div>
+        </div>
       )}
 
       {showCheckoutModal && (
