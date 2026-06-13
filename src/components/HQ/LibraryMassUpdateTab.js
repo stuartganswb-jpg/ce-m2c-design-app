@@ -44,6 +44,10 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     // --- MASS UPDATE STATE ---
     const [inventory, setInventory] = useState([]);
     const [searchTerm, setSearchTerm] = useState("");
+    const [routingFilter, setRoutingFilter] = useState("ALL");
+    const [typeFilter, setTypeFilter] = useState("");
+    const [collectionFilter, setCollectionFilter] = useState("");
+    const [watchlistFilter, setWatchlistFilter] = useState("");
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [isUpdating, setIsUpdating] = useState(false);
     const [progress, setProgress] = useState(0);
@@ -282,7 +286,14 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
         let csvContent = headers.join(",") + "\n";
 
-        inventory.forEach(part => {
+        // Export what's selected; if nothing is checked, export the current filtered view;
+        // only fall back to the whole library when no selection, search, or filter is active.
+        const exportRows = selectedIds.size > 0
+            ? inventory.filter(p => selectedIds.has(p.id))
+            : (anyFilterActive ? filteredInventory : inventory);
+        if (exportRows.length === 0) return alert("Nothing to export — select rows, or set a search/filter first.");
+
+        exportRows.forEach(part => {
             const specs = part.manufacturingSpecs || {};
             const cust = specs.customData || {};
             
@@ -436,12 +447,32 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     };
 
     // --- MASS UPDATE LOGIC ---
+    const anyFilterActive = !!searchTerm || routingFilter !== "ALL" || !!typeFilter || !!collectionFilter || !!watchlistFilter;
     const filteredInventory = inventory.filter(part => {
-        if (!searchTerm) return false; 
+        // Don't render the whole library by default — require a search or at least one filter.
+        if (!anyFilterActive) return false;
+        const specs = part.manufacturingSpecs || {};
+
         const term = searchTerm.toLowerCase();
-        return part.itemName?.toLowerCase().includes(term) || 
-               (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term)) || 
-               (part.itemId && part.itemId.toLowerCase().includes(term));
+        const matchesSearch = !searchTerm ||
+            part.itemName?.toLowerCase().includes(term) ||
+            (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term)) ||
+            (part.itemId && part.itemId.toLowerCase().includes(term)) ||
+            (specs.binLocation && specs.binLocation.toLowerCase().includes(term));
+
+        const matchesRouting = routingFilter === "ALL" ||
+            (routingFilter === "UNASSIGNED" ? (!part.routingType || part.routingType === "UNASSIGNED") : ((part.routingType || "").toUpperCase() === routingFilter.toUpperCase()));
+
+        const matchesType = !typeFilter || (specs.productType || part.productType || "").toUpperCase() === typeFilter.toUpperCase();
+
+        const cust = specs.customData || {};
+        const partCollections = specs.collections ? specs.collections.map(c => c.toUpperCase()) : (cust.collection && cust.collection !== 'N/A' ? [cust.collection.toUpperCase()] : []);
+        const matchesCollection = !collectionFilter || partCollections.includes(collectionFilter.toUpperCase());
+
+        const currentWatchList = (specs.watchList || cust.watchlist || "NONE").toUpperCase();
+        const matchesWatchlist = !watchlistFilter || currentWatchList === watchlistFilter.toUpperCase();
+
+        return matchesSearch && matchesRouting && matchesType && matchesCollection && matchesWatchlist;
     });
 
     const toggleSelection = (id) => {
@@ -780,11 +811,11 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px', marginBottom: '10px', borderRadius: '2px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                     <h3 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>CSV Data Mapping Tool</h3>
-                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: theme.inkSoft }}>Download your current inventory, edit it in Excel, and upload it back to instantly map NetSuite data like Bins, Pricing, and Routing.</span>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: theme.inkSoft }}>Filter or select rows on the left, download just those, edit in Excel, and upload back to map NetSuite data like Bins, Pricing, and Routing. With nothing selected/filtered it exports the whole library.</span>
                 </div>
                 <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                    <button onClick={handleDownloadCsvTemplate} style={{ padding: '12px 24px', background: 'var(--paper-2)', color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
-                        1. Download Excel/CSV Template
+                    <button onClick={handleDownloadCsvTemplate} title="Exports your current selection, or the filtered view, or the whole library if neither is set" style={{ padding: '12px 24px', background: 'var(--paper-2)', color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                        1. Download CSV {selectedIds.size > 0 ? `(${selectedIds.size} selected)` : (anyFilterActive ? `(${filteredInventory.length} filtered)` : '(all)')}
                     </button>
                     <input 
                         id="csv-upload-input"
@@ -806,12 +837,32 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 
                 <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', height: '70vh', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                     <div style={{ padding: '20px', background: theme.paper2, borderBottom: `1px solid ${theme.line}` }}>
-                        <input 
-                            placeholder="Range Filter (e.g., 'H1-75BE')..." 
-                            value={searchTerm} 
-                            onChange={(e) => setSearchTerm(e.target.value)} 
-                            style={{ ...fieldStyle, fontSize: '1rem', padding: '12px' }} 
+                        <input
+                            placeholder="Search Name, ERP, Bin..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            style={{ ...fieldStyle, fontSize: '1rem', padding: '12px' }}
                         />
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
+                            <select value={routingFilter} onChange={(e) => setRoutingFilter(e.target.value)} style={{ ...fieldStyle, flex: '1 1 130px', padding: '8px' }}>
+                                <option value="ALL">All Routing / Class</option>
+                                <option value="UNASSIGNED">Unassigned / Pending</option>
+                                {[...new Set([...(globalLists.assemblyTypes || []), ...(globalLists.inventoryTypes || [])])].map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                            <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ ...fieldStyle, flex: '1 1 130px', padding: '8px' }}>
+                                <option value="">All Categories</option>
+                                {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                            </select>
+                            <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ ...fieldStyle, flex: '1 1 130px', padding: '8px' }}>
+                                <option value="">All Collections</option>
+                                {(globalLists.collections && globalLists.collections.length ? globalLists.collections : collectionsData.map(c => c.name).filter(Boolean)).map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                            <select value={watchlistFilter} onChange={(e) => setWatchlistFilter(e.target.value)} style={{ ...fieldStyle, flex: '1 1 130px', padding: '8px' }}>
+                                <option value="">All Watchlists</option>
+                                <option value="NONE">None / Unassigned</option>
+                                {(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
+                            </select>
+                        </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', alignItems: 'center' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>Showing {filteredInventory.length} Results</span>
                             <button onClick={handleSelectAll} disabled={filteredInventory.length === 0} style={{ background: 'transparent', border: `1px solid ${theme.ink}`, color: theme.ink, padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>
@@ -821,9 +872,9 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     </div>
 
                     <div style={{ overflowY: 'auto', flex: 1, padding: '10px' }}>
-                        {!searchTerm ? (
+                        {!anyFilterActive ? (
                             <div style={{ padding: '40px', textAlign: 'center', color: theme.inkSoft, fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: '1.2rem' }}>
-                                Type in the search box to find items to batch update.
+                                Search or pick a filter to find items to batch update.
                             </div>
                         ) : filteredInventory.length === 0 ? (
                             <div style={{ padding: '40px', textAlign: 'center', color: theme.inkSoft }}>No matching items found.</div>
