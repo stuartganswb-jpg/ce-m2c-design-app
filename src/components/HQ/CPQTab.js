@@ -1390,6 +1390,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           )}
                       </div>
 
+                      {!currentStep.hideQty && (
                       <div style={{ padding: '20px 24px', background: 'var(--paper)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div style={{ color: 'var(--ink-soft)', flex: 1, paddingRight: '20px' }}>
                               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', display: 'block', marginBottom: '4px' }}>Step Quantity</span>
@@ -1422,6 +1423,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               }} style={{ width: '36px', height: '36px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontSize: '1.2rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
                           </div>
                       </div>
+                      )}
 
                       {engineFlags.warnings.length > 0 && (
                            <div style={{ background: 'var(--paper-2)', borderTop: '1px solid var(--brass)', padding: '16px 24px' }}>
