@@ -644,8 +644,14 @@ const PackagingTab = ({ activeBrand }) => {
     try {
       const units = [];
       (items || []).forEach(it => {
-        const w = it.footprint?.w || 3, h = it.footprint?.h || 3;
-        for (let q = 0; q < (Number(it.qty) || 1); q++) units.push({ w, h, cw: w + 2 * margin, ch: h + 2 * margin, glbUrl: it.glbUrl, partId: it.partId });
+        // Rings pack on their SKINNY side — cut a thin slot (0.25" thick × the ring's diameter)
+        // so many fit. They're cut as a rect (no silhouette), regardless of any glb.
+        const isRing = /\bring\b/i.test(it.partName || '');
+        const ringOD = it.footprint ? Math.max(it.footprint.w, it.footprint.h) : 2.25;
+        const w = isRing ? 0.25 : (it.footprint?.w || 3);
+        const h = isRing ? ringOD : (it.footprint?.h || 3);
+        const glbUrl = isRing ? null : it.glbUrl;   // ring -> rect slot fallback
+        for (let q = 0; q < (Number(it.qty) || 1); q++) units.push({ w, h, cw: w + 2 * margin, ch: h + 2 * margin, glbUrl, partId: it.partId });
       });
       // Trace unique silhouettes (in each part's real footprint inches).
       const contour = new Map();
