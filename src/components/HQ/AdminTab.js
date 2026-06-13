@@ -778,10 +778,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const getDataSourceItems = (source) => {
       if (!source) return [];
       if (source === 'master_finishes') {
+          // Carry the finish code through so every picker can show "CODE · Name" (accuracy).
           return [
-              ...globalFinishes.map(f => ({ id: f.id, name: f.name })),
-              ...outsourceFinishes.map(f => ({ id: f.id, name: f.name }))
-          ].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+              ...globalFinishes.map(f => ({ id: f.id, name: f.name, code: f.code || '' })),
+              ...outsourceFinishes.map(f => ({ id: f.id, name: f.name, code: f.code || '' }))
+          ].sort((a, b) => (a.code || a.name || '').localeCompare(b.code || b.name || ''));
       }
       
       if (globalLists.prodTypes?.includes(source)) {
@@ -977,7 +978,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                         if (e.target.checked) set.add(f.id); else set.delete(f.id);
                                                         setFlowSettings({ ...flowSettings, defaultFinishOptions: [...set] });
                                                     }} />
-                                                    {f.name}
+                                                    {f.code ? `${f.code} · ${f.name}` : f.name}
                                                 </label>
                                             );
                                         })}
@@ -1204,7 +1205,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                 else setNewStep({...newStep, allowedOptions: curr.filter(id => id !== item.id)});
                                                             }}
                                                         />
-                                                        {item.name}
+                                                        {item.code ? `${item.code} · ${item.name}` : item.name}
                                                     </label>
                                                 ))}
                                             </div>
@@ -1368,7 +1369,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                                     return { ...prev, finishAllowedOptions: [...set] };
                                                                                 });
                                                                             }} />
-                                                                            {f.name}
+                                                                            {f.code ? `${f.code} · ${f.name}` : f.name}
                                                                         </label>
                                                                     );
                                                                 })}
@@ -1406,7 +1407,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                                                 return { ...so, finishAllowedOptions: [...set] };
                                                                                             }) }));
                                                                                         }} />
-                                                                                        {f.name}
+                                                                                        {f.code ? `${f.code} · ${f.name}` : f.name}
                                                                                     </label>
                                                                                 );
                                                                             })}
@@ -1472,7 +1473,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                     return (
                                                         <React.Fragment key={opt.id}>
                                                             <div style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', color: 'var(--ink)' }}>
-                                                                {opt.name}
+                                                                {opt.code ? `${opt.code} · ${opt.name}` : opt.name}
                                                             </div>
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                                 <input type="number" step="0.5" value={newStep.priceMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, priceMap: { ...prev.priceMap, [opt.id]: parseFloat(e.target.value) || 0 } }))} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid var(--line)', outline: 'none' }} disabled={newStep.useClientPricing || !!newStep.priceOverride} />
