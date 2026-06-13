@@ -178,8 +178,12 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         const currentFile = queue[currentIndex];
         
         const safePattern = String(patternId).toUpperCase().replace(/[^A-Z0-9-]/g, '');
-        const safeFinish = String(finishId).toUpperCase().replace(/[^A-Z0-9-]/g, '');
-        const displayId = safeFinish ? `${String(patternId).toUpperCase()}/${String(finishId).toUpperCase()}` : String(patternId).toUpperCase();
+        // EP finishes were erroneously zero-padded (EP01 should be EP1) — strip it so gallery
+        // codes match the EP1..EP6 used on library parts. ONLY EP: P##/S## finishes are
+        // canonically zero-padded (master_finishes P01-P30, S01-S12), so leave those alone.
+        const cleanFinish = String(finishId).toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1');
+        const safeFinish = cleanFinish.replace(/[^A-Z0-9-]/g, '');
+        const displayId = safeFinish ? `${String(patternId).toUpperCase()}/${safeFinish}` : String(patternId).toUpperCase();
         const safeUrlId = safeFinish ? `${safePattern}_${safeFinish}` : safePattern;
         
         const brandFolder = activeBrand ? String(activeBrand) : 'global';
@@ -214,7 +218,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             await setDoc(doc(db, "global_assets", assetDocId), {
                 id: assetDocId,
                 patternId: String(patternId).toUpperCase(),
-                finishId: String(finishId).toUpperCase(),
+                finishId: safeFinish,
                 customerId: customerId || '',
                 clientSku: String(clientSku).toUpperCase(),
                 name: displayId, 
@@ -349,9 +353,12 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                     value={finishId} 
                                     onChange={e => setFinishId(e.target.value)} 
                                     onKeyDown={handleKeyDown}
-                                    placeholder="e.g. EP01" 
-                                    style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px', outline: 'none' }} 
+                                    placeholder="e.g. EP1"
+                                    style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px', outline: 'none' }}
                                 />
+                                {/^EP0+\d+$/.test(String(finishId).toUpperCase().trim()) && (
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginTop: '5px', letterSpacing: '.05em' }}>↳ EP leading zero auto-removed → {String(finishId).toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1')}</div>
+                                )}
                             </div>
                         </div>
 
