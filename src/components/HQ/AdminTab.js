@@ -996,6 +996,10 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     <div style={{ maxHeight: '240px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px', background: '#fff', border: '1px solid var(--line)', padding: '12px' }}>
                                         {linkedAsm.nodeClusters.map(cl => {
                                             const checked = (flowSettings.hiddenClusters || []).includes(cl.id);
+                                            // Show the matched part's description under the cluster label (like the
+                                            // style-options window) so it's easy to pick the right cluster.
+                                            const pin = linkedBomPins.find(p => p.clusterId === cl.id);
+                                            const desc = pin?.partName && pin.partName !== cl.name ? pin.partName : '';
                                             return (
                                                 <label key={cl.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer', opacity: checked ? 0.55 : 1 }}>
                                                     <input type="checkbox" checked={checked} onChange={(e) => {
@@ -1006,7 +1010,10 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                     {cl.imageUrl
                                                         ? <img src={cl.imageUrl} alt="" onClick={(e) => { e.preventDefault(); setZoomImg({ url: cl.imageUrl, label: cl.name }); }} title="Click to enlarge" style={{ width: '32px', height: '32px', objectFit: 'contain', background: 'var(--paper)', border: '1px solid var(--line)', flexShrink: 0, cursor: 'zoom-in' }} />
                                                         : <span style={{ width: '32px', height: '32px', flexShrink: 0, border: '1px dashed var(--line)' }} />}
-                                                    <span style={{ textDecoration: checked ? 'line-through' : 'none' }}>{cl.name}</span>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                                                        <span style={{ textDecoration: checked ? 'line-through' : 'none' }}>{cl.name}</span>
+                                                        {desc && <span style={{ fontSize: '0.72rem', color: 'var(--ink-soft)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{desc}</span>}
+                                                    </div>
                                                 </label>
                                             );
                                         })}
