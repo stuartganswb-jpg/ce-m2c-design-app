@@ -249,6 +249,23 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         return cache;
     };
 
+    // Resolve the brand's ring (FIPR) part footprint so packaging cuts an exact slot. The CPQ ring
+    // line is a *finish* step (FIN- id, no geometry), so its OD can't come from the line — look up
+    // the FIPR geometry part by code and read its captured dims. Returns {w:OD, h:thick} or null
+    // (packaging then falls back to a 2.25" default). One brand query, cached per split.
+    const resolveRingFootprint = async (brand) => {
+        try {
+            const snap = await getDocs(query(collection(db, "Approved_Designs"), where("brandId", "==", brand)));
+            const fipr = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .find(p => /^FIPR/i.test(p.legacyErpId || '') || /^FIPR/i.test(p.id || ''));
+            if (!fipr) return null;
+            const pm = fipr.manufacturingSpecs?.parametric || {};
+            const od = Math.max(parseFloat(pm.width) || 0, parseFloat(pm.height) || 0);
+            const thick = parseFloat(pm.thickness) || null;
+            return od > 0 ? { w: od, h: thick || od } : null;
+        } catch (e) { return null; }
+    };
+
     // Map associated part id -> reference image url, from the shared asset gallery.
     const loadAssetMap = async () => {
         const map = new Map();
@@ -420,17 +437,26 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             const pkgId = `PKG-${orderKey}`;
             // Keep non-physical lines out of packaging: fees, the assembly/header line (-ASM-),
             // and the Rod-Material config line (records wood/metal; the rod is the Pole Length line).
-            const pkgItems = lines.filter(l =>
+            const keptLines = lines.filter(l =>
                 !(!l.partId && /\bfee\b/i.test(l.name || '')) &&
                 !(l.partId && /-ASM-/i.test(l.partId)) &&
                 !(/^(wood|metal)$/i.test(l.partId || '') || /rod material/i.test(l.name || ''))
-            ).map(l => {
+            );
+            // Rings are a finish line with no geometry — resolve the brand's FIPR part footprint
+            // once so packaging cuts an exact slot instead of the 2.25" default.
+            const hasRing = keptLines.some(l => /\bring\b/i.test(l.name || ''));
+            const ringFootprint = hasRing ? await resolveRingFootprint(activeBrand) : null;
+            const pkgItems = keptLines.map(l => {
                 const part = l.partId ? partCache.get(l.partId) : null;
                 // Pole = the cut-to-length rod (Pole Length line). Backplates / bracket arms are
                 // also fab-Custom but pack flat in the small box, so don't call them poles.
                 const isPolePart = Number(l.cutLength) > 0 || /pole\s*length/i.test(l.name || '');
                 const param = part?.manufacturingSpecs?.parametric || {};
-                const fw = parseFloat(param.width), fh = parseFloat(param.height);
+                const fw = parseFloat(param.width), fh = parseFloat(param.height), ft = parseFloat(param.thickness);
+                // Traced part footprint (in) for the small-parts foam nest; thick drives the T-unit
+                // (backplate+arm) compose + pole bore. Rings borrow the FIPR footprint. null -> defaults.
+                let footprint = (fw > 0 && fh > 0) ? { w: fw, h: fh, thick: ft > 0 ? ft : null } : null;
+                if (!footprint && /\bring\b/i.test(l.name || '') && ringFootprint) footprint = ringFootprint;
                 return {
                     partId: l.partId || null,
                     partName: cleanLineName(l.name),
@@ -440,8 +466,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     partHandling: l.partHandling || (classifyLine(l, part) === DIVISION_CUSTOM ? 'Custom' : 'Small Parts'),
                     cutLength: l.cutLength || null,
                     dimensions: l.dimensions || null,
-                    // Traced part footprint (in) for the small-parts foam nest; null -> packer defaults.
-                    footprint: (fw > 0 && fh > 0) ? { w: fw, h: fh } : null,
+                    footprint,
                     // Per-component .glb so the nester can trace the true cut silhouette.
                     glbUrl: part?.componentGlbUrl || null,
                 };

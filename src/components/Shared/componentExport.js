@@ -114,16 +114,18 @@ export function snapshotPNG(object, size = 512) {
   });
 }
 
-// Measure a flat-laid group's true dimensions in inches (the master .glb is in meters). The
-// part lies flat with its thin axis on Y, so width/height are the X/Z face extents (matching
-// the Packaging top-down trace) and thickness is the Y extent.
-const IN_PER_M = 39.3701;
+// Measure a flat-laid group's true dimensions in inches. The master .glb is authored in INCHES
+// (Fusion export keeps inch units — e.g. the 1.5x0.5 Flat Iron steel pole measures exactly
+// 1.5 x 0.5), so CAD units ARE inches and no scaling is applied. The part lies flat with its
+// thin axis on Y, so width/height are the X/Z face extents (matching the Packaging top-down
+// trace) and thickness is the Y extent.
+const CAD_TO_IN = 1; // CAD masters are inch-authored (was 39.3701 when masters were in meters)
 export function measureInches(group) {
   const s = new THREE.Box3().setFromObject(group).getSize(new THREE.Vector3());
   return {
-    width: +(s.x * IN_PER_M).toFixed(3),
-    height: +(s.z * IN_PER_M).toFixed(3),
-    thickness: +(s.y * IN_PER_M).toFixed(3),
+    width: +(s.x * CAD_TO_IN).toFixed(3),
+    height: +(s.z * CAD_TO_IN).toFixed(3),
+    thickness: +(s.y * CAD_TO_IN).toFixed(3),
   };
 }
 
