@@ -126,7 +126,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const [editingGlobalFinish, setEditingGlobalFinish] = useState(null);
     const [editingOutsourceFinish, setEditingOutsourceFinish] = useState(null);
     const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '', clientMapping: [] });
-    const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] });
+    const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] });
     const [newFinishClientMapping, setNewFinishClientMapping] = useState({ customerId: '', clientFinishName: '' });
     
     const [finishUploadProgress, setFinishUploadProgress] = useState(0);
@@ -730,20 +730,24 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     };
 
     const handleAddOutsourceFinish = async () => {
-        if (!newOutsourceFinishConfig.name) return alert("Finish name required.");
-        const safeId = editingOutsourceFinish || `FIN-${newOutsourceFinishConfig.name.toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
-        await setDoc(doc(db, "hq_outsource_finishes", safeId), { 
-            id: safeId, 
-            legacyErpId: "PENDING", 
-            name: newOutsourceFinishConfig.name.toUpperCase(), 
-            description: newOutsourceFinishConfig.description || "", 
-            multiplier: parseFloat(newOutsourceFinishConfig.multiplier) || 1.0, 
+        if (!newOutsourceFinishConfig.name) return alert("Descriptive name required.");
+        // Doc id derives from the Code (the main identifier) when given, else the descriptive name
+        // (backward compatible). Editing keeps the existing id so references stay intact.
+        const idBasis = (newOutsourceFinishConfig.code || newOutsourceFinishConfig.name).toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const safeId = editingOutsourceFinish || `FIN-${idBasis}`;
+        await setDoc(doc(db, "hq_outsource_finishes", safeId), {
+            id: safeId,
+            legacyErpId: "PENDING",
+            code: (newOutsourceFinishConfig.code || '').toUpperCase(),
+            name: newOutsourceFinishConfig.name.toUpperCase(),
+            description: newOutsourceFinishConfig.description || "",
+            multiplier: parseFloat(newOutsourceFinishConfig.multiplier) || 1.0,
             vendor: newOutsourceFinishConfig.vendor || "",
             textureUrl: newOutsourceFinishConfig.textureUrl || "",
             clientMapping: newOutsourceFinishConfig.clientMapping || []
         }, { merge: true });
 
-        setNewOutsourceFinishConfig({ name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] }); 
+        setNewOutsourceFinishConfig({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] });
         setShowOutsourceFinishForm(false);
         setEditingOutsourceFinish(null);
     };
@@ -751,6 +755,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const handleEditOutsourceFinish = (finish) => {
         setNewOutsourceFinishConfig({
             name: finish.name,
+            code: finish.code || '',
             description: finish.description || '',
             multiplier: finish.multiplier || 1.0,
             vendor: finish.vendor || '',
@@ -1208,9 +1213,9 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px', marginBottom: '10px' }}>
                                                 {editingGlobalFinish ? `Editing: ${newFinishConfig.name}` : 'New In-House Finish'}
                                             </div>
-                                            <div><label style={labelStyle}>Finish Name</label><input value={newFinishConfig.name} onChange={(e) => setNewFinishConfig({...newFinishConfig, name: e.target.value})} placeholder="e.g. Matte Brass" style={fieldStyle} /></div>
+                                            <div><label style={labelStyle}>Finish ID / Code</label><input value={newFinishConfig.code} onChange={(e) => setNewFinishConfig({...newFinishConfig, code: e.target.value})} placeholder="e.g. MB" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                                <div><label style={labelStyle}>Code</label><input value={newFinishConfig.code} onChange={(e) => setNewFinishConfig({...newFinishConfig, code: e.target.value})} placeholder="MB" style={fieldStyle} /></div>
+                                                <div><label style={labelStyle}>Descriptive Name</label><input value={newFinishConfig.name} onChange={(e) => setNewFinishConfig({...newFinishConfig, name: e.target.value})} placeholder="e.g. Matte Brass" style={fieldStyle} /></div>
                                                 <div><label style={labelStyle}>Category / Type</label><input value={newFinishConfig.type} onChange={(e) => setNewFinishConfig({...newFinishConfig, type: e.target.value})} placeholder="e.g. METAL, WOOD" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
                                             </div>
                                             <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>
@@ -1258,7 +1263,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                     <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
                                                         <div style={{ width: '48px', height: '48px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : theme.paper2, borderRadius: '50%', border: `1px solid ${theme.line}` }} />
                                                         <div>
-                                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.name} {finish.code && `(${finish.code})`}</div>
+                                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.code || finish.name}</div>
+                                                            {finish.code && finish.name && <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: theme.inkSoft, marginTop: '2px' }}>{finish.name}</div>}
                                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Status: {hasRecipe ? 'Production Ready' : 'Working / R&D'}</div>
                                                             {finish.clientMapping && finish.clientMapping.length > 0 && (
                                                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink, marginTop: '4px' }}>{finish.clientMapping.length} Client Map(s) Active</div>
@@ -1285,7 +1291,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                                 <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
                                     <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Outsourced Master Finishes</span>
-                                    <button onClick={() => { setShowOutsourceFinishForm(!showOutsourceFinishForm); setEditingOutsourceFinish(null); setNewOutsourceFinishConfig({name: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: []}); }} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showOutsourceFinishForm && !editingOutsourceFinish ? 'Close' : 'Add Finish'}</button>
+                                    <button onClick={() => { setShowOutsourceFinishForm(!showOutsourceFinishForm); setEditingOutsourceFinish(null); setNewOutsourceFinishConfig({name: '', code: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: []}); }} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showOutsourceFinishForm && !editingOutsourceFinish ? 'Close' : 'Add Finish'}</button>
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                                     {showOutsourceFinishForm && (
@@ -1293,7 +1299,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px', marginBottom: '10px' }}>
                                                 {editingOutsourceFinish ? `Editing: ${newOutsourceFinishConfig.name}` : 'New Outsourced Finish'}
                                             </div>
-                                            <div><label style={labelStyle}>Finish Name</label><input value={newOutsourceFinishConfig.name} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, name: e.target.value})} style={fieldStyle} /></div>
+                                            <div><label style={labelStyle}>Finish ID / Code</label><input value={newOutsourceFinishConfig.code} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, code: e.target.value})} placeholder="e.g. EP1" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                            <div><label style={labelStyle}>Descriptive Name</label><input value={newOutsourceFinishConfig.name} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, name: e.target.value})} placeholder="e.g. Espresso Patina" style={fieldStyle} /></div>
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                                                 <div><label style={labelStyle}>Approved Vendor</label><select value={newOutsourceFinishConfig.vendor} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, vendor: e.target.value})} style={fieldStyle}><option value="">Select...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
                                                 <div><label style={labelStyle}>Price Multiplier (x)</label><input type="number" step="0.1" value={newOutsourceFinishConfig.multiplier} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, multiplier: e.target.value})} style={fieldStyle} /></div>
@@ -1342,7 +1349,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                 <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
                                                     <div style={{ width: '48px', height: '48px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : theme.paper2, borderRadius: '50%', border: `1px solid ${theme.line}` }} />
                                                     <div>
-                                                        <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.name}</div>
+                                                        <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.code || finish.name}</div>
+                                                        {finish.code && finish.name && <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: theme.inkSoft, marginTop: '2px' }}>{finish.name}</div>}
                                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Vendor: <span style={{color: theme.ink}}>{finish.vendor || 'Unassigned'}</span> | Mult: <span style={{color: theme.ink}}>x{finish.multiplier}</span></div>
                                                         {finish.clientMapping && finish.clientMapping.length > 0 && (
                                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink, marginTop: '4px' }}>{finish.clientMapping.length} Client Map(s) Active</div>
