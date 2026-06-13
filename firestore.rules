@@ -52,6 +52,7 @@ service cloud.firestore {
     match /hq_inhouse_finishes/{document=**}    { allow read, write: if isAuth(); }
     match /hq_outsource_finishes/{document=**}  { allow read, write: if isAuth(); }
     match /packaging_templates/{document=**}    { allow read, write: if isAuth(); }
+    match /packaging_orders/{document=**}       { allow read, write: if isAuth(); }
     match /standard_boxes/{document=**}         { allow read, write: if isAuth(); }
     match /project_images/{document=**}         { allow read, write: if isAuth(); }
     match /markups/{document=**}                { allow read, write: if isAuth(); }
