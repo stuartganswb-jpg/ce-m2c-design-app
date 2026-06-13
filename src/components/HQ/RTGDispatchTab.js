@@ -413,6 +413,55 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 addLog(`Created Shop custom order ${shopId}${fabMethod ? ` [${fabMethod}]` : ''} (${customLines.length} custom lines).`, "success");
             }
 
+            // Packaging: create the packaging order alongside finishing + shop (shared orderKey)
+            // so it lands in the Packaging inbox the moment the SO is split. Carries every line
+            // (poles = Custom division, small parts) plus the CPQ config — the paired CPQ steps
+            // are what decide which pieces bolt together / pack as one assembled (T-shaped) unit.
+            const pkgId = `PKG-${orderKey}`;
+            // Keep non-physical lines out of packaging: fees, the assembly/header line (-ASM-),
+            // and the Rod-Material config line (records wood/metal; the rod is the Pole Length line).
+            const pkgItems = lines.filter(l =>
+                !(!l.partId && /\bfee\b/i.test(l.name || '')) &&
+                !(l.partId && /-ASM-/i.test(l.partId)) &&
+                !(/^(wood|metal)$/i.test(l.partId || '') || /rod material/i.test(l.name || ''))
+            ).map(l => {
+                const part = l.partId ? partCache.get(l.partId) : null;
+                // Pole = the cut-to-length rod (Pole Length line). Backplates / bracket arms are
+                // also fab-Custom but pack flat in the small box, so don't call them poles.
+                const isPolePart = Number(l.cutLength) > 0 || /pole\s*length/i.test(l.name || '');
+                const param = part?.manufacturingSpecs?.parametric || {};
+                const fw = parseFloat(param.width), fh = parseFloat(param.height);
+                return {
+                    partId: l.partId || null,
+                    partName: cleanLineName(l.name),
+                    legacyErpId: l.legacyErpId || part?.legacyErpId || null,
+                    qty: Number(l.qty) || 1,
+                    division: isPolePart ? 'pole' : 'small',
+                    partHandling: l.partHandling || (classifyLine(l, part) === DIVISION_CUSTOM ? 'Custom' : 'Small Parts'),
+                    cutLength: l.cutLength || null,
+                    dimensions: l.dimensions || null,
+                    // Traced part footprint (in) for the small-parts foam nest; null -> packer defaults.
+                    footprint: (fw > 0 && fh > 0) ? { w: fw, h: fh } : null,
+                    // Per-component .glb so the nester can trace the true cut silhouette.
+                    glbUrl: part?.componentGlbUrl || null,
+                };
+            });
+            const pkgDoc = {
+                id: pkgId, orderKey, quoteId: so.hqJobId || null, salesOrderId: so.soId || null,
+                brand: activeBrand || null, customerId: customerId || null, customerName: customerName || null, customer: customerName || null,
+                sidemark: job.sidemark || "", reqDate: so.reqDate || "", note: so.memo || "",
+                status: 'pending',
+                items: pkgItems,
+                // Fab geometry drives the pole box width: french-return bends need the wider 8" box.
+                fab: { shape: fabNotes.shape || null, qtyBends: fabNotes.qtyBends || 0, qtyMiterReturns: fabNotes.qtyMiterReturns || 0 },
+                // cpqData NOT stored here — large, and the grouping step re-fetches it via quoteId.
+                finSiblingId: hasSmall ? finId : null, shopSiblingId: hasCustom ? shopId : null,
+                createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || null
+            };
+            // Strip any undefined (Firestore rejects it anywhere in the doc) via a JSON round-trip.
+            await setDoc(doc(db, "packaging_orders", pkgId), JSON.parse(JSON.stringify(pkgDoc)));
+            addLog(`Created Packaging order ${pkgId} (${pkgItems.length} lines).`, "success");
+
             // Mark the originating job + SO board entry as imported.
             await updateDoc(doc(db, "jobs", so.hqJobId), {
                 salesOrderId: so.soId || null,
@@ -431,7 +480,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         } catch (error) {
             console.error("Auto-Split Error:", error);
             addLog(`Auto-Split Failed: ${error.message}`, "error");
-            alert("Failed to auto-split Sales Order. Check console.");
+            alert(`Failed to auto-split Sales Order:\n${error.message || error}`);
         }
     };
 

@@ -651,7 +651,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               
               let lineTotal = stepPrice * multiplier * qty;
               
-              if (lineTotal > 0 || stepPrice > 0 || step.type === 'STATIC_FEE') {
+              // Emit a BOM line for any selected PHYSICAL part even at $0 — every part step
+              // carries a partHandling routing flag (fees don't), so an unpriced bracket/ring
+              // still flows to the BOM, finishing, and packaging instead of silently dropping.
+              if (lineTotal > 0 || stepPrice > 0 || step.type === 'STATIC_FEE' || (selectedValue && step.partHandling)) {
                   // Carry the generated cut geometry (from Vision -> dimensionInputs) onto
                   // dimension-driven lines so the shop work order gets a cutLength and the
                   // fin work order gets dimensions. See WORK_ORDER_CONTRACT.md §6/§7.
@@ -1387,6 +1390,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           )}
                       </div>
 
+                      {!currentStep.hideQty && (
                       <div style={{ padding: '20px 24px', background: 'var(--paper)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div style={{ color: 'var(--ink-soft)', flex: 1, paddingRight: '20px' }}>
                               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', display: 'block', marginBottom: '4px' }}>Step Quantity</span>
@@ -1419,6 +1423,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               }} style={{ width: '36px', height: '36px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontSize: '1.2rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
                           </div>
                       </div>
+                      )}
 
                       {engineFlags.warnings.length > 0 && (
                            <div style={{ background: 'var(--paper-2)', borderTop: '1px solid var(--brass)', padding: '16px 24px' }}>
