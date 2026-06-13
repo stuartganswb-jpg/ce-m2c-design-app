@@ -342,6 +342,9 @@ function GLBModal({ gltfScene, foamW, foamH, onClose, onTrace }) {
           {[ {l:"Top", e:[-Math.PI/2,0,0]}, {l:"Front", e:[0,0,0]}, {l:"Side", e:[0,Math.PI/2,0]} ].map(p => (
             <button key={p.l} onClick={() => setEuler(p.e)} style={{ flex: 1, padding: "8px", border: `1px solid ${theme.line}`, background: "#fff", cursor: "pointer", fontFamily: theme.sans, fontSize: "0.8rem" }}>{p.l}</button>
           ))}
+          {/* Spin the part 90° in the cut plane (rotate about the top-down view axis) so it can
+              be nested / cut the other direction. */}
+          <button onClick={() => setEuler(e => [e[0], e[1] + Math.PI / 2, e[2]])} title="Rotate 90° in the cut plane" style={{ flex: 1, padding: "8px", border: `1px solid ${theme.line}`, background: theme.paper2, cursor: "pointer", fontFamily: theme.sans, fontSize: "0.8rem" }}>⟳ 90°</button>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px" }}>
           <div><label style={{ display: "block", fontSize: "0.7rem", fontFamily: theme.sans, color: theme.inkSoft, marginBottom: "4px" }}>Part Width (in)</label><input type="number" value={partW} onChange={e=>setPartW(parseFloat(e.target.value)||0)} style={inpStyle} /></div>
@@ -552,10 +555,11 @@ const PackagingTab = ({ activeBrand }) => {
   };
 
   const saveStandardBox = async () => {
-    const name = prompt("Enter a name for this standard box/sheet size (e.g., 'Medium Square Box'):");
+    const name = prompt("Enter a name for this standard box (e.g., 'Small Parts Box 18x12x4'):");
     if (!name) return;
+    const d = parseFloat(prompt("Box depth / foam thickness (in):", "4")) || 0;
     await addDoc(collection(db, "standard_boxes"), {
-      name, w: foamW, h: foamH, brandId: activeBrand || 'global', createdAt: serverTimestamp()
+      name, w: foamW, h: foamH, d, brandId: activeBrand || 'global', createdAt: serverTimestamp()
     });
   };
 
