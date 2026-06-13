@@ -438,18 +438,20 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     glbUrl: part?.componentGlbUrl || null,
                 };
             });
-            await setDoc(doc(db, "packaging_orders", pkgId), {
-                id: pkgId, orderKey, quoteId: so.hqJobId, salesOrderId: so.soId || null,
-                brand: activeBrand, customerId, customerName, customer: customerName,
+            const pkgDoc = {
+                id: pkgId, orderKey, quoteId: so.hqJobId || null, salesOrderId: so.soId || null,
+                brand: activeBrand || null, customerId: customerId || null, customerName: customerName || null, customer: customerName || null,
                 sidemark: job.sidemark || "", reqDate: so.reqDate || "", note: so.memo || "",
                 status: 'pending',
                 items: pkgItems,
                 // Fab geometry drives the pole box width: french-return bends need the wider 8" box.
-                fab: { shape: fabNotes.shape, qtyBends: fabNotes.qtyBends || 0, qtyMiterReturns: fabNotes.qtyMiterReturns || 0 },
-                cpqData: job.cpqData || null,
+                fab: { shape: fabNotes.shape || null, qtyBends: fabNotes.qtyBends || 0, qtyMiterReturns: fabNotes.qtyMiterReturns || 0 },
+                // cpqData NOT stored here — large, and the grouping step re-fetches it via quoteId.
                 finSiblingId: hasSmall ? finId : null, shopSiblingId: hasCustom ? shopId : null,
-                createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser
-            });
+                createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || null
+            };
+            // Strip any undefined (Firestore rejects it anywhere in the doc) via a JSON round-trip.
+            await setDoc(doc(db, "packaging_orders", pkgId), JSON.parse(JSON.stringify(pkgDoc)));
             addLog(`Created Packaging order ${pkgId} (${pkgItems.length} lines).`, "success");
 
             // Mark the originating job + SO board entry as imported.
@@ -470,7 +472,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         } catch (error) {
             console.error("Auto-Split Error:", error);
             addLog(`Auto-Split Failed: ${error.message}`, "error");
-            alert("Failed to auto-split Sales Order. Check console.");
+            alert(`Failed to auto-split Sales Order:\n${error.message || error}`);
         }
     };
 
