@@ -596,9 +596,11 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       viewMode === '3D' ? p.imageUrl === '3D_CAD' : (p.imageUrl === activeImageUrl || (!p.imageUrl && activeImageUrl === activeAssembly?.finalImageUrl))
   );
 
-  const unassignedClusters = (activeAssembly?.nodeClusters || []).filter(cluster => {
+  // Memoized so its identity is stable across renders — otherwise the autoAssignProposals memo
+  // (which depends on it) recomputes every render and the seed effect below wipes the user's picks.
+  const unassignedClusters = useMemo(() => (activeAssembly?.nodeClusters || []).filter(cluster => {
       return !pins.some(pin => pin.clusterId === cluster.id || pin.targetNode === cluster.nodes?.join(', '));
-  });
+  }), [activeAssembly, pins]);
 
   // --- AUTO-ASSIGN BOM ---
   // Match each unassigned cluster to a library part by its code/pattern name (e.g.
@@ -627,14 +629,20 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       });
   }, [unassignedClusters, libraryParts, activeAssembly]);
 
+  // Seed defaults for any cluster we haven't seen yet, but PRESERVE the user's existing picks —
+  // overwriting unconditionally made a manual selection vanish on the next render ("keeps
+  // deselecting"). Only fills keys not already in state.
   useEffect(() => {
-      const chk = {}, prt = {};
-      autoAssignProposals.forEach(p => {
-          chk[p.cluster.id] = p.score >= 0.85 && !!p.part;
-          prt[p.cluster.id] = p.part?.id || '';
+      setAutoAssignChecked(prev => {
+          const next = { ...prev };
+          autoAssignProposals.forEach(p => { if (!(p.cluster.id in next)) next[p.cluster.id] = p.score >= 0.85 && !!p.part; });
+          return next;
       });
-      setAutoAssignChecked(chk);
-      setAutoAssignPart(prt);
+      setAutoAssignPart(prev => {
+          const next = { ...prev };
+          autoAssignProposals.forEach(p => { if (!(p.cluster.id in next)) next[p.cluster.id] = p.part?.id || ''; });
+          return next;
+      });
   }, [autoAssignProposals]);
 
   const handleAutoAssign = async () => {
