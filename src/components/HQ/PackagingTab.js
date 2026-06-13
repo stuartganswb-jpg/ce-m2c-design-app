@@ -597,6 +597,32 @@ const PackagingTab = ({ activeBrand }) => {
     return out;
   };
 
+  // Auto-nest the small parts into the box base (foam sheet). Shelf pack (tallest-first),
+  // 0.5" of foam around every part, rotating parts narrower than 3" when it helps them fit.
+  // v1 packs each part's bounding footprint; assembled-unit T outlines + true silhouettes are
+  // the next revision. Returns the cut rects (part footprint inset by the margin) + overflow count.
+  const nestSmallParts = (items, boxW, boxH, margin = 0.5) => {
+    const units = [];
+    (items || []).forEach(it => {
+      const w = it.footprint?.w || 3, h = it.footprint?.h || 3;   // default 3x3 when untraced
+      for (let q = 0; q < (Number(it.qty) || 1); q++) units.push({ w, h, cw: w + 2 * margin, ch: h + 2 * margin });
+    });
+    units.sort((a, b) => b.ch - a.ch);
+    const shapes = []; let unplaced = 0;
+    let x = 0, y = 0, shelfH = 0;
+    for (const u of units) {
+      let cw = u.cw, ch = u.ch, rot = false;
+      const canRotate = Math.min(u.w, u.h) < 3;
+      if (x + cw > boxW + 1e-6) { x = 0; y += shelfH; shelfH = 0; }            // wrap to next shelf
+      if (x + cw > boxW + 1e-6 && canRotate && ch <= boxW + 1e-6) { [cw, ch] = [ch, cw]; rot = true; } // rotate to fit width
+      if (x + cw > boxW + 1e-6 || y + ch > boxH + 1e-6) { unplaced++; continue; }  // doesn't fit -> overflow
+      const pw = rot ? u.h : u.w, ph = rot ? u.w : u.h;
+      shapes.push({ id: uid(), type: 'rect', x: +(x + margin).toFixed(3), y: +(y + margin).toFixed(3), width: +pw.toFixed(3), height: +ph.toFixed(3) });
+      x += cw; shelfH = Math.max(shelfH, ch);
+    }
+    return { shapes, unplaced };
+  };
+
   // --- Rendering Helpers ---
   const renderShape = (s) => {
     const selected = sel.has(s.id);
@@ -853,7 +879,7 @@ const PackagingTab = ({ activeBrand }) => {
                 {/* Pole box loads the cross-section (W×H, e.g. 8×3) into the workspace — the foam is
                     cut as a side-extrusion of that profile (bores per pole), run the box length. */}
                 {poleBox && boxCard(`${poleBox.name} · ${poleCount} pole(s)`, `${poleBox.len}"L × ${poleBox.w}"W × ${poleBox.h}"H`, poleItems.map(itemRow), () => { setFoamW(poleBox.w); setFoamH(poleBox.h); setShapes(generatePoleBores(poleCount, poleBox.w, poleBox.h)); })}
-                {smallItems.length > 0 && boxCard(smallBox.name, `${smallBox.w}" × ${smallBox.h}"${smallBox.d ? ` × ${smallBox.d}"` : ''}`, smallItems.map(itemRow), () => { setFoamW(smallBox.w); setFoamH(smallBox.h); })}
+                {smallItems.length > 0 && boxCard(smallBox.name, `${smallBox.w}" × ${smallBox.h}"${smallBox.d ? ` × ${smallBox.d}"` : ''}`, smallItems.map(itemRow), () => { setFoamW(smallBox.w); setFoamH(smallBox.h); const r = nestSmallParts(smallItems, smallBox.w, smallBox.h); setShapes(r.shapes); if (r.unplaced) setTimeout(() => alert(`${r.unplaced} part(s) didn't fit this box — they'll need a second box.`), 50); })}
                 {items.length === 0 && <div style={{ fontSize: '0.8rem', color: theme.inkSoft, fontStyle: 'italic' }}>No items on this order.</div>}
               </div>
             );

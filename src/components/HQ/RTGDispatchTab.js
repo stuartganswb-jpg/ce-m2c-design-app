@@ -421,6 +421,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             const pkgItems = lines.map(l => {
                 const part = l.partId ? partCache.get(l.partId) : null;
                 const isCustom = classifyLine(l, part) === DIVISION_CUSTOM;
+                const param = part?.manufacturingSpecs?.parametric || {};
+                const fw = parseFloat(param.width), fh = parseFloat(param.height);
                 return {
                     partId: l.partId || null,
                     partName: cleanLineName(l.name),
@@ -430,6 +432,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     partHandling: l.partHandling || (isCustom ? 'Custom' : 'Small Parts'),
                     cutLength: l.cutLength || null,
                     dimensions: l.dimensions || null,
+                    // Traced part footprint (in) for the small-parts foam nest; null -> packer defaults.
+                    footprint: (fw > 0 && fh > 0) ? { w: fw, h: fh } : null,
                 };
             });
             await setDoc(doc(db, "packaging_orders", pkgId), {
