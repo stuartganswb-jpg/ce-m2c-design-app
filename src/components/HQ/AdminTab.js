@@ -213,7 +213,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   useEffect(() => {
       if (!flowSettings.linkedAssemblyId) { setLinkedBomPins([]); return; }
-      const linkedAsm = masterAssemblies.find(a => a.id === flowSettings.linkedAssemblyId);
+      const linkedAsm = allApprovedDesigns.find(a => a.id === flowSettings.linkedAssemblyId || a.itemId === flowSettings.linkedAssemblyId);
       if(!linkedAsm) return;
       
       const unsub = onSnapshot(collection(db, "assembly_pins"), (snap) => {
@@ -276,7 +276,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   const handleInspectNodes = () => {
       if (!flowSettings.linkedAssemblyId) return alert("Please link a Master Assembly to this CPQ Flow first.");
-      const linkedAsm = masterAssemblies.find(a => a.id === flowSettings.linkedAssemblyId);
+      const linkedAsm = allApprovedDesigns.find(a => a.id === flowSettings.linkedAssemblyId || a.itemId === flowSettings.linkedAssemblyId);
       if (!linkedAsm || !linkedAsm.manufacturingSpecs?.cadUrl) return alert("The linked Master Assembly does not have a 3D CAD (.glb) file attached.");
 
       setIsInspecting(true);
@@ -802,7 +802,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
   const orphanedAssemblies = masterAssemblies.filter(asm => !cpqFlows.some(flow => flow.linkedAssemblyId === asm.id));
   const availableSourceItems = getDataSourceItems(newStep.dataSource);
-  const linkedAsm = masterAssemblies.find(a => a.id === flowSettings.linkedAssemblyId);
+  const linkedAsm = allApprovedDesigns.find(a => a.id === flowSettings.linkedAssemblyId || a.itemId === flowSettings.linkedAssemblyId);
 
   const optionsToMap = (newStep.allowedOptions && newStep.allowedOptions.length > 0) 
       ? availableSourceItems.filter(opt => newStep.allowedOptions.includes(opt.id)) 
@@ -1265,6 +1265,31 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
                                             <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Style Options — choose which BOM items can be swapped</label>
                                             <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Items and their 3D mesh nodes come from this assembly's BOM (set in Node Cluster / BOM Engine). Not listed? Add it to the BOM first.</span>
+
+                                            {(newStep.styleOptions || []).length > 0 && (
+                                                <div style={{ marginBottom: '16px', padding: '12px 16px', background: 'var(--paper)', border: '1px solid var(--brass)' }}>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Configured Options ({(newStep.styleOptions || []).length}) — what the customer chooses between on this step</div>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                        {(newStep.styleOptions || []).map(o => {
+                                                            const okey = o.optId || o.partId;
+                                                            const part = allApprovedDesigns.find(d => d.id === o.partId || d.itemId === o.partId);
+                                                            const img = part?.componentImageUrl || part?.finalImageUrl;
+                                                            return (
+                                                                <div key={okey} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#fff', border: '1px solid var(--line)', padding: '6px 8px' }}>
+                                                                    {img
+                                                                        ? <img src={img} alt="" onClick={() => setZoomImg({ url: img, label: o.partName || okey })} title="Click to enlarge" style={{ width: '34px', height: '34px', objectFit: 'contain', background: 'var(--paper)', cursor: 'zoom-in', flexShrink: 0 }} />
+                                                                        : <span style={{ width: '34px', height: '34px', flexShrink: 0, border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)' }}>no img</span>}
+                                                                    <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--ink)' }}>{o.partName || okey}</span>
+                                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{(o.price !== undefined && o.price !== '' && o.price !== null) ? `$${o.price}` : ''}</span>
+                                                                    <button onClick={() => setNewStep(prev => { const opts = (prev.styleOptions || []).filter(x => (x.optId || x.partId) !== okey); const geometryMap = {}; opts.forEach(x => { geometryMap[x.optId || x.partId] = x.targetNode; }); return { ...prev, styleOptions: opts, geometryMap }; })} title="Remove this option" style={{ background: 'transparent', border: 'none', color: '#d9534f', fontSize: '1.1rem', lineHeight: 1, cursor: 'pointer', padding: '0 6px' }}>×</button>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', marginTop: '8px', fontStyle: 'italic' }}>Add more by checking BOM components below. Custom options not in the BOM (e.g. Wood / Metal rod, which have no library part yet) live here and aren't shown as checkboxes.</div>
+                                                </div>
+                                            )}
+
                                             {!flowSettings.linkedAssemblyId ? (
                                                 <div style={{ fontSize: '0.9rem', color: '#d9534f', fontStyle: 'italic' }}>Link a Master Assembly to this flow first (in the settings above).</div>
                                             ) : linkedBomPins.length === 0 ? (
