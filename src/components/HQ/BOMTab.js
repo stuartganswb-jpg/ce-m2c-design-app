@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, updateDoc } from "firebase/firestore";
-import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
+import { loadGLBScene, snapshotPNG } from '../Shared/componentExport';
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -13,6 +14,7 @@ const AVAILABLE_BRANDS = [
 const BOMTab = ({ currentUser, activeBrand }) => {
   const [assemblies, setAssemblies] = useState([]);
   const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
+  const [capturingThumb, setCapturingThumb] = useState(false);
   
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
@@ -111,7 +113,9 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       let docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       docs.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setAssemblies(docs);
-      if (docs.length > 0 && !selectedAssemblyId) setSelectedAssemblyId(docs[0].itemId);
+      // Default to the first MAIN assembly (the only ones this tab lists).
+      const firstMain = docs.find(d => (d.routingType || '').toUpperCase() === 'MAIN');
+      if (firstMain && !selectedAssemblyId) setSelectedAssemblyId(firstMain.itemId);
     });
     return () => unsubscribe();
   }, [activeBrand, selectedAssemblyId]);
@@ -137,6 +141,23 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   }, [activeBrand]);
 
   const selectedAssemblyData = assemblies.find(a => a.itemId === selectedAssemblyId);
+
+  // Capture a thumbnail of the WHOLE assembly from its .glb (3/4 render), the assembly-level
+  // counterpart to the per-component thumbnails generated in Visual Assembly.
+  const handleCaptureAssemblyThumbnail = async () => {
+      const cadUrl = selectedAssemblyData?.manufacturingSpecs?.cadUrl;
+      if (!cadUrl) return alert("This assembly has no 3D CAD (.glb) to capture.");
+      setCapturingThumb(true);
+      try {
+          const scene = await loadGLBScene(cadUrl);
+          const png = await snapshotPNG(scene, 768);
+          const sref = ref(storage, `assembly_thumbnails/${activeBrand}_${selectedAssemblyData.itemId}.png`);
+          await uploadBytes(sref, png, { contentType: 'image/png' });
+          await updateDoc(doc(db, "Approved_Designs", selectedAssemblyData.id), { finalImageUrl: await getDownloadURL(sref) });
+          alert("✅ Assembly thumbnail captured.");
+      } catch (e) { console.error(e); alert("Capture failed: " + (e.message || e)); }
+      finally { setCapturingThumb(false); }
+  };
 
   useEffect(() => {
       if (selectedAssemblyData) {
@@ -208,7 +229,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       const term = searchTerm.toLowerCase();
       const specs = part.manufacturingSpecs || {};
 
-      const matchesSearch = part.itemName?.toLowerCase().includes(term) || 
+      // The BOM Engine builds the MAIN CPQ assemblies only; sub-assemblies / parts are edited
+      // in the Master Library. So hard-restrict the list to routingType MAIN.
+      if ((part.routingType || '').toUpperCase() !== 'MAIN') return false;
+
+      const matchesSearch = part.itemName?.toLowerCase().includes(term) ||
                             (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term)) || 
                             (part.itemId && part.itemId.toLowerCase().includes(term));
       
@@ -603,7 +628,14 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     ) : (
                                         <div style={{ height: '200px', background: 'var(--paper-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed var(--line)', color: 'var(--ink-soft)', flexDirection: 'column' }}>
                                             <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>No Image Available</span>
-                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', marginTop: '10px', color: 'var(--ink-soft)' }}>Capture Thumbnail via Visual Engine</span>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', marginTop: '10px', color: 'var(--ink-soft)' }}>Capture from the .glb below, or via Visual Engine</span>
+                                        </div>
+                                    )}
+                                    {selectedAssemblyData.manufacturingSpecs?.cadUrl && (
+                                        <div style={{ marginTop: '12px' }}>
+                                            <button onClick={handleCaptureAssemblyThumbnail} disabled={capturingThumb} style={{ padding: '10px 20px', background: capturingThumb ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', border: 'none', cursor: capturingThumb ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                {capturingThumb ? '⚙ Capturing…' : (selectedAssemblyData.finalImageUrl ? '⚙ Re-capture Assembly Thumbnail' : '⚙ Capture Assembly Thumbnail')}
+                                            </button>
                                         </div>
                                     )}
                                 </div>
