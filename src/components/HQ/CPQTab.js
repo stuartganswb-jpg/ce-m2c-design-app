@@ -676,6 +676,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
 
+  // When a Style selection changes, drop any finish picked for the prior style: different
+  // styles can scope different finish sets (e.g. a Wood rod offers wood-clear finishes, a
+  // Metal rod offers metal finishes), so a carried-over finish could be invalid for — and
+  // applied to the wrong mesh of — the new selection.
+  const handleStyleChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value, [`${stepId}__finish`]: '' }));
+
   const handleNextStep = () => {
       if (!activeFlow) return;
       let nextIndex = currentStepIndex + 1;
@@ -1272,7 +1278,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           )}
 
                           {((currentStep.type === 'DROPDOWN' && currentStep.dataSource) || currentStep.type === 'STYLE_SWAP') && (
-                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleParamChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: currentStep.finishDataSource ? '12px' : '20px', outline: 'none' }}>
+                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleStyleChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: currentStep.finishDataSource ? '12px' : '20px', outline: 'none' }}>
                                   <option value="">{currentStep.type === 'STYLE_SWAP' ? '-- Choose Style --' : '-- Select Option --'}</option>
                                   {getOptionsForStep(currentStep).map(opt => (
                                       <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</option>
@@ -1280,19 +1286,29 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               </select>
                           )}
 
-                          {/* Compound step: an optional second "Finish" dropdown sharing one finish
-                              set, applied to the selected (visible) item's mesh. */}
-                          {currentStep.finishDataSource && (
+                          {/* Compound step: an optional second "Finish" dropdown applied to the
+                              selected (visible) item's mesh. The finish set is scoped to the chosen
+                              Style option when that option carries its own finishAllowedOptions
+                              (e.g. Wood rod -> wood-clear finishes, Metal rod -> metal finishes);
+                              otherwise it falls back to the step-level finish list. */}
+                          {currentStep.finishDataSource && (() => {
+                              const selStyleId = dynamicConfigParams[currentStep.id];
+                              const selOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === selStyleId);
+                              const scopedFinishes = (selOpt && Array.isArray(selOpt.finishAllowedOptions) && selOpt.finishAllowedOptions.length)
+                                  ? selOpt.finishAllowedOptions
+                                  : (currentStep.finishAllowedOptions || []);
+                              return (
                               <div style={{ marginBottom: '20px' }}>
                                   <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Finish</label>
                                   <select value={dynamicConfigParams[`${currentStep.id}__finish`] || ''} onChange={(e) => handleParamChange(`${currentStep.id}__finish`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none' }}>
                                       <option value="">-- Select Finish --</option>
-                                      {getOptionsForStep({ ...currentStep, type: 'DROPDOWN', dataSource: currentStep.finishDataSource, allowedOptions: currentStep.finishAllowedOptions || [], geometryMap: {}, styleOptions: [] }).map(opt => (
+                                      {getOptionsForStep({ ...currentStep, type: 'DROPDOWN', dataSource: currentStep.finishDataSource, allowedOptions: scopedFinishes, geometryMap: {}, styleOptions: [] }).map(opt => (
                                           <option key={opt.id} value={opt.id}>{opt.itemName}</option>
                                       ))}
                                   </select>
                               </div>
-                          )}
+                              );
+                          })()}
 
                           {currentStep.type === 'STATIC_FEE' && (
                               <div style={{ padding: '24px', background: 'var(--paper)', border: '1px dashed var(--line)', textAlign: 'center', marginBottom: '20px' }}>

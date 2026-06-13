@@ -28,6 +28,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [isAdmin] = useState(true);
 
   const [inventory, setInventory] = useState([]);
+  const [syncingThumbs, setSyncingThumbs] = useState(null);   // {done,total} while syncing, else null
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [partClassFilter, setPartClassFilter] = useState("ALL"); 
@@ -336,6 +337,56 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       );
   };
 
+  // Sync Thumbnails: match library parts to Asset Gallery images by pattern + finish and set
+  // finalImageUrl on any that are missing one. Part codes are "<pattern>/<finish>" (e.g.
+  // "H1-138BE/P01"); assets store patternId + finishId. Finishes are normalised (the gallery
+  // zero-pads — EP01 — while parts don't — EP1), so leading zeros are stripped on both sides.
+  // Re-runnable: as new images are uploaded, re-run to fill more parts.
+  const handleSyncThumbnails = async () => {
+      const normFinish = (s) => String(s || '').toUpperCase().trim().replace(/^([A-Z]+)0*(\d+)$/, '$1$2');
+      const split = (erp) => {
+          const i = String(erp || '').indexOf('/');
+          return i < 0 ? null : { pattern: erp.slice(0, i).toUpperCase().trim(), finish: normFinish(erp.slice(i + 1)) };
+      };
+      try {
+          setSyncingThumbs({ done: 0, total: 0 });
+          const snap = await getDocs(collection(db, "global_assets"));
+          const assetMap = new Map();
+          snap.docs.forEach(d => {
+              const a = d.data();
+              const img = a.thumbnailUrl || a.url || a.originalUrl;
+              if (a.patternId && img) assetMap.set(`${String(a.patternId).toUpperCase().trim()}|${normFinish(a.finishId)}`, img);
+          });
+
+          // Parts in this brand that have no image yet and carry a pattern/finish code.
+          const candidates = inventory.filter(p =>
+              (p.brandId === activeBrand || (p.sharedBrands && p.sharedBrands.includes(activeBrand))) &&
+              !p.finalImageUrl && p.legacyErpId && p.legacyErpId.includes('/'));
+
+          const hits = [];
+          candidates.forEach(p => {
+              const k = split(p.legacyErpId);
+              const img = k && assetMap.get(`${k.pattern}|${k.finish}`);
+              if (img) hits.push({ id: p.id, img });
+          });
+
+          if (hits.length === 0) { setSyncingThumbs(null); return alert(`No new matches. Checked ${candidates.length} image-less part(s) against ${assetMap.size} gallery image(s).`); }
+
+          // Commit in chunks (Firestore batch cap 500).
+          let done = 0;
+          for (let i = 0; i < hits.length; i += 400) {
+              const chunk = hits.slice(i, i + 400);
+              const batch = writeBatch(db);
+              chunk.forEach(h => batch.update(doc(db, "Approved_Designs", h.id), { finalImageUrl: h.img }));
+              await batch.commit();
+              done += chunk.length;
+              setSyncingThumbs({ done, total: hits.length });
+          }
+          setSyncingThumbs(null);
+          alert(`✅ Synced ${hits.length} thumbnail(s) from the Asset Gallery (of ${candidates.length} image-less parts).`);
+      } catch (e) { console.error(e); setSyncingThumbs(null); alert("Sync failed: " + (e.message || e)); }
+  };
+
   const handleCreateNewPart = () => {
     const actualClass = partClassFilter === 'ALL' || partClassFilter === 'INVENTORY' || partClassFilter === 'OUTSOURCED' ? 'Inventory' : 'Assembly';
     const newId = `${activeBrand.toUpperCase()}-${actualClass === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
@@ -538,6 +589,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           </select>
           
           <button onClick={handleCreateNewPart} style={{ padding: '10px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>+ New Record</button>
+
+          <button onClick={handleSyncThumbnails} disabled={!!syncingThumbs} title="Match image-less parts to Asset Gallery images by pattern + finish (e.g. H1-138BE / P01) and set their thumbnails. Re-runnable as you add images." style={{ padding: '10px 20px', background: syncingThumbs ? 'var(--ink-soft)' : 'var(--brass)', color: '#fff', border: 'none', cursor: syncingThumbs ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+              {syncingThumbs ? `⟳ Syncing ${syncingThumbs.done}/${syncingThumbs.total}` : '⟳ Sync Thumbnails'}
+          </button>
           
           {windowConfig.system.prodTypes?.includes(activeBrand) && (
               <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }}>

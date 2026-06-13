@@ -318,7 +318,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 qtyMiters: eng.qtyMiters || 0,
                 qtyMiterReturns: eng.qtyMiterReturns || 0,
                 poleO2O: eng.poleO2O || null,
-                totalSystemO2O: eng.totalSystemO2O || null
+                totalSystemO2O: eng.totalSystemO2O || null,
+                // Hidden-hanger mount positions captured in Vision: FIPBH per bracket, FIPBHS per
+                // splice. The shop floor reads these to set the concealed hangers at the right spots.
+                hangerLocations: Array.isArray(eng.hangerLocations) ? eng.hangerLocations : []
             };
             const fabMethod = eng.qtyBends > 0 ? 'BEND' : (eng.qtySplices > 0 ? 'SPLICE' : (eng.qtyMiters > 0 ? 'MITER' : null));
             const drawingUrl = svgUri

@@ -5,6 +5,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import * as THREE from 'three';
+import { loadGLBScene, buildComponentFiles } from '../Shared/componentExport';
 
 class ErrorBoundary extends React.Component {
     constructor(props) { super(props); this.state = { hasError: false }; }
@@ -150,6 +151,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [showAutoAssign, setShowAutoAssign] = useState(false);
   const [autoAssignPart, setAutoAssignPart] = useState({});    // clusterId -> chosen partId
   const [autoAssignChecked, setAutoAssignChecked] = useState({});
+  const [genState, setGenState] = useState(null);              // {done,total,label} while generating component files
   const [isCanvasLocked, setIsCanvasLocked] = useState(true); 
 
   const [isFrozen, setIsFrozen] = useState(false);
@@ -657,6 +659,88 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           setShowAutoAssign(false);
       } catch (err) { console.error(err); alert("Auto-assign failed."); }
   };
+
+  // --- GENERATE PER-COMPONENT FILES ---
+  // For each cluster: isolate it from the master .glb, lay it FLAT, and emit a standalone
+  // .glb + a thumbnail PNG. The PNG becomes the item image (auto-generated, no manual
+  // screenshot); the .glb is reusable and feeds the Packaging tab's foam-cut tracer. Names
+  // by the matched part code so repeats (L/C/R) share one file. Retrofits existing
+  // assemblies — it just iterates whatever clusters are already there, and is re-runnable.
+  const handleGenerateComponentFiles = async () => {
+      const cadUrl = activeAssembly?.manufacturingSpecs?.cadUrl;
+      const clusters = activeAssembly?.nodeClusters || [];
+      if (!cadUrl) return alert("This assembly has no 3D CAD (.glb). Upload one in Inception first.");
+      if (clusters.length === 0) return alert("No clusters to export — run Auto-Group first.");
+      if (!window.confirm(`Generate a flat per-component .glb + thumbnail for ${clusters.length} cluster(s)?\nThis loads the model and renders each part — may take a minute.`)) return;
+
+      const codeForCluster = (cl) => {
+          const pin = pins.find(p => p.clusterId === cl.id);
+          const fromPin = pin && pin.legacyErpId && !['N/A', 'PENDING', ''].includes(pin.legacyErpId) ? pin.legacyErpId : '';
+          return normCode(fromPin) || normCode(stripPosition(cl.name)) || cl.id;
+      };
+
+      setGenState({ done: 0, total: clusters.length, label: 'Loading model…' });
+      try {
+          const scene = await loadGLBScene(cadUrl);
+
+          // Dedupe by code — L/C/R repeats share identical geometry, so build the files once.
+          const built = {};          // code -> { glbUrl, imageUrl, dims } | null
+          const clusterUpdates = {}; // clusterId -> { glbUrl, imageUrl, dims }
+          let done = 0, made = 0, empty = 0;
+
+          for (const cl of clusters) {
+              const code = codeForCluster(cl);
+              setGenState({ done, total: clusters.length, label: code });
+              if (!(code in built)) {
+                  const files = await buildComponentFiles(scene, cl.nodes || []);
+                  if (files) {
+                      const glbRef = ref(storage, `component_models/${activeBrand}_${code}.glb`);
+                      const pngRef = ref(storage, `component_images/${activeBrand}_${code}.png`);
+                      await uploadBytes(glbRef, files.glbBlob, { contentType: 'model/gltf-binary' });
+                      await uploadBytes(pngRef, files.pngBlob, { contentType: 'image/png' });
+                      built[code] = { glbUrl: await getDownloadURL(glbRef), imageUrl: await getDownloadURL(pngRef), dims: files.dims };
+                      made++;
+                  } else { built[code] = null; empty++; }
+              }
+              if (built[code]) clusterUpdates[cl.id] = built[code];
+              done++;
+              setGenState({ done, total: clusters.length, label: code });
+          }
+
+          // Stamp the generated files + measured dims onto each cluster.
+          const newClusters = clusters.map(cl => clusterUpdates[cl.id]
+              ? { ...cl, glbUrl: clusterUpdates[cl.id].glbUrl, imageUrl: clusterUpdates[cl.id].imageUrl, dimsIn: clusterUpdates[cl.id].dims }
+              : cl);
+          await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: newClusters });
+
+          // Carry to the matched library parts: record component artefacts + the measured
+          // Geometry & Z-Index dimensions (Width/Height, in inches), and set the primary item
+          // image only when the part has no curated one (non-destructive on retrofit). One
+          // write per part.
+          const seenPart = new Set();
+          for (const cl of clusters) {
+              const u = clusterUpdates[cl.id]; if (!u) continue;
+              const pin = pins.find(p => p.clusterId === cl.id); if (!pin?.partId) continue;
+              const part = libraryParts.find(lp => lp.itemId === pin.partId || lp.id === pin.partId);
+              if (!part || seenPart.has(part.id)) continue;
+              seenPart.add(part.id);
+              const patch = {
+                  componentGlbUrl: u.glbUrl,
+                  componentImageUrl: u.imageUrl,
+                  'manufacturingSpecs.parametric.width': u.dims.width,
+                  'manufacturingSpecs.parametric.height': u.dims.height,
+              };
+              if (!part.finalImageUrl) patch.finalImageUrl = u.imageUrl;
+              await updateDoc(doc(db, "Approved_Designs", part.id), patch);
+          }
+
+          setGenState(null);
+          alert(`✅ Generated ${made} component file set(s)${empty ? ` (${empty} cluster(s) had no mesh — skipped)` : ''}.\nFlat .glb + thumbnails saved, true dimensions written to each part's Geometry rules; .glb's are ready for foam tracing in Packaging.`);
+      } catch (err) {
+          console.error(err); setGenState(null);
+          alert(`Generate failed: ${err.message || err}`);
+      }
+  };
   
   // Resolve the nodes to highlight for "Locate". Works for an unassigned cluster (by id)
   // and for an already-assigned BOM pin (by its clusterId, or its own targetNode) — so
@@ -719,34 +803,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', height: isCanvasMaximized ? 'auto' : 'calc(100vh - 150px)', minHeight: isCanvasMaximized ? 'auto' : '600px', overflow: isCanvasMaximized ? 'visible' : 'hidden' }}>
 
-        {viewMode === '3D' && activeAssembly && (
-            <div style={{ width: '280px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                <div style={{ padding: '16px 20px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
-                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Evil Eye</span>
-                    <button onClick={() => setHiddenNodes([])} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Show All</button>
-                </div>
-                <div style={{ padding: '20px', flex: 1, overflowY: 'auto', background: '#fff' }}>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '16px', fontStyle: 'italic' }}>Uncheck to hide parts for clean screenshots.</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {sceneMeshes.map(meshObj => (
-                            <label key={meshObj.originalName} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', cursor: 'pointer', background: hiddenNodes.includes(meshObj.originalName) ? 'var(--paper-2)' : '#fff', padding: '8px 12px', border: '1px solid var(--line)', color: 'var(--ink)' }}>
-                                <input 
-                                    type="checkbox" 
-                                    checked={!hiddenNodes.includes(meshObj.originalName)} 
-                                    onChange={(e) => {
-                                        if (e.target.checked) setHiddenNodes(prev => prev.filter(n => n !== meshObj.originalName));
-                                        else setHiddenNodes(prev => [...prev, meshObj.originalName]);
-                                    }} 
-                                />
-                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={meshObj.displayName}>
-                                    {meshObj.displayName}
-                                </span>
-                            </label>
-                        ))}
-                    </div>
-                </div>
-            </div>
-        )}
+        {/* Evil Eye per-mesh hide panel removed — the body-label checkboxes weren't useful;
+            the screen is now a clean split between the 3D viewer and the cluster/BOM column. */}
 
         <div style={canvasContainerStyle} id="canvas-container">
           
@@ -959,16 +1017,22 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                             <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Unassigned Clusters</span>
                             <button onClick={() => setShowAutoAssign(true)} title="Match these clusters to library parts by name and build the BOM in one pass" style={{ padding: '10px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600, whiteSpace: 'nowrap' }}>⚡ Auto-Assign BOM</button>
+                            <button onClick={handleGenerateComponentFiles} disabled={!!genState || !activeAssembly?.manufacturingSpecs?.cadUrl} title="Isolate each cluster from the .glb, lay it flat, and save a per-component .glb + thumbnail. The PNG becomes the item image; the .glb feeds foam-cut tracing in Packaging." style={{ padding: '10px 16px', background: genState ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', border: 'none', cursor: genState || !activeAssembly?.manufacturingSpecs?.cadUrl ? 'not-allowed' : 'pointer', opacity: !activeAssembly?.manufacturingSpecs?.cadUrl ? 0.5 : 1, fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                {genState ? `⚙ ${genState.done}/${genState.total} ${genState.label}` : '⚙ Generate Component Files'}
+                            </button>
                         </div>
                         <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>These 3D groupings have not been converted into BOM items yet. <strong>Locate</strong> highlights one in the 3D view.</div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '32vh', overflowY: 'auto' }}>
                             {unassignedClusters.map(cl => {
                                 const isLocating = locatingClusterId === cl.id;
                                 return (
-                                <div key={cl.id} style={{ display: 'flex', gap: '8px' }}>
-                                    <button 
+                                <div key={cl.id} style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '6px', borderRadius: '2px', background: isLocating ? 'rgba(176,141,87,0.14)' : 'transparent', border: `1px solid ${isLocating ? 'var(--brass)' : 'transparent'}` }}>
+                                    {cl.imageUrl
+                                        ? <img src={cl.imageUrl} alt="" style={{ width: '46px', height: '46px', objectFit: 'contain', background: '#fff', border: '1px solid var(--line)', flexShrink: 0 }} />
+                                        : <span style={{ width: '46px', height: '46px', flexShrink: 0, border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '8px', color: 'var(--ink-soft)', textAlign: 'center' }}>no img</span>}
+                                    <button
                                         onClick={() => setLocatingClusterId(isLocating ? null : cl.id)}
-                                        style={{ padding: '12px', background: isLocating ? 'var(--paper)' : '#fff', color: isLocating ? 'var(--ink)' : 'var(--ink-soft)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', flexShrink: 0 }}
+                                        style={{ padding: '12px', background: isLocating ? 'var(--brass)' : '#fff', color: isLocating ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', flexShrink: 0 }}
                                     >
                                         {isLocating ? 'Clear' : 'Locate'}
                                     </button>
@@ -1001,9 +1065,11 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             {pins.map(pin => {
                                 const libraryMatch = libraryParts.find(p => p.id === pin.partId);
-                                const hasThumb = libraryMatch?.finalImageUrl;
+                                const cluster = activeAssembly?.nodeClusters?.find(c => c.id === pin.clusterId);
+                                const hasThumb = libraryMatch?.finalImageUrl || libraryMatch?.componentImageUrl || cluster?.imageUrl;
+                                const isLoc = locatingClusterId === (pin.clusterId || pin.id);
                                 return (
-                                <div key={pin.id} style={{ background: 'var(--paper)', border: '1px solid var(--line)', borderLeft: `4px solid ${pin.isExistingLibraryPart ? 'var(--ink)' : 'var(--brass)'}`, padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <div key={pin.id} style={{ background: isLoc ? 'rgba(176,141,87,0.12)' : 'var(--paper)', border: `1px solid ${isLoc ? 'var(--brass)' : 'var(--line)'}`, borderLeft: `4px solid ${pin.isExistingLibraryPart ? 'var(--ink)' : 'var(--brass)'}`, padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                                         <div style={{ width: '48px', height: '48px', background: '#fff', border: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                                             {hasThumb ? <img src={hasThumb} alt="" style={{width: '100%', height:'100%', objectFit:'contain'}}/> : <span style={{fontSize:'12px', color:'var(--ink-soft)'}}>No Img</span>}
@@ -1020,18 +1086,15 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
 
-                                        {viewMode === '3D' && (pin.clusterId || pin.targetNode) && (() => {
-                                            const isLoc = locatingClusterId === (pin.clusterId || pin.id);
-                                            return (
-                                                <button
-                                                    onClick={() => setLocatingClusterId(isLoc ? null : (pin.clusterId || pin.id))}
-                                                    title="Highlight this part in the 3D view to confirm the assignment"
-                                                    style={{ background: isLoc ? 'var(--brass)' : 'transparent', border: '1px solid var(--brass)', color: isLoc ? '#fff' : 'var(--brass)', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer', padding: '8px 12px' }}
-                                                >
-                                                    {isLoc ? '◉ Locating' : 'Locate'}
-                                                </button>
-                                            );
-                                        })()}
+                                        {viewMode === '3D' && (pin.clusterId || pin.targetNode) && (
+                                            <button
+                                                onClick={() => setLocatingClusterId(isLoc ? null : (pin.clusterId || pin.id))}
+                                                title="Highlight this part in the 3D view to confirm the assignment"
+                                                style={{ background: isLoc ? 'var(--brass)' : 'transparent', border: '1px solid var(--brass)', color: isLoc ? '#fff' : 'var(--brass)', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer', padding: '8px 12px' }}
+                                            >
+                                                {isLoc ? '◉ Locating' : 'Locate'}
+                                            </button>
+                                        )}
 
                                         <button
                                             onClick={() => { setIsFrozen(true); setInteractionMode('crop'); setCropState({ pinId: pin.id, x: 50, y: 50, w: 250, h: 250, action: null }); }}
@@ -1049,16 +1112,15 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                     </div>
                 </div>
 
-                <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                    <div style={{ padding: '20px 24px', background: 'var(--paper)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Parent Routing</div>
-                    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block' }}>Classify Entire Image As:</label>
-                        <select value={routingType} onChange={(e) => setRoutingType(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
-                            <option value="">-- Select Routing Type --</option>
-                            {(globalLists.assemblyTypes || []).map(type => ( <option key={type} value={type}>{type}</option> ))}
-                        </select>
-                        <button onClick={handleSaveRouting} disabled={!activeAssembly || !routingType} style={{ padding: '16px', background: isSavingRouting ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: (activeAssembly && routingType) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '8px', transition: 'background 0.2s' }}>{isSavingRouting ? "Saving..." : "Save Routing Type"}</button>
-                    </div>
+                {/* Parent Routing is just a one-off classification dropdown — keep it a compact
+                    single row so it doesn't squeeze the Master BOM. */}
+                <div style={{ flexShrink: 0, background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', whiteSpace: 'nowrap', letterSpacing: '.1em' }} title="Classify the entire assembly (routing type). Setting this also lets the CPQ flow builder recognise it as a CPQ master assembly.">Parent Routing</label>
+                    <select value={routingType} onChange={(e) => setRoutingType(e.target.value)} style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }}>
+                        <option value="">-- Classify entire image as… --</option>
+                        {(globalLists.assemblyTypes || []).map(type => ( <option key={type} value={type}>{type}</option> ))}
+                    </select>
+                    <button onClick={handleSaveRouting} disabled={!activeAssembly || !routingType} style={{ padding: '10px 18px', background: isSavingRouting ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: (activeAssembly && routingType) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap', transition: 'background 0.2s' }}>{isSavingRouting ? "Saving…" : "Save"}</button>
                 </div>
             </div>
         )}

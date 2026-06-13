@@ -66,6 +66,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [newFlowName, setNewFlowName] = useState("");
   const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
+  const [zoomImg, setZoomImg] = useState(null);   // {url,label} for the cluster-image lightbox
   const [isCreatingRollup, setIsCreatingRollup] = useState(false);
 
   const [inspectedNodes, setInspectedNodes] = useState([]);
@@ -212,7 +213,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   useEffect(() => {
       if (!flowSettings.linkedAssemblyId) { setLinkedBomPins([]); return; }
-      const linkedAsm = masterAssemblies.find(a => a.id === flowSettings.linkedAssemblyId);
+      const linkedAsm = allApprovedDesigns.find(a => a.id === flowSettings.linkedAssemblyId || a.itemId === flowSettings.linkedAssemblyId);
       if(!linkedAsm) return;
       
       const unsub = onSnapshot(collection(db, "assembly_pins"), (snap) => {
@@ -275,7 +276,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   const handleInspectNodes = () => {
       if (!flowSettings.linkedAssemblyId) return alert("Please link a Master Assembly to this CPQ Flow first.");
-      const linkedAsm = masterAssemblies.find(a => a.id === flowSettings.linkedAssemblyId);
+      const linkedAsm = allApprovedDesigns.find(a => a.id === flowSettings.linkedAssemblyId || a.itemId === flowSettings.linkedAssemblyId);
       if (!linkedAsm || !linkedAsm.manufacturingSpecs?.cadUrl) return alert("The linked Master Assembly does not have a 3D CAD (.glb) file attached.");
 
       setIsInspecting(true);
@@ -801,7 +802,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
   const orphanedAssemblies = masterAssemblies.filter(asm => !cpqFlows.some(flow => flow.linkedAssemblyId === asm.id));
   const availableSourceItems = getDataSourceItems(newStep.dataSource);
-  const linkedAsm = masterAssemblies.find(a => a.id === flowSettings.linkedAssemblyId);
+  const linkedAsm = allApprovedDesigns.find(a => a.id === flowSettings.linkedAssemblyId || a.itemId === flowSettings.linkedAssemblyId);
 
   const optionsToMap = (newStep.allowedOptions && newStep.allowedOptions.length > 0) 
       ? availableSourceItems.filter(opt => newStep.allowedOptions.includes(opt.id)) 
@@ -991,17 +992,20 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                                     <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Hide Geometry (other configs)</label>
                                     <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>When one CAD file holds several configs (e.g. wall / ceiling / end brackets), check the clusters this flow should NOT show. They'll be hidden in the 3D view for this flow — so the wall flow never shows ceiling or end brackets.</span>
-                                    <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 16px', background: '#fff', border: '1px solid var(--line)', padding: '12px' }}>
+                                    <div style={{ maxHeight: '240px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px', background: '#fff', border: '1px solid var(--line)', padding: '12px' }}>
                                         {linkedAsm.nodeClusters.map(cl => {
                                             const checked = (flowSettings.hiddenClusters || []).includes(cl.id);
                                             return (
-                                                <label key={cl.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer' }}>
+                                                <label key={cl.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer', opacity: checked ? 0.55 : 1 }}>
                                                     <input type="checkbox" checked={checked} onChange={(e) => {
                                                         const set = new Set(flowSettings.hiddenClusters || []);
                                                         if (e.target.checked) set.add(cl.id); else set.delete(cl.id);
                                                         setFlowSettings({ ...flowSettings, hiddenClusters: [...set] });
                                                     }} />
-                                                    {cl.name}
+                                                    {cl.imageUrl
+                                                        ? <img src={cl.imageUrl} alt="" onClick={(e) => { e.preventDefault(); setZoomImg({ url: cl.imageUrl, label: cl.name }); }} title="Click to enlarge" style={{ width: '32px', height: '32px', objectFit: 'contain', background: 'var(--paper)', border: '1px solid var(--line)', flexShrink: 0, cursor: 'zoom-in' }} />
+                                                        : <span style={{ width: '32px', height: '32px', flexShrink: 0, border: '1px dashed var(--line)' }} />}
+                                                    <span style={{ textDecoration: checked ? 'line-through' : 'none' }}>{cl.name}</span>
                                                 </label>
                                             );
                                         })}
@@ -1261,6 +1265,31 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
                                             <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Style Options — choose which BOM items can be swapped</label>
                                             <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Items and their 3D mesh nodes come from this assembly's BOM (set in Node Cluster / BOM Engine). Not listed? Add it to the BOM first.</span>
+
+                                            {(newStep.styleOptions || []).length > 0 && (
+                                                <div style={{ marginBottom: '16px', padding: '12px 16px', background: 'var(--paper)', border: '1px solid var(--brass)' }}>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Configured Options ({(newStep.styleOptions || []).length}) — what the customer chooses between on this step</div>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                        {(newStep.styleOptions || []).map(o => {
+                                                            const okey = o.optId || o.partId;
+                                                            const part = allApprovedDesigns.find(d => d.id === o.partId || d.itemId === o.partId);
+                                                            const img = part?.componentImageUrl || part?.finalImageUrl;
+                                                            return (
+                                                                <div key={okey} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#fff', border: '1px solid var(--line)', padding: '6px 8px' }}>
+                                                                    {img
+                                                                        ? <img src={img} alt="" onClick={() => setZoomImg({ url: img, label: o.partName || okey })} title="Click to enlarge" style={{ width: '34px', height: '34px', objectFit: 'contain', background: 'var(--paper)', cursor: 'zoom-in', flexShrink: 0 }} />
+                                                                        : <span style={{ width: '34px', height: '34px', flexShrink: 0, border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)' }}>no img</span>}
+                                                                    <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--ink)' }}>{o.partName || okey}</span>
+                                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{(o.price !== undefined && o.price !== '' && o.price !== null) ? `$${o.price}` : ''}</span>
+                                                                    <button onClick={() => setNewStep(prev => { const opts = (prev.styleOptions || []).filter(x => (x.optId || x.partId) !== okey); const geometryMap = {}; opts.forEach(x => { geometryMap[x.optId || x.partId] = x.targetNode; }); return { ...prev, styleOptions: opts, geometryMap }; })} title="Remove this option" style={{ background: 'transparent', border: 'none', color: '#d9534f', fontSize: '1.1rem', lineHeight: 1, cursor: 'pointer', padding: '0 6px' }}>×</button>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', marginTop: '8px', fontStyle: 'italic' }}>Add more by checking BOM components below. Custom options not in the BOM (e.g. Wood / Metal rod, which have no library part yet) live here and aren't shown as checkboxes.</div>
+                                                </div>
+                                            )}
+
                                             {!flowSettings.linkedAssemblyId ? (
                                                 <div style={{ fontSize: '0.9rem', color: '#d9534f', fontStyle: 'italic' }}>Link a Master Assembly to this flow first (in the settings above).</div>
                                             ) : linkedBomPins.length === 0 ? (
@@ -1292,6 +1321,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                         return { ...prev, styleOptions: opts, geometryMap };
                                                                     });
                                                                 }} />
+                                                                {cluster?.imageUrl
+                                                                    ? <img src={cluster.imageUrl} alt="" onClick={() => setZoomImg({ url: cluster.imageUrl, label: locLabel })} title="Click to enlarge" style={{ width: '40px', height: '40px', objectFit: 'contain', background: 'var(--paper)', border: '1px solid var(--line)', flexShrink: 0, cursor: 'zoom-in' }} />
+                                                                    : <span style={{ width: '40px', height: '40px', flexShrink: 0, border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)', textAlign: 'center' }}>no img</span>}
                                                                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                                                                     <span style={{ fontSize: '0.9rem', color: 'var(--ink)', fontWeight: 500 }}>{locLabel}</span>
                                                                     {cluster && cluster.name !== pin.partName && <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{pin.partName}</span>}
@@ -1341,6 +1373,47 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                     );
                                                                 })}
                                                             </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Per-style finish overrides: scope the finish list to an individual
+                                                        style option (e.g. Wood rod -> wood-clear finishes, Metal rod ->
+                                                        metal finishes). An option with its own list overrides the step
+                                                        default above; left empty it inherits the step default. Iterates
+                                                        styleOptions directly, so hand-authored options (not BOM pins) edit here too. */}
+                                                    {newStep.finishDataSource && (newStep.styleOptions || []).length > 0 && (
+                                                        <div style={{ marginTop: '12px', marginLeft: '28px', padding: '12px 16px', background: 'var(--paper)', border: '1px dashed var(--line)' }}>
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Per-style finish overrides (optional)</div>
+                                                            <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Scope finishes per style — e.g. a Wood rod offers wood-clear finishes, a Metal rod offers metal finishes. Leave a style's list empty to use the step default above.</span>
+                                                            {(newStep.styleOptions || []).map((o, oi) => {
+                                                                const okey = o.optId || o.partId;
+                                                                const list = o.finishAllowedOptions || [];
+                                                                return (
+                                                                    <details key={okey || oi} style={{ marginBottom: '8px', border: '1px solid var(--line)', background: '#fff' }}>
+                                                                        <summary style={{ cursor: 'pointer', padding: '8px 12px', fontSize: '0.85rem', color: 'var(--ink)', fontWeight: 500 }}>
+                                                                            {o.partName || okey} <span style={{ color: 'var(--ink-soft)', fontWeight: 400 }}>— {list.length ? `${list.length} finish(es)` : 'step default'}</span>
+                                                                        </summary>
+                                                                        <div style={{ maxHeight: '160px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 16px', padding: '8px 12px', borderTop: '1px solid var(--line)' }}>
+                                                                            {getDataSourceItems('master_finishes').map(f => {
+                                                                                const checked = list.includes(f.id);
+                                                                                return (
+                                                                                    <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer' }}>
+                                                                                        <input type="checkbox" checked={checked} onChange={(e) => {
+                                                                                            setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(so => {
+                                                                                                if ((so.optId || so.partId) !== okey) return so;
+                                                                                                const set = new Set(so.finishAllowedOptions || []);
+                                                                                                if (e.target.checked) set.add(f.id); else set.delete(f.id);
+                                                                                                return { ...so, finishAllowedOptions: [...set] };
+                                                                                            }) }));
+                                                                                        }} />
+                                                                                        {f.name}
+                                                                                    </label>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+                                                                    </details>
+                                                                );
+                                                            })}
                                                         </div>
                                                     )}
                                                 </div>
@@ -1986,6 +2059,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
         </div>
       </div>
+
+      {zoomImg && (
+        <div onClick={() => setZoomImg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.75)', zIndex: 11000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px', cursor: 'zoom-out' }}>
+          <img src={zoomImg.url} alt={zoomImg.label} style={{ maxWidth: '70vw', maxHeight: '75vh', objectFit: 'contain', background: '#fff', border: '1px solid var(--line)', padding: '12px' }} />
+          <div style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: '#fff', letterSpacing: '.05em' }}>{zoomImg.label} · click anywhere to close</div>
+        </div>
+      )}
     </div>
   );
 };

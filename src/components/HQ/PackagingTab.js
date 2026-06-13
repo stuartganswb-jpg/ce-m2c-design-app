@@ -196,11 +196,18 @@ function chaikin(pts, iters = 3) {
 async function loadGLTF(file) {
   const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
   const url = URL.createObjectURL(file);
-  try { 
-    return await new Promise((res, rej) => new GLTFLoader().load(url, res, null, rej)); 
-  } finally { 
-    URL.revokeObjectURL(url); 
+  try {
+    return await new Promise((res, rej) => new GLTFLoader().load(url, res, null, rej));
+  } finally {
+    URL.revokeObjectURL(url);
   }
+}
+
+// Load a per-component .glb straight from its storage URL (those generated in Visual Assembly
+// are laid flat already, so the default top-down trace is the correct foam profile).
+async function loadGLTFFromURL(url) {
+  const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+  return await new Promise((res, rej) => new GLTFLoader().load(url, res, null, rej));
 }
 
 function renderSilhouette(gltfScene, euler, SIZE = 512) {
@@ -216,7 +223,12 @@ function renderSilhouette(gltfScene, euler, SIZE = 512) {
   const half = Math.max(size.x * 0.6 || 1, size.z * 0.6 || 1);
   const cam = new THREE.OrthographicCamera(-half, half, half, -half, -5000, 5000);
   cam.position.set(center.x, center.y + 1000, center.z);
-  cam.lookAt(center); cam.up.set(0, 0, -1); cam.updateProjectionMatrix();
+  // up MUST be set before lookAt: the view direction here is straight down -Y, so the default
+  // up (0,1,0) is parallel to it and yields a degenerate camera that renders the top-down view
+  // empty (which is exactly the projection that captures a part's large flat face). Set up to
+  // -Z first, then aim — so flat parts trace their large face instead of nothing.
+  cam.up.set(0, 0, -1);
+  cam.lookAt(center); cam.updateProjectionMatrix();
 
   const offscreen = document.createElement("canvas");
   offscreen.width = offscreen.height = SIZE;
@@ -288,6 +300,14 @@ function GLBModal({ gltfScene, foamW, foamH, onClose, onTrace }) {
     const model = gltfScene.clone(true); modelRef.current = model; scene.add(model);
     const box = new THREE.Box3().setFromObject(model), center = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
     model.position.sub(center);
+    // Auto-fill the part's true dimensions so the foam cutout is true-to-size instead of the
+    // 6x4 placeholder. Component .glb's are exported in meters; the tracer projects top-down,
+    // so screen W = world X, screen H = world Z. Guarded to a sane range so an oddly-scaled
+    // manual upload keeps the editable default rather than a wild value.
+    const IN_PER_M = 39.3701;
+    const autoW = +(size.x * IN_PER_M).toFixed(2), autoH = +(size.z * IN_PER_M).toFixed(2);
+    if (autoW >= 0.1 && autoW <= 120) setPartW(autoW);
+    if (autoH >= 0.1 && autoH <= 120) setPartH(autoH);
     const cam = new THREE.PerspectiveCamera(38, 400/300, 0.001, 10000); camRef.current = cam;
     cam.position.set(0, Math.max(size.x, size.y, size.z) * 1.8, Math.max(size.x, size.y, size.z) * 2.2); cam.lookAt(0, 0, 0);
     renderer.render(scene, cam);
@@ -358,6 +378,7 @@ const PackagingTab = ({ activeBrand }) => {
   // GLB State
   const [glbScene, setGlbScene] = useState(null);
   const [glbModal, setGlbModal] = useState(false);
+  const [components, setComponents] = useState([]);   // [{label,url}] per-component glbs from this brand's assemblies
 
   // Interaction Refs
   const drawRef = useRef(null), previewRef = useRef(null), dragRef = useRef(null), shiftRef = useRef(false), svgRef = useRef(null);
@@ -476,9 +497,35 @@ const PackagingTab = ({ activeBrand }) => {
     a.click(); URL.revokeObjectURL(a.href);
   };
 
+  // Per-component .glb's generated in Visual Assembly are stored on each assembly's clusters.
+  // Surface them here so the foam tracer can pull a flat component directly instead of a
+  // manual upload.
+  useEffect(() => {
+    const q = activeBrand
+      ? query(collection(db, "Approved_Designs"), where("brandId", "==", activeBrand), where("partClass", "==", "Assembly"))
+      : query(collection(db, "Approved_Designs"), where("partClass", "==", "Assembly"));
+    const unsub = onSnapshot(q, (snap) => {
+      const list = []; const seen = new Set();
+      snap.docs.forEach(d => {
+        const a = d.data();
+        (a.nodeClusters || []).forEach(c => {
+          if (c.glbUrl && !seen.has(c.glbUrl)) { seen.add(c.glbUrl); list.push({ label: `${a.itemId || a.itemName || 'ASM'} · ${c.name}`, url: c.glbUrl }); }
+        });
+      });
+      setComponents(list);
+    }, () => setComponents([]));
+    return () => unsub();
+  }, [activeBrand]);
+
+  const handlePickComponent = async (url) => {
+    if (!url) return;
+    try { const gltf = await loadGLTFFromURL(url); setGlbScene(gltf.scene); setGlbModal(true); }
+    catch (err) { alert(err.message || "Failed to load component .glb."); }
+  };
+
   const handleGLBUpload = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    try { const gltf = await loadGLTF(file); setGlbScene(gltf.scene); setGlbModal(true); } 
+    try { const gltf = await loadGLTF(file); setGlbScene(gltf.scene); setGlbModal(true); }
     catch (err) { alert(err.message); }
     e.target.value = "";
   };
@@ -585,6 +632,17 @@ const PackagingTab = ({ activeBrand }) => {
             {["select", "rect", "ellipse", "line"].map((t) => (
               <button key={t} style={btnStyle(tool === t)} onClick={() => setTool(t)}>{t}</button>
             ))}
+            {components.length > 0 && (
+              <select
+                value=""
+                onChange={(e) => { handlePickComponent(e.target.value); e.target.value = ''; }}
+                title="Trace a flat per-component .glb generated in Visual Assembly"
+                style={{ ...inpStyle, width: 'auto', marginLeft: '10px', maxWidth: '220px', cursor: 'pointer' }}
+              >
+                <option value="">⚙ Component ({components.length})…</option>
+                {components.map((c, i) => <option key={i} value={c.url}>{c.label}</option>)}
+              </select>
+            )}
             <label style={{ ...btnStyle(false), border: `1px dashed ${theme.brass}`, color: theme.brass, marginLeft: '10px', display: 'flex', alignItems: 'center' }}>
                + Extract .GLB Silhouette
                <input type="file" accept=".glb,.gltf" onChange={handleGLBUpload} style={{ display: "none" }} />

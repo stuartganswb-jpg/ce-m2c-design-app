@@ -667,7 +667,31 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           capturedSvg = svgStr;
       }
 
-      const payload = { 
+      // Hanger placement capture: each placed bracket marks where an FIPBH (passing-bracket
+      // hanger) mounts; each splice marks where an FIPBHS (splice hanger) mounts. Resolve each
+      // marker's distance-from-edge into a readable position and carry the list to the
+      // shop-floor BOM (engineeringNotes -> fabNotes) so the floor knows where to set the
+      // hidden hangers. Applies to every Flat Iron flow (data-driven off the placed markers).
+      const edgeNamesForSeg = (segId) => (
+          engData.shape === 'MITERED'
+              ? ({ 1: ['L.Edge', 'L.Miter'], 2: ['L.Miter', 'R.Miter'], 3: ['R.Miter', 'R.Edge'] }[segId] || ['L.Edge', 'R.Edge'])
+              : ['L.Edge', 'R.Edge']
+      );
+      let _bSeq = 0, _sSeq = 0;
+      const hangerLocations = attachments.map(att => {
+          const isBracket = att.type === 'bracket';
+          const pair = edgeNamesForSeg(att.segId);
+          const fromEdge = att.ref === 'START' ? pair[0] : pair[1];
+          const seq = isBracket ? ++_bSeq : ++_sSeq;
+          return {
+              code: isBracket ? 'FIPBH' : 'FIPBHS',
+              anchor: isBracket ? `Bracket ${seq}` : `Splice ${seq}`,
+              position: `${att.distInches}" from ${fromEdge}`,
+              note: att.note || ''
+          };
+      });
+
+      const payload = {
           id: draftId, brandId: activeBrand, category: 'HARDWARE', status: 'DRAFT_FROM_VISION', 
           jobName: activeSession.jobName, 
           sidemark: sidemark,
@@ -683,7 +707,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               engineeringNotes: {
                   poleFeetQty, qtyBrackets, recRings, qtyFinials, qtySplices, qtyMiters,
                   qtyBends, qtyMiterReturns, qtyCustomProjBrackets, shape: engData.shape,
-                  poleO2O, totalSystemO2O, pole1, pole2, pole3, svgString: capturedSvg 
+                  poleO2O, totalSystemO2O, pole1, pole2, pole3, hangerLocations, svgString: capturedSvg
               },
               ...dynamicConfigParams
           }, 
