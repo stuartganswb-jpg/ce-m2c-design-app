@@ -281,6 +281,19 @@ async function traceGLB({ gltfScene, euler, partW, partH, clearance, foamW, foam
   }));
 }
 
+// Trace a part's raw cut outline (top-down) scaled to its real footprint (partW x partH),
+// origin at the outline's top-left — i.e. the silhouette ready to drop at a nest position.
+// Component .glb's are exported laid flat (thin axis -> Y), so the default (no-rotation)
+// top-down projection is the part's large face. Returns null if the model renders empty.
+function silhouettePolygon(gltfScene, partW, partH) {
+  const { grid, W, H, minX, maxX, minY, maxY } = renderSilhouette(gltfScene, [0, 0, 0]);
+  if (minX > maxX) return null;
+  const raw = marchingSquares(grid, W, H);
+  if (!raw.length) return null;
+  const sx = partW / (maxX - minX + 1), sy = partH / (maxY - minY + 1);
+  return chaikin(rdp(raw, 1.5), 3).map(p => ({ x: fmt((p.x - minX) * sx), y: fmt((p.y - minY) * sy) }));
+}
+
 // --- GLB PREVIEW MODAL ---
 function GLBModal({ gltfScene, foamW, foamH, onClose, onTrace }) {
   const canvasRef = useRef(null), rendRef = useRef(null), sceneRef = useRef(null), camRef = useRef(null), modelRef = useRef(null), dragRef = useRef(null);
@@ -378,6 +391,7 @@ const PackagingTab = ({ activeBrand }) => {
   const [boreH, setBoreH] = useState(0.5);
   const [boreShape, setBoreShape] = useState('rect');   // 'rect' (flat bar) | 'round' (dowel)
   const [boreCount, setBoreCount] = useState(2);
+  const [nesting, setNesting] = useState(false);   // tracing silhouettes for the auto-nest
   const [shapes, setShapes] = useState([]);
   const [sel,    setSel]    = useState(new Set());
   const [tool,   setTool]   = useState("select");
@@ -597,30 +611,50 @@ const PackagingTab = ({ activeBrand }) => {
     return out;
   };
 
-  // Auto-nest the small parts into the box base (foam sheet). Shelf pack (tallest-first),
-  // 0.5" of foam around every part, rotating parts narrower than 3" when it helps them fit.
-  // v1 packs each part's bounding footprint; assembled-unit T outlines + true silhouettes are
-  // the next revision. Returns the cut rects (part footprint inset by the margin) + overflow count.
-  const nestSmallParts = (items, boxW, boxH, margin = 0.5) => {
-    const units = [];
-    (items || []).forEach(it => {
-      const w = it.footprint?.w || 3, h = it.footprint?.h || 3;   // default 3x3 when untraced
-      for (let q = 0; q < (Number(it.qty) || 1); q++) units.push({ w, h, cw: w + 2 * margin, ch: h + 2 * margin });
-    });
-    units.sort((a, b) => b.ch - a.ch);
-    const shapes = []; let unplaced = 0;
-    let x = 0, y = 0, shelfH = 0;
-    for (const u of units) {
-      let cw = u.cw, ch = u.ch, rot = false;
-      const canRotate = Math.min(u.w, u.h) < 3;
-      if (x + cw > boxW + 1e-6) { x = 0; y += shelfH; shelfH = 0; }            // wrap to next shelf
-      if (x + cw > boxW + 1e-6 && canRotate && ch <= boxW + 1e-6) { [cw, ch] = [ch, cw]; rot = true; } // rotate to fit width
-      if (x + cw > boxW + 1e-6 || y + ch > boxH + 1e-6) { unplaced++; continue; }  // doesn't fit -> overflow
-      const pw = rot ? u.h : u.w, ph = rot ? u.w : u.h;
-      shapes.push({ id: uid(), type: 'rect', x: +(x + margin).toFixed(3), y: +(y + margin).toFixed(3), width: +pw.toFixed(3), height: +ph.toFixed(3) });
-      x += cw; shelfH = Math.max(shelfH, ch);
-    }
-    return { shapes, unplaced };
+  // True-silhouette nest: same shelf packing as nestSmallParts, but each part's cut is its
+  // actual traced outline (placed/rotated at its cell) instead of a bounding rect. Traces each
+  // unique part's component .glb once (cached by partId); parts without a glb / that fail to
+  // trace fall back to a rect. Async (offscreen renders), so it sets `nesting` while it runs.
+  const autoNestSilhouettes = async (items, boxW, boxH, margin = 0.5) => {
+    setNesting(true);
+    try {
+      const units = [];
+      (items || []).forEach(it => {
+        const w = it.footprint?.w || 3, h = it.footprint?.h || 3;
+        for (let q = 0; q < (Number(it.qty) || 1); q++) units.push({ w, h, cw: w + 2 * margin, ch: h + 2 * margin, glbUrl: it.glbUrl, partId: it.partId });
+      });
+      // Trace unique silhouettes (in each part's real footprint inches).
+      const contour = new Map();
+      for (const u of units) {
+        const key = u.partId || u.glbUrl;
+        if (u.glbUrl && key && !contour.has(key)) {
+          try { const g = await loadGLTFFromURL(u.glbUrl); contour.set(key, silhouettePolygon(g.scene, u.w, u.h)); }
+          catch { contour.set(key, null); }
+        }
+      }
+      units.sort((a, b) => b.ch - a.ch);
+      const shapes = []; let unplaced = 0, x = 0, y = 0, shelfH = 0;
+      for (const u of units) {
+        let cw = u.cw, ch = u.ch, rot = false;
+        const canRotate = Math.min(u.w, u.h) < 3;
+        if (x + cw > boxW + 1e-6) { x = 0; y += shelfH; shelfH = 0; }
+        if (x + cw > boxW + 1e-6 && canRotate && ch <= boxW + 1e-6) { [cw, ch] = [ch, cw]; rot = true; }
+        if (x + cw > boxW + 1e-6 || y + ch > boxH + 1e-6) { unplaced++; continue; }
+        const ox = x + margin, oy = y + margin;
+        const c = contour.get(u.partId || u.glbUrl);
+        if (c && c.length >= 3) {
+          // drop the outline at the cell; rotate 90° (w x h -> h x w) when the cell was rotated
+          const pts = c.map(p => rot ? { x: fmt(ox + p.y), y: fmt(oy + (u.w - p.x)) } : { x: fmt(ox + p.x), y: fmt(oy + p.y) });
+          shapes.push({ id: uid(), type: 'polygon', points: pts });
+        } else {
+          const pw = rot ? u.h : u.w, ph = rot ? u.w : u.h;
+          shapes.push({ id: uid(), type: 'rect', x: fmt(ox), y: fmt(oy), width: fmt(pw), height: fmt(ph) });
+        }
+        x += cw; shelfH = Math.max(shelfH, ch);
+      }
+      setShapes(shapes);
+      if (unplaced) setTimeout(() => alert(`${unplaced} part(s) didn't fit this box — they'll need a second box.`), 50);
+    } finally { setNesting(false); }
   };
 
   // --- Rendering Helpers ---
@@ -883,7 +917,7 @@ const PackagingTab = ({ activeBrand }) => {
                 {/* Pole box loads the cross-section (W×H, e.g. 8×3) into the workspace — the foam is
                     cut as a side-extrusion of that profile (bores per pole), run the box length. */}
                 {poleBox && boxCard(`${poleBox.name} · ${poleCount} pole(s)`, `${poleBox.len}"L × ${poleBox.w}"W × ${poleBox.h}"H`, poleItems.map(itemRow), () => { setFoamW(poleBox.w); setFoamH(poleBox.h); setShapes(generatePoleBores(poleCount, poleBox.w, poleBox.h)); })}
-                {smallItems.length > 0 && boxCard(smallBox.name, `${smallBox.w}" × ${smallBox.h}"${smallBox.d ? ` × ${smallBox.d}"` : ''}`, smallItems.map(itemRow), () => { setFoamW(smallBox.w); setFoamH(smallBox.h); const r = nestSmallParts(smallItems, smallBox.w, smallBox.h); setShapes(r.shapes); if (r.unplaced) setTimeout(() => alert(`${r.unplaced} part(s) didn't fit this box — they'll need a second box.`), 50); })}
+                {smallItems.length > 0 && boxCard(`${smallBox.name}${nesting ? ' · tracing…' : ''}`, `${smallBox.w}" × ${smallBox.h}"${smallBox.d ? ` × ${smallBox.d}"` : ''}`, smallItems.map(itemRow), () => { setFoamW(smallBox.w); setFoamH(smallBox.h); autoNestSilhouettes(smallItems, smallBox.w, smallBox.h); })}
                 {items.length === 0 && <div style={{ fontSize: '0.8rem', color: theme.inkSoft, fontStyle: 'italic' }}>No items on this order.</div>}
               </div>
             );

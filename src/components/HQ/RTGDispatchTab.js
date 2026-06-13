@@ -434,6 +434,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     dimensions: l.dimensions || null,
                     // Traced part footprint (in) for the small-parts foam nest; null -> packer defaults.
                     footprint: (fw > 0 && fh > 0) ? { w: fw, h: fh } : null,
+                    // Per-component .glb so the nester can trace the true cut silhouette.
+                    glbUrl: part?.componentGlbUrl || null,
                 };
             });
             await setDoc(doc(db, "packaging_orders", pkgId), {
