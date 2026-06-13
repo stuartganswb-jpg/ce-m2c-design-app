@@ -651,7 +651,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               
               let lineTotal = stepPrice * multiplier * qty;
               
-              if (lineTotal > 0 || stepPrice > 0 || step.type === 'STATIC_FEE') {
+              // Emit a BOM line for any selected PHYSICAL part even at $0 — every part step
+              // carries a partHandling routing flag (fees don't), so an unpriced bracket/ring
+              // still flows to the BOM, finishing, and packaging instead of silently dropping.
+              if (lineTotal > 0 || stepPrice > 0 || step.type === 'STATIC_FEE' || (selectedValue && step.partHandling)) {
                   // Carry the generated cut geometry (from Vision -> dimensionInputs) onto
                   // dimension-driven lines so the shop work order gets a cutLength and the
                   // fin work order gets dimensions. See WORK_ORDER_CONTRACT.md §6/§7.
