@@ -418,7 +418,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             // (poles = Custom division, small parts) plus the CPQ config — the paired CPQ steps
             // are what decide which pieces bolt together / pack as one assembled (T-shaped) unit.
             const pkgId = `PKG-${orderKey}`;
-            const pkgItems = lines.map(l => {
+            // Fees (Bend / Cut-Splice) aren't physical parts — keep them out of packaging.
+            const pkgItems = lines.filter(l => !(!l.partId && /\bfee\b/i.test(l.name || ''))).map(l => {
                 const part = l.partId ? partCache.get(l.partId) : null;
                 const isCustom = classifyLine(l, part) === DIVISION_CUSTOM;
                 const param = part?.manufacturingSpecs?.parametric || {};

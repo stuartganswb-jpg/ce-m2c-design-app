@@ -885,10 +885,13 @@ const PackagingTab = ({ activeBrand }) => {
             // 3"w if a single pole fits the cross-section, else 8"w, both 3" tall). Small parts
             // ship in the standard small-parts box. Foam layout (bores / nest) is the packer.
             const items = activeJob.items || [];
+            // Fees (Bend / Cut-Splice) aren't physical parts — exclude them from packing.
+            const isFee = (i) => !i.partId && /\bfee\b/i.test(i.partName || '');
             const isPole = (i) => i.division === 'pole' || i.partHandling === 'Custom';
-            const poleItems = items.filter(isPole);
-            const smallItems = items.filter(i => !isPole(i));
-            const poleCount = poleItems.reduce((s, i) => s + (Number(i.qty) || 1), 0);
+            const poleItems = items.filter(i => !isFee(i) && isPole(i));
+            const smallItems = items.filter(i => !isFee(i) && !isPole(i));
+            // Each rod line = one physical pole (its qty is feet/length, not a pole count).
+            const poleCount = poleItems.length;
             const maxPoleLen = poleItems.reduce((m, i) => Math.max(m, Number(i.cutLength) || Number(i.dimensions?.length) || 0), 0);
             const smallBox = standardBoxes.find(b => b.usage === 'small_parts') || { name: 'Small Parts Box', w: 18, h: 12, d: 4 };
             // Pole box width: french-return bends (or >1 pole side-by-side) need the wide 8" box;
@@ -902,14 +905,15 @@ const PackagingTab = ({ activeBrand }) => {
                 <span style={{ fontFamily: theme.mono, fontSize: '0.7rem', color: theme.inkSoft }}>{it.cutLength ? `${it.cutLength}" cut` : (it.dimensions?.width ? `${it.dimensions.width}×${it.dimensions.height}"` : '')}</span>
               </div>
             );
+            // The whole card is clickable — click a box to lay it out in the workspace.
             const boxCard = (title, dims, rows, onLoad) => (
-              <div style={{ background: '#fff', border: `1px solid ${theme.line}`, marginBottom: '10px' }}>
+              <div onClick={onLoad} title="Click to lay this box out in the workspace" style={{ background: '#fff', border: `1px solid ${theme.line}`, marginBottom: '10px', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: theme.paper2, borderBottom: `1px solid ${theme.line}` }}>
                   <span style={{ fontSize: '0.82rem', fontWeight: 600, color: theme.ink }}>📦 {title}</span>
                   <span style={{ fontFamily: theme.mono, fontSize: '0.7rem', color: theme.brass }}>{dims}</span>
                 </div>
                 <div style={{ padding: '8px 10px' }}>{rows}</div>
-                <button onClick={onLoad} style={{ width: '100%', padding: '8px', background: 'transparent', border: 'none', borderTop: `1px solid ${theme.line}`, color: theme.ink, fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Load box → workspace</button>
+                <div style={{ width: '100%', padding: '8px', background: theme.ink, color: '#fff', textAlign: 'center', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>▶ Lay out in workspace</div>
               </div>
             );
             return (
