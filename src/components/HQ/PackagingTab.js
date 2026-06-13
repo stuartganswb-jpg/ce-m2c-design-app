@@ -771,19 +771,45 @@ const PackagingTab = ({ activeBrand }) => {
           <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: theme.brass }}>Order Requirements</span>
           <h3 style={{ margin: '5px 0 15px 0', fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink }}>Bill of Materials</h3>
           
-          {activeJob ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflowY: 'auto' }}>
-              {activeJob.items?.map((item, idx) => (
-                <div key={item.id || idx} style={{ background: '#fff', padding: '10px', border: `1px solid ${theme.line}` }}>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 500, color: theme.ink }}>{item.name}</div>
-                  <div style={{ fontSize: '0.75rem', color: theme.inkSoft, fontFamily: theme.mono, marginTop: '4px' }}>
-                    {item.w}" x {item.h}"
-                  </div>
+          {activeJob ? (() => {
+            // Box split: poles (Custom) ship in cut-to-length pole boxes (len = pole + 1.25",
+            // 3"w if a single pole fits the cross-section, else 8"w, both 3" tall). Small parts
+            // ship in the standard small-parts box. Foam layout (bores / nest) is the packer.
+            const items = activeJob.items || [];
+            const isPole = (i) => i.division === 'pole' || i.partHandling === 'Custom';
+            const poleItems = items.filter(isPole);
+            const smallItems = items.filter(i => !isPole(i));
+            const poleCount = poleItems.reduce((s, i) => s + (Number(i.qty) || 1), 0);
+            const maxPoleLen = poleItems.reduce((m, i) => Math.max(m, Number(i.cutLength) || Number(i.dimensions?.length) || 0), 0);
+            const smallBox = standardBoxes.find(b => b.usage === 'small_parts') || { name: 'Small Parts Box', w: 18, h: 12, d: 4 };
+            const poleBox = poleItems.length ? { name: poleCount > 1 ? 'Pole Box (Large)' : 'Pole Box (Small)', w: poleCount > 1 ? 8 : 3, h: 3, len: +(maxPoleLen + 1.25).toFixed(2) } : null;
+            const itemRow = (it, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: theme.ink, padding: '4px 0', borderTop: i ? `1px solid ${theme.line}` : 'none' }}>
+                <span>{it.qty > 1 ? `${it.qty}× ` : ''}{it.partName}</span>
+                <span style={{ fontFamily: theme.mono, fontSize: '0.7rem', color: theme.inkSoft }}>{it.cutLength ? `${it.cutLength}" cut` : (it.dimensions?.width ? `${it.dimensions.width}×${it.dimensions.height}"` : '')}</span>
+              </div>
+            );
+            const boxCard = (title, dims, rows, onLoad) => (
+              <div style={{ background: '#fff', border: `1px solid ${theme.line}`, marginBottom: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: theme.paper2, borderBottom: `1px solid ${theme.line}` }}>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 600, color: theme.ink }}>📦 {title}</span>
+                  <span style={{ fontFamily: theme.mono, fontSize: '0.7rem', color: theme.brass }}>{dims}</span>
                 </div>
-              ))}
-            </div>
-          ) : (
-             <div style={{ fontSize: '0.8rem', color: theme.inkSoft, fontStyle: 'italic' }}>Select a job from the queue.</div>
+                <div style={{ padding: '8px 10px' }}>{rows}</div>
+                <button onClick={onLoad} style={{ width: '100%', padding: '8px', background: 'transparent', border: 'none', borderTop: `1px solid ${theme.line}`, color: theme.ink, fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Load box → workspace</button>
+              </div>
+            );
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto' }}>
+                {/* Pole box loads the cross-section (W×H, e.g. 8×3) into the workspace — the foam is
+                    cut as a side-extrusion of that profile (bores per pole), run the box length. */}
+                {poleBox && boxCard(`${poleBox.name} · ${poleCount} pole(s)`, `${poleBox.len}"L × ${poleBox.w}"W × ${poleBox.h}"H`, poleItems.map(itemRow), () => { setFoamW(poleBox.w); setFoamH(poleBox.h); })}
+                {smallItems.length > 0 && boxCard(smallBox.name, `${smallBox.w}" × ${smallBox.h}"${smallBox.d ? ` × ${smallBox.d}"` : ''}`, smallItems.map(itemRow), () => { setFoamW(smallBox.w); setFoamH(smallBox.h); })}
+                {items.length === 0 && <div style={{ fontSize: '0.8rem', color: theme.inkSoft, fontStyle: 'italic' }}>No items on this order.</div>}
+              </div>
+            );
+          })() : (
+             <div style={{ fontSize: '0.8rem', color: theme.inkSoft, fontStyle: 'italic' }}>Select an order from the queue.</div>
           )}
         </div>
       </div>
