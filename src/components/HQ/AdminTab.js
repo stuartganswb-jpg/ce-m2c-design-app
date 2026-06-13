@@ -66,6 +66,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [newFlowName, setNewFlowName] = useState("");
   const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
+  const [zoomImg, setZoomImg] = useState(null);   // {url,label} for the cluster-image lightbox
   const [isCreatingRollup, setIsCreatingRollup] = useState(false);
 
   const [inspectedNodes, setInspectedNodes] = useState([]);
@@ -991,17 +992,20 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                                     <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Hide Geometry (other configs)</label>
                                     <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>When one CAD file holds several configs (e.g. wall / ceiling / end brackets), check the clusters this flow should NOT show. They'll be hidden in the 3D view for this flow — so the wall flow never shows ceiling or end brackets.</span>
-                                    <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 16px', background: '#fff', border: '1px solid var(--line)', padding: '12px' }}>
+                                    <div style={{ maxHeight: '240px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px', background: '#fff', border: '1px solid var(--line)', padding: '12px' }}>
                                         {linkedAsm.nodeClusters.map(cl => {
                                             const checked = (flowSettings.hiddenClusters || []).includes(cl.id);
                                             return (
-                                                <label key={cl.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer' }}>
+                                                <label key={cl.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer', opacity: checked ? 0.55 : 1 }}>
                                                     <input type="checkbox" checked={checked} onChange={(e) => {
                                                         const set = new Set(flowSettings.hiddenClusters || []);
                                                         if (e.target.checked) set.add(cl.id); else set.delete(cl.id);
                                                         setFlowSettings({ ...flowSettings, hiddenClusters: [...set] });
                                                     }} />
-                                                    {cl.name}
+                                                    {cl.imageUrl
+                                                        ? <img src={cl.imageUrl} alt="" onClick={(e) => { e.preventDefault(); setZoomImg({ url: cl.imageUrl, label: cl.name }); }} title="Click to enlarge" style={{ width: '32px', height: '32px', objectFit: 'contain', background: 'var(--paper)', border: '1px solid var(--line)', flexShrink: 0, cursor: 'zoom-in' }} />
+                                                        : <span style={{ width: '32px', height: '32px', flexShrink: 0, border: '1px dashed var(--line)' }} />}
+                                                    <span style={{ textDecoration: checked ? 'line-through' : 'none' }}>{cl.name}</span>
                                                 </label>
                                             );
                                         })}
@@ -1292,6 +1296,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                         return { ...prev, styleOptions: opts, geometryMap };
                                                                     });
                                                                 }} />
+                                                                {cluster?.imageUrl
+                                                                    ? <img src={cluster.imageUrl} alt="" onClick={() => setZoomImg({ url: cluster.imageUrl, label: locLabel })} title="Click to enlarge" style={{ width: '40px', height: '40px', objectFit: 'contain', background: 'var(--paper)', border: '1px solid var(--line)', flexShrink: 0, cursor: 'zoom-in' }} />
+                                                                    : <span style={{ width: '40px', height: '40px', flexShrink: 0, border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)', textAlign: 'center' }}>no img</span>}
                                                                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                                                                     <span style={{ fontSize: '0.9rem', color: 'var(--ink)', fontWeight: 500 }}>{locLabel}</span>
                                                                     {cluster && cluster.name !== pin.partName && <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{pin.partName}</span>}
@@ -2027,6 +2034,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
         </div>
       </div>
+
+      {zoomImg && (
+        <div onClick={() => setZoomImg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.75)', zIndex: 11000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px', cursor: 'zoom-out' }}>
+          <img src={zoomImg.url} alt={zoomImg.label} style={{ maxWidth: '70vw', maxHeight: '75vh', objectFit: 'contain', background: '#fff', border: '1px solid var(--line)', padding: '12px' }} />
+          <div style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: '#fff', letterSpacing: '.05em' }}>{zoomImg.label} · click anywhere to close</div>
+        </div>
+      )}
     </div>
   );
 };
