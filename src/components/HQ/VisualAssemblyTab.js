@@ -1112,16 +1112,15 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                     </div>
                 </div>
 
-                <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                    <div style={{ padding: '20px 24px', background: 'var(--paper)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Parent Routing</div>
-                    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block' }}>Classify Entire Image As:</label>
-                        <select value={routingType} onChange={(e) => setRoutingType(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
-                            <option value="">-- Select Routing Type --</option>
-                            {(globalLists.assemblyTypes || []).map(type => ( <option key={type} value={type}>{type}</option> ))}
-                        </select>
-                        <button onClick={handleSaveRouting} disabled={!activeAssembly || !routingType} style={{ padding: '16px', background: isSavingRouting ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: (activeAssembly && routingType) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '8px', transition: 'background 0.2s' }}>{isSavingRouting ? "Saving..." : "Save Routing Type"}</button>
-                    </div>
+                {/* Parent Routing is just a one-off classification dropdown — keep it a compact
+                    single row so it doesn't squeeze the Master BOM. */}
+                <div style={{ flexShrink: 0, background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', whiteSpace: 'nowrap', letterSpacing: '.1em' }} title="Classify the entire assembly (routing type). Setting this also lets the CPQ flow builder recognise it as a CPQ master assembly.">Parent Routing</label>
+                    <select value={routingType} onChange={(e) => setRoutingType(e.target.value)} style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }}>
+                        <option value="">-- Classify entire image as… --</option>
+                        {(globalLists.assemblyTypes || []).map(type => ( <option key={type} value={type}>{type}</option> ))}
+                    </select>
+                    <button onClick={handleSaveRouting} disabled={!activeAssembly || !routingType} style={{ padding: '10px 18px', background: isSavingRouting ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: (activeAssembly && routingType) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap', transition: 'background 0.2s' }}>{isSavingRouting ? "Saving…" : "Save"}</button>
                 </div>
             </div>
         )}
