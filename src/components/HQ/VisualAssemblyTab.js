@@ -803,34 +803,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', height: isCanvasMaximized ? 'auto' : 'calc(100vh - 150px)', minHeight: isCanvasMaximized ? 'auto' : '600px', overflow: isCanvasMaximized ? 'visible' : 'hidden' }}>
 
-        {viewMode === '3D' && activeAssembly && (
-            <div style={{ width: '280px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                <div style={{ padding: '16px 20px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
-                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Evil Eye</span>
-                    <button onClick={() => setHiddenNodes([])} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Show All</button>
-                </div>
-                <div style={{ padding: '20px', flex: 1, overflowY: 'auto', background: '#fff' }}>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '16px', fontStyle: 'italic' }}>Uncheck to hide parts for clean screenshots.</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {sceneMeshes.map(meshObj => (
-                            <label key={meshObj.originalName} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', cursor: 'pointer', background: hiddenNodes.includes(meshObj.originalName) ? 'var(--paper-2)' : '#fff', padding: '8px 12px', border: '1px solid var(--line)', color: 'var(--ink)' }}>
-                                <input 
-                                    type="checkbox" 
-                                    checked={!hiddenNodes.includes(meshObj.originalName)} 
-                                    onChange={(e) => {
-                                        if (e.target.checked) setHiddenNodes(prev => prev.filter(n => n !== meshObj.originalName));
-                                        else setHiddenNodes(prev => [...prev, meshObj.originalName]);
-                                    }} 
-                                />
-                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={meshObj.displayName}>
-                                    {meshObj.displayName}
-                                </span>
-                            </label>
-                        ))}
-                    </div>
-                </div>
-            </div>
-        )}
+        {/* Evil Eye per-mesh hide panel removed — the body-label checkboxes weren't useful;
+            the screen is now a clean split between the 3D viewer and the cluster/BOM column. */}
 
         <div style={canvasContainerStyle} id="canvas-container">
           
@@ -1052,10 +1026,13 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                             {unassignedClusters.map(cl => {
                                 const isLocating = locatingClusterId === cl.id;
                                 return (
-                                <div key={cl.id} style={{ display: 'flex', gap: '8px' }}>
-                                    <button 
+                                <div key={cl.id} style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '6px', borderRadius: '2px', background: isLocating ? 'rgba(176,141,87,0.14)' : 'transparent', border: `1px solid ${isLocating ? 'var(--brass)' : 'transparent'}` }}>
+                                    {cl.imageUrl
+                                        ? <img src={cl.imageUrl} alt="" style={{ width: '46px', height: '46px', objectFit: 'contain', background: '#fff', border: '1px solid var(--line)', flexShrink: 0 }} />
+                                        : <span style={{ width: '46px', height: '46px', flexShrink: 0, border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '8px', color: 'var(--ink-soft)', textAlign: 'center' }}>no img</span>}
+                                    <button
                                         onClick={() => setLocatingClusterId(isLocating ? null : cl.id)}
-                                        style={{ padding: '12px', background: isLocating ? 'var(--paper)' : '#fff', color: isLocating ? 'var(--ink)' : 'var(--ink-soft)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', flexShrink: 0 }}
+                                        style={{ padding: '12px', background: isLocating ? 'var(--brass)' : '#fff', color: isLocating ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', flexShrink: 0 }}
                                     >
                                         {isLocating ? 'Clear' : 'Locate'}
                                     </button>
@@ -1088,9 +1065,11 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             {pins.map(pin => {
                                 const libraryMatch = libraryParts.find(p => p.id === pin.partId);
-                                const hasThumb = libraryMatch?.finalImageUrl;
+                                const cluster = activeAssembly?.nodeClusters?.find(c => c.id === pin.clusterId);
+                                const hasThumb = libraryMatch?.finalImageUrl || libraryMatch?.componentImageUrl || cluster?.imageUrl;
+                                const isLoc = locatingClusterId === (pin.clusterId || pin.id);
                                 return (
-                                <div key={pin.id} style={{ background: 'var(--paper)', border: '1px solid var(--line)', borderLeft: `4px solid ${pin.isExistingLibraryPart ? 'var(--ink)' : 'var(--brass)'}`, padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <div key={pin.id} style={{ background: isLoc ? 'rgba(176,141,87,0.12)' : 'var(--paper)', border: `1px solid ${isLoc ? 'var(--brass)' : 'var(--line)'}`, borderLeft: `4px solid ${pin.isExistingLibraryPart ? 'var(--ink)' : 'var(--brass)'}`, padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                                         <div style={{ width: '48px', height: '48px', background: '#fff', border: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                                             {hasThumb ? <img src={hasThumb} alt="" style={{width: '100%', height:'100%', objectFit:'contain'}}/> : <span style={{fontSize:'12px', color:'var(--ink-soft)'}}>No Img</span>}
@@ -1107,18 +1086,15 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
 
-                                        {viewMode === '3D' && (pin.clusterId || pin.targetNode) && (() => {
-                                            const isLoc = locatingClusterId === (pin.clusterId || pin.id);
-                                            return (
-                                                <button
-                                                    onClick={() => setLocatingClusterId(isLoc ? null : (pin.clusterId || pin.id))}
-                                                    title="Highlight this part in the 3D view to confirm the assignment"
-                                                    style={{ background: isLoc ? 'var(--brass)' : 'transparent', border: '1px solid var(--brass)', color: isLoc ? '#fff' : 'var(--brass)', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer', padding: '8px 12px' }}
-                                                >
-                                                    {isLoc ? '◉ Locating' : 'Locate'}
-                                                </button>
-                                            );
-                                        })()}
+                                        {viewMode === '3D' && (pin.clusterId || pin.targetNode) && (
+                                            <button
+                                                onClick={() => setLocatingClusterId(isLoc ? null : (pin.clusterId || pin.id))}
+                                                title="Highlight this part in the 3D view to confirm the assignment"
+                                                style={{ background: isLoc ? 'var(--brass)' : 'transparent', border: '1px solid var(--brass)', color: isLoc ? '#fff' : 'var(--brass)', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer', padding: '8px 12px' }}
+                                            >
+                                                {isLoc ? '◉ Locating' : 'Locate'}
+                                            </button>
+                                        )}
 
                                         <button
                                             onClick={() => { setIsFrozen(true); setInteractionMode('crop'); setCropState({ pinId: pin.id, x: 50, y: 50, w: 250, h: 250, action: null }); }}
