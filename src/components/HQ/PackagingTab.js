@@ -223,7 +223,12 @@ function renderSilhouette(gltfScene, euler, SIZE = 512) {
   const half = Math.max(size.x * 0.6 || 1, size.z * 0.6 || 1);
   const cam = new THREE.OrthographicCamera(-half, half, half, -half, -5000, 5000);
   cam.position.set(center.x, center.y + 1000, center.z);
-  cam.lookAt(center); cam.up.set(0, 0, -1); cam.updateProjectionMatrix();
+  // up MUST be set before lookAt: the view direction here is straight down -Y, so the default
+  // up (0,1,0) is parallel to it and yields a degenerate camera that renders the top-down view
+  // empty (which is exactly the projection that captures a part's large flat face). Set up to
+  // -Z first, then aim — so flat parts trace their large face instead of nothing.
+  cam.up.set(0, 0, -1);
+  cam.lookAt(center); cam.updateProjectionMatrix();
 
   const offscreen = document.createElement("canvas");
   offscreen.width = offscreen.height = SIZE;
