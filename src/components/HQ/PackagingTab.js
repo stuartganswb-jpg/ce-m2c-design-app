@@ -909,12 +909,16 @@ const PackagingTab = ({ activeBrand }) => {
             // 3"w if a single pole fits the cross-section, else 8"w, both 3" tall). Small parts
             // ship in the standard small-parts box. Foam layout (bores / nest) is the packer.
             const items = activeJob.items || [];
-            // Not packable: fees (Bend/Cut-Splice) and the assembly/header line (partId is the
-            // -ASM- master itself, not a component).
+            // Not packable: fees, the assembly/header line (-ASM-), and the Rod-Material config
+            // line (it just records wood/metal — the rod itself is the Pole Length line).
             const isFee = (i) => !i.partId && /\bfee\b/i.test(i.partName || '');
             const isAssemblyLine = (i) => i.partId && /-ASM-/i.test(i.partId);
-            const packable = (i) => !isFee(i) && !isAssemblyLine(i);
-            const isPole = (i) => i.division === 'pole' || i.partHandling === 'Custom';
+            const isRodMaterial = (i) => /^(wood|metal)$/i.test(i.partId || '') || /rod material/i.test(i.partName || '');
+            const packable = (i) => !isFee(i) && !isAssemblyLine(i) && !isRodMaterial(i);
+            // A pole is the cut-to-length ROD only (the Pole Length line). Backplates and bracket
+            // arms are also "Custom" but pack flat in the small box — so classify by the rod, not
+            // by partHandling. (Tight match so "Splice (… poles)" isn't mistaken for a pole.)
+            const isPole = (i) => Number(i.cutLength) > 0 || /pole\s*length/i.test(i.partName || '');
             const poleItems = items.filter(i => packable(i) && isPole(i));
             const smallItems = items.filter(i => packable(i) && !isPole(i));
             // Each rod line = one physical pole (its qty is feet/length, not a pole count).

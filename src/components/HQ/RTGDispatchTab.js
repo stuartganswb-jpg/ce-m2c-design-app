@@ -418,14 +418,17 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             // (poles = Custom division, small parts) plus the CPQ config — the paired CPQ steps
             // are what decide which pieces bolt together / pack as one assembled (T-shaped) unit.
             const pkgId = `PKG-${orderKey}`;
-            // Keep non-physical lines out of packaging: fees (no partId, name ~ /fee/) and the
-            // assembly/header line (partId is the -ASM- master itself, not a packable component).
+            // Keep non-physical lines out of packaging: fees, the assembly/header line (-ASM-),
+            // and the Rod-Material config line (records wood/metal; the rod is the Pole Length line).
             const pkgItems = lines.filter(l =>
                 !(!l.partId && /\bfee\b/i.test(l.name || '')) &&
-                !(l.partId && /-ASM-/i.test(l.partId))
+                !(l.partId && /-ASM-/i.test(l.partId)) &&
+                !(/^(wood|metal)$/i.test(l.partId || '') || /rod material/i.test(l.name || ''))
             ).map(l => {
                 const part = l.partId ? partCache.get(l.partId) : null;
-                const isCustom = classifyLine(l, part) === DIVISION_CUSTOM;
+                // Pole = the cut-to-length rod (Pole Length line). Backplates / bracket arms are
+                // also fab-Custom but pack flat in the small box, so don't call them poles.
+                const isPolePart = Number(l.cutLength) > 0 || /pole\s*length/i.test(l.name || '');
                 const param = part?.manufacturingSpecs?.parametric || {};
                 const fw = parseFloat(param.width), fh = parseFloat(param.height);
                 return {
@@ -433,8 +436,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     partName: cleanLineName(l.name),
                     legacyErpId: l.legacyErpId || part?.legacyErpId || null,
                     qty: Number(l.qty) || 1,
-                    division: isCustom ? 'pole' : 'small',
-                    partHandling: l.partHandling || (isCustom ? 'Custom' : 'Small Parts'),
+                    division: isPolePart ? 'pole' : 'small',
+                    partHandling: l.partHandling || (classifyLine(l, part) === DIVISION_CUSTOM ? 'Custom' : 'Small Parts'),
                     cutLength: l.cutLength || null,
                     dimensions: l.dimensions || null,
                     // Traced part footprint (in) for the small-parts foam nest; null -> packer defaults.
