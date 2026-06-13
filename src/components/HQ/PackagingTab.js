@@ -589,10 +589,34 @@ const PackagingTab = ({ activeBrand }) => {
   // profile + 0.125" clearance; rounded bars -> rect, dowels -> ellipse. Bores sit side by
   // side along the width with a 0.125" gap (and from the walls), wrapping to a new row up if
   // the row overflows. The poles then float in these bores, foam extruded the box length.
-  const generatePoleBores = (count, boxW, boxH) => {
+  // Derive the pole's bore profile from the order (the pole is usually a finish-step line, so
+  // there's no geometry part — read the name). "1\" Round Rod" -> round 1"; "1.5 x 0.5 Flat
+  // Iron" -> flat 1.5x0.5. Falls back to the part footprint, then sane defaults.
+  const parseInches = (s) => {
+    s = String(s || '').trim();
+    let m = s.match(/^(\d+)-(\d+)\/(\d+)$/); if (m) return +m[1] + (+m[2]) / (+m[3]);   // 1-3/8
+    m = s.match(/^(\d+)\/(\d+)$/); if (m) return (+m[1]) / (+m[2]);                       // 3/4
+    return parseFloat(s) || 0;
+  };
+  const derivePoleProfile = (poleItems) => {
+    const it = poleItems[0] || {};
+    const nm = (it.partName || '').toLowerCase();
+    const round = /round|dowel/.test(nm);
+    let w = it.footprint?.w || 0, h = it.footprint?.h || 0;
+    if (!w) {
+      const flat = nm.match(/(\d+(?:\.\d+)?|\d+-\d+\/\d+|\d+\/\d+)\s*[x×]\s*(\d+(?:\.\d+)?|\d+\/\d+)/);
+      if (flat) { w = parseInches(flat[1]); h = parseInches(flat[2]); }
+      else { const d = nm.match(/(\d+-\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)\s*["”]/); w = d ? parseInches(d[1]) : (round ? 1 : 1.5); }
+    }
+    if (round) h = w; else if (!h) h = 0.5;
+    return { w: +(w || 1).toFixed(3), h: +(h || (round ? w : 0.5)).toFixed(3), shape: round ? 'round' : 'rect' };
+  };
+
+  const generatePoleBores = (count, boxW, boxH, prof = null) => {
     const CL = 0.125, GAP = 0.125;
-    const bw = (parseFloat(boreW) || 1) + CL;
-    const bh = (parseFloat(boreH) || (parseFloat(boreW) || 1)) + CL;
+    const shape = prof ? prof.shape : boreShape;
+    const bw = (prof ? prof.w : (parseFloat(boreW) || 1)) + CL;
+    const bh = (prof ? prof.h : (parseFloat(boreH) || (parseFloat(boreW) || 1))) + CL;
     const perRow = Math.max(1, Math.floor((boxW - GAP) / (bw + GAP)));
     const rows = Math.ceil(count / perRow);
     const totalH = rows * bh + (rows - 1) * GAP;
@@ -605,7 +629,7 @@ const PackagingTab = ({ activeBrand }) => {
       const startX = Math.max(GAP, (boxW - rowW) / 2);
       const x = startX + col * (bw + GAP);
       const y = startY + r * (bh + GAP);
-      if (boreShape === 'round') out.push({ id: uid(), type: 'ellipse', cx: x + bw / 2, cy: y + bh / 2, rx: bw / 2, ry: bh / 2 });
+      if (shape === 'round') out.push({ id: uid(), type: 'ellipse', cx: x + bw / 2, cy: y + bh / 2, rx: bw / 2, ry: bh / 2 });
       else out.push({ id: uid(), type: 'rect', x, y, width: bw, height: bh });
     }
     return out;
@@ -885,11 +909,14 @@ const PackagingTab = ({ activeBrand }) => {
             // 3"w if a single pole fits the cross-section, else 8"w, both 3" tall). Small parts
             // ship in the standard small-parts box. Foam layout (bores / nest) is the packer.
             const items = activeJob.items || [];
-            // Fees (Bend / Cut-Splice) aren't physical parts — exclude them from packing.
+            // Not packable: fees (Bend/Cut-Splice) and the assembly/header line (partId is the
+            // -ASM- master itself, not a component).
             const isFee = (i) => !i.partId && /\bfee\b/i.test(i.partName || '');
+            const isAssemblyLine = (i) => i.partId && /-ASM-/i.test(i.partId);
+            const packable = (i) => !isFee(i) && !isAssemblyLine(i);
             const isPole = (i) => i.division === 'pole' || i.partHandling === 'Custom';
-            const poleItems = items.filter(i => !isFee(i) && isPole(i));
-            const smallItems = items.filter(i => !isFee(i) && !isPole(i));
+            const poleItems = items.filter(i => packable(i) && isPole(i));
+            const smallItems = items.filter(i => packable(i) && !isPole(i));
             // Each rod line = one physical pole (its qty is feet/length, not a pole count).
             const poleCount = poleItems.length;
             const maxPoleLen = poleItems.reduce((m, i) => Math.max(m, Number(i.cutLength) || Number(i.dimensions?.length) || 0), 0);
@@ -920,7 +947,12 @@ const PackagingTab = ({ activeBrand }) => {
               <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto' }}>
                 {/* Pole box loads the cross-section (W×H, e.g. 8×3) into the workspace — the foam is
                     cut as a side-extrusion of that profile (bores per pole), run the box length. */}
-                {poleBox && boxCard(`${poleBox.name} · ${poleCount} pole(s)`, `${poleBox.len}"L × ${poleBox.w}"W × ${poleBox.h}"H`, poleItems.map(itemRow), () => { setFoamW(poleBox.w); setFoamH(poleBox.h); setShapes(generatePoleBores(poleCount, poleBox.w, poleBox.h)); })}
+                {poleBox && boxCard(`${poleBox.name} · ${poleCount} pole(s)`, `${poleBox.len}"L × ${poleBox.w}"W × ${poleBox.h}"H`, poleItems.map(itemRow), () => {
+                    const prof = derivePoleProfile(poleItems);
+                    setBoreW(prof.w); setBoreH(prof.h); setBoreShape(prof.shape);   // reflect derived profile in the control
+                    setFoamW(poleBox.w); setFoamH(poleBox.h);
+                    setShapes(generatePoleBores(poleCount, poleBox.w, poleBox.h, prof));
+                })}
                 {smallItems.length > 0 && boxCard(`${smallBox.name}${nesting ? ' · tracing…' : ''}`, `${smallBox.w}" × ${smallBox.h}"${smallBox.d ? ` × ${smallBox.d}"` : ''}`, smallItems.map(itemRow), () => { setFoamW(smallBox.w); setFoamH(smallBox.h); autoNestSilhouettes(smallItems, smallBox.w, smallBox.h); })}
                 {items.length === 0 && <div style={{ fontSize: '0.8rem', color: theme.inkSoft, fontStyle: 'italic' }}>No items on this order.</div>}
               </div>

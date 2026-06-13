@@ -418,8 +418,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             // (poles = Custom division, small parts) plus the CPQ config — the paired CPQ steps
             // are what decide which pieces bolt together / pack as one assembled (T-shaped) unit.
             const pkgId = `PKG-${orderKey}`;
-            // Fees (Bend / Cut-Splice) aren't physical parts — keep them out of packaging.
-            const pkgItems = lines.filter(l => !(!l.partId && /\bfee\b/i.test(l.name || ''))).map(l => {
+            // Keep non-physical lines out of packaging: fees (no partId, name ~ /fee/) and the
+            // assembly/header line (partId is the -ASM- master itself, not a packable component).
+            const pkgItems = lines.filter(l =>
+                !(!l.partId && /\bfee\b/i.test(l.name || '')) &&
+                !(l.partId && /-ASM-/i.test(l.partId))
+            ).map(l => {
                 const part = l.partId ? partCache.get(l.partId) : null;
                 const isCustom = classifyLine(l, part) === DIVISION_CUSTOM;
                 const param = part?.manufacturingSpecs?.parametric || {};
