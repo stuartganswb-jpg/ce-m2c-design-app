@@ -114,12 +114,26 @@ export function snapshotPNG(object, size = 512) {
   });
 }
 
-// One component, end to end: returns { glbBlob, pngBlob } laid flat. Returns null if the
+// Measure a flat-laid group's true dimensions in inches (the master .glb is in meters). The
+// part lies flat with its thin axis on Y, so width/height are the X/Z face extents (matching
+// the Packaging top-down trace) and thickness is the Y extent.
+const IN_PER_M = 39.3701;
+export function measureInches(group) {
+  const s = new THREE.Box3().setFromObject(group).getSize(new THREE.Vector3());
+  return {
+    width: +(s.x * IN_PER_M).toFixed(3),
+    height: +(s.z * IN_PER_M).toFixed(3),
+    thickness: +(s.y * IN_PER_M).toFixed(3),
+  };
+}
+
+// One component, end to end: returns { glbBlob, pngBlob, dims } laid flat. Returns null if the
 // cluster matched no geometry in this glb (e.g. a BOM-only part with no mesh).
 export async function buildComponentFiles(scene, nodeNames) {
   const group = isolateCluster(scene, nodeNames);
   if (group.children.length === 0) return null;
   layFlat(group);
+  const dims = measureInches(group);
   const [glbBlob, pngBlob] = await Promise.all([exportGLB(group), snapshotPNG(group)]);
-  return { glbBlob, pngBlob };
+  return { glbBlob, pngBlob, dims };
 }

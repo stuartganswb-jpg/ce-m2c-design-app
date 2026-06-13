@@ -684,8 +684,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           const scene = await loadGLBScene(cadUrl);
 
           // Dedupe by code — L/C/R repeats share identical geometry, so build the files once.
-          const built = {};          // code -> { glbUrl, imageUrl } | null
-          const clusterUpdates = {}; // clusterId -> { glbUrl, imageUrl }
+          const built = {};          // code -> { glbUrl, imageUrl, dims } | null
+          const clusterUpdates = {}; // clusterId -> { glbUrl, imageUrl, dims }
           let done = 0, made = 0, empty = 0;
 
           for (const cl of clusters) {
@@ -698,7 +698,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                       const pngRef = ref(storage, `component_images/${activeBrand}_${code}.png`);
                       await uploadBytes(glbRef, files.glbBlob, { contentType: 'model/gltf-binary' });
                       await uploadBytes(pngRef, files.pngBlob, { contentType: 'image/png' });
-                      built[code] = { glbUrl: await getDownloadURL(glbRef), imageUrl: await getDownloadURL(pngRef) };
+                      built[code] = { glbUrl: await getDownloadURL(glbRef), imageUrl: await getDownloadURL(pngRef), dims: files.dims };
                       made++;
                   } else { built[code] = null; empty++; }
               }
@@ -707,15 +707,16 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               setGenState({ done, total: clusters.length, label: code });
           }
 
-          // Stamp the generated files onto each cluster.
+          // Stamp the generated files + measured dims onto each cluster.
           const newClusters = clusters.map(cl => clusterUpdates[cl.id]
-              ? { ...cl, glbUrl: clusterUpdates[cl.id].glbUrl, imageUrl: clusterUpdates[cl.id].imageUrl }
+              ? { ...cl, glbUrl: clusterUpdates[cl.id].glbUrl, imageUrl: clusterUpdates[cl.id].imageUrl, dimsIn: clusterUpdates[cl.id].dims }
               : cl);
           await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: newClusters });
 
-          // Carry to the matched library parts: always record component artefacts; only set the
-          // primary item image when the part doesn't already have a curated one (non-destructive
-          // on retrofit). One write per part.
+          // Carry to the matched library parts: record component artefacts + the measured
+          // Geometry & Z-Index dimensions (Width/Height, in inches), and set the primary item
+          // image only when the part has no curated one (non-destructive on retrofit). One
+          // write per part.
           const seenPart = new Set();
           for (const cl of clusters) {
               const u = clusterUpdates[cl.id]; if (!u) continue;
@@ -723,13 +724,18 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
               const part = libraryParts.find(lp => lp.itemId === pin.partId || lp.id === pin.partId);
               if (!part || seenPart.has(part.id)) continue;
               seenPart.add(part.id);
-              const patch = { componentGlbUrl: u.glbUrl, componentImageUrl: u.imageUrl };
+              const patch = {
+                  componentGlbUrl: u.glbUrl,
+                  componentImageUrl: u.imageUrl,
+                  'manufacturingSpecs.parametric.width': u.dims.width,
+                  'manufacturingSpecs.parametric.height': u.dims.height,
+              };
               if (!part.finalImageUrl) patch.finalImageUrl = u.imageUrl;
               await updateDoc(doc(db, "Approved_Designs", part.id), patch);
           }
 
           setGenState(null);
-          alert(`✅ Generated ${made} component file set(s)${empty ? ` (${empty} cluster(s) had no mesh — skipped)` : ''}.\nFlat .glb + thumbnails saved; .glb's are ready for foam tracing in Packaging.`);
+          alert(`✅ Generated ${made} component file set(s)${empty ? ` (${empty} cluster(s) had no mesh — skipped)` : ''}.\nFlat .glb + thumbnails saved, true dimensions written to each part's Geometry rules; .glb's are ready for foam tracing in Packaging.`);
       } catch (err) {
           console.error(err); setGenState(null);
           alert(`Generate failed: ${err.message || err}`);

@@ -300,6 +300,14 @@ function GLBModal({ gltfScene, foamW, foamH, onClose, onTrace }) {
     const model = gltfScene.clone(true); modelRef.current = model; scene.add(model);
     const box = new THREE.Box3().setFromObject(model), center = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
     model.position.sub(center);
+    // Auto-fill the part's true dimensions so the foam cutout is true-to-size instead of the
+    // 6x4 placeholder. Component .glb's are exported in meters; the tracer projects top-down,
+    // so screen W = world X, screen H = world Z. Guarded to a sane range so an oddly-scaled
+    // manual upload keeps the editable default rather than a wild value.
+    const IN_PER_M = 39.3701;
+    const autoW = +(size.x * IN_PER_M).toFixed(2), autoH = +(size.z * IN_PER_M).toFixed(2);
+    if (autoW >= 0.1 && autoW <= 120) setPartW(autoW);
+    if (autoH >= 0.1 && autoH <= 120) setPartH(autoH);
     const cam = new THREE.PerspectiveCamera(38, 400/300, 0.001, 10000); camRef.current = cam;
     cam.position.set(0, Math.max(size.x, size.y, size.z) * 1.8, Math.max(size.x, size.y, size.z) * 2.2); cam.lookAt(0, 0, 0);
     renderer.render(scene, cam);
