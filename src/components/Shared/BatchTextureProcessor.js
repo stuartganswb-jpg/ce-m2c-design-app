@@ -5,6 +5,10 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
+// Normalize a finish code for matching: uppercase, strip non-alphanumeric, and undo the EP
+// zero-pad (EP01 -> EP1) so the gallery/filename codes line up with the master finish codes.
+const normFinish = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^EP0+(\d+)$/, 'EP$1');
+
 const BatchTextureProcessor = ({ currentUser }) => {
     const [queue, setQueue] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
@@ -49,29 +53,48 @@ const BatchTextureProcessor = ({ currentUser }) => {
         setQueue(prev => [...prev, ...files]);
     };
 
-    // 3. Load Current Image & Parse Filename
+    const allFinishes = [...(Array.isArray(globalFinishes) ? globalFinishes : []), ...(Array.isArray(outsourceFinishes) ? outsourceFinishes : [])];
+
+    // 3. Load Current Image (preview + crop reset)
     useEffect(() => {
         if (queue.length > 0 && currentIndex < queue.length) {
             const file = queue[currentIndex];
             const objectUrl = URL.createObjectURL(file);
             setImageSrc(objectUrl);
             setAiPrompt("");
-            
-            // Regex: Look for "P" or "EP" followed by exactly two digits anywhere in the filename
-            let rawName = file.name.toUpperCase();
-            let match = rawName.match(/(EP|P)\d{2}/);
-            setFinishCode(match ? match[0] : "");
-            
+
             // Reset Cropper state for the new image
             setCropScale(100);
             setCropX(50);
             setCropY(50);
-            
+
             return () => URL.revokeObjectURL(objectUrl);
         } else {
             setImageSrc(null);
         }
     }, [currentIndex, queue]);
+
+    // 3b. Auto-detect the finish code by aligning the filename to the MASTER finishes (not a fixed
+    // regex). Pull EP/P/S+digits candidates + filename tokens, normalize (EP zero-strip), and match
+    // against each finish's code / descriptive name / id; set the canonical code. Re-runs when the
+    // finishes load so detection lines up even on the first image. Falls back to a broadened regex
+    // hit (EP/P/S + 1-3 digits) so a code still surfaces when no master finish exists yet.
+    useEffect(() => {
+        if (!(queue.length > 0 && currentIndex < queue.length)) return;
+        const raw = String(queue[currentIndex]?.name || '').toUpperCase().replace(/\.[^.]+$/, '');
+        const regexHits = raw.match(/(?:EP|P|S)\d{1,3}/g) || [];
+        const tokens = raw.split(/[^A-Z0-9]+/).filter(Boolean);
+        const candidates = [...new Set([...regexHits, ...tokens])];
+        let detected = '';
+        for (const c of candidates) {
+            const nc = normFinish(c);
+            const hit = allFinishes.find(f => normFinish(f.code) === nc || normFinish(f.name) === nc || normFinish(f.id) === nc);
+            if (hit) { detected = hit.code || hit.name || c; break; }
+        }
+        if (!detected) detected = regexHits[0] || '';
+        setFinishCode(detected);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentIndex, queue, globalFinishes, outsourceFinishes]);
 
     // 4. Check for Overwrite Conflicts
     useEffect(() => {
@@ -80,8 +103,9 @@ const BatchTextureProcessor = ({ currentUser }) => {
             return;
         }
         
-        const inHouseMatch = globalFinishes.find(f => f.code === finishCode || f.id === finishCode || f.name === finishCode);
-        const outsourceMatch = outsourceFinishes.find(f => f.id === finishCode || f.name === finishCode);
+        const nc = normFinish(finishCode);
+        const inHouseMatch = globalFinishes.find(f => normFinish(f.code) === nc || normFinish(f.id) === nc || normFinish(f.name) === nc);
+        const outsourceMatch = outsourceFinishes.find(f => normFinish(f.code) === nc || normFinish(f.id) === nc || normFinish(f.name) === nc);
         
         if (inHouseMatch) {
             setConflictWarning({ type: 'IN_HOUSE', finish: inHouseMatch, hasTexture: !!inHouseMatch.textureUrl });
@@ -306,7 +330,7 @@ const BatchTextureProcessor = ({ currentUser }) => {
                             {conflictWarning ? (
                                 <div style={{ background: conflictWarning.hasTexture ? '#fff3cd' : '#d4edda', border: `1px solid ${conflictWarning.hasTexture ? '#ffeeba' : '#c3e6cb'}`, padding: '15px' }}>
                                     <div style={{ fontFamily: theme.sans, fontSize: '0.9rem', fontWeight: 500, color: theme.ink }}>
-                                        ✓ Found in {conflictWarning.type === 'IN_HOUSE' ? 'In-House' : 'Outsourced'} Finishes: {conflictWarning.finish.name}
+                                        ✓ Found in {conflictWarning.type === 'IN_HOUSE' ? 'In-House' : 'Outsourced'} Finishes: {[conflictWarning.finish.code, conflictWarning.finish.name].filter(Boolean).join(' · ')}
                                     </div>
                                     {conflictWarning.hasTexture && (
                                         <div style={{ marginTop: '5px', fontSize: '0.85rem', color: '#856404' }}>
