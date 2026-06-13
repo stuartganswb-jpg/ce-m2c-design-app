@@ -455,7 +455,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       setIsPushingErp(true);
       try {
           const nsId = activePart.netSuiteInternalId;
-          const recordType = activePart.partClass === 'Inventory' ? 'inventoryitem' : 'assemblyitem';
 
           const payload = {
               itemid: editSpecs.tempLegacyId || activePart.legacyErpId,
@@ -464,20 +463,37 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               custitem9: parseFloat(editSpecs.basePrice) || 0
           };
 
-          const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${recordType}/${nsId}`;
+          const pushWith = async (recordType) => {
+              const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${recordType}/${nsId}`;
+              const response = await fetch(FIREBASE_FUNCTION_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ targetUrl, method: 'PATCH', payload })
+              });
+              const result = await response.json();
+              return { ok: response.ok, result };
+          };
 
-          const response = await fetch(FIREBASE_FUNCTION_URL, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                  targetUrl: targetUrl,
-                  method: 'PATCH',
-                  payload: payload
-              })
-          });
+          // partClass is the app's notion (Inventory vs Assembly), but the actual NetSuite record
+          // type can differ — e.g. a part converted to an assembly code (FIRWW15) keeps partClass
+          // 'Inventory' yet maps to a NetSuite assemblyitem. Prefer a previously-confirmed NS type,
+          // else derive from partClass; on a type-mismatch NetSuite tells us the real type — retry
+          // with it and remember it so future pushes go straight there.
+          let recordType = activePart.netSuiteRecordType || (activePart.partClass === 'Inventory' ? 'inventoryitem' : 'assemblyitem');
+          let { ok, result } = await pushWith(recordType);
+          if (!ok) {
+              const actual = JSON.stringify(result || '').match(/different type:\s*([a-z]+)/i)?.[1];
+              if (actual && actual.toLowerCase() !== recordType) {
+                  recordType = actual.toLowerCase();
+                  ({ ok, result } = await pushWith(recordType));
+              }
+              if (!ok) throw new Error(JSON.stringify(result));
+          }
 
-          const result = await response.json();
-          if (!response.ok) throw new Error(JSON.stringify(result));
+          // Remember the confirmed record type so the retry isn't needed next time.
+          if (activePart.netSuiteRecordType !== recordType) {
+              try { await setDoc(doc(db, "Approved_Designs", activePart.id), { netSuiteRecordType: recordType }, { merge: true }); } catch (_) { /* non-fatal */ }
+          }
 
           alert("✅ Successfully updated NetSuite ERP record!");
       } catch (error) {
