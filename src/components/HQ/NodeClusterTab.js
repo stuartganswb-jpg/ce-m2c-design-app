@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, where, doc, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, updateDoc, getDoc } from "firebase/firestore";
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds } from '@react-three/drei';
@@ -484,19 +484,19 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         } catch (err) { console.error(err); alert("Failed to save cluster."); }
     };
 
-    // Re-tag an existing cluster's region Location without re-running Auto-Group.
-    const handleSetClusterLocation = async (clusterId, location) => {
-        const updated = (activeAssembly.nodeClusters || []).map(c => c.id === clusterId ? { ...c, location } : c);
-        try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updated }); }
-        catch (err) { console.error(err); }
+    // Re-tag one cluster field without re-running Auto-Group. Re-reads the latest clusters first
+    // (not the possibly-stale prop) so a second tab / rapid clicks can't clobber other edits — and
+    // every other field (nodes, name, the other tag) is preserved via spread.
+    const setClusterField = async (clusterId, patch) => {
+        try {
+            const ref = doc(db, "Approved_Designs", activeAssembly.id);
+            const snap = await getDoc(ref);
+            const updated = ((snap.exists() ? snap.data().nodeClusters : activeAssembly.nodeClusters) || []).map(c => c.id === clusterId ? { ...c, ...patch } : c);
+            await updateDoc(ref, { nodeClusters: updated });
+        } catch (err) { console.error(err); }
     };
-
-    // Re-tag an existing cluster's Position (Left/Center/Right) without re-running Auto-Group.
-    const handleSetClusterPosition = async (clusterId, position) => {
-        const updated = (activeAssembly.nodeClusters || []).map(c => c.id === clusterId ? { ...c, position } : c);
-        try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updated }); }
-        catch (err) { console.error(err); }
-    };
+    const handleSetClusterLocation = (clusterId, location) => setClusterField(clusterId, { location });
+    const handleSetClusterPosition = (clusterId, position) => setClusterField(clusterId, { position });
 
     const handleDeleteCluster = async (clusterId) => {
         if (!window.confirm("Delete this grouping? The meshes will return to being unassigned.")) return;
