@@ -684,15 +684,22 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const promptStr = window.prompt(`Type "DELETE ALL ASSEMBLIES" to confirm wiping ${activeBrand.toUpperCase()} assemblies AND BOM pins:`); 
       if (promptStr === "DELETE ALL ASSEMBLIES") {
           try {
-              // 1. Get all Assemblies
+              // 1. Get this brand's Assemblies
               const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "in", ["Assembly", "Master Assembly"]), where("brandId", "==", activeBrand)));
-              
-              // 2. Get ALL BOM Pins (Crucial to prevent ghost data)
+              const brandAsmIds = new Set(snap.docs.map(d => d.id));
+
+              // 2. Get the BOM Pins that belong to THIS brand's assemblies only — scoping by the
+              // pin's assemblyId so the nuke can't reach into other brands' pins (pins have no
+              // brandId field, so we match on the assemblies we're deleting).
               const pinsSnap = await getDocs(collection(db, "assembly_pins"));
+              const brandPins = pinsSnap.docs.filter(d => {
+                  const aid = d.data().assemblyId;
+                  return aid && brandAsmIds.has(aid);
+              });
 
               const allDocs = [
                   ...snap.docs.map(d => doc(db, "Approved_Designs", d.id)),
-                  ...pinsSnap.docs.map(d => doc(db, "assembly_pins", d.id))
+                  ...brandPins.map(d => doc(db, "assembly_pins", d.id))
               ];
 
               // 3. Delete in batches to bypass Firebase 500 document limits
@@ -712,7 +719,18 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       }
   };
   
-  const handleNukeLibrary = async () => { 
+  const handleNukeFlows = async () => {
+      const promptStr = window.prompt(`Type "DELETE ALL FLOWS" to confirm wiping ${activeBrand.toUpperCase()} CPQ flows:`);
+      if (promptStr === "DELETE ALL FLOWS") {
+          try {
+              const snap = await getDocs(query(collection(db, "cpq_flows"), where("brandId", "==", activeBrand)));
+              await Promise.all(snap.docs.map(d => deleteDoc(doc(db, "cpq_flows", d.id))));
+              alert(`✅ ALL ${activeBrand.toUpperCase()} CPQ FLOWS NUKED (${snap.docs.length}).`);
+          } catch(e) { console.error(e); alert("❌ Failed to nuke flows: " + e.message); }
+      }
+  };
+
+  const handleNukeLibrary = async () => {
       const promptStr = window.prompt(`Type "DELETE MASTER LIBRARY" to confirm wiping ${activeBrand.toUpperCase()} inventory:`); 
       if (promptStr === "DELETE MASTER LIBRARY") {
           try {
@@ -1955,6 +1973,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                       <div style={{fontSize:'0.9rem', color:'var(--ink-soft)'}}>Deletes all BOMs and Top-Level Configurations.</div>
                   </div>
                   <button onClick={handleNukeAssemblies} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Assemblies</button>
+                </div>
+                <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
+                  <div>
+                      <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: '#d9534f' }}>Wipe All CPQ Flows</h4>
+                      <div style={{fontSize:'0.9rem', color:'var(--ink-soft)'}}>Deletes every CPQ flow for this brand (steps, geometry maps, hide-cluster lists).</div>
+                  </div>
+                  <button onClick={handleNukeFlows} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Flows</button>
                 </div>
                 <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
                   <div>
