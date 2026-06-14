@@ -304,8 +304,10 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [autoChecked, setAutoChecked] = useState({});
     const [autoNames, setAutoNames] = useState({});
     const [autoLocations, setAutoLocations] = useState({}); // proposalId -> 'WALL'|'CEILING'|'END'|''
-    const [previewNodes, setPreviewNodes] = useState([]);   // highlight a proposal's nodes in the 3D
     const [showGroupColors, setShowGroupColors] = useState(true); // paint every proposed group its own color in the 3D
+    const [previewProposalId, setPreviewProposalId] = useState(null); // click a part / row -> isolate that group
+    const [activeProposalId, setActiveProposalId] = useState(null);   // group being edited: 3D clicks add/remove parts
+    const [proposalNodeOverrides, setProposalNodeOverrides] = useState({}); // proposalId -> edited node list
 
     useEffect(() => {
         if (!activeBrand) return;
@@ -382,6 +384,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     };
 
     const handleMeshClick = (nodeName) => {
+        if (showAutoPanel) return handleAutoMeshClick(nodeName);
         if (interactionMode === "hide") handleToggleHide(nodeName);
         else handleToggleSelect(nodeName);
     };
@@ -536,6 +539,9 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         setAutoChecked(checked);
         setAutoNames(names);
         setAutoLocations(locs);
+        setProposalNodeOverrides({});
+        setActiveProposalId(null);
+        setPreviewProposalId(null);
     }, [autoProposals, existingClusters]);
 
     // Match each selected proposal to an existing cluster by sanitized node overlap so
@@ -547,7 +553,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         const sanSets = existingClusters.map(c => new Set((c.nodes || []).map(sanitizeNodeName)));
         const claimed = new Set();
         const plan = chosen.map(p => {
-            const pset = new Set(p.nodes.map(sanitizeNodeName));
+            const pset = new Set((proposalNodeOverrides[p.id] || p.nodes).map(sanitizeNodeName));
             let bestIdx = -1, bestScore = 0;
             existingClusters.forEach((c, idx) => {
                 if (claimed.has(idx)) return;
@@ -562,7 +568,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
             return { p, matchedId, name: (autoNames[p.id] || p.suggestedName).toUpperCase().trim() };
         });
         return { plan, replaceCount: plan.filter(x => x.matchedId).length, newCount: plan.filter(x => !x.matchedId).length };
-    }, [autoProposals, autoChecked, autoNames, existingClusters]);
+    }, [autoProposals, autoChecked, autoNames, existingClusters, proposalNodeOverrides]);
 
     const handleAutoSaveSelected = async () => {
         const { plan } = autoSavePlan;
@@ -573,11 +579,12 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         plan.forEach((x, i) => {
             // Region tags travel with the cluster (the name stays part-based for BOM Auto-Assign).
             const region = { position: x.p.pos || '', location: autoLocations[x.p.id] || '', center: x.p.center || null };
+            const savedNodes = proposalNodeOverrides[x.p.id] || x.p.nodes; // honor hand-edits
             if (x.matchedId) {
                 const ex = existingClusters.find(c => c.id === x.matchedId);
-                updatedById[x.matchedId] = { ...ex, name: x.name, nodes: x.p.nodes, ...region };
+                updatedById[x.matchedId] = { ...ex, name: x.name, nodes: savedNodes, ...region };
             } else {
-                additions.push({ id: `CLUSTER-${stamp}-${i}`, name: x.name, nodes: x.p.nodes, ...region });
+                additions.push({ id: `CLUSTER-${stamp}-${i}`, name: x.name, nodes: savedNodes, ...region });
             }
         });
         const merged = existingClusters.map(c => updatedById[c.id] || c).concat(additions);
@@ -585,17 +592,55 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
             await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: merged });
             setShowAutoPanel(false);
             setSelectedNodes([]);
-            setPreviewNodes([]);
+            setPreviewProposalId(null);
+            setActiveProposalId(null);
         } catch (err) { console.error(err); alert("Failed to save auto-groups."); }
     };
 
+    // A proposal's CURRENT node set = its hand-edited override (if any) else the auto-derived nodes.
+    const nodesOf = (p) => proposalNodeOverrides[p.id] || p.nodes;
     // Stable color per proposal (by its index), and the color-group set fed to the 3D when
     // "Color groups" is on — only the CHECKED proposals get painted; the rest fade.
     const proposalColor = (p) => GROUP_COLOR(autoProposals.indexOf(p));
     const colorGroups = useMemo(
-        () => autoProposals.filter(p => autoChecked[p.id]).map(p => ({ nodes: p.nodes, color: GROUP_COLOR(autoProposals.indexOf(p)) })),
-        [autoProposals, autoChecked]
+        () => autoProposals.filter(p => autoChecked[p.id]).map(p => ({ nodes: proposalNodeOverrides[p.id] || p.nodes, color: GROUP_COLOR(autoProposals.indexOf(p)) })),
+        [autoProposals, autoChecked, proposalNodeOverrides]
     );
+    // Reveal mode isolates one clicked group; edit mode keeps every group colored (so you can
+    // grab a part from any group), so don't isolate while editing.
+    const previewProposal = autoProposals.find(p => p.id === previewProposalId);
+    const previewNodes = (!activeProposalId && previewProposal) ? nodesOf(previewProposal) : [];
+
+    // 3D mesh clicks while the Auto-Group panel is open: in edit mode, add/remove the part
+    // to/from the active group (a part belongs to one group); otherwise reveal its group.
+    const handleAutoMeshClick = (nodeName) => {
+        const target = findNodeByName(sceneGraph, nodeName);
+        const subtree = target ? getAllNames(target) : [nodeName];
+        const sub = new Set(subtree);
+        if (activeProposalId) {
+            setProposalNodeOverrides(prev => {
+                const next = { ...prev };
+                const active = autoProposals.find(p => p.id === activeProposalId);
+                const activeNodes = new Set(next[activeProposalId] || (active ? active.nodes : []));
+                const allIn = subtree.every(n => activeNodes.has(n));
+                if (allIn) {
+                    subtree.forEach(n => activeNodes.delete(n)); // toggle off
+                } else {
+                    subtree.forEach(n => activeNodes.add(n));
+                    autoProposals.forEach(p => { // a part lives in one group — pull it out of the others
+                        if (p.id === activeProposalId) return;
+                        const pn = next[p.id] || p.nodes;
+                        if (pn.some(n => sub.has(n))) next[p.id] = pn.filter(n => !sub.has(n));
+                    });
+                }
+                next[activeProposalId] = [...activeNodes];
+                return next;
+            });
+        } else {
+            const owner = autoProposals.find(p => nodesOf(p).some(n => sub.has(n)));
+            if (owner) setPreviewProposalId(owner.id);
+        }
+    };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
@@ -666,11 +711,22 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                         {/* 3D VIEWER */}
                         <div style={{ flex: 1.8, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'relative', borderRadius: '2px', overflow: 'hidden' }}>
                             <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '16px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
-                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', letterSpacing: '.1em' }}>■ Current Selection</div>
-                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>■ Clustered / Bound</div>
-                                <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', borderTop: '1px solid var(--line)', paddingTop: '8px', marginTop: '4px', fontStyle: 'italic' }}>
-                                    Tip: Right-click & drag to pan.
-                                </div>
+                                {showAutoPanel ? (
+                                    <>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', letterSpacing: '.1em' }}>Each color = a group</div>
+                                        <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', borderTop: '1px solid var(--line)', paddingTop: '8px', marginTop: '4px', fontStyle: 'italic', maxWidth: '200px' }}>
+                                            {activeProposalId ? 'Editing — click parts to add/remove them from the highlighted group.' : 'Click a part to find its group · use ✎ Edit on a row to move parts.'}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', letterSpacing: '.1em' }}>■ Current Selection</div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>■ Clustered / Bound</div>
+                                        <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', borderTop: '1px solid var(--line)', paddingTop: '8px', marginTop: '4px', fontStyle: 'italic' }}>
+                                            Tip: Right-click & drag to pan.
+                                        </div>
+                                    </>
+                                )}
                             </div>
 
                             <div style={{ position: 'absolute', top: '20px', right: '20px', zIndex: 10, display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'flex-end' }}>
@@ -728,7 +784,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         onLoaded={setSceneGraph}
                                         onComponents={setCadComponents}
                                         locatingNodes={previewNodes.length ? previewNodes : locatingNodes}
-                                        colorGroups={showAutoPanel && showGroupColors && !previewNodes.length ? colorGroups : []}
+                                        colorGroups={showAutoPanel && (showGroupColors || activeProposalId) && !previewNodes.length ? colorGroups : []}
                                     />
                                 </Bounds>
                             </Canvas>
@@ -825,7 +881,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Auto-Group · tag regions</span>
                                 <h2 style={{ margin: '4px 0 0 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Group by Location & Position</h2>
                             </div>
-                            <button onClick={() => { setShowAutoPanel(false); setPreviewNodes([]); }} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                            <button onClick={() => { setShowAutoPanel(false); setPreviewProposalId(null); setActiveProposalId(null); }} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
                         </div>
                         <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '14px', flexWrap: 'wrap' }}>
                             <div style={{ display: 'flex', border: '1px solid var(--line)', background: '#fff' }}>
@@ -850,19 +906,30 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                     {/* List */}
                     <div style={{ flex: 1, overflowY: 'auto', padding: '14px 22px' }}>
                         {autoProposals.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>No sub-assemblies detected in this model.</div>}
+                        {activeProposalId && (() => {
+                            const ap = autoProposals.find(p => p.id === activeProposalId);
+                            return (
+                                <div style={{ position: 'sticky', top: 0, zIndex: 1, marginBottom: '10px', padding: '10px 12px', background: 'var(--brass)', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', borderRadius: '2px' }}>
+                                    <span style={{ fontSize: '0.82rem' }}>✎ Editing <strong>{(autoNames[activeProposalId] ?? ap?.suggestedName) || ''}</strong> — click parts in the 3D to add / remove them.</span>
+                                    <button onClick={() => setActiveProposalId(null)} style={{ background: '#fff', color: 'var(--brass)', border: 'none', padding: '5px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>✓ Done</button>
+                                </div>
+                            );
+                        })()}
                         {autoProposals.map(p => {
                             const on = !!autoChecked[p.id];
                             const loc = autoLocations[p.id] || '';
-                            const isPreview = previewNodes === p.nodes;
+                            const isEditing = activeProposalId === p.id;
+                            const isPreview = previewProposalId === p.id && !activeProposalId;
+                            const color = proposalColor(p);
                             return (
-                                <div key={p.id} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '10px', marginBottom: '4px', borderRadius: '2px', border: `1px solid ${isPreview ? 'var(--brass)' : 'transparent'}`, background: isPreview ? 'var(--paper-2)' : 'transparent', opacity: on ? 1 : 0.55 }}>
+                                <div key={p.id} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '10px', marginBottom: '4px', borderRadius: '2px', border: `1px solid ${(isEditing || isPreview) ? 'var(--brass)' : 'transparent'}`, background: (isEditing || isPreview) ? 'var(--paper-2)' : 'transparent', boxShadow: (showGroupColors && on) ? `inset 5px 0 0 ${color}` : 'none', opacity: on ? 1 : 0.55 }}>
                                     <input type="checkbox" checked={on} onChange={(e) => setAutoChecked(prev => ({ ...prev, [p.id]: e.target.checked }))} style={{ marginTop: '10px', width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--brass)' }} />
-                                    <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => setPreviewNodes(p.nodes)} title="Click to highlight this group in the 3D view">
+                                    <div style={{ flex: 1, cursor: isEditing ? 'default' : 'pointer' }} onClick={() => { if (!isEditing) setPreviewProposalId(isPreview ? null : p.id); }} title={isEditing ? '' : 'Click to isolate this group in the 3D'}>
                                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                            <span title="Group color in the 3D" style={{ width: '14px', height: '14px', flexShrink: 0, borderRadius: '3px', border: '1px solid var(--line)', background: proposalColor(p), opacity: (showGroupColors && on) ? 1 : 0.25 }} />
+                                            <span title="Group color in the 3D" style={{ width: '14px', height: '14px', flexShrink: 0, borderRadius: '3px', border: '1px solid var(--line)', background: color, opacity: (showGroupColors && on) ? 1 : 0.25 }} />
                                             <input value={autoNames[p.id] ?? p.suggestedName} onClick={(e) => e.stopPropagation()} onChange={(e) => setAutoNames(prev => ({ ...prev, [p.id]: e.target.value }))} style={{ flex: 1, padding: '7px 9px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', textTransform: 'uppercase', outline: 'none' }} />
                                             {p.pos && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: 'var(--paper-2)', color: 'var(--brass)', padding: '4px 8px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>{p.pos}</span>}
-                                            {on && autoSavePlan.plan.find(x => x.p.id === p.id)?.matchedId && <span title="Updates an existing cluster in place" style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: 'var(--brass)', color: '#fff', padding: '4px 8px', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>↻</span>}
+                                            <button onClick={(e) => { e.stopPropagation(); if (!isEditing) setAutoChecked(prev => ({ ...prev, [p.id]: true })); setActiveProposalId(isEditing ? null : p.id); setPreviewProposalId(null); }} title="Add/remove parts: then click meshes in the 3D" style={{ background: isEditing ? 'var(--brass)' : '#fff', color: isEditing ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', padding: '4px 8px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{isEditing ? '✓ Done' : '✎ Edit'}</button>
                                         </div>
                                         {/* Location tag (Wall / Ceiling / End) */}
                                         <div style={{ display: 'flex', gap: '6px', marginTop: '8px', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
@@ -872,7 +939,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                             ))}
                                         </div>
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '6px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                                            {p.nodes.length} nodes · {p.meshCount} mesh{p.meshCount === 1 ? '' : 'es'}
+                                            {nodesOf(p).length} nodes{proposalNodeOverrides[p.id] ? ' · edited' : ''}
                                         </div>
                                         {p.flags.map((f, i) => (
                                             <div key={i} style={{ fontSize: '0.76rem', color: f.startsWith('Already') ? 'var(--ink-soft)' : '#b9770e', marginTop: '4px', display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -891,7 +958,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                             {autoSavePlan.replaceCount > 0 && <span style={{ color: 'var(--brass)' }}> · {autoSavePlan.replaceCount}↻ · {autoSavePlan.newCount}+</span>}
                         </div>
                         <div style={{ display: 'flex', gap: '10px' }}>
-                            <button onClick={() => { setShowAutoPanel(false); setPreviewNodes([]); }} style={{ padding: '12px 18px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Cancel</button>
+                            <button onClick={() => { setShowAutoPanel(false); setPreviewProposalId(null); setActiveProposalId(null); }} style={{ padding: '12px 18px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Cancel</button>
                             <button onClick={handleAutoSaveSelected} style={{ padding: '12px 22px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Clusters</button>
                         </div>
                     </div>
