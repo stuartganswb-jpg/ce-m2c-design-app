@@ -4,6 +4,18 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, 
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
+// Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
+// keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
+const stripUndefined = (v) => {
+    if (Array.isArray(v)) return v.map(stripUndefined);
+    if (v && typeof v === 'object') {
+        const out = {};
+        for (const k of Object.keys(v)) { if (v[k] !== undefined) out[k] = stripUndefined(v[k]); }
+        return out;
+    }
+    return v;
+};
+
 // CONSTANTS FOR GLOBAL PERMISSIONS
 const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'admin'];
 const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'OS COMMS', 'ASSET GALLERY', 'MANAGEMENT', 'DAILY SUMMARY'];
@@ -395,7 +407,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           const name = `${String(rest.name || 'IMPORTED FLOW').toUpperCase()} (IMPORTED — REVIEW)`;
           // Creates a fresh, isolated flow for review — strip _note helper keys from steps first.
           const steps = (Array.isArray(rest.steps) ? rest.steps : []).map(s => { const { _note, ...keep } = s || {}; return keep; });
-          await setDoc(doc(db, "cpq_flows", flowId), { ...rest, id: flowId, brandId: activeBrand, name, steps });
+          await setDoc(doc(db, "cpq_flows", flowId), stripUndefined({ ...rest, id: flowId, brandId: activeBrand, name, steps }));
           setActiveFlowId(flowId);
           alert(`Imported "${name}". It's a fresh, isolated flow — review each step, fill any PLACEHOLDER part IDs / mesh names, then Save. Nothing goes live until you use it in a quote.`);
       } catch (err) { console.error("Flow import failed:", err); alert("Import failed — that file isn't valid flow JSON."); }
@@ -409,7 +421,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           const formattedName = flowSettings.name.toUpperCase();
           const formattedErpId = (flowSettings.legacyErpId || 'PENDING').toUpperCase();
 
-          await setDoc(doc(db, "cpq_flows", activeFlowId), { ...flowSettings, name: formattedName, legacyErpId: formattedErpId }, { merge: true });
+          await setDoc(doc(db, "cpq_flows", activeFlowId), stripUndefined({ ...flowSettings, name: formattedName, legacyErpId: formattedErpId }), { merge: true });
           
           if (flowSettings.linkedAssemblyId) {
               await updateDoc(doc(db, "Approved_Designs", flowSettings.linkedAssemblyId), {
@@ -452,7 +464,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           return { ...s, finishDataSource: 'master_finishes', finishAllowedOptions: [...def] };
       });
       try {
-          await updateDoc(doc(db, "cpq_flows", activeFlowId), { steps: updatedSteps, defaultFinishOptions: def });
+          await updateDoc(doc(db, "cpq_flows", activeFlowId), stripUndefined({ steps: updatedSteps, defaultFinishOptions: def }));
           alert(`Applied default finishes to ${eligible.length} step(s).`);
       } catch (err) {
           console.error("Error applying finishes to steps:", err);
@@ -617,7 +629,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           });
 
           const updatedSteps = [...(flow.steps || []), ...generatedSteps];
-          await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps }, { merge: true });
+          await setDoc(doc(db, "cpq_flows", flow.id), stripUndefined({ ...flow, steps: updatedSteps }), { merge: true });
           alert(`✅ Successfully synced ${generatedSteps.length} configuration steps from the Master File Cabinet!`);
       } catch (err) {
           console.error("Auto-sync failed:", err);
@@ -638,7 +650,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           } else {
               updatedSteps = [...(flow.steps || []), { ...newStep, id: `STEP-${Date.now()}` }];
           }
-          await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
+          await setDoc(doc(db, "cpq_flows", flow.id), stripUndefined({ ...flow, steps: updatedSteps }));
           setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
       } catch (err) { console.error("Error saving step:", err); alert("Database Error."); }
   };
@@ -647,7 +659,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       if (!window.confirm("Delete this configuration step?")) return;
       try {
           const updatedSteps = flow.steps.filter(s => s.id !== stepId);
-          await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
+          await setDoc(doc(db, "cpq_flows", flow.id), stripUndefined({ ...flow, steps: updatedSteps }));
       } catch (err) { console.error("Error deleting step:", err); }
   };
 
@@ -658,7 +670,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       } else if (direction === 'DOWN' && index < updatedSteps.length - 1) {
           [updatedSteps[index + 1], updatedSteps[index]] = [updatedSteps[index], updatedSteps[index + 1]];
       }
-      await setDoc(doc(db, "cpq_flows", flow.id), { ...flow, steps: updatedSteps });
+      await setDoc(doc(db, "cpq_flows", flow.id), stripUndefined({ ...flow, steps: updatedSteps }));
   };
 
   const handleAiGenerateRule = () => {
