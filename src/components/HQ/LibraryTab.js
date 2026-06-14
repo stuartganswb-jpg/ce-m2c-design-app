@@ -1005,6 +1005,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               <select value={String(editSpecs.customData?.bpOrientation || 'VERTICAL').toUpperCase()} onChange={(e) => handleCustomFieldChange("bpOrientation", e.target.value)} style={fieldStyle}>
                                   <option value="VERTICAL">Vertical — Width is along the pole (½ Width / side)</option>
                                   <option value="HORIZONTAL">Horizontal — Length is along the pole (½ Length / side)</option>
+                                  <option value="SQUARE">Square — Width = Height (½ Width / side)</option>
+                                  <option value="ROUND">Round — Diameter (½ Diameter / side)</option>
                               </select>
                           </div>
                       )}
