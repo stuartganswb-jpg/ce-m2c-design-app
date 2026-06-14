@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where, updateDoc, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { UncontrolledReactSVGPanZoom, TOOL_PAN, TOOL_ZOOM_IN, TOOL_ZOOM_OUT, TOOL_NONE } from 'react-svg-pan-zoom'; 
 
@@ -300,9 +300,17 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
     if (!confirmDelete) return;
 
     try {
-        await deleteDoc(doc(db, "Approved_Designs", activeAssembly.id));
+        // Delete this assembly's BOM pins too — only the ones tied to THIS assembly (scoped by
+        // assemblyId), so deleting one product never touches another's. Prevents "ghost" pins from
+        // resurfacing if the assembly is rebuilt under the same id.
+        const pinsSnap = await getDocs(query(collection(db, "assembly_pins"), where("assemblyId", "==", activeAssembly.id)));
+        await Promise.all([
+            deleteDoc(doc(db, "Approved_Designs", activeAssembly.id)),
+            ...pinsSnap.docs.map(d => deleteDoc(doc(db, "assembly_pins", d.id)))
+        ]);
         setActiveAssembly(null);
         setIsEditing(false);
+        alert(`✅ Deleted "${activeAssembly.itemName}" and ${pinsSnap.docs.length} BOM pin(s).`);
     } catch (err) {
         console.error("Error deleting assembly:", err);
         alert("Failed to delete product.");
