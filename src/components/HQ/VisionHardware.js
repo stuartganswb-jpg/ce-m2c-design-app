@@ -65,7 +65,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
     shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'FINIAL', proj: "", bracketId: "", bracketIdRight: "", bracketIdCenter: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
+    endStyle: 'FINIAL', proj: "", bracketId: "", bracketIdRight: "", bracketIdCenter: "", endsSame: true, poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   };
 
@@ -270,7 +270,6 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const keepSelected = (list, selId) => (selId && !list.some(b => b.id === selId)) ? list.concat(allBrackets.filter(b => b.id === selId)) : list;
   const leftMount = engData.shape === 'STRAIGHT' ? engData.mountLeft : engData.mountOuter;
   const rightMount = engData.shape === 'STRAIGHT' ? engData.mountRight : engData.mountOuter;
-  const splitEnds = engData.shape === 'STRAIGHT' && leftMount !== rightMount;
   const leftBrackets = keepSelected(allBrackets.filter(b => bracketMatchesMount(b, leftMount)), engData.bracketId);
   const rightBrackets = keepSelected(allBrackets.filter(b => bracketMatchesMount(b, rightMount)), engData.bracketIdRight);
   const centerBrackets = keepSelected(allBrackets.filter(b => !isReturnBracketPart(b) && (bracketMatchesMount(b, leftMount) || bracketMatchesMount(b, rightMount))), engData.bracketIdCenter);
@@ -490,6 +489,28 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
 
   const handleUpdateAttachmentDist = (id, newDist) => { setAttachments(atts => atts.map(a => a.id === id ? { ...a, distInches: parseFloat(newDist) || 0 } : a)); };
   const handleUpdateAttachmentNote = (id, text) => { setAttachments(atts => atts.map(a => a.id === id ? { ...a, note: text } : a)); };
+
+  // Auto-place brackets along a STRAIGHT pole: end brackets inset (an end-return bracket sits at
+  // 0", others ~3" in), then centers per the 36"/54" rule — none at ≤36", else spread evenly so
+  // no gap exceeds 54" (so a 100" pole gets one at 50"). All become editable/removable attachments.
+  const handleAutoPlaceBrackets = () => {
+      if (engData.shape !== 'STRAIGHT') return alert("Auto-place currently supports straight poles. Miter / Bow are coming next.");
+      const segLen = pole2;
+      if (!segLen || segLen <= 0) return alert("Enter the pole width / measurements first so there's a length to lay out.");
+      if (attachments.length > 0 && !window.confirm("Replace the current placements with a fresh auto-layout? Any manual bracket / splice positions will be cleared.")) return;
+      const isRet = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
+      const snap = (n) => Math.round(n * 8) / 8;
+      const leftOff = isRet(engData.bracketId) ? 0 : 3;
+      const rightOff = isRet(engData.endsSame !== false ? engData.bracketId : engData.bracketIdRight) ? 0 : 3;
+      let idc = Date.now();
+      const next = [
+          { id: idc++, type: 'bracket', segId: 2, distInches: snap(leftOff), ref: 'START', note: 'End · L' },
+          { id: idc++, type: 'bracket', segId: 2, distInches: snap(rightOff), ref: 'END', note: 'End · R' },
+      ];
+      const nCenters = segLen <= 36 ? 0 : Math.max(1, Math.ceil(segLen / 54) - 1);
+      for (let i = 1; i <= nCenters; i++) next.push({ id: idc++, type: 'bracket', segId: 2, distInches: snap(segLen * i / (nCenters + 1)), ref: 'START', note: 'Center' });
+      setAttachments(next);
+  };
   const handleUpdateShopNote = (id, text) => { setShopNotes(notes => notes.map(n => n.id === id ? { ...n, text: text } : n)); };
 
   const getAdjustedSvgPoint = (clientX, clientY) => {
@@ -851,34 +872,29 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                         <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>3. Fabrication Settings</div>
                         <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                            {/* Bracket selection — Outer (L+R) + Center, narrowed by mount; auto-splits to Left/Right when the end mounts differ. bracketId stays = Outer/Left for back-compat (dim-sync + push-to-CPQ). */}
-                            <div style={{ display: 'flex', gap: '16px' }}>
-                                {splitEnds ? (
-                                    <>
-                                        <div style={{ flex: 1 }}>
-                                            <label style={labelStyle}>Left End Bracket · {leftMount}</label>
-                                            <select value={engData.bracketId || ''} onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))} style={fieldStyle}>
-                                                <option value="">{quoteFlowId ? '-- Select --' : '-- Select CPQ Flow First --'}</option>
-                                                {leftBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
-                                            </select>
-                                        </div>
-                                        <div style={{ flex: 1 }}>
-                                            <label style={labelStyle}>Right End Bracket · {rightMount}</label>
-                                            <select value={engData.bracketIdRight || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdRight: e.target.value }))} style={fieldStyle}>
-                                                <option value="">-- Select --</option>
-                                                {rightBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
-                                            </select>
-                                        </div>
-                                    </>
-                                ) : (
-                                    <div style={{ flex: 1.5 }}>
-                                        <label style={labelStyle}>Outer Bracket · L + R{leftMount ? ` · ${leftMount}` : ''} (Auto-Syncs Dims)</label>
-                                        <select value={engData.bracketId || ''} onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value, bracketIdRight: '' }))} style={fieldStyle}>
-                                            <option value="">{quoteFlowId ? '-- Select Outer Bracket --' : '-- Select CPQ Flow First --'}</option>
-                                            {leftBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
-                                        </select>
+                            {/* Bracket selection — Left + Right end brackets are independent (even same-mount ends
+                                can differ, e.g. L end-return + R passing-with-endcap). "Same as left" mirrors L→R for
+                                symmetric jobs. + Center (passing, excludes end-return). bracketId = Left for back-compat. */}
+                            <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+                                <div style={{ flex: 1 }}>
+                                    <label style={labelStyle}>Left End Bracket{leftMount ? ` · ${leftMount}` : ''} (Auto-Syncs Dims)</label>
+                                    <select value={engData.bracketId || ''} onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value, ...(prev.endsSame !== false ? { bracketIdRight: e.target.value } : {}) }))} style={fieldStyle}>
+                                        <option value="">{quoteFlowId ? '-- Select --' : '-- Select CPQ Flow First --'}</option>
+                                        {leftBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
+                                    </select>
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <div style={{ ...labelStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                                        <span>Right End Bracket{rightMount ? ` · ${rightMount}` : ''}</span>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', textTransform: 'none', letterSpacing: 0, cursor: 'pointer', fontSize: '0.72rem' }}>
+                                            <input type="checkbox" checked={engData.endsSame !== false} onChange={e => setEngData(prev => ({ ...prev, endsSame: e.target.checked, ...(e.target.checked ? { bracketIdRight: prev.bracketId } : {}) }))} style={{ cursor: 'pointer' }} /> same as left
+                                        </label>
                                     </div>
-                                )}
+                                    <select value={(engData.endsSame !== false ? engData.bracketId : engData.bracketIdRight) || ''} disabled={engData.endsSame !== false} onChange={e => setEngData(prev => ({ ...prev, bracketIdRight: e.target.value }))} style={{ ...fieldStyle, opacity: engData.endsSame !== false ? 0.55 : 1 }}>
+                                        <option value="">-- Select --</option>
+                                        {rightBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
+                                    </select>
+                                </div>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Center Bracket · passing</label>
                                     <select value={engData.bracketIdCenter || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdCenter: e.target.value }))} style={fieldStyle}>
@@ -887,6 +903,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     </select>
                                 </div>
                             </div>
+                            <button onClick={handleAutoPlaceBrackets} disabled={engData.shape !== 'STRAIGHT'} title={engData.shape !== 'STRAIGHT' ? 'Auto-place currently supports straight poles' : 'Place end + center brackets automatically — then slide / edit / remove them in the Engineering view'} style={{ padding: '12px 16px', background: engData.shape === 'STRAIGHT' ? 'var(--brass)' : 'var(--paper-2)', color: engData.shape === 'STRAIGHT' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: engData.shape === 'STRAIGHT' ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⚙ Auto-Place Brackets · ends + centers (edit in Engineering view)</button>
                             <div style={{ display: 'flex', gap: '16px' }}>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Projection (in)</label>
