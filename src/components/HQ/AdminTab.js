@@ -49,6 +49,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
+  const [colGlobalFinishes, setColGlobalFinishes] = useState([]); // legacy hq_global_finishes collection
+  const [inhouseFinishes, setInhouseFinishes] = useState([]);     // legacy hq_inhouse_finishes collection
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
 
@@ -129,6 +131,10 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (snap) => { if(snap.exists() && snap.data().finishes) setGlobalFinishes(snap.data().finishes); });
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+      // Finishes can also live in the legacy collections the Asset Gallery uses — read them so the
+      // CPQ finish picker is a strict superset of every store (in-house + outsourced + legacy).
+      const unsubColGlobal = onSnapshot(collection(db, "hq_global_finishes"), (snap) => setColGlobalFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))), () => {});
+      const unsubInhouse = onSnapshot(collection(db, "hq_inhouse_finishes"), (snap) => setInhouseFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))), () => {});
 
       const unsubLogos = onSnapshot(doc(db, "hq_config", "brand_logos"), (docSnap) => { if (docSnap.exists()) setBrandLogos(docSnap.data()); });
       const unsubForms = onSnapshot(doc(db, "hq_config", "form_templates"), (docSnap) => { 
@@ -137,7 +143,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
       });
 
-      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
+      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubColGlobal(); unsubInhouse(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -796,10 +802,15 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const getDataSourceItems = (source) => {
       if (!source) return [];
       if (source === 'master_finishes') {
-          return [
-              ...globalFinishes.map(f => ({ id: f.id, name: f.name })),
-              ...outsourceFinishes.map(f => ({ id: f.id, name: f.name }))
-          ].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+          // Union every finish store (in-house master doc + legacy collections + outsourced) and
+          // dedupe by id/code, so a finish added in any manager shows here exactly once.
+          const seen = new Set(); const out = [];
+          for (const f of [...globalFinishes, ...colGlobalFinishes, ...inhouseFinishes, ...outsourceFinishes]) {
+              const id = f.id || f.code; if (!id) continue;
+              const k = String(id).trim().toUpperCase(); if (seen.has(k)) continue;
+              seen.add(k); out.push({ id, name: f.name || f.code || id });
+          }
+          return out.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       }
       
       if (globalLists.prodTypes?.includes(source)) {
@@ -970,6 +981,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             <label style={{ fontSize: '0.8rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>End Style</label>
                                             <select value={flowSettings.fabEndStyle || ''} onChange={e => setFlowSettings({...flowSettings, fabEndStyle: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                                                 <option value="">-- None (auto-detect) --</option>
+                                                <option value="FLUSH">Flush Cut (Inside Mount)</option>
                                                 <option value="RETURN_BEND">Bent Return (FR)</option>
                                                 <option value="RETURN_MITER">Mitered Return</option>
                                                 <option value="FINIAL">Finial</option>
