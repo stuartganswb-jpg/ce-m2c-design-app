@@ -69,6 +69,7 @@ const guessLocation = (s) => {
     return '';
 };
 const LOCATIONS = ['WALL', 'CEILING', 'END'];
+const POSITIONS = ['LEFT', 'CENTER', 'RIGHT'];
 // Library-driven categorization. The Auto-Group tool matches each node to a library
 // component (by name / ERP id), then reads its productType + bracket mount to pre-fill
 // the group's Category (Bracket / Pole / Finial) and — for brackets — its Location.
@@ -486,6 +487,13 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     // Re-tag an existing cluster's region Location without re-running Auto-Group.
     const handleSetClusterLocation = async (clusterId, location) => {
         const updated = (activeAssembly.nodeClusters || []).map(c => c.id === clusterId ? { ...c, location } : c);
+        try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updated }); }
+        catch (err) { console.error(err); }
+    };
+
+    // Re-tag an existing cluster's Position (Left/Center/Right) without re-running Auto-Group.
+    const handleSetClusterPosition = async (clusterId, position) => {
+        const updated = (activeAssembly.nodeClusters || []).map(c => c.id === clusterId ? { ...c, position } : c);
         try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updated }); }
         catch (err) { console.error(err); }
     };
@@ -972,10 +980,15 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginTop: '6px' }}>
                                                     {(cl.location || cl.position) && <span style={{ color: 'var(--brass)', marginRight: '8px' }}>{regionLabel(cl)}</span>}{cl.nodes?.length || 0} Nodes
                                                 </div>
-                                                {/* Re-tag region location without re-running Auto-Group */}
+                                                {/* Re-tag region location + position without re-running Auto-Group */}
                                                 <div style={{ display: 'flex', gap: '5px', marginTop: '8px' }}>
                                                     {LOCATIONS.map(L => (
                                                         <button key={L} onClick={() => handleSetClusterLocation(cl.id, cl.location === L ? '' : L)} style={{ padding: '3px 8px', background: cl.location === L ? 'var(--ink)' : '#fff', color: cl.location === L ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{L}</button>
+                                                    ))}
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '5px', marginTop: '5px' }}>
+                                                    {POSITIONS.map(P => (
+                                                        <button key={P} onClick={() => handleSetClusterPosition(cl.id, cl.position === P ? '' : P)} style={{ padding: '3px 8px', background: cl.position === P ? 'var(--brass)' : '#fff', color: cl.position === P ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{P}</button>
                                                     ))}
                                                 </div>
                                             </div>
