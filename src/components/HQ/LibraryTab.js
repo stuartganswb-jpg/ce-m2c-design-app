@@ -999,6 +999,13 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '2px' }}>Sits right at the pole end and its width adds to the O2O. End-return brackets are the only ones placed at the very end — and they're never offered as a center support. (e.g. FIWERA, FICERA)</div>
                           </div>
                       </div>
+                      {!!editSpecs.customData?.isReturnBracket && (
+                          <div>
+                              <label style={labelStyle}>Bracket Arm Thickness (in)</label>
+                              <input type="number" step="0.125" value={editSpecs.customData?.armThickness ?? ''} onChange={(e) => handleCustomFieldChange("armThickness", e.target.value)} placeholder="e.g. 0.5 (½&quot; flat-iron)" style={fieldStyle} />
+                              <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Adds to the O2O on each return end, on top of the half-backplate.</div>
+                          </div>
+                      )}
                       {(editSpecs.productType || '').toUpperCase().includes('BACKPLATE') && (
                           <div>
                               <label style={labelStyle}>Backplate Orientation (drives O2O)</label>

@@ -374,8 +374,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const isRetBkt = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
   const o2oRightBktId = engData.endsSame !== false ? engData.bracketId : engData.bracketIdRight;
   const o2oRightBpId = engData.backplatesSame !== false ? engData.backplateIdLeft : engData.backplateIdRight;
-  const endAddL = (isRetBkt(engData.bracketId) && engData.backplateIdLeft) ? bpEndHalf(engData.backplateIdLeft) : (engData.bracketW / 2);
-  const endAddR = (isRetBkt(o2oRightBktId) && o2oRightBpId) ? bpEndHalf(o2oRightBpId) : (engData.bracketW / 2);
+  // Return-bracket arm thickness (e.g. ½" flat-iron stock) is set on the bracket item and adds
+  // to each return end's O2O on top of the half-backplate.
+  const armThk = (id) => parseFloat(libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.armThickness) || 0;
+  const endAddL = (isRetBkt(engData.bracketId) && engData.backplateIdLeft) ? (bpEndHalf(engData.backplateIdLeft) + armThk(engData.bracketId)) : (engData.bracketW / 2);
+  const endAddR = (isRetBkt(o2oRightBktId) && o2oRightBpId) ? (bpEndHalf(o2oRightBpId) + armThk(o2oRightBktId)) : (engData.bracketW / 2);
   const totalSystemO2O = poleO2O + endAddL + endAddR;
 
   const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
