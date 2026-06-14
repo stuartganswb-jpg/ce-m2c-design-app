@@ -72,12 +72,13 @@ const LOCATIONS = ['WALL', 'CEILING', 'END'];
 // Library-driven categorization. The Auto-Group tool matches each node to a library
 // component (by name / ERP id), then reads its productType + bracket mount to pre-fill
 // the group's Category (Bracket / Pole / Finial) and — for brackets — its Location.
-const CATEGORIES = ['BRACKET', 'POLE', 'FINIAL'];
+const CATEGORIES = ['BRACKET', 'POLE', 'FINIAL', 'BACKPLATE'];
 // Normalize any name / id to a comparable key (drop case, spaces, punctuation).
 const normKey = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 // Bucket a library productType string into one of our categories.
 const classifyCategory = (pt) => {
     const t = String(pt || '').toUpperCase();
+    if (t.includes('BACKPLATE') || t.includes('BACK PLATE') || t.includes('BACK-PLATE')) return 'BACKPLATE';
     if (t.includes('BRACKET')) return 'BRACKET';
     if (t.includes('FINIAL')) return 'FINIAL';
     if (t.includes('POLE') || t.includes('ROD')) return 'POLE';
@@ -550,9 +551,10 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
             return f;
         };
 
+        let proposals;
         if (splitByPosition) {
             // One proposal per instance, with a position label.
-            return cadComponents.map(c => {
+            proposals = cadComponents.map(c => {
                 const base = cleanCadName(c.name) || c.name || 'UNNAMED';
                 const pos = positionLabel(byBase[base], c);
                 // Style-option detection: another component at (nearly) the same spot
@@ -581,10 +583,9 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                     library,
                 };
             });
-        }
-
-        // Merge: one proposal per base name (all instances combined).
-        return Object.entries(byBase).map(([base, group]) => {
+        } else {
+            // Merge: one proposal per base name (all instances combined).
+            proposals = Object.entries(byBase).map(([base, group]) => {
             const nodes = [...new Set(group.flatMap(g => g.nodes))];
             const meshCount = group.reduce((s, g) => s + g.meshCount, 0);
             const flags = flagsFor(nodes, meshCount, base, false);
@@ -605,7 +606,25 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                 guessedCategory: (library && library.category) || guessCategory(base),
                 library,
             };
-        });
+            });
+        }
+
+        // Backplates have no intrinsic wall/ceiling — they assemble onto a bracket arm.
+        // Give each backplate the Location of the geometrically nearest LOCATED bracket
+        // (wall arm -> WALL, ceiling arm -> CEILING), overriding any name-based guess.
+        const locatedBrackets = proposals.filter(b => b.guessedCategory === 'BRACKET' && b.guessedLocation && b.center);
+        if (locatedBrackets.length) {
+            proposals.forEach(p => {
+                if (p.guessedCategory !== 'BACKPLATE' || !p.center) return;
+                let best = null, bestD = Infinity;
+                locatedBrackets.forEach(b => {
+                    const d = Math.hypot((p.center.x || 0) - (b.center.x || 0), (p.center.y || 0) - (b.center.y || 0), (p.center.z || 0) - (b.center.z || 0));
+                    if (d < bestD) { bestD = d; best = b; }
+                });
+                if (best) { p.guessedLocation = best.guessedLocation; p.inheritedFrom = { base: best.base, location: best.guessedLocation }; }
+            });
+        }
+        return proposals;
     }, [cadComponents, splitByPosition, existingClusters, libraryIndex]);
 
     // Initialise checkboxes + editable names whenever the proposal set changes.
@@ -1045,6 +1064,11 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                                 ? `⛓ ${p.library.itemName}${p.library.productType ? ' · ' + p.library.productType : ''}${p.library.bracketType ? ' · ' + p.library.bracketType : ''}${p.library.exact ? '' : ' (≈)'}`
                                                 : '⛓ no library match'}
                                         </div>
+                                        {p.inheritedFrom && (
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', marginTop: '4px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)' }}>
+                                                ↳ backplate → {p.inheritedFrom.location} (nearest arm: {p.inheritedFrom.base})
+                                            </div>
+                                        )}
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '6px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
                                             {nodesOf(p).length} nodes{proposalNodeOverrides[p.id] ? ' · edited' : ''}
                                         </div>
