@@ -69,6 +69,9 @@ const guessLocation = (s) => {
     return '';
 };
 const LOCATIONS = ['WALL', 'CEILING', 'END'];
+// Distinct, evenly-spread hue per group index — lets the Auto-Group panel paint every
+// proposed group its own color in the 3D so the whole grouping reads at a glance.
+const GROUP_COLOR = (i) => `hsl(${(i * 57) % 360}, 70%, 55%)`;
 // Region label shown in the flow builder, composed from the tags (the cluster name itself
 // stays part-based so BOM Auto-Assign keeps matching). e.g. {location:'WALL',position:'LEFT'} -> "WALL · LEFT".
 export const regionLabel = (cl) => [cl.location, cl.position].filter(Boolean).join(' · ') || 'UNGROUPED';
@@ -153,7 +156,7 @@ const SceneNodeTree = ({ node, level = 0, selectedNodes, hiddenNodes, onToggleSe
 };
 
 // --- 3D INTERACTIVE HIGHLIGHT & VISIBILITY MODEL ---
-const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, highlightUnassigned, locatingNodes = [], onMeshClick, onLoaded, onComponents }) => {
+const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, highlightUnassigned, locatingNodes = [], colorGroups = [], onMeshClick, onLoaded, onComponents }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
@@ -232,6 +235,18 @@ const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, hi
                     return;
                 }
 
+                // Color-all-groups mode: paint each proposed group its own color so the whole
+                // grouping is visible at a glance. Unassigned meshes fade out.
+                if (colorGroups.length > 0) {
+                    const g = colorGroups.find(grp => isDescendantOf(child, grp.nodes));
+                    if (g) {
+                        child.material = new THREE.MeshStandardMaterial({ color: g.color, emissive: g.color, emissiveIntensity: 0.4, transparent: true, opacity: 0.95 });
+                    } else {
+                        child.material = new THREE.MeshBasicMaterial({ color: '#cccccc', transparent: true, opacity: 0.12 });
+                    }
+                    return;
+                }
+
                 const isSelected = isDescendantOf(child, selectedNodes);
                 const isClustered = existingClusters.some(cl => isDescendantOf(child, cl.nodes));
 
@@ -248,7 +263,7 @@ const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, hi
                 }
             }
         });
-    }, [clonedScene, selectedNodes, existingClusters, hiddenNodes, highlightUnassigned, locatingNodes]);
+    }, [clonedScene, selectedNodes, existingClusters, hiddenNodes, highlightUnassigned, locatingNodes, colorGroups]);
 
     return (
         <primitive 
@@ -290,6 +305,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [autoNames, setAutoNames] = useState({});
     const [autoLocations, setAutoLocations] = useState({}); // proposalId -> 'WALL'|'CEILING'|'END'|''
     const [previewNodes, setPreviewNodes] = useState([]);   // highlight a proposal's nodes in the 3D
+    const [showGroupColors, setShowGroupColors] = useState(true); // paint every proposed group its own color in the 3D
 
     useEffect(() => {
         if (!activeBrand) return;
@@ -573,6 +589,14 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         } catch (err) { console.error(err); alert("Failed to save auto-groups."); }
     };
 
+    // Stable color per proposal (by its index), and the color-group set fed to the 3D when
+    // "Color groups" is on — only the CHECKED proposals get painted; the rest fade.
+    const proposalColor = (p) => GROUP_COLOR(autoProposals.indexOf(p));
+    const colorGroups = useMemo(
+        () => autoProposals.filter(p => autoChecked[p.id]).map(p => ({ nodes: p.nodes, color: GROUP_COLOR(autoProposals.indexOf(p)) })),
+        [autoProposals, autoChecked]
+    );
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
@@ -704,6 +728,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         onLoaded={setSceneGraph}
                                         onComponents={setCadComponents}
                                         locatingNodes={previewNodes.length ? previewNodes : locatingNodes}
+                                        colorGroups={showAutoPanel && showGroupColors && !previewNodes.length ? colorGroups : []}
                                     />
                                 </Bounds>
                             </Canvas>
@@ -812,6 +837,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                 <span style={{ color: 'var(--line)' }}>|</span>
                                 <button onClick={() => setAutoChecked({})} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer' }}>None</button>
                             </div>
+                            <button onClick={() => setShowGroupColors(v => !v)} title="Paint every group its own color in the 3D" style={{ padding: '6px 10px', background: showGroupColors ? 'var(--ink)' : '#fff', color: showGroupColors ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>◧ {showGroupColors ? 'Colors on' : 'Color groups'}</button>
                         </div>
                         {/* Bulk tag the checked proposals */}
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '12px' }}>
@@ -833,6 +859,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                     <input type="checkbox" checked={on} onChange={(e) => setAutoChecked(prev => ({ ...prev, [p.id]: e.target.checked }))} style={{ marginTop: '10px', width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--brass)' }} />
                                     <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => setPreviewNodes(p.nodes)} title="Click to highlight this group in the 3D view">
                                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                            <span title="Group color in the 3D" style={{ width: '14px', height: '14px', flexShrink: 0, borderRadius: '3px', border: '1px solid var(--line)', background: proposalColor(p), opacity: (showGroupColors && on) ? 1 : 0.25 }} />
                                             <input value={autoNames[p.id] ?? p.suggestedName} onClick={(e) => e.stopPropagation()} onChange={(e) => setAutoNames(prev => ({ ...prev, [p.id]: e.target.value }))} style={{ flex: 1, padding: '7px 9px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', textTransform: 'uppercase', outline: 'none' }} />
                                             {p.pos && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: 'var(--paper-2)', color: 'var(--brass)', padding: '4px 8px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>{p.pos}</span>}
                                             {on && autoSavePlan.plan.find(x => x.p.id === p.id)?.matchedId && <span title="Updates an existing cluster in place" style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: 'var(--brass)', color: '#fff', padding: '4px 8px', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>↻</span>}
