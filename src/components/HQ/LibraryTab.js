@@ -999,6 +999,15 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '2px' }}>Sits right at the pole end and its width adds to the O2O. End-return brackets are the only ones placed at the very end — and they're never offered as a center support. (e.g. FIWERA, FICERA)</div>
                           </div>
                       </div>
+                      {(editSpecs.productType || '').toUpperCase().includes('BACKPLATE') && (
+                          <div>
+                              <label style={labelStyle}>Backplate Orientation (drives O2O)</label>
+                              <select value={String(editSpecs.customData?.bpOrientation || 'VERTICAL').toUpperCase()} onChange={(e) => handleCustomFieldChange("bpOrientation", e.target.value)} style={fieldStyle}>
+                                  <option value="VERTICAL">Vertical — Width is along the pole (½ Width / side)</option>
+                                  <option value="HORIZONTAL">Horizontal — Length is along the pole (½ Length / side)</option>
+                              </select>
+                          </div>
+                      )}
                       <div style={{ gridColumn: 'span 2' }}>
                           <label style={labelStyle}>Service / Fee Type (Auto-Append)</label>
                           <select value={String(editSpecs.customData?.feeType || "").toUpperCase()} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>

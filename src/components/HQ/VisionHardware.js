@@ -358,7 +358,17 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
 
   const totalPoleRawInches = rawLeft + rawCenter + rawRight;
   const poleO2O = orderL + orderC + orderR;
-  const totalSystemO2O = poleO2O + engData.bracketW;
+  // Per-end O2O contribution: a return end WITH a backplate adds half the backplate's pole-axis
+  // dimension — the end-return arm lands at the backplate's middle (orientation set on the backplate
+  // item: vertical→width, horizontal→length). Any other end keeps the legacy bracketW share, so a
+  // plain non-backplate job is unchanged (½·bracketW + ½·bracketW = bracketW).
+  const bpEndHalf = (id) => { const p = libraryParts.find(x => x.id === id); const par = p?.manufacturingSpecs?.parametric || {}; const horiz = (p?.manufacturingSpecs?.customData?.bpOrientation || 'VERTICAL').toUpperCase().startsWith('H'); return ((horiz ? parseFloat(par.length) : parseFloat(par.width)) || 0) / 2; };
+  const isRetBkt = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
+  const o2oRightBktId = engData.endsSame !== false ? engData.bracketId : engData.bracketIdRight;
+  const o2oRightBpId = engData.backplatesSame !== false ? engData.backplateIdLeft : engData.backplateIdRight;
+  const endAddL = (isRetBkt(engData.bracketId) && engData.backplateIdLeft) ? bpEndHalf(engData.backplateIdLeft) : (engData.bracketW / 2);
+  const endAddR = (isRetBkt(o2oRightBktId) && o2oRightBpId) ? bpEndHalf(o2oRightBpId) : (engData.bracketW / 2);
+  const totalSystemO2O = poleO2O + endAddL + endAddR;
 
   const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
   const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;
@@ -1283,6 +1293,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.9rem', fontFamily: 'var(--sans)' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>Pole O2O (Edge-to-Edge):</span><strong style={{ fontWeight: 500 }}>{poleO2O.toFixed(2)}"</strong></div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>Total System O2O (+ Brackets):</span><strong style={{ fontWeight: 500 }}>{totalSystemO2O.toFixed(2)}"</strong></div>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--ink-soft)', textAlign: 'right' }}>= {poleO2O.toFixed(2)} pole + {endAddL.toFixed(2)} L + {endAddR.toFixed(2)} R</div>
                               {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px' }}><span style={{ color: 'var(--ink-soft)' }}>Left Wall C2C:</span><strong style={{ fontWeight: 500 }}>{pole1.toFixed(2)}"</strong></div>}
                               <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{engData.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</span><strong style={{ fontWeight: 500 }}>{pole2.toFixed(2)}"</strong></div>
                               {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Right Wall C2C:</span><strong style={{ fontWeight: 500 }}>{pole3.toFixed(2)}"</strong></div>}
