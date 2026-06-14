@@ -375,6 +375,33 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       } catch (err) { console.error("Error creating flow:", err); alert("Database Error. Check Firestore Rules."); }
   };
 
+  const handleExportFlow = () => {
+      if (!activeFlow) return alert("Select a flow first, then Export.");
+      const { id, ...rest } = activeFlow; // drop id so importing always makes a fresh flow
+      const blob = new Blob([JSON.stringify(rest, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `${String(activeFlow.name || 'flow').replace(/[^a-z0-9]+/gi, '-')}.json`;
+      a.click(); URL.revokeObjectURL(url);
+  };
+
+  const handleImportFlow = async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      try {
+          const parsed = JSON.parse(await file.text());
+          const flowId = `FLOW-${Date.now()}`;
+          const { id, ...rest } = parsed;
+          const name = `${String(rest.name || 'IMPORTED FLOW').toUpperCase()} (IMPORTED — REVIEW)`;
+          // Creates a fresh, isolated flow for review — strip _note helper keys from steps first.
+          const steps = (Array.isArray(rest.steps) ? rest.steps : []).map(s => { const { _note, ...keep } = s || {}; return keep; });
+          await setDoc(doc(db, "cpq_flows", flowId), { ...rest, id: flowId, brandId: activeBrand, name, steps });
+          setActiveFlowId(flowId);
+          alert(`Imported "${name}". It's a fresh, isolated flow — review each step, fill any PLACEHOLDER part IDs / mesh names, then Save. Nothing goes live until you use it in a quote.`);
+      } catch (err) { console.error("Flow import failed:", err); alert("Import failed — that file isn't valid flow JSON."); }
+      e.target.value = '';
+  };
+
   const handleSaveFlowSettings = async () => {
       if (!activeFlowId) return;
       setIsSavingFlowSettings(true);
@@ -894,6 +921,10 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                     <div style={{ display: 'flex', gap: '8px' }}>
                         <input value={newFlowName} onChange={e => setNewFlowName(e.target.value)} placeholder="e.g., CHANDELIER CONFIG" style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                         <button onClick={handleCreateNewFlow} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '0 15px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={handleExportFlow} title="Download the selected flow as JSON (back up / copy to another collection)" style={{ flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Export Flow</button>
+                        <label title="Create a fresh flow from a JSON file (for review before use)" style={{ flex: 1, textAlign: 'center', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Import Flow<input type="file" accept="application/json,.json" onChange={handleImportFlow} style={{ display: 'none' }} /></label>
                     </div>
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', flex: 1 }}>

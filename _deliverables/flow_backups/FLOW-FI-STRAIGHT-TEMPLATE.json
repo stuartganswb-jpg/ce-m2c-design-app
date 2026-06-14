@@ -1,0 +1,147 @@
+{
+  "name": "FLAT IRON — STRAIGHT (TEMPLATE)",
+  "brandId": "m2c",
+  "legacyErpId": "PENDING",
+  "basePrice": "0",
+  "linkedAssemblyId": "M2C-ASM-6776",
+  "fabShape": "STRAIGHT",
+  "fabEndStyle": "",
+  "fabProjection": "",
+  "defaultFinishOptions": [],
+  "hiddenClusters": [],
+  "_note_top": "Shape-only preset: fabEndStyle + fabProjection are blank on purpose — Vision supplies end style + projection per line. One flow covers wall/ceiling/inside because each bracket option carries its own geometryMap (show selected, hide others), which replaces the old static hiddenClusters. Fill every PLACEHOLDER-* with your real M2C-INV part id (styleOptions) or the real mesh names from the .glb (geometryMap). The importer drops these _note keys.",
+  "steps": [
+    {
+      "id": "STEP-POLE",
+      "title": "Pole — Material, Finish & Length",
+      "type": "VISUAL_DIMENSIONS",
+      "dataSource": "master_finishes",
+      "partHandling": "Custom",
+      "calculatorTemplate": "calc_straight_pole",
+      "qtyHelperText": "Pole length (feet)",
+      "required": true,
+      "geometryMap": {},
+      "_note": "Finish grid + length. If steel vs wood changes the model, add each material as an option here (or a small material DROPDOWN before this) and map it in geometryMap to its pole meshes."
+    },
+    {
+      "id": "STEP-ENDTREAT",
+      "title": "End Treatment",
+      "type": "STYLE_SWAP",
+      "partHandling": "Custom",
+      "finishDataSource": "master_finishes",
+      "styleOptions": [
+        { "optId": "FINIAL", "partId": "M2C-INV-53055", "partName": "Flat Iron End Cap", "price": 0 },
+        { "optId": "RETURN_MITER", "partId": "PLACEHOLDER-MITER", "partName": "Mitered Return (no cap)", "price": 0 },
+        { "optId": "RETURN_BEND", "partId": "PLACEHOLDER-BEND", "partName": "Bent Return", "price": 0 },
+        { "optId": "FLUSH", "partId": "PLACEHOLDER-FLUSH", "partName": "Flush Cut (Inside)", "price": 0 }
+      ],
+      "geometryMap": {
+        "FINIAL": "PLACEHOLDER-finial-end-meshes",
+        "RETURN_MITER": "PLACEHOLDER-miter-end-meshes",
+        "RETURN_BEND": "PLACEHOLDER-bend-end-meshes",
+        "FLUSH": ""
+      },
+      "_note": "End style. The optId values deliberately equal Vision's endStyle values (FINIAL / RETURN_MITER / RETURN_BEND / FLUSH) so we can auto-pre-fill this step from Vision next. geometryMap: each -> the end geometry that should show."
+    },
+    {
+      "id": "STEP-BKT-L",
+      "title": "Left End Bracket",
+      "type": "STYLE_SWAP",
+      "partHandling": "Custom",
+      "styleOptions": [
+        { "optId": "WALL", "partId": "PLACEHOLDER-FIWERA", "partName": "Wall End-Return Arm", "price": 0 },
+        { "optId": "CEIL", "partId": "PLACEHOLDER-FICERA", "partName": "Ceiling End-Return Arm", "price": 0 },
+        { "optId": "INSIDE", "partId": "PLACEHOLDER-FIIM", "partName": "Inside Mount Bracket", "price": 0 }
+      ],
+      "geometryMap": {
+        "WALL": "PLACEHOLDER-wall-bracket-LEFT-meshes",
+        "CEIL": "PLACEHOLDER-ceiling-bracket-LEFT-meshes",
+        "INSIDE": "PLACEHOLDER-inside-bracket-LEFT-meshes"
+      },
+      "_note": "ALL mounts as options on ONE step. Picking one shows its bracket (Left) and hides the others via geometryMap. THIS is what lets a single flow handle wall + ceiling + inside. Vision pre-fills it from the left bracket you chose (matched by part id)."
+    },
+    {
+      "id": "STEP-BKT-R",
+      "title": "Right End Bracket",
+      "type": "STYLE_SWAP",
+      "partHandling": "Custom",
+      "styleOptions": [
+        { "optId": "WALL", "partId": "PLACEHOLDER-FIWERA", "partName": "Wall End-Return Arm", "price": 0 },
+        { "optId": "CEIL", "partId": "PLACEHOLDER-FICERA", "partName": "Ceiling End-Return Arm", "price": 0 },
+        { "optId": "INSIDE", "partId": "PLACEHOLDER-FIIM", "partName": "Inside Mount Bracket", "price": 0 }
+      ],
+      "geometryMap": {
+        "WALL": "PLACEHOLDER-wall-bracket-RIGHT-meshes",
+        "CEIL": "PLACEHOLDER-ceiling-bracket-RIGHT-meshes",
+        "INSIDE": "PLACEHOLDER-inside-bracket-RIGHT-meshes"
+      },
+      "_note": "Separate from Left so the two ends can differ (e.g. left return, right passing-with-endcap). If your jobs are always symmetric you can delete this step and reuse Left for both ends."
+    },
+    {
+      "id": "STEP-WALLPLATE",
+      "title": "Wall Plate (Backplate)",
+      "type": "STYLE_SWAP",
+      "partHandling": "Custom",
+      "styleOptions": [
+        { "optId": "VBP", "partId": "M2C-INV-54254", "partName": "2\" x 4\" x 1/2\" Vertical Backplate", "price": 0, "projection": 4.25 },
+        { "optId": "MINI-VBP", "partId": "M2C-INV-53061", "partName": "2\" x 1-3/8\" x 3/8\" Mini Vertical", "price": 0, "projection": 4.125 },
+        { "optId": "HBP", "partId": "M2C-INV-53060", "partName": "2\" x 4\" x 1/2\" Horizontal Backplate", "price": 0, "projection": 4.25 },
+        { "optId": "MINI-HBP", "partId": "M2C-INV-53062", "partName": "3\" x 1-1/2\" x 3/8\" Mini Horizontal", "price": 0, "projection": 4.125 }
+      ],
+      "geometryMap": {
+        "VBP": "PLACEHOLDER-54254-meshes",
+        "MINI-VBP": "PLACEHOLDER-53061-meshes",
+        "HBP": "PLACEHOLDER-53060-meshes",
+        "MINI-HBP": "PLACEHOLDER-53062-meshes"
+      },
+      "_note": "The wall plates, as their OWN step (not combined with the bracket). These line up 1:1 with Vision's bpOrientation (54254/53061 = Vertical, 53060/53062 = Horizontal). Vision pre-fills from the backplate you chose."
+    },
+    {
+      "id": "STEP-CENTER",
+      "title": "Center Passing Bracket",
+      "type": "STYLE_SWAP",
+      "partHandling": "Custom",
+      "isCenterClone": true,
+      "qtyHelperText": "Number of center passing brackets",
+      "styleOptions": [
+        { "optId": "WALL-PASS", "partId": "M2C-INV-55171", "partName": "Flat Iron Wall Passing Bracket Arm", "price": 0 },
+        { "optId": "CEIL-PASS", "partId": "M2C-INV-55172", "partName": "Flat Iron Ceiling Passing Bracket Arm", "price": 0 }
+      ],
+      "geometryMap": {
+        "WALL-PASS": "PLACEHOLDER-55171-meshes",
+        "CEIL-PASS": "PLACEHOLDER-55172-meshes"
+      },
+      "_note": "isCenterClone=true -> the picked center bracket is cloned 'qty' times and spaced down the pole in the live render. Only ONE center node needs to exist in the .glb (at the middle). Qty + part come straight from Vision."
+    },
+    {
+      "id": "STEP-RINGS",
+      "title": "Rings",
+      "type": "DROPDOWN",
+      "dataSource": "master_finishes",
+      "partHandling": "Small Parts",
+      "qtyHelperText": "Number of rings",
+      "geometryMap": {},
+      "_note": "Ring finish + qty. No geometryMap needed (rings don't swap geometry)."
+    },
+    {
+      "id": "STEP-SPLICE",
+      "title": "Splice",
+      "type": "STYLE_SWAP",
+      "partHandling": "Small Parts",
+      "qtyHelperText": "Number of splices",
+      "styleOptions": [
+        { "optId": "SPLICE", "partId": "M2C-INV-53058", "partName": "Flat Iron Steel Rod Splice", "price": 0 }
+      ],
+      "geometryMap": { "SPLICE": "" },
+      "_note": "For long / joined poles. Qty from Vision."
+    },
+    {
+      "id": "STEP-FEE",
+      "title": "Cut / Splice Fee",
+      "type": "STATIC_FEE",
+      "qtyHelperText": "Per cut / splice",
+      "basePrice": "0",
+      "_note": "Flat per-cut/splice fee. Set basePrice to your charge."
+    }
+  ]
+}
