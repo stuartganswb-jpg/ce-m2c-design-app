@@ -6,7 +6,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import * as THREE from 'three';
-import { loadGLBScene, buildComponentFiles } from '../Shared/componentExport';
+import { loadGLBScene, buildComponentFiles, isolateCluster, snapshotPNG } from '../Shared/componentExport';
 
 class ErrorBoundary extends React.Component {
     constructor(props) { super(props); this.state = { hasError: false }; }
@@ -159,6 +159,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
   const [cropState, setCropState] = useState(null); 
   const [isProcessingCrop, setIsProcessingCrop] = useState(false);
+  const [thumbBusy, setThumbBusy] = useState(null); // pinId whose node thumbnail is rendering
   
   const [locatingClusterId, setLocatingClusterId] = useState(null);
 
@@ -583,7 +584,39 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       }
   };
 
-  const filteredLibrary = libraryParts.filter(p => 
+  // Render a crisp thumbnail for ONE item straight from its node in the assembly .glb — far
+  // cleaner than a 2D crop. Single-item counterpart to handleGenerateComponentFiles; stamps
+  // the library part's finalImageUrl/componentImageUrl (where the BOM list reads thumbnails).
+  const handleNodeThumbnail = async (pin) => {
+      const cadUrl = activeAssembly?.manufacturingSpecs?.cadUrl;
+      if (!cadUrl) return alert("This assembly has no 3D CAD (.glb) to render from.");
+      const cluster = activeAssembly?.nodeClusters?.find(c => c.id === pin.clusterId);
+      const nodes = (cluster?.nodes?.length)
+          ? cluster.nodes
+          : (pin.targetNode ? pin.targetNode.split(',').map(s => s.trim()).filter(Boolean) : []);
+      if (!nodes.length) return alert("This item isn't linked to a 3D node or cluster yet — pin it to a node/cluster first.");
+      setThumbBusy(pin.id);
+      try {
+          const scene = await loadGLBScene(cadUrl);
+          const group = isolateCluster(scene, nodes);
+          if (!group.children.length) throw new Error("No geometry matched this item's node(s) in the model.");
+          const png = await snapshotPNG(group, 512);
+          const sref = ref(storage, `component_images/${activeBrand}_${pin.partId || pin.id}_${Date.now()}.png`);
+          await uploadBytes(sref, png);
+          const url = await getDownloadURL(sref);
+          if (pin.partId) await updateDoc(doc(db, "Approved_Designs", pin.partId), { finalImageUrl: url, componentImageUrl: url });
+          if (pin.clusterId && Array.isArray(activeAssembly?.nodeClusters)) {
+              const updated = activeAssembly.nodeClusters.map(c => c.id === pin.clusterId ? { ...c, imageUrl: url } : c);
+              await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updated });
+          }
+      } catch (e) {
+          console.error(e);
+          alert("Failed to render node thumbnail: " + (e.message || e));
+      }
+      setThumbBusy(null);
+  };
+
+  const filteredLibrary = libraryParts.filter(p =>
       (p.partClass === 'Inventory' || p.partClass === 'Assembly') && 
       ((p.itemName && p.itemName.toLowerCase().includes(searchQuery.toLowerCase())) || 
       (p.legacyErpId && p.legacyErpId.toLowerCase().includes(searchQuery.toLowerCase())))
@@ -1077,6 +1110,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                 const cluster = activeAssembly?.nodeClusters?.find(c => c.id === pin.clusterId);
                                 const hasThumb = libraryMatch?.finalImageUrl || libraryMatch?.componentImageUrl || cluster?.imageUrl;
                                 const isLoc = locatingClusterId === (pin.clusterId || pin.id);
+                                const canThumb = !!(activeAssembly?.manufacturingSpecs?.cadUrl && ((cluster?.nodes?.length) || pin.targetNode));
+                                const thumbing = thumbBusy === pin.id;
                                 return (
                                 <div key={pin.id} style={{ background: isLoc ? 'rgba(176,141,87,0.12)' : 'var(--paper)', border: `1px solid ${isLoc ? 'var(--brass)' : 'var(--line)'}`, borderLeft: `4px solid ${pin.isExistingLibraryPart ? 'var(--ink)' : 'var(--brass)'}`, padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
@@ -1106,10 +1141,12 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                         )}
 
                                         <button
-                                            onClick={() => { setIsFrozen(true); setInteractionMode('crop'); setCropState({ pinId: pin.id, x: 50, y: 50, w: 250, h: 250, action: null }); }}
-                                            style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer', padding: '8px 12px' }}
+                                            onClick={() => handleNodeThumbnail(pin)}
+                                            disabled={!canThumb || thumbing}
+                                            title={canThumb ? "Render this item's thumbnail straight from its node in the 3D model" : "Needs a .glb model and a linked node/cluster"}
+                                            style={{ background: thumbing ? 'var(--brass)' : 'transparent', border: '1px solid var(--brass)', color: thumbing ? '#fff' : 'var(--brass)', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: (canThumb && !thumbing) ? 'pointer' : 'not-allowed', padding: '8px 12px', opacity: canThumb ? 1 : 0.5, whiteSpace: 'nowrap' }}
                                         >
-                                            Crop
+                                            {thumbing ? '⏳ Rendering' : '📷 Node Thumb'}
                                         </button>
                                         
                                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}><label style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginBottom: '4px' }}>QTY</label><input type="number" min="1" value={pin.defaultQty || 1} onChange={(e) => handleUpdatePinQty(pin.id, e.target.value)} style={{ width: '48px', padding: '6px', border: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--sans)' }} /></div>
