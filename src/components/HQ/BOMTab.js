@@ -1238,6 +1238,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             <option value="SQUARE">Square — Width = Height (½ Width / side)</option>
                                             <option value="ROUND">Round — Diameter (½ Diameter / side)</option>
                                         </select>
+                                        <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', marginTop: '4px' }}>O2O uses the Geometry dimension along the pole — <strong>Vertical → ½ Width</strong> · <strong>Horizontal → ½ Length</strong> · <strong>Square → ½ Width</strong> · <strong>Round → ½ Diameter (Width)</strong>. Set L / W / H in “Geometry &amp; Z-Index Rules” above.</div>
                                     </div>
                                 )}
                                 <div style={{ gridColumn: 'span 2' }}>

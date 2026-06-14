@@ -82,7 +82,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         reorderPoint: { active: false, value: "" },
         binLocation: { active: false, value: "" },
         bpOrientation: { active: false, value: "VERTICAL" },
-        isReturnBracket: { active: false, value: true }
+        isReturnBracket: { active: false, value: true },
+        armThickness: { active: false, value: "" }
     });
 
     // --- SYSTEM DICTIONARY STATE ---
@@ -282,7 +283,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             "ID (DO NOT EDIT)", "Legacy ERP ID", "Item Name", "Brand", "Part Class", "Routing Type", 
             "Product Type (Category)", "Collection", "Watchlist", "UOM", "Part Handling", "Outsource Action", "Bracket Projection",
             "Weight", "Base Price", "Cost", "Reorder Pt (ROP)", "Lead Time (Days)", "Vendor Name", "Vendor SKU", "Bin Location", "Is In-House (TRUE/FALSE)",
-            "Backplate Orientation", "Is Return Bracket (TRUE/FALSE)", "Backplate Length", "Backplate Width"
+            "Backplate Orientation", "Is Return Bracket (TRUE/FALSE)", "Backplate Length", "Backplate Width", "Backplate Height", "Bracket Arm Thickness"
         ];
 
         let csvContent = headers.join(",") + "\n";
@@ -329,7 +330,9 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 cust.bpOrientation || "",
                 cust.isReturnBracket ? "TRUE" : "FALSE",
                 specs.parametric?.length || "",
-                specs.parametric?.width || ""
+                specs.parametric?.width || "",
+                specs.parametric?.height || "",
+                cust.armThickness || ""
             ];
             
             csvContent += row.map(v => `"${(v || '').toString().replace(/"/g, '""')}"`).join(",") + "\n";
@@ -413,6 +416,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 const isr = getVal("Is Return Bracket (TRUE/FALSE)"); if(isr !== null && isr !== "") { payload["manufacturingSpecs.customData.isReturnBracket"] = isr.toUpperCase() === 'TRUE'; }
                 const bpl = getVal("Backplate Length"); if(bpl !== null && bpl !== "") { payload["manufacturingSpecs.parametric.length"] = bpl === "" ? "" : parseFloat(bpl); }
                 const bpw = getVal("Backplate Width"); if(bpw !== null && bpw !== "") { payload["manufacturingSpecs.parametric.width"] = bpw === "" ? "" : parseFloat(bpw); }
+                const bph = getVal("Backplate Height"); if(bph !== null && bph !== "") { payload["manufacturingSpecs.parametric.height"] = bph === "" ? "" : parseFloat(bph); }
+                const arm = getVal("Bracket Arm Thickness"); if(arm !== null && arm !== "") { payload["manufacturingSpecs.customData.armThickness"] = arm; }
                 
                 const isInHouse = getVal("Is In-House (TRUE/FALSE)"); 
                 if(isInHouse !== null) { 
@@ -536,7 +541,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                         } else if (fieldKey === 'isInHouse') {
                             payload['manufacturingSpecs.isInHouse'] = val;
                             payload.partClass = val ? "Inventory" : "Inventory"; 
-                        } else if (fieldKey === 'projection' || fieldKey === 'bpOrientation' || fieldKey === 'isReturnBracket') {
+                        } else if (fieldKey === 'projection' || fieldKey === 'bpOrientation' || fieldKey === 'isReturnBracket' || fieldKey === 'armThickness') {
                             payload[`manufacturingSpecs.customData.${fieldKey}`] = val;
                         } else if (['basePrice', 'cost', 'weight', 'moq', 'leadTime', 'reorderPoint'].includes(fieldKey)) {
                             payload[`manufacturingSpecs.${fieldKey}`] = val === "" ? "" : parseFloat(val);
@@ -967,6 +972,14 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 <option value="true">Yes — End-Return (sits at pole end, adds to O2O)</option>
                                 <option value="false">No</option>
                             </select>
+                        </div>
+
+                        <div style={{ background: updates.armThickness.active ? theme.paper : 'transparent', border: `1px solid ${updates.armThickness.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.armThickness.active} onChange={(e) => handleUpdateChange('armThickness', 'active', e.target.checked)} />
+                                Set Bracket Arm Thickness (in)
+                            </label>
+                            <input type="number" step="0.125" disabled={!updates.armThickness.active} value={updates.armThickness.value} onChange={(e) => handleUpdateChange('armThickness', 'value', e.target.value)} placeholder="e.g. 0.5 (½&quot; flat-iron)" style={{ ...fieldStyle, opacity: updates.armThickness.active ? 1 : 0.5 }} />
                         </div>
 
                         <div style={{ background: updates.routingType.active ? theme.paper : 'transparent', border: `1px solid ${updates.routingType.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
