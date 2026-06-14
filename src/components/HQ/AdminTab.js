@@ -1436,7 +1436,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                         const optId = pin.targetNode || pin.clusterId || pin.partId;
                                                         // The cluster name carries the Auto-Group position label; use it to tell
                                                         // the three instances apart in the builder.
-                                                        const cluster = linkedAsm?.nodeClusters?.find(c => c.id === pin.clusterId);
+                                                        // Resolve the pin's cluster by id OR by mesh overlap (many pins predate clusterId),
+                                                        // so the Location/Position tags surface regardless of how the pin was bound.
+                                                        const _norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+                                                        const _pinMeshes = String(pin.targetNode || '').split(',').map(_norm).filter(Boolean);
+                                                        const cluster = linkedAsm?.nodeClusters?.find(c => (pin.clusterId && c.id === pin.clusterId) || (c.nodes || c.meshes || []).some(n => _pinMeshes.includes(_norm(n))));
                                                         const posLabel = [cluster?.location, cluster?.position].filter(Boolean).join(' · ');
                                                         const locLabel = posLabel || (cluster?.name || pin.partName || '').replace(/_/g, ' ');
                                                         const matches = (o) => (o.optId ? o.optId === optId : o.partId === pin.partId);
@@ -1458,9 +1462,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                 {cluster?.imageUrl
                                                                     ? <img src={cluster.imageUrl} alt="" onClick={() => setZoomImg({ url: cluster.imageUrl, label: locLabel })} title="Click to enlarge" style={{ width: '40px', height: '40px', objectFit: 'contain', background: 'var(--paper)', border: '1px solid var(--line)', flexShrink: 0, cursor: 'zoom-in' }} />
                                                                     : <span style={{ width: '40px', height: '40px', flexShrink: 0, border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)', textAlign: 'center' }}>no img</span>}
-                                                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                                                                    <span style={{ fontSize: '0.9rem', color: 'var(--ink)', fontWeight: 500 }}>{locLabel}</span>
-                                                                    {locLabel !== pin.partName && <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{pin.partName}</span>}
+                                                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                                    {(cluster?.location || cluster?.position) && (
+                                                                        <div style={{ display: 'flex', gap: '4px' }}>
+                                                                            {cluster?.location && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', background: 'var(--ink)', color: '#fff', padding: '2px 6px', textTransform: 'uppercase', letterSpacing: '.05em', borderRadius: '2px' }}>{cluster.location}</span>}
+                                                                            {cluster?.position && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', background: 'var(--brass)', color: '#fff', padding: '2px 6px', textTransform: 'uppercase', letterSpacing: '.05em', borderRadius: '2px' }}>{cluster.position}</span>}
+                                                                        </div>
+                                                                    )}
+                                                                    <span style={{ fontSize: '0.9rem', color: 'var(--ink)', fontWeight: 500 }}>{pin.partName}</span>
                                                                 </div>
                                                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={meshNode}>mesh: {meshNode}</span>
                                                                 <span style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>$</span>
