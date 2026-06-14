@@ -69,6 +69,58 @@ const guessLocation = (s) => {
     return '';
 };
 const LOCATIONS = ['WALL', 'CEILING', 'END'];
+// Library-driven categorization. The Auto-Group tool matches each node to a library
+// component (by name / ERP id), then reads its productType + bracket mount to pre-fill
+// the group's Category (Bracket / Pole / Finial) and — for brackets — its Location.
+const CATEGORIES = ['BRACKET', 'POLE', 'FINIAL'];
+// Normalize any name / id to a comparable key (drop case, spaces, punctuation).
+const normKey = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// Bucket a library productType string into one of our categories.
+const classifyCategory = (pt) => {
+    const t = String(pt || '').toUpperCase();
+    if (t.includes('BRACKET')) return 'BRACKET';
+    if (t.includes('FINIAL')) return 'FINIAL';
+    if (t.includes('POLE') || t.includes('ROD')) return 'POLE';
+    return '';
+};
+// A bracket's mount type -> region Location (inside-mount = end of the pole). Non-brackets: ''.
+const bracketLocation = (productType, bracketType) => {
+    if (!String(productType || '').toUpperCase().includes('BRACKET')) return '';
+    const t = String(bracketType || '').toUpperCase();
+    if (t.includes('CEIL')) return 'CEILING';
+    if (t.includes('WALL')) return 'WALL';
+    if (t.includes('INSIDE') || t.includes('END') || /\bIM\b/.test(t)) return 'END';
+    return '';
+};
+// Name-only fallback when no library item matches.
+const guessCategory = (s) => classifyCategory(s);
+// Best library component for a group's candidate names (its clean base name + node names).
+// Exact id/name match wins; otherwise a containment overlap above 0.5 is accepted. Returns
+// the matched item plus the derived category/location, or null when nothing aligns.
+const matchLibrary = (candidates, libraryIndex) => {
+    const cks = [...new Set(candidates.map(normKey).filter(k => k && k.length >= 3))];
+    if (!cks.length || !libraryIndex.length) return null;
+    let best = null;
+    for (const entry of libraryIndex) {
+        for (const k of entry.keys) {
+            for (const c of cks) {
+                let score = 0;
+                if (k === c) score = 1;
+                else if (k.length >= 4 && c.length >= 4 && (k.includes(c) || c.includes(k))) {
+                    score = Math.min(k.length, c.length) / Math.max(k.length, c.length);
+                }
+                if (score > (best ? best.score : 0)) best = { entry, score, exact: k === c };
+            }
+        }
+    }
+    if (!best || best.score < 0.5) return null;
+    const e = best.entry;
+    return {
+        item: e.part, itemName: e.itemName, productType: e.productType, bracketType: e.bracketType,
+        category: classifyCategory(e.productType), location: bracketLocation(e.productType, e.bracketType),
+        exact: best.exact, score: best.score,
+    };
+};
 // Distinct, evenly-spread hue per group index — lets the Auto-Group panel paint every
 // proposed group its own color in the 3D so the whole grouping reads at a glance.
 const GROUP_COLOR = (i) => `hsl(${(i * 57) % 360}, 70%, 55%)`;
@@ -281,6 +333,7 @@ const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, hi
 
 const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [masterAssemblies, setMasterAssemblies] = useState([]);
+    const [libraryParts, setLibraryParts] = useState([]); // inventory components, for library category matching
     const [activeAssembly, setActiveAssembly] = useState(null);
     const [sceneGraph, setSceneGraph] = useState(null);
     
@@ -304,6 +357,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [autoChecked, setAutoChecked] = useState({});
     const [autoNames, setAutoNames] = useState({});
     const [autoLocations, setAutoLocations] = useState({}); // proposalId -> 'WALL'|'CEILING'|'END'|''
+    const [autoCategories, setAutoCategories] = useState({}); // proposalId -> 'BRACKET'|'POLE'|'FINIAL'|''
     const [showGroupColors, setShowGroupColors] = useState(true); // paint every proposed group its own color in the 3D
     const [previewProposalId, setPreviewProposalId] = useState(null); // click a part / row -> isolate that group
     const [activeProposalId, setActiveProposalId] = useState(null);   // group being edited: 3D clicks add/remove parts
@@ -328,6 +382,19 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         });
         return () => unsubscribe();
     }, [activeBrand, activeAssembly?.id]);
+
+    // Library components (brackets / poles / finials) used to categorize nodes: match a
+    // node's name / ERP id to a library item, then read its productType + bracketType.
+    useEffect(() => {
+        if (!activeBrand) return;
+        const q = query(collection(db, "Approved_Designs"), where("partClass", "==", "Inventory"));
+        const unsub = onSnapshot(q, (snap) => {
+            const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(d => d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand)));
+            setLibraryParts(docs);
+        });
+        return () => unsub();
+    }, [activeBrand]);
 
     const filteredAssemblies = masterAssemblies.filter(asm => {
         const matchesSearch = (asm.itemName || "").toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -428,6 +495,17 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const existingClusters = activeAssembly?.nodeClusters || [];
     const locatingNodes = existingClusters.find(c => c.id === locatingClusterId)?.nodes || [];
 
+    // Normalized lookup of library components for fast name / ERP matching.
+    const libraryIndex = useMemo(() => libraryParts.map(part => {
+        const specs = part.manufacturingSpecs || {};
+        const productType = (specs.productType || part.productType || '').toString().toUpperCase();
+        const bracketType = (specs.customData?.bracketType || '').toString().toUpperCase();
+        return {
+            part, itemName: part.itemName || '', productType, bracketType,
+            keys: [normKey(part.legacyErpId), normKey(part.itemId), normKey(part.itemName)].filter(k => k && k !== 'PENDING'),
+        };
+    }), [libraryParts]);
+
     // --- AUTO-GROUP PROPOSALS ---
     // Turn the raw CAD sub-assemblies into reviewable cluster proposals: clean name,
     // auto Left/Center/Right label (by geometry along the assembly's longest axis),
@@ -487,6 +565,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                 ).length;
                 const flags = flagsFor(c.nodes, c.meshCount, c.name, c.isMesh);
                 if (overlapOptions > 0) flags.push(`Shares position with ${overlapOptions} other part(s) — likely a Choose/Swap style option`);
+                const library = matchLibrary([base, ...(c.nodes || []).map(cleanCadName)], libraryIndex);
                 return {
                     id: `AUTO-${c.uuid}`,
                     base,
@@ -497,7 +576,9 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                     flags,
                     alreadyGrouped: flags.some(x => x.startsWith('Already in')),
                     center: c.center,
-                    guessedLocation: guessLocation(base),
+                    guessedLocation: (library && library.location) || guessLocation(base),
+                    guessedCategory: (library && library.category) || guessCategory(base),
+                    library,
                 };
             });
         }
@@ -509,6 +590,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
             const flags = flagsFor(nodes, meshCount, base, false);
             if (group.length > 1) flags.push(`${group.length} instances merged into one cluster`);
             const center = ['x', 'y', 'z'].reduce((o, a) => ({ ...o, [a]: group.reduce((s, g) => s + g.center[a], 0) / group.length }), {});
+            const library = matchLibrary([base, ...nodes.map(cleanCadName)], libraryIndex);
             return {
                 id: `AUTO-${base.replace(/\s+/g, '_')}`,
                 base,
@@ -519,26 +601,32 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                 flags,
                 alreadyGrouped: flags.some(x => x.startsWith('Already in')),
                 center,
-                guessedLocation: guessLocation(base),
+                guessedLocation: (library && library.location) || guessLocation(base),
+                guessedCategory: (library && library.category) || guessCategory(base),
+                library,
             };
         });
-    }, [cadComponents, splitByPosition, existingClusters]);
+    }, [cadComponents, splitByPosition, existingClusters, libraryIndex]);
 
     // Initialise checkboxes + editable names whenever the proposal set changes.
     useEffect(() => {
         const checked = {};
         const names = {};
         const locs = {};
+        const cats = {};
         autoProposals.forEach(p => {
             checked[p.id] = !p.alreadyGrouped && p.meshCount > 0;
             names[p.id] = p.suggestedName;
-            // Pre-fill the location: an existing cluster's saved tag (re-run keeps it), else the guess.
+            // Pre-fill location + category: an existing cluster's saved tags (re-run keeps them),
+            // else the library match, else the name-based guess.
             const matched = existingClusters.find(c => (c.nodes || []).some(n => p.nodes.includes(n)));
             locs[p.id] = (matched && matched.location) || p.guessedLocation || '';
+            cats[p.id] = (matched && matched.category) || p.guessedCategory || '';
         });
         setAutoChecked(checked);
         setAutoNames(names);
         setAutoLocations(locs);
+        setAutoCategories(cats);
         setProposalNodeOverrides({});
         setActiveProposalId(null);
         setPreviewProposalId(null);
@@ -578,7 +666,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         const additions = [];
         plan.forEach((x, i) => {
             // Region tags travel with the cluster (the name stays part-based for BOM Auto-Assign).
-            const region = { position: x.p.pos || '', location: autoLocations[x.p.id] || '', center: x.p.center || null };
+            const region = { position: x.p.pos || '', location: autoLocations[x.p.id] || '', category: autoCategories[x.p.id] || '', center: x.p.center || null };
             const savedNodes = proposalNodeOverrides[x.p.id] || x.p.nodes; // honor hand-edits
             if (x.matchedId) {
                 const ex = existingClusters.find(c => c.id === x.matchedId);
@@ -896,11 +984,16 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                             <button onClick={() => setShowGroupColors(v => !v)} title="Paint every group its own color in the 3D" style={{ padding: '6px 10px', background: showGroupColors ? 'var(--ink)' : '#fff', color: showGroupColors ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>◧ {showGroupColors ? 'Colors on' : 'Color groups'}</button>
                         </div>
                         {/* Bulk tag the checked proposals */}
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '12px' }}>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '12px', flexWrap: 'wrap' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Tag checked:</span>
                             {LOCATIONS.map(loc => (
                                 <button key={loc} onClick={() => setAutoLocations(prev => { const n = { ...prev }; autoProposals.forEach(p => { if (autoChecked[p.id]) n[p.id] = loc; }); return n; })} style={{ padding: '5px 10px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{loc}</button>
                             ))}
+                            <span style={{ color: 'var(--line)' }}>|</span>
+                            {CATEGORIES.map(c => (
+                                <button key={c} onClick={() => setAutoCategories(prev => { const n = { ...prev }; autoProposals.forEach(p => { if (autoChecked[p.id]) n[p.id] = c; }); return n; })} style={{ padding: '5px 10px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{c}</button>
+                            ))}
+                            <button onClick={() => { setAutoLocations(prev => { const n = { ...prev }; autoProposals.forEach(p => { if (autoChecked[p.id] && p.library) n[p.id] = p.library.location || n[p.id] || ''; }); return n; }); setAutoCategories(prev => { const n = { ...prev }; autoProposals.forEach(p => { if (autoChecked[p.id] && p.library) n[p.id] = p.library.category || n[p.id] || ''; }); return n; }); }} title="Fill Location + Category from the matched library item for every checked group" style={{ padding: '5px 10px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>⛓ From Library</button>
                         </div>
                     </div>
                     {/* List */}
@@ -918,6 +1011,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                         {autoProposals.map(p => {
                             const on = !!autoChecked[p.id];
                             const loc = autoLocations[p.id] || '';
+                            const cat = autoCategories[p.id] || '';
                             const isEditing = activeProposalId === p.id;
                             const isPreview = previewProposalId === p.id && !activeProposalId;
                             const color = proposalColor(p);
@@ -937,6 +1031,19 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                             {LOCATIONS.map(L => (
                                                 <button key={L} onClick={() => setAutoLocations(prev => ({ ...prev, [p.id]: loc === L ? '' : L }))} style={{ padding: '4px 9px', background: loc === L ? 'var(--ink)' : '#fff', color: loc === L ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{L}</button>
                                             ))}
+                                        </div>
+                                        {/* Category tag (Bracket / Pole / Finial) — from the matched library item */}
+                                        <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>Cat:</span>
+                                            {CATEGORIES.map(C => (
+                                                <button key={C} onClick={() => setAutoCategories(prev => ({ ...prev, [p.id]: cat === C ? '' : C }))} style={{ padding: '4px 9px', background: cat === C ? 'var(--ink)' : '#fff', color: cat === C ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{C}</button>
+                                            ))}
+                                        </div>
+                                        {/* Library match — verify the node resolved to the right component */}
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', marginTop: '6px', textTransform: 'uppercase', letterSpacing: '.05em', color: p.library ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                                            {p.library
+                                                ? `⛓ ${p.library.itemName}${p.library.productType ? ' · ' + p.library.productType : ''}${p.library.bracketType ? ' · ' + p.library.bracketType : ''}${p.library.exact ? '' : ' (≈)'}`
+                                                : '⛓ no library match'}
                                         </div>
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '6px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
                                             {nodesOf(p).length} nodes{proposalNodeOverrides[p.id] ? ' · edited' : ''}
