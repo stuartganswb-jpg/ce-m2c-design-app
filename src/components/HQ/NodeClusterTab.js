@@ -260,6 +260,7 @@ const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, hi
 
     useMemo(() => {
         const isDescendantOf = (child, nodeNameList) => {
+            if (!Array.isArray(nodeNameList) || nodeNameList.length === 0) return false; // skip clusters with no node list
             let curr = child;
             while (curr) {
                 if (curr.name && nodeNameList.includes(curr.name)) return true;
@@ -709,7 +710,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     };
 
     // A proposal's CURRENT node set = its hand-edited override (if any) else the auto-derived nodes.
-    const nodesOf = (p) => proposalNodeOverrides[p.id] || p.nodes;
+    const nodesOf = (p) => proposalNodeOverrides[p.id] || p.nodes || [];
     // Stable color per proposal (by its index), and the color-group set fed to the 3D when
     // "Color groups" is on — only the CHECKED proposals get painted; the rest fade.
     const proposalColor = (p) => GROUP_COLOR(autoProposals.indexOf(p));
