@@ -65,7 +65,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const defaultEngData = {
     shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
-    mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
+    mountLeft: 'OPEN', mountRight: 'OPEN', mountCenter: 'OPEN', mountOuter: 'OPEN',      
     endStyle: 'FINIAL', endStyleRight: '', proj: "", bracketId: "", bracketIdRight: "", bracketIdCenter: "", backplateIdLeft: "", backplateIdRight: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   };
@@ -293,7 +293,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const rightMount = engData.shape === 'STRAIGHT' ? engData.mountRight : engData.mountOuter;
   const leftBrackets = keepSelected(allBrackets.filter(b => bracketMatchesMount(b, leftMount)), engData.bracketId);
   const rightBrackets = keepSelected(allBrackets.filter(b => bracketMatchesMount(b, rightMount)), engData.bracketIdRight);
-  const centerBrackets = keepSelected(allBrackets.filter(b => !isReturnBracketPart(b) && (bracketMatchesMount(b, leftMount) || bracketMatchesMount(b, rightMount))), engData.bracketIdCenter);
+  const centerBrackets = keepSelected(allBrackets.filter(b => !isReturnBracketPart(b) && bracketMatchesMount(b, engData.mountCenter)), engData.bracketIdCenter);
 
   // Backplates for the end-return arms (productType BACKPLATE, pinned to this flow + collection).
   const allBackplates = libraryParts.filter(p => {
@@ -894,20 +894,28 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     </select>
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <label style={labelStyle}>Mount (Wall/Wall)</label>
+                                    <label style={labelStyle}>Mount ({engData.shape === 'STRAIGHT' ? 'L / C / R' : 'Ends / Center'})</label>
                                     {engData.shape === 'STRAIGHT' ? (
                                         <div style={{ display: 'flex', gap: '8px' }}>
                                             <select value={engData.mountLeft} onChange={e => setEngData({...engData, mountLeft: e.target.value})} style={fieldStyle}>
                                                 <option value="OPEN">L: Open</option><option value="INSIDE">L: Inside</option><option value="CEILING">L: Ceiling</option>
+                                            </select>
+                                            <select value={engData.mountCenter} onChange={e => setEngData({...engData, mountCenter: e.target.value})} style={fieldStyle}>
+                                                <option value="OPEN">C: Open</option><option value="INSIDE">C: Inside</option><option value="CEILING">C: Ceiling</option>
                                             </select>
                                             <select value={engData.mountRight} onChange={e => setEngData({...engData, mountRight: e.target.value})} style={fieldStyle}>
                                                 <option value="OPEN">R: Open</option><option value="INSIDE">R: Inside</option><option value="CEILING">R: Ceiling</option>
                                             </select>
                                         </div>
                                     ) : (
-                                        <select value={engData.mountOuter} onChange={e => setEngData({...engData, mountOuter: e.target.value})} style={fieldStyle}>
-                                            <option value="OPEN">Open Ends (Wall)</option><option value="INSIDE">Inside (Wall to Wall)</option><option value="CEILING">Ceiling Mount</option>
-                                        </select>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <select value={engData.mountOuter} onChange={e => setEngData({...engData, mountOuter: e.target.value})} style={fieldStyle}>
+                                                <option value="OPEN">Ends: Open</option><option value="INSIDE">Ends: Inside</option><option value="CEILING">Ends: Ceiling</option>
+                                            </select>
+                                            <select value={engData.mountCenter} onChange={e => setEngData({...engData, mountCenter: e.target.value})} style={fieldStyle}>
+                                                <option value="OPEN">C: Open</option><option value="INSIDE">C: Inside</option><option value="CEILING">C: Ceiling</option>
+                                            </select>
+                                        </div>
                                     )}
                                 </div>
                             </div>
