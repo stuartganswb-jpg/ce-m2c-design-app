@@ -62,12 +62,13 @@ const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, sty
     );
 };
 
-const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
+const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
-    
+
     const textureOverridesString = JSON.stringify(textureOverrides);
     const visibilityOverridesString = JSON.stringify(visibilityOverrides);
+    const cloneSpecsString = JSON.stringify(cloneSpecs);
 
     useEffect(() => {
         clonedScene.traverse((child) => {
@@ -133,6 +134,42 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                     }
                 }
             });
+
+            // --- Center-bracket cloning ---------------------------------------------------------
+            // One source bracket sits at the middle of the pole; clone it N times (count from the
+            // flow's "clone along pole" step qty) and space the copies evenly along the pole's long
+            // axis. Fully graceful: if anything is missing it no-ops and the model renders as-is.
+            try {
+                const prior = clonedScene.getObjectByName('__centerClones');
+                if (prior) clonedScene.remove(prior);
+                const specs = (cloneSpecs || []).filter(s => s && (parseInt(s.count) || 0) >= 1 && (s.meshNames || []).length);
+                if (specs.length) {
+                    clonedScene.updateMatrixWorld(true);
+                    const modelBox = new THREE.Box3().setFromObject(clonedScene);
+                    const size = modelBox.getSize(new THREE.Vector3());
+                    const axis = size.x >= size.y && size.x >= size.z ? 'x' : (size.y >= size.z ? 'y' : 'z');
+                    const lo = modelBox.min[axis], hi = modelBox.max[axis];
+                    const invRoot = new THREE.Matrix4().copy(clonedScene.matrixWorld).invert();
+                    const group = new THREE.Group(); group.name = '__centerClones';
+                    specs.forEach(spec => {
+                        const n = parseInt(spec.count) || 0;
+                        const wanted = (spec.meshNames || []).map(s => String(s).trim().toLowerCase().replace(/[^a-z0-9]/g, '')).filter(Boolean);
+                        const src = [];
+                        clonedScene.traverse(c => { if (c.isMesh) { const k = c.name.toLowerCase().replace(/[^a-z0-9]/g, ''); if (wanted.some(w => k === w || k.startsWith(w))) src.push(c); } });
+                        if (!src.length) return;
+                        const srcBox = new THREE.Box3(); src.forEach(m => srcBox.expandByObject(m));
+                        const srcAlong = srcBox.getCenter(new THREE.Vector3())[axis];
+                        src.forEach(m => { m.visible = false; }); // hide the single middle original; clones replace it
+                        for (let i = 1; i <= n; i++) {
+                            const targetAlong = lo + (hi - lo) * (i / (n + 1));
+                            const delta = targetAlong - srcAlong;
+                            const offset = new THREE.Matrix4().makeTranslation(axis === 'x' ? delta : 0, axis === 'y' ? delta : 0, axis === 'z' ? delta : 0);
+                            src.forEach(m => { const c = m.clone(); c.visible = true; c.matrixAutoUpdate = false; c.matrix.copy(invRoot).multiply(offset).multiply(m.matrixWorld); group.add(c); });
+                        }
+                    });
+                    if (group.children.length) clonedScene.add(group);
+                }
+            } catch (e) { console.warn('center-bracket clone skipped', e); }
         };
 
         if (!textureOverrides || Object.keys(textureOverrides).length === 0) {
@@ -176,7 +213,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides }) => {
                 );
             }
         });
-    }, [clonedScene, textureOverridesString, visibilityOverridesString]);
+    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString]);
 
     return <primitive object={clonedScene} />;
 };
@@ -1168,6 +1205,24 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       return overrides;
   }, [dynamicConfigParams, activeFlow, activeAssembly]);
 
+  // Steps flagged "clone along pole" (e.g. the center passing bracket) drive procedural cloning:
+  // the selected option's meshes are cloned (qty) times and spaced down the pole in DynamicModel.
+  const cloneSpecs = useMemo(() => {
+      if (!activeFlow) return [];
+      const out = [];
+      (activeFlow.steps || []).forEach(step => {
+          if (!step.isCenterClone) return;
+          const selId = dynamicConfigParams[step.id];
+          const meshStr = selId && step.geometryMap ? step.geometryMap[selId] : '';
+          if (!meshStr) return;
+          const meshNames = String(meshStr).split(',').map(m => m.trim()).filter(Boolean);
+          const rawQty = stepQuantities[step.id];
+          const count = (rawQty !== undefined && rawQty !== '') ? (parseInt(rawQty) || 0) : 1;
+          if (count >= 1 && meshNames.length) out.push({ stepId: step.id, meshNames, count });
+      });
+      return out;
+  }, [activeFlow, dynamicConfigParams, stepQuantities]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
@@ -1500,10 +1555,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               <ContactShadows position={[0, -0.5, 0]} opacity={0.5} scale={10} blur={2} far={4} />
                               <OrbitControls makeDefault />
                               <Bounds fit clip margin={1.2}>
-                                  <DynamicModel 
-                                      url={activeAssembly.manufacturingSpecs.cadUrl} 
-                                      textureOverrides={textureOverrides} 
+                                  <DynamicModel
+                                      url={activeAssembly.manufacturingSpecs.cadUrl}
+                                      textureOverrides={textureOverrides}
                                       visibilityOverrides={visibilityOverrides}
+                                      cloneSpecs={cloneSpecs}
                                   />
                               </Bounds>
                           </Canvas>

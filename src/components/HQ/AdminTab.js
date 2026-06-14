@@ -1202,10 +1202,20 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <input 
                                             value={newStep.qtyHelperText || ''} 
                                             onChange={e => setNewStep({...newStep, qtyHelperText: e.target.value})} 
-                                            placeholder="e.g. Enter 4 rings per foot." 
-                                            style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} 
+                                            placeholder="e.g. Enter 4 rings per foot."
+                                            style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}
                                         />
                                     </div>
+
+                                    {newStep.type === 'STYLE_SWAP' && (
+                                    <div style={{ background: '#fff', padding: '15px', border: '1px solid var(--line)' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                                            <input type="checkbox" checked={!!newStep.isCenterClone} onChange={e => setNewStep({...newStep, isCenterClone: e.target.checked})} />
+                                            <span style={{ fontSize: '0.85rem', color: 'var(--ink)' }}>Clone along pole (center passing bracket)</span>
+                                        </label>
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>The selected bracket is cloned by this step's quantity and spaced evenly down the pole in the live rendering. Only one center bracket needs to exist in the .glb (at the middle of the pole).</span>
+                                    </div>
+                                    )}
 
                                     {newStep.type !== 'STYLE_SWAP' && (
                                     <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
