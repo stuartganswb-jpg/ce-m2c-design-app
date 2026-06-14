@@ -558,7 +558,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                 if (engTool === 'splice') { const center = closestSeg.len / 2; if (Math.abs(finalDist - center) < (closestSeg.len * 0.15)) finalDist = center; }
                 let ref = 'START'; let displayDist = finalDist;
                 if (finalDist > closestSeg.len / 2) { ref = 'END'; displayDist = closestSeg.len - finalDist; }
-                setAttachments([...attachments, { id: Date.now(), type: engTool, segId: closestSeg.id, distInches: displayDist, ref: ref, note: '' }]);
+                setAttachments([...attachments, { id: Date.now(), type: engTool, segId: closestSeg.id, distInches: Math.round(displayDist * 8) / 8, ref: ref, note: '' }]);
             }
         }
     }
