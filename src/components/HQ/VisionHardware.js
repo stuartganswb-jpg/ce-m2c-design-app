@@ -208,22 +208,25 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       }
   }, [engData.bracketId, libraryParts, activeFlow]);
 
-  // When BOTH end brackets are flagged Is-Return, the pole miters back into them — auto-switch the
-  // End Style to Miter Return. Only re-fires on a bracket change (endStyle is read via prev, not a
-  // dep), so a later manual End Style override sticks.
+  // Auto-set each end's End Style from its mount + bracket: an INSIDE mount is a flush cut; otherwise
+  // an Is-Return bracket miters back into the wall. Leaves the style alone when neither applies, so a
+  // manual choice / flow preset still sticks. Re-fires on a mount or bracket change (style read via
+  // prev, not a dep), so it never loops.
   useEffect(() => {
       const isRet = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
-      const lRet = engData.bracketId && isRet(engData.bracketId);
-      const rRet = engData.bracketIdRight && isRet(engData.bracketIdRight);
-      if (!lRet && !rRet) return;
+      const sideStyle = (mount, bktId) => mount === 'INSIDE' ? 'FLUSH' : ((bktId && isRet(bktId)) ? 'RETURN_MITER' : null);
+      const lMount = engData.shape === 'STRAIGHT' ? engData.mountLeft : engData.mountOuter;
+      const rMount = engData.shape === 'STRAIGHT' ? engData.mountRight : engData.mountOuter;
+      const lStyle = sideStyle(lMount, engData.bracketId);
+      const rStyle = sideStyle(rMount, engData.bracketIdRight);
       setEngData(prev => {
           const next = { ...prev };
           let changed = false;
-          if (lRet && prev.endStyle !== 'RETURN_MITER') { next.endStyle = 'RETURN_MITER'; changed = true; }
-          if (rRet && (prev.endStyleRight || prev.endStyle) !== 'RETURN_MITER') { next.endStyleRight = 'RETURN_MITER'; changed = true; }
+          if (lStyle && prev.endStyle !== lStyle) { next.endStyle = lStyle; changed = true; }
+          if (rStyle && (prev.endStyleRight || prev.endStyle) !== rStyle) { next.endStyleRight = rStyle; changed = true; }
           return changed ? next : prev;
       });
-  }, [engData.bracketId, engData.bracketIdRight, libraryParts]);
+  }, [engData.bracketId, engData.bracketIdRight, engData.mountLeft, engData.mountRight, engData.mountOuter, engData.shape, libraryParts]);
 
   // Per-option projection: a Choose/Swap bracket option can carry its own projection
   // (e.g. standard 4.25" vs mini 4.125" backplate — same rendering, different fab).
@@ -384,8 +387,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   // Return-bracket arm thickness (e.g. ½" flat-iron stock) is set on the bracket item and adds
   // to each return end's O2O on top of the half-backplate.
   const armThk = (id) => parseFloat(libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.armThickness) || 0;
-  const endAddL = (isRetBkt(engData.bracketId) && engData.backplateIdLeft) ? (bpEndHalf(engData.backplateIdLeft) + armThk(engData.bracketId)) : (engData.bracketW / 2);
-  const endAddR = (isRetBkt(o2oRightBktId) && o2oRightBpId) ? (bpEndHalf(o2oRightBpId) + armThk(o2oRightBktId)) : (engData.bracketW / 2);
+  // An INSIDE-mounted end sits flush to the wall and adds nothing past the pole (the inside-mount
+  // deduct already trims the pole to fit). An OUTSIDE end adds either the return backplate half + arm
+  // (return bracket) or half the bracket width (passing bracket).
+  const endAddL = isLeftInside ? 0 : ((isRetBkt(engData.bracketId) && engData.backplateIdLeft) ? (bpEndHalf(engData.backplateIdLeft) + armThk(engData.bracketId)) : (engData.bracketW / 2));
+  const endAddR = isRightInside ? 0 : ((isRetBkt(o2oRightBktId) && o2oRightBpId) ? (bpEndHalf(o2oRightBpId) + armThk(o2oRightBktId)) : (engData.bracketW / 2));
   const totalSystemO2O = poleO2O + endAddL + endAddR;
 
   const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
