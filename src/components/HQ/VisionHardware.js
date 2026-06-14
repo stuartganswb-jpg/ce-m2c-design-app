@@ -213,10 +213,16 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   // dep), so a later manual End Style override sticks.
   useEffect(() => {
       const isRet = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
-      const rId = engData.bracketIdRight;
-      if (engData.bracketId && isRet(engData.bracketId) && rId && isRet(rId)) {
-          setEngData(prev => prev.endStyle === 'RETURN_MITER' ? prev : { ...prev, endStyle: 'RETURN_MITER' });
-      }
+      const lRet = engData.bracketId && isRet(engData.bracketId);
+      const rRet = engData.bracketIdRight && isRet(engData.bracketIdRight);
+      if (!lRet && !rRet) return;
+      setEngData(prev => {
+          const next = { ...prev };
+          let changed = false;
+          if (lRet && prev.endStyle !== 'RETURN_MITER') { next.endStyle = 'RETURN_MITER'; changed = true; }
+          if (rRet && (prev.endStyleRight || prev.endStyle) !== 'RETURN_MITER') { next.endStyleRight = 'RETURN_MITER'; changed = true; }
+          return changed ? next : prev;
+      });
   }, [engData.bracketId, engData.bracketIdRight, libraryParts]);
 
   // Per-option projection: a Choose/Swap bracket option can carry its own projection
@@ -306,8 +312,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const isLeftInside = engData.shape === 'STRAIGHT' ? engData.mountLeft === 'INSIDE' : engData.mountOuter === 'INSIDE';
   const isRightInside = engData.shape === 'STRAIGHT' ? engData.mountRight === 'INSIDE' : engData.mountOuter === 'INSIDE';
   
-  const bendDeductL = (!isLeftInside && engData.endStyle === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
-  const bendDeductR = (!isRightInside && engData.endStyle === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
+  // Per-side End Style: Left = engData.endStyle, Right = endStyleRight (falls back to Left when unset).
+  const endStyleL = engData.endStyle;
+  const endStyleR = engData.endStyleRight || engData.endStyle;
+  const bendDeductL = (!isLeftInside && endStyleL === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
+  const bendDeductR = (!isRightInside && endStyleR === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
   const imDeductL = isLeftInside ? engData.insideMountDeduct : 0;
   const imDeductR = isRightInside ? engData.insideMountDeduct : 0;
 
@@ -343,10 +352,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   }
 
   // --- RAW CUTS & O2O MATH ---
-  let endRawAdd = 0;
-  if (engData.endStyle === 'RETURN_BEND') endRawAdd = engData.gripAllowance;
-  const addL_RAW = isLeftInside ? 0 : endRawAdd;
-  const addR_RAW = isRightInside ? 0 : endRawAdd;
+  const addL_RAW = (!isLeftInside && endStyleL === 'RETURN_BEND') ? engData.gripAllowance : 0;
+  const addR_RAW = (!isRightInside && endStyleR === 'RETURN_BEND') ? engData.gripAllowance : 0;
 
   const orderL = engData.shape === 'MITERED' ? pole1 + bendDeductL + imDeductL : 0;
   const orderR = engData.shape === 'MITERED' ? pole3 + bendDeductR + imDeductR : 0;
@@ -385,10 +392,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;
   const qtySplices = attachments.filter(a => a.type === 'splice').length;
   const qtyMiters = engData.shape === 'MITERED' ? 2 : 0;
-  const qtyBends = engData.endStyle === 'RETURN_BEND' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
-  const qtyMiterReturns = engData.endStyle === 'RETURN_MITER' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
+  const qtyBends = (endStyleL === 'RETURN_BEND' && !isLeftInside ? 1 : 0) + (endStyleR === 'RETURN_BEND' && !isRightInside ? 1 : 0);
+  const qtyMiterReturns = (endStyleL === 'RETURN_MITER' && !isLeftInside ? 1 : 0) + (endStyleR === 'RETURN_MITER' && !isRightInside ? 1 : 0);
   const qtyCustomProjBrackets = isCustomProj ? qtyBrackets : 0;
-  const qtyFinials = engData.endStyle === 'FINIAL' ? ((isLeftInside ? 0 : 1) + (isRightInside ? 0 : 1)) : 0;
+  const qtyFinials = (endStyleL === 'FINIAL' && !isLeftInside ? 1 : 0) + (endStyleR === 'FINIAL' && !isRightInside ? 1 : 0);
   const recRings = Math.ceil(totalSystemO2O / 12) * 4;
 
   const P2 = { x: 500 - (wall2 * S)/2, y: 250 }; const P3 = { x: 500 + (wall2 * S)/2, y: 250 };
@@ -415,25 +422,24 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   }
 
   let drawHS = { ...HS }; let drawHE = { ...HE };
-  if (engData.endStyle === 'RETURN_BEND') {
-      const r = engData.returnRadius * S;
-      if (!isLeftInside) {
-          let inVec = {x: 1, y: 0};
-          if (engData.shape === 'MITERED') { const dx = HC1.x - HS.x; const dy = HC1.y - HS.y; const len = Math.sqrt(dx*dx + dy*dy) || 1; inVec = {x: dx/len, y: dy/len}; } 
-          if (engData.shape !== 'BOW') drawHS = { x: HS.x + inVec.x * r, y: HS.y + inVec.y * r };
-      }
-      if (!isRightInside) {
-          let inVec = {x: -1, y: 0};
-          if (engData.shape === 'MITERED') { const dx = HC2.x - HE.x; const dy = HC2.y - HE.y; const len = Math.sqrt(dx*dx + dy*dy) || 1; inVec = {x: dx/len, y: dy/len}; } 
-          if (engData.shape !== 'BOW') drawHE = { x: HE.x + inVec.x * r, y: HE.y + inVec.y * r };
-      }
+  const rBend = engData.returnRadius * S;
+  if (endStyleL === 'RETURN_BEND' && !isLeftInside) {
+      let inVec = {x: 1, y: 0};
+      if (engData.shape === 'MITERED') { const dx = HC1.x - HS.x; const dy = HC1.y - HS.y; const len = Math.sqrt(dx*dx + dy*dy) || 1; inVec = {x: dx/len, y: dy/len}; }
+      if (engData.shape !== 'BOW') drawHS = { x: HS.x + inVec.x * rBend, y: HS.y + inVec.y * rBend };
+  }
+  if (endStyleR === 'RETURN_BEND' && !isRightInside) {
+      let inVec = {x: -1, y: 0};
+      if (engData.shape === 'MITERED') { const dx = HC2.x - HE.x; const dy = HC2.y - HE.y; const len = Math.sqrt(dx*dx + dy*dy) || 1; inVec = {x: dx/len, y: dy/len}; }
+      if (engData.shape !== 'BOW') drawHE = { x: HE.x + inVec.x * rBend, y: HE.y + inVec.y * rBend };
   }
 
   const renderEndTreatment = (isLeft, forceFlatten = false) => {
       const isInside = isLeft ? isLeftInside : isRightInside;
+      const es = isLeft ? endStyleL : endStyleR;
       const startOrig = isLeft ? HS : HE; const stopPoint = isLeft ? drawHS : drawHE; const norm = isLeft ? nL : nR; 
       if (isInside) return forceFlatten ? null : <line x1={startOrig.x - norm.y*15} y1={startOrig.y + norm.x*15} x2={startOrig.x + norm.y*15} y2={startOrig.y - norm.x*15} stroke="var(--line)" strokeWidth="6" />;
-      if (engData.endStyle === 'FINIAL') {
+      if (es === 'FINIAL') {
           let outVec = {x: -1, y: 0};
           if (engData.shape === 'STRAIGHT') outVec = isLeft ? {x: -1, y: 0} : {x: 1, y: 0};
           else if (engData.shape === 'MITERED') { const dx = (isLeft?HS:HE).x - (isLeft?HC1:HC2).x; const dy = (isLeft?HS:HE).y - (isLeft?HC1:HC2).y; const len = Math.sqrt(dx*dx + dy*dy) || 1; outVec = {x: dx/len, y: dy/len}; }
@@ -441,7 +447,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           const fw = engData.finialW * S;
           return forceFlatten ? <circle cx={startOrig.x + outVec.x * fw} cy="0" r="10" fill="var(--brass)" /> : <line x1={startOrig.x} y1={startOrig.y} x2={startOrig.x + outVec.x*fw} y2={startOrig.y + outVec.y*fw} stroke="var(--brass)" strokeWidth="6" />;
       }
-      if (engData.endStyle === 'RETURN_MITER') {
+      if (es === 'RETURN_MITER') {
           const wx = startOrig.x + norm.x * (safeProj * S); const wy = startOrig.y + norm.y * (safeProj * S);
           let outVec = {x: -1, y: 0};
           if (engData.shape === 'STRAIGHT') outVec = isLeft ? {x: -1, y: 0} : {x: 1, y: 0};
@@ -449,7 +455,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           if (forceFlatten) return <line x1={startOrig.x} y1="0" x2={startOrig.x} y2="-15" stroke="var(--brass)" strokeWidth="8" />;
           return ( <g><line x1={startOrig.x} y1={startOrig.y} x2={wx} y2={wy} stroke="var(--brass)" strokeWidth="1.5" /><line x1={startOrig.x + outVec.x*2 - norm.x*2} y1={startOrig.y + outVec.y*2 - norm.y*2} x2={startOrig.x - outVec.x*2 + norm.x*2} y2={startOrig.y - outVec.y*2 + norm.y*2} stroke="#fff" strokeWidth="0.5" /></g> );
       }
-      if (engData.endStyle === 'RETURN_BEND') {
+      if (es === 'RETURN_BEND') {
           const r = engData.returnRadius * S; const projPx = safeProj * S;
           let outVec = {x: -1, y: 0};
           if (engData.shape === 'STRAIGHT') outVec = isLeft ? {x: -1, y: 0} : {x: 1, y: 0};
@@ -967,8 +973,17 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     <input type="number" step="0.125" value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={fieldStyle} />
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <label style={labelStyle}>End Style</label>
+                                    <label style={labelStyle}>End Style · Left</label>
                                     <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={fieldStyle}>
+                                        <option value="FLUSH">Flush Cut</option>
+                                        <option value="FINIAL">Finials</option>
+                                        <option value="RETURN_MITER">Miter Return</option>
+                                        <option value="RETURN_BEND">Bent Return (FR)</option>
+                                    </select>
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <label style={labelStyle}>End Style · Right</label>
+                                    <select value={engData.endStyleRight || engData.endStyle} onChange={e => setEngData({...engData, endStyleRight: e.target.value})} style={fieldStyle}>
                                         <option value="FLUSH">Flush Cut</option>
                                         <option value="FINIAL">Finials</option>
                                         <option value="RETURN_MITER">Miter Return</option>
@@ -982,8 +997,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                 <div style={{ flex: 1 }}><label style={labelStyle}>Pole Dia. (in)</label><input type="number" step="0.125" value={engData.poleDiameter} onChange={e => setEngData({...engData, poleDiameter: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
                             </div>
                             <div style={{ display: 'flex', gap: '16px', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Bend Radius (in)</label><input type="number" step="0.125" value={engData.returnRadius} onChange={e => setEngData({...engData, returnRadius: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Grip Allowance (in)</label><input type="number" step="0.125" value={engData.gripAllowance} onChange={e => setEngData({...engData, gripAllowance: parseFloat(e.target.value)||0})} disabled={engData.endStyle !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: engData.endStyle === 'RETURN_BEND' ? 1 : 0.4 }} /></div>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Bend Radius (in)</label><input type="number" step="0.125" value={engData.returnRadius} onChange={e => setEngData({...engData, returnRadius: parseFloat(e.target.value)||0})} disabled={endStyleL !== 'RETURN_BEND' && endStyleR !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: (endStyleL === 'RETURN_BEND' || endStyleR === 'RETURN_BEND') ? 1 : 0.4 }} /></div>
+                                <div style={{ flex: 1 }}><label style={labelStyle}>Grip Allowance (in)</label><input type="number" step="0.125" value={engData.gripAllowance} onChange={e => setEngData({...engData, gripAllowance: parseFloat(e.target.value)||0})} disabled={endStyleL !== 'RETURN_BEND' && endStyleR !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: (endStyleL === 'RETURN_BEND' || endStyleR === 'RETURN_BEND') ? 1 : 0.4 }} /></div>
                                 <div style={{ flex: 1 }}><label style={labelStyle}>IM Deduct. (in)</label><input type="number" step="0.125" value={engData.insideMountDeduct} onChange={e => setEngData({...engData, insideMountDeduct: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
                             </div>
                         </div>
@@ -1300,7 +1315,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                               {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px' }}><span style={{ color: 'var(--ink-soft)' }}>Left Wall C2C:</span><strong style={{ fontWeight: 500 }}>{pole1.toFixed(2)}"</strong></div>}
                               <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{engData.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</span><strong style={{ fontWeight: 500 }}>{pole2.toFixed(2)}"</strong></div>
                               {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Right Wall C2C:</span><strong style={{ fontWeight: 500 }}>{pole3.toFixed(2)}"</strong></div>}
-                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)', marginTop: '8px' }}><span style={{ color: 'var(--ink-soft)' }}>End Style:</span><strong style={{ fontWeight: 500 }}>{engData.endStyle.replace('_', ' ')}</strong></div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)', marginTop: '8px' }}><span style={{ color: 'var(--ink-soft)' }}>End Style{endStyleL !== endStyleR ? ' (L / R)' : ''}:</span><strong style={{ fontWeight: 500 }}>{endStyleL.replace('_', ' ')}{endStyleL !== endStyleR ? ' / ' + endStyleR.replace('_', ' ') : ''}</strong></div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>Projection:</span><strong style={{ fontWeight: 500 }}>{isCustomProj ? `CUSTOM (${engData.proj}")` : `${engData.proj}"`}</strong></div>
                           </div>
                       </div>
