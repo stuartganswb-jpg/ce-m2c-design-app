@@ -209,7 +209,7 @@ const SceneNodeTree = ({ node, level = 0, selectedNodes, hiddenNodes, onToggleSe
 };
 
 // --- 3D INTERACTIVE HIGHLIGHT & VISIBILITY MODEL ---
-const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, highlightUnassigned, locatingNodes = [], colorGroups = [], onMeshClick, onLoaded, onComponents }) => {
+const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, highlightUnassigned, locatingNodes = [], colorGroups = [], onMeshClick, onHoverMesh, onLoaded, onComponents }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
@@ -322,7 +322,8 @@ const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, hi
         <primitive 
             object={clonedScene} 
             onPointerOver={(e) => { e.stopPropagation(); document.body.style.cursor = 'crosshair'; }}
-            onPointerOut={(e) => { e.stopPropagation(); document.body.style.cursor = 'auto'; }}
+            onPointerMove={onHoverMesh ? (e) => { e.stopPropagation(); onHoverMesh(e.object.name || (e.object.parent && e.object.parent.name) || null); } : undefined}
+            onPointerOut={(e) => { e.stopPropagation(); document.body.style.cursor = 'auto'; if (onHoverMesh) onHoverMesh(null); }}
             onClick={(e) => { 
                 e.stopPropagation(); 
                 const targetName = e.object.name || (e.object.parent && e.object.parent.name);
@@ -359,7 +360,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [autoNames, setAutoNames] = useState({});
     const [autoLocations, setAutoLocations] = useState({}); // proposalId -> 'WALL'|'CEILING'|'END'|''
     const [autoCategories, setAutoCategories] = useState({}); // proposalId -> 'BRACKET'|'POLE'|'FINIAL'|''
-    const [showGroupColors, setShowGroupColors] = useState(true); // paint every proposed group its own color in the 3D
+    const [showGroupColors, setShowGroupColors] = useState(false); // optional: paint every proposed group its own color (off by default — hover to glow instead)
+    const [hoveredProposalId, setHoveredProposalId] = useState(null); // hover a part / row -> glow that group
     const [previewProposalId, setPreviewProposalId] = useState(null); // click a part / row -> isolate that group
     const [activeProposalId, setActiveProposalId] = useState(null);   // group being edited: 3D clicks add/remove parts
     const [proposalNodeOverrides, setProposalNodeOverrides] = useState({}); // proposalId -> edited node list
@@ -369,7 +371,9 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         const q = query(collection(db, "Approved_Designs"), where("partClass", "in", ["Assembly", "Master Assembly"]));
         const unsubscribe = onSnapshot(q, (snapshot) => {
             let docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            docs = docs.filter(d => d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand)));
+            // Only MAIN assemblies belong here — sub-assemblies / components (e.g. screws) are
+            // grouped via their own main assembly, not on their own. Mirrors the BOM Engine.
+            docs = docs.filter(d => (d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand))) && (d.routingType || '').toUpperCase() === 'MAIN');
             docs.sort((a, b) => (a.itemName || "").localeCompare(b.itemName || ""));
             setMasterAssemblies(docs);
             
@@ -715,8 +719,23 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     );
     // Reveal mode isolates one clicked group; edit mode keeps every group colored (so you can
     // grab a part from any group), so don't isolate while editing.
-    const previewProposal = autoProposals.find(p => p.id === previewProposalId);
-    const previewNodes = (!activeProposalId && previewProposal) ? nodesOf(previewProposal) : [];
+    // What glows in the 3D: the group you're editing, else the one you're hovering (row or
+    // part), else the one you clicked to lock. Everything else keeps its natural material —
+    // no always-on colors, so the glow alone confirms a grouping at a glance.
+    const glowProposalId = activeProposalId || hoveredProposalId || previewProposalId;
+    const glowProposal = autoProposals.find(p => p.id === glowProposalId);
+    const glowNodes = glowProposal ? nodesOf(glowProposal) : [];
+
+    // Hover a 3D mesh -> glow its owning group (skipped while editing, where clicks add/remove).
+    const handleAutoMeshHover = (nodeName) => {
+        if (activeProposalId) return;
+        if (!nodeName) { setHoveredProposalId(prev => (prev === null ? prev : null)); return; }
+        const target = findNodeByName(sceneGraph, nodeName);
+        const sub = new Set(target ? getAllNames(target) : [nodeName]);
+        const owner = autoProposals.find(p => nodesOf(p).some(n => sub.has(n)));
+        const id = owner ? owner.id : null;
+        setHoveredProposalId(prev => (prev === id ? prev : id));
+    };
 
     // 3D mesh clicks while the Auto-Group panel is open: in edit mode, add/remove the part
     // to/from the active group (a part belongs to one group); otherwise reveal its group.
@@ -820,9 +839,9 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                             <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '16px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
                                 {showAutoPanel ? (
                                     <>
-                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', letterSpacing: '.1em' }}>Each color = a group</div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', letterSpacing: '.1em' }}>Hover to confirm a group</div>
                                         <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', borderTop: '1px solid var(--line)', paddingTop: '8px', marginTop: '4px', fontStyle: 'italic', maxWidth: '200px' }}>
-                                            {activeProposalId ? 'Editing — click parts to add/remove them from the highlighted group.' : 'Click a part to find its group · use ✎ Edit on a row to move parts.'}
+                                            {activeProposalId ? 'Editing — click parts to add/remove them from the highlighted group.' : 'Hover a part or a row to glow its whole group · click to lock · ✎ Edit to move parts.'}
                                         </div>
                                     </>
                                 ) : (
@@ -890,8 +909,9 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         onMeshClick={handleMeshClick}
                                         onLoaded={setSceneGraph}
                                         onComponents={setCadComponents}
-                                        locatingNodes={previewNodes.length ? previewNodes : locatingNodes}
-                                        colorGroups={showAutoPanel && (showGroupColors || activeProposalId) && !previewNodes.length ? colorGroups : []}
+                                        locatingNodes={(showAutoPanel && glowNodes.length) ? glowNodes : locatingNodes}
+                                        colorGroups={showAutoPanel && showGroupColors && !glowNodes.length ? colorGroups : []}
+                                        onHoverMesh={showAutoPanel ? handleAutoMeshHover : undefined}
                                     />
                                 </Bounds>
                             </Canvas>
@@ -1033,13 +1053,14 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                             const cat = autoCategories[p.id] || '';
                             const isEditing = activeProposalId === p.id;
                             const isPreview = previewProposalId === p.id && !activeProposalId;
+                            const isGlow = (activeProposalId || hoveredProposalId || previewProposalId) === p.id;
                             const color = proposalColor(p);
                             return (
-                                <div key={p.id} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '10px', marginBottom: '4px', borderRadius: '2px', border: `1px solid ${(isEditing || isPreview) ? 'var(--brass)' : 'transparent'}`, background: (isEditing || isPreview) ? 'var(--paper-2)' : 'transparent', boxShadow: (showGroupColors && on) ? `inset 5px 0 0 ${color}` : 'none', opacity: on ? 1 : 0.55 }}>
+                                <div key={p.id} onMouseEnter={() => { if (!activeProposalId) setHoveredProposalId(p.id); }} onMouseLeave={() => setHoveredProposalId(prev => prev === p.id ? null : prev)} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '10px', marginBottom: '4px', borderRadius: '2px', border: `1px solid ${isGlow ? 'var(--brass)' : 'transparent'}`, background: isGlow ? 'var(--paper-2)' : 'transparent', boxShadow: (showGroupColors && on) ? `inset 5px 0 0 ${color}` : (isGlow ? 'inset 5px 0 0 var(--brass)' : 'none'), opacity: on ? 1 : 0.55 }}>
                                     <input type="checkbox" checked={on} onChange={(e) => setAutoChecked(prev => ({ ...prev, [p.id]: e.target.checked }))} style={{ marginTop: '10px', width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--brass)' }} />
                                     <div style={{ flex: 1, cursor: isEditing ? 'default' : 'pointer' }} onClick={() => { if (!isEditing) setPreviewProposalId(isPreview ? null : p.id); }} title={isEditing ? '' : 'Click to isolate this group in the 3D'}>
                                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                            <span title="Group color in the 3D" style={{ width: '14px', height: '14px', flexShrink: 0, borderRadius: '3px', border: '1px solid var(--line)', background: color, opacity: (showGroupColors && on) ? 1 : 0.25 }} />
+                                            <span title="Hover to glow this group in the 3D" style={{ width: '14px', height: '14px', flexShrink: 0, borderRadius: '3px', border: '1px solid var(--line)', background: showGroupColors ? color : (isGlow ? 'var(--brass)' : 'transparent'), opacity: showGroupColors ? (on ? 1 : 0.25) : 1 }} />
                                             <input value={autoNames[p.id] ?? p.suggestedName} onClick={(e) => e.stopPropagation()} onChange={(e) => setAutoNames(prev => ({ ...prev, [p.id]: e.target.value }))} style={{ flex: 1, padding: '7px 9px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', textTransform: 'uppercase', outline: 'none' }} />
                                             {p.pos && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: 'var(--paper-2)', color: 'var(--brass)', padding: '4px 8px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>{p.pos}</span>}
                                             <button onClick={(e) => { e.stopPropagation(); if (!isEditing) setAutoChecked(prev => ({ ...prev, [p.id]: true })); setActiveProposalId(isEditing ? null : p.id); setPreviewProposalId(null); }} title="Add/remove parts: then click meshes in the 3D" style={{ background: isEditing ? 'var(--brass)' : '#fff', color: isEditing ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', padding: '4px 8px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{isEditing ? '✓ Done' : '✎ Edit'}</button>
