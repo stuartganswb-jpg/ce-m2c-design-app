@@ -23,6 +23,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const [placedItems, setPlacedItems] = useState([]);
   const [activePlacedId, setActivePlacedId] = useState(null);
   const [showEngOverlay, setShowEngOverlay] = useState(false);
+  const [showManualFab, setShowManualFab] = useState(false); // collapsed by default: dims auto-fill from the selected bracket; open only for one-off custom overrides
   const [engOverlayPos, setEngOverlayPos] = useState({ x: 500, y: 400 });
   const [perspectiveStretch, setPerspectiveStretch] = useState({ L: 0, R: 0 }); 
   const [visScale, setVisScale] = useState(1.0); 
@@ -997,15 +998,25 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     </select>
                                 </div>
                             </div>
-                            <div style={{ display: 'flex', gap: '16px', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Bracket W. (in)</label><input type="number" step="0.125" value={engData.bracketW} onChange={e => setEngData({...engData, bracketW: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Bracket Thick. (in)</label><input type="number" step="0.125" value={engData.bracketThickness} onChange={e => setEngData({...engData, bracketThickness: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Pole Dia. (in)</label><input type="number" step="0.125" value={engData.poleDiameter} onChange={e => setEngData({...engData, poleDiameter: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
-                            </div>
-                            <div style={{ display: 'flex', gap: '16px', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Bend Radius (in)</label><input type="number" step="0.125" value={engData.returnRadius} onChange={e => setEngData({...engData, returnRadius: parseFloat(e.target.value)||0})} disabled={endStyleL !== 'RETURN_BEND' && endStyleR !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: (endStyleL === 'RETURN_BEND' || endStyleR === 'RETURN_BEND') ? 1 : 0.4 }} /></div>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>Grip Allowance (in)</label><input type="number" step="0.125" value={engData.gripAllowance} onChange={e => setEngData({...engData, gripAllowance: parseFloat(e.target.value)||0})} disabled={endStyleL !== 'RETURN_BEND' && endStyleR !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: (endStyleL === 'RETURN_BEND' || endStyleR === 'RETURN_BEND') ? 1 : 0.4 }} /></div>
-                                <div style={{ flex: 1 }}><label style={labelStyle}>IM Deduct. (in)</label><input type="number" step="0.125" value={engData.insideMountDeduct} onChange={e => setEngData({...engData, insideMountDeduct: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                            {/* These dims auto-fill from the selected bracket / master library — collapsed by
+                                default. Open only to override for one-off custom work outside the library. */}
+                            <div style={{ marginTop: '4px' }}>
+                                <button type="button" onClick={() => setShowManualFab(v => !v)} style={{ width: '100%', textAlign: 'left', background: 'var(--paper)', border: '1px solid var(--line)', padding: '12px 20px', cursor: 'pointer', fontFamily: 'var(--sans)', color: 'var(--ink-soft)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                                    <span style={{ fontSize: '0.8rem', letterSpacing: '0.05em', textTransform: 'uppercase' }}>{showManualFab ? '▾' : '▸'} Manual Dimension Overrides</span>
+                                    <span style={{ fontSize: '0.72rem' }}>Auto-filled from the selected bracket · open only for one-off custom</span>
+                                </button>
+                                {showManualFab && (<div style={{ marginTop: '4px' }}>
+                                    <div style={{ display: 'flex', gap: '16px', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
+                                        <div style={{ flex: 1 }}><label style={labelStyle}>Bracket W. (in)</label><input type="number" step="0.125" value={engData.bracketW} onChange={e => setEngData({...engData, bracketW: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                        <div style={{ flex: 1 }}><label style={labelStyle}>Bracket Thick. (in)</label><input type="number" step="0.125" value={engData.bracketThickness} onChange={e => setEngData({...engData, bracketThickness: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                        <div style={{ flex: 1 }}><label style={labelStyle}>Pole Dia. (in)</label><input type="number" step="0.125" value={engData.poleDiameter} onChange={e => setEngData({...engData, poleDiameter: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '16px', background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)', borderTop: 'none' }}>
+                                        <div style={{ flex: 1 }}><label style={labelStyle}>Bend Radius (in)</label><input type="number" step="0.125" value={engData.returnRadius} onChange={e => setEngData({...engData, returnRadius: parseFloat(e.target.value)||0})} disabled={endStyleL !== 'RETURN_BEND' && endStyleR !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: (endStyleL === 'RETURN_BEND' || endStyleR === 'RETURN_BEND') ? 1 : 0.4 }} /></div>
+                                        <div style={{ flex: 1 }}><label style={labelStyle}>Grip Allowance (in)</label><input type="number" step="0.125" value={engData.gripAllowance} onChange={e => setEngData({...engData, gripAllowance: parseFloat(e.target.value)||0})} disabled={endStyleL !== 'RETURN_BEND' && endStyleR !== 'RETURN_BEND'} style={{ ...fieldStyle, opacity: (endStyleL === 'RETURN_BEND' || endStyleR === 'RETURN_BEND') ? 1 : 0.4 }} /></div>
+                                        <div style={{ flex: 1 }}><label style={labelStyle}>IM Deduct. (in)</label><input type="number" step="0.125" value={engData.insideMountDeduct} onChange={e => setEngData({...engData, insideMountDeduct: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>
+                                    </div>
+                                </div>)}
                             </div>
                         </div>
                     </div>
