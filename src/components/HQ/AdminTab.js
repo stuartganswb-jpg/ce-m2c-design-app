@@ -1009,24 +1009,62 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 {linkedAsm?.nodeClusters?.length > 0 && (
                                 <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                                     <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Hide Geometry (other configs)</label>
-                                    <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>When one CAD file holds several configs (e.g. wall / ceiling / end brackets), check the clusters this flow should NOT show. They'll be hidden in the 3D view for this flow — so the wall flow never shows ceiling or end brackets.</span>
-                                    <div style={{ maxHeight: '240px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px', background: '#fff', border: '1px solid var(--line)', padding: '12px' }}>
-                                        {linkedAsm.nodeClusters.map(cl => {
-                                            const checked = (flowSettings.hiddenClusters || []).includes(cl.id);
-                                            return (
-                                                <label key={cl.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer', opacity: checked ? 0.55 : 1 }}>
-                                                    <input type="checkbox" checked={checked} onChange={(e) => {
-                                                        const set = new Set(flowSettings.hiddenClusters || []);
-                                                        if (e.target.checked) set.add(cl.id); else set.delete(cl.id);
-                                                        setFlowSettings({ ...flowSettings, hiddenClusters: [...set] });
-                                                    }} />
-                                                    {cl.imageUrl
-                                                        ? <img src={cl.imageUrl} alt="" onClick={(e) => { e.preventDefault(); setZoomImg({ url: cl.imageUrl, label: cl.name }); }} title="Click to enlarge" style={{ width: '32px', height: '32px', objectFit: 'contain', background: 'var(--paper)', border: '1px solid var(--line)', flexShrink: 0, cursor: 'zoom-in' }} />
-                                                        : <span style={{ width: '32px', height: '32px', flexShrink: 0, border: '1px dashed var(--line)' }} />}
-                                                    <span style={{ textDecoration: checked ? 'line-through' : 'none' }}>{cl.name}</span>
-                                                </label>
-                                            );
-                                        })}
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>When one CAD file holds several configs (e.g. wall / ceiling / end brackets), hide the regions this flow should NOT show. Clusters are grouped by the Location/Position tags set in Node Grouping — toggle a whole region header in one click (e.g. hide all "CEILING · LEFT").</span>
+                                    <div style={{ maxHeight: '300px', overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', padding: '12px' }}>
+                                        {(() => {
+                                            const clusters = linkedAsm.nodeClusters;
+                                            const hidden = new Set(flowSettings.hiddenClusters || []);
+                                            const groups = {};
+                                            clusters.forEach(cl => {
+                                                const key = (cl.location || cl.position) ? `${cl.location || ''}|${cl.position || ''}` : '__UNGROUPED__';
+                                                (groups[key] = groups[key] || { location: cl.location || '', position: cl.position || '', clusters: [] }).clusters.push(cl);
+                                            });
+                                            const POS = { LEFT: 0, CENTER: 1, RIGHT: 2 };
+                                            const entries = Object.entries(groups).sort(([ka, a], [kb, b]) => {
+                                                if (ka === '__UNGROUPED__') return 1;
+                                                if (kb === '__UNGROUPED__') return -1;
+                                                return (a.location || '').localeCompare(b.location || '') || ((POS[a.position] ?? 9) - (POS[b.position] ?? 9)) || (a.position || '').localeCompare(b.position || '');
+                                            });
+                                            const toggleRegion = (ids, allHidden) => {
+                                                const set = new Set(hidden);
+                                                ids.forEach(id => allHidden ? set.delete(id) : set.add(id));
+                                                setFlowSettings({ ...flowSettings, hiddenClusters: [...set] });
+                                            };
+                                            const toggleOne = (id, on) => {
+                                                const set = new Set(flowSettings.hiddenClusters || []);
+                                                if (on) set.add(id); else set.delete(id);
+                                                setFlowSettings({ ...flowSettings, hiddenClusters: [...set] });
+                                            };
+                                            return entries.map(([key, g]) => {
+                                                const ids = g.clusters.map(c => c.id);
+                                                const allHidden = ids.every(id => hidden.has(id));
+                                                const someHidden = ids.some(id => hidden.has(id));
+                                                const label = key === '__UNGROUPED__' ? 'UNGROUPED' : [g.location, g.position].filter(Boolean).join(' · ');
+                                                return (
+                                                    <div key={key} style={{ marginBottom: '10px' }}>
+                                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', background: 'var(--paper-2)', borderLeft: `2px solid ${allHidden ? 'var(--ink-soft)' : 'var(--brass)'}`, cursor: key === '__UNGROUPED__' ? 'default' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)' }}>
+                                                            {key !== '__UNGROUPED__' && <input type="checkbox" checked={allHidden} ref={el => { if (el) el.indeterminate = !allHidden && someHidden; }} onChange={() => toggleRegion(ids, allHidden)} style={{ width: '15px', height: '15px', accentColor: 'var(--brass)', cursor: 'pointer' }} />}
+                                                            <span style={{ fontWeight: 600 }}>{label}</span>
+                                                            <span style={{ color: 'var(--ink-soft)', fontWeight: 400 }}>· {g.clusters.length}{allHidden ? ' · hidden' : ''}</span>
+                                                        </label>
+                                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 16px', padding: '6px 0 0 14px' }}>
+                                                            {g.clusters.map(cl => {
+                                                                const checked = hidden.has(cl.id);
+                                                                return (
+                                                                    <label key={cl.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0', fontSize: '0.82rem', color: 'var(--ink)', cursor: 'pointer', opacity: checked ? 0.5 : 1 }}>
+                                                                        <input type="checkbox" checked={checked} onChange={(e) => toggleOne(cl.id, e.target.checked)} />
+                                                                        {cl.imageUrl
+                                                                            ? <img src={cl.imageUrl} alt="" onClick={(e) => { e.preventDefault(); setZoomImg({ url: cl.imageUrl, label: cl.name }); }} title="Click to enlarge" style={{ width: '26px', height: '26px', objectFit: 'contain', background: 'var(--paper)', border: '1px solid var(--line)', flexShrink: 0, cursor: 'zoom-in' }} />
+                                                                            : <span style={{ width: '26px', height: '26px', flexShrink: 0, border: '1px dashed var(--line)' }} />}
+                                                                        <span style={{ textDecoration: checked ? 'line-through' : 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cl.name}</span>
+                                                                    </label>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            });
+                                        })()}
                                     </div>
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', display: 'block', marginTop: '10px' }}>{(flowSettings.hiddenClusters || []).length} cluster(s) hidden in this flow · Save and Cascade to apply</span>
                                 </div>

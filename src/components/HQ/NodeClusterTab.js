@@ -58,6 +58,21 @@ const cleanCadName = (raw) => {
     return s.replace(/\s{2,}/g, ' ').replace(/\s*\.\s*$/, '').trim();
 };
 
+// Assistive default for the region "Location" tag (Wall / Ceiling / End). Guesses from the
+// part code / words in the name; returns '' (user tags it) when ambiguous, e.g. shared
+// backplates that live at both wall and ceiling positions. Purely a pre-fill — overridable.
+const guessLocation = (s) => {
+    const t = String(s || '').toUpperCase();
+    if (/\bFIW|\bWALL\b/.test(t)) return 'WALL';
+    if (/\bFIC|CEIL/.test(t)) return 'CEILING';
+    if (/\bFIIM|\bEND\b|INSIDE\s*MOUNT/.test(t)) return 'END';
+    return '';
+};
+const LOCATIONS = ['WALL', 'CEILING', 'END'];
+// Region label shown in the flow builder, composed from the tags (the cluster name itself
+// stays part-based so BOM Auto-Assign keeps matching). e.g. {location:'WALL',position:'LEFT'} -> "WALL · LEFT".
+export const regionLabel = (cl) => [cl.location, cl.position].filter(Boolean).join(' · ') || 'UNGROUPED';
+
 // Normalize a node name for cross-cluster matching. Older clusters stored sanitized
 // names ("1in_Loop_Bracket_Ext_v41", "Body1017"); Auto-Group stores raw glb names
 // ("1in Loop Bracket Ext. v4:1", "Body1.017"). Sanitizing both sides lets us tell when
@@ -273,6 +288,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [splitByPosition, setSplitByPosition] = useState(true);
     const [autoChecked, setAutoChecked] = useState({});
     const [autoNames, setAutoNames] = useState({});
+    const [autoLocations, setAutoLocations] = useState({}); // proposalId -> 'WALL'|'CEILING'|'END'|''
+    const [previewNodes, setPreviewNodes] = useState([]);   // highlight a proposal's nodes in the 3D
 
     useEffect(() => {
         if (!activeBrand) return;
@@ -374,6 +391,13 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         } catch (err) { console.error(err); alert("Failed to save cluster."); }
     };
 
+    // Re-tag an existing cluster's region Location without re-running Auto-Group.
+    const handleSetClusterLocation = async (clusterId, location) => {
+        const updated = (activeAssembly.nodeClusters || []).map(c => c.id === clusterId ? { ...c, location } : c);
+        try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updated }); }
+        catch (err) { console.error(err); }
+    };
+
     const handleDeleteCluster = async (clusterId) => {
         if (!window.confirm("Delete this grouping? The meshes will return to being unassigned.")) return;
         const updatedClusters = (activeAssembly.nodeClusters || []).filter(c => c.id !== clusterId);
@@ -453,6 +477,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                     meshCount: c.meshCount,
                     flags,
                     alreadyGrouped: flags.some(x => x.startsWith('Already in')),
+                    center: c.center,
+                    guessedLocation: guessLocation(base),
                 };
             });
         }
@@ -463,6 +489,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
             const meshCount = group.reduce((s, g) => s + g.meshCount, 0);
             const flags = flagsFor(nodes, meshCount, base, false);
             if (group.length > 1) flags.push(`${group.length} instances merged into one cluster`);
+            const center = ['x', 'y', 'z'].reduce((o, a) => ({ ...o, [a]: group.reduce((s, g) => s + g.center[a], 0) / group.length }), {});
             return {
                 id: `AUTO-${base.replace(/\s+/g, '_')}`,
                 base,
@@ -472,6 +499,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                 meshCount,
                 flags,
                 alreadyGrouped: flags.some(x => x.startsWith('Already in')),
+                center,
+                guessedLocation: guessLocation(base),
             };
         });
     }, [cadComponents, splitByPosition, existingClusters]);
@@ -480,13 +509,18 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     useEffect(() => {
         const checked = {};
         const names = {};
+        const locs = {};
         autoProposals.forEach(p => {
             checked[p.id] = !p.alreadyGrouped && p.meshCount > 0;
             names[p.id] = p.suggestedName;
+            // Pre-fill the location: an existing cluster's saved tag (re-run keeps it), else the guess.
+            const matched = existingClusters.find(c => (c.nodes || []).some(n => p.nodes.includes(n)));
+            locs[p.id] = (matched && matched.location) || p.guessedLocation || '';
         });
         setAutoChecked(checked);
         setAutoNames(names);
-    }, [autoProposals]);
+        setAutoLocations(locs);
+    }, [autoProposals, existingClusters]);
 
     // Match each selected proposal to an existing cluster by sanitized node overlap so
     // re-running Auto-Group REPLACES the old grouping in place (reusing its id) instead
@@ -521,11 +555,13 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         const updatedById = {};
         const additions = [];
         plan.forEach((x, i) => {
+            // Region tags travel with the cluster (the name stays part-based for BOM Auto-Assign).
+            const region = { position: x.p.pos || '', location: autoLocations[x.p.id] || '', center: x.p.center || null };
             if (x.matchedId) {
                 const ex = existingClusters.find(c => c.id === x.matchedId);
-                updatedById[x.matchedId] = { ...ex, name: x.name, nodes: x.p.nodes };
+                updatedById[x.matchedId] = { ...ex, name: x.name, nodes: x.p.nodes, ...region };
             } else {
-                additions.push({ id: `CLUSTER-${stamp}-${i}`, name: x.name, nodes: x.p.nodes });
+                additions.push({ id: `CLUSTER-${stamp}-${i}`, name: x.name, nodes: x.p.nodes, ...region });
             }
         });
         const merged = existingClusters.map(c => updatedById[c.id] || c).concat(additions);
@@ -533,6 +569,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
             await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: merged });
             setShowAutoPanel(false);
             setSelectedNodes([]);
+            setPreviewNodes([]);
         } catch (err) { console.error(err); alert("Failed to save auto-groups."); }
     };
 
@@ -666,7 +703,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         onMeshClick={handleMeshClick}
                                         onLoaded={setSceneGraph}
                                         onComponents={setCadComponents}
-                                        locatingNodes={locatingNodes}
+                                        locatingNodes={previewNodes.length ? previewNodes : locatingNodes}
                                     />
                                 </Bounds>
                             </Canvas>
@@ -721,11 +758,19 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         const isLocating = locatingClusterId === cl.id;
                                         return (
                                         <div key={cl.id} style={{ border: `1px solid ${isLocating ? 'var(--brass)' : 'var(--line)'}`, padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: isLocating ? 'var(--paper-2)' : 'var(--paper)', borderLeft: '2px solid var(--brass)' }}>
-                                            <div>
+                                            <div style={{ minWidth: 0 }}>
                                                 <div style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '1rem' }}>{cl.name}</div>
-                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginTop: '6px' }}>{cl.nodes?.length || 0} Nodes Attached</div>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginTop: '6px' }}>
+                                                    {(cl.location || cl.position) && <span style={{ color: 'var(--brass)', marginRight: '8px' }}>{regionLabel(cl)}</span>}{cl.nodes?.length || 0} Nodes
+                                                </div>
+                                                {/* Re-tag region location without re-running Auto-Group */}
+                                                <div style={{ display: 'flex', gap: '5px', marginTop: '8px' }}>
+                                                    {LOCATIONS.map(L => (
+                                                        <button key={L} onClick={() => handleSetClusterLocation(cl.id, cl.location === L ? '' : L)} style={{ padding: '3px 8px', background: cl.location === L ? 'var(--ink)' : '#fff', color: cl.location === L ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{L}</button>
+                                                    ))}
+                                                </div>
                                             </div>
-                                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
                                                 <button onClick={() => setLocatingClusterId(isLocating ? null : cl.id)} title="Highlight this group in the 3D view" style={{ background: isLocating ? 'var(--brass)' : '#fff', color: isLocating ? '#fff' : 'var(--ink)', border: '1px solid var(--brass)', padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer' }}>{isLocating ? '◉ Locating' : 'Locate'}</button>
                                                 <button onClick={() => handleDeleteCluster(cl.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer' }}>Del</button>
                                             </div>
@@ -744,68 +789,83 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                 )}
             </div>
 
-            {/* AUTO-GROUP REVIEW MODAL */}
+            {/* AUTO-GROUP DOCKED PANEL — sits beside the live 3D (no popup) so you tag while you
+                look at the model; clicking a row highlights its nodes in the viewer. */}
             {showAutoPanel && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }} onClick={() => setShowAutoPanel(false)}>
-                    <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', border: '1px solid var(--line)', width: '760px', maxWidth: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', borderRadius: '2px' }}>
-                        {/* Header */}
-                        <div style={{ padding: '24px 28px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                <div>
-                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Auto-Trace from CAD Hierarchy</span>
-                                    <h2 style={{ margin: '4px 0 0 0', fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Review Proposed Sub-Assemblies</h2>
-                                </div>
-                                <button onClick={() => setShowAutoPanel(false)} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                <div style={{ position: 'fixed', top: '80px', right: '24px', bottom: '24px', width: '500px', maxWidth: 'calc(100vw - 48px)', zIndex: 1000, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.25)', borderRadius: '2px' }}>
+                    {/* Header */}
+                    <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Auto-Group · tag regions</span>
+                                <h2 style={{ margin: '4px 0 0 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Group by Location & Position</h2>
                             </div>
-                            <div style={{ display: 'flex', gap: '16px', alignItems: 'center', marginTop: '16px' }}>
-                                <div style={{ display: 'flex', border: '1px solid var(--line)', background: '#fff' }}>
-                                    <button onClick={() => setSplitByPosition(true)} style={{ padding: '8px 14px', background: splitByPosition ? 'var(--ink)' : 'transparent', color: splitByPosition ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Split by Position</button>
-                                    <button onClick={() => setSplitByPosition(false)} style={{ padding: '8px 14px', background: !splitByPosition ? 'var(--ink)' : 'transparent', color: !splitByPosition ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Merge Instances</button>
-                                </div>
-                                <div style={{ display: 'flex', gap: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                                    <button onClick={() => setAutoChecked(Object.fromEntries(autoProposals.map(p => [p.id, true])))} style={{ background: 'none', border: 'none', color: 'var(--brass)', cursor: 'pointer' }}>Select all</button>
-                                    <span style={{ color: 'var(--line)' }}>|</span>
-                                    <button onClick={() => setAutoChecked({})} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer' }}>None</button>
-                                </div>
+                            <button onClick={() => { setShowAutoPanel(false); setPreviewNodes([]); }} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '14px', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', border: '1px solid var(--line)', background: '#fff' }}>
+                                <button onClick={() => setSplitByPosition(true)} style={{ padding: '7px 12px', background: splitByPosition ? 'var(--ink)' : 'transparent', color: splitByPosition ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Split by Position</button>
+                                <button onClick={() => setSplitByPosition(false)} style={{ padding: '7px 12px', background: !splitByPosition ? 'var(--ink)' : 'transparent', color: !splitByPosition ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Merge Instances</button>
+                            </div>
+                            <div style={{ display: 'flex', gap: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                                <button onClick={() => setAutoChecked(Object.fromEntries(autoProposals.map(p => [p.id, true])))} style={{ background: 'none', border: 'none', color: 'var(--brass)', cursor: 'pointer' }}>Select all</button>
+                                <span style={{ color: 'var(--line)' }}>|</span>
+                                <button onClick={() => setAutoChecked({})} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer' }}>None</button>
                             </div>
                         </div>
-                        {/* List */}
-                        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 28px' }}>
-                            {autoProposals.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>No sub-assemblies detected in this model.</div>}
-                            {autoProposals.map(p => {
-                                const on = !!autoChecked[p.id];
-                                return (
-                                    <div key={p.id} style={{ display: 'flex', gap: '14px', alignItems: 'flex-start', padding: '14px 0', borderBottom: '1px solid var(--line)', opacity: on ? 1 : 0.55 }}>
-                                        <input type="checkbox" checked={on} onChange={(e) => setAutoChecked(prev => ({ ...prev, [p.id]: e.target.checked }))} style={{ marginTop: '12px', width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--brass)' }} />
-                                        <div style={{ flex: 1 }}>
-                                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                                                <input value={autoNames[p.id] ?? p.suggestedName} onChange={(e) => setAutoNames(prev => ({ ...prev, [p.id]: e.target.value }))} style={{ flex: 1, padding: '8px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', textTransform: 'uppercase', outline: 'none' }} />
-                                                {p.pos && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: 'var(--paper-2)', color: 'var(--brass)', padding: '4px 8px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>{p.pos}</span>}
-                                                {on && autoSavePlan.plan.find(x => x.p.id === p.id)?.matchedId && <span title="Updates an existing cluster in place (keeps its id, refreshes name + nodes)" style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: 'var(--brass)', color: '#fff', padding: '4px 8px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>↻ updates existing</span>}
-                                            </div>
-                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '6px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                                                {p.nodes.length} nodes · {p.meshCount} mesh{p.meshCount === 1 ? '' : 'es'}
-                                            </div>
-                                            {p.flags.map((f, i) => (
-                                                <div key={i} style={{ fontSize: '0.78rem', color: f.startsWith('Already') ? 'var(--ink-soft)' : '#b9770e', marginTop: '4px', display: 'flex', gap: '6px', alignItems: 'center' }}>
-                                                    <span>⚠</span><span>{f}</span>
-                                                </div>
+                        {/* Bulk tag the checked proposals */}
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '12px' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Tag checked:</span>
+                            {LOCATIONS.map(loc => (
+                                <button key={loc} onClick={() => setAutoLocations(prev => { const n = { ...prev }; autoProposals.forEach(p => { if (autoChecked[p.id]) n[p.id] = loc; }); return n; })} style={{ padding: '5px 10px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{loc}</button>
+                            ))}
+                        </div>
+                    </div>
+                    {/* List */}
+                    <div style={{ flex: 1, overflowY: 'auto', padding: '14px 22px' }}>
+                        {autoProposals.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>No sub-assemblies detected in this model.</div>}
+                        {autoProposals.map(p => {
+                            const on = !!autoChecked[p.id];
+                            const loc = autoLocations[p.id] || '';
+                            const isPreview = previewNodes === p.nodes;
+                            return (
+                                <div key={p.id} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '10px', marginBottom: '4px', borderRadius: '2px', border: `1px solid ${isPreview ? 'var(--brass)' : 'transparent'}`, background: isPreview ? 'var(--paper-2)' : 'transparent', opacity: on ? 1 : 0.55 }}>
+                                    <input type="checkbox" checked={on} onChange={(e) => setAutoChecked(prev => ({ ...prev, [p.id]: e.target.checked }))} style={{ marginTop: '10px', width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--brass)' }} />
+                                    <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => setPreviewNodes(p.nodes)} title="Click to highlight this group in the 3D view">
+                                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                            <input value={autoNames[p.id] ?? p.suggestedName} onClick={(e) => e.stopPropagation()} onChange={(e) => setAutoNames(prev => ({ ...prev, [p.id]: e.target.value }))} style={{ flex: 1, padding: '7px 9px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', textTransform: 'uppercase', outline: 'none' }} />
+                                            {p.pos && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: 'var(--paper-2)', color: 'var(--brass)', padding: '4px 8px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>{p.pos}</span>}
+                                            {on && autoSavePlan.plan.find(x => x.p.id === p.id)?.matchedId && <span title="Updates an existing cluster in place" style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: 'var(--brass)', color: '#fff', padding: '4px 8px', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>↻</span>}
+                                        </div>
+                                        {/* Location tag (Wall / Ceiling / End) */}
+                                        <div style={{ display: 'flex', gap: '6px', marginTop: '8px', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>Loc:</span>
+                                            {LOCATIONS.map(L => (
+                                                <button key={L} onClick={() => setAutoLocations(prev => ({ ...prev, [p.id]: loc === L ? '' : L }))} style={{ padding: '4px 9px', background: loc === L ? 'var(--ink)' : '#fff', color: loc === L ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{L}</button>
                                             ))}
                                         </div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '6px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                                            {p.nodes.length} nodes · {p.meshCount} mesh{p.meshCount === 1 ? '' : 'es'}
+                                        </div>
+                                        {p.flags.map((f, i) => (
+                                            <div key={i} style={{ fontSize: '0.76rem', color: f.startsWith('Already') ? 'var(--ink-soft)' : '#b9770e', marginTop: '4px', display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                                <span>⚠</span><span>{f}</span>
+                                            </div>
+                                        ))}
                                     </div>
-                                );
-                            })}
+                                </div>
+                            );
+                        })}
+                    </div>
+                    {/* Footer */}
+                    <div style={{ padding: '16px 22px', borderTop: '1px solid var(--line)', background: 'var(--paper)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                            {autoProposals.filter(p => autoChecked[p.id]).length} of {autoProposals.length}
+                            {autoSavePlan.replaceCount > 0 && <span style={{ color: 'var(--brass)' }}> · {autoSavePlan.replaceCount}↻ · {autoSavePlan.newCount}+</span>}
                         </div>
-                        {/* Footer */}
-                        <div style={{ padding: '20px 28px', borderTop: '1px solid var(--line)', background: 'var(--paper)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
-                                {autoProposals.filter(p => autoChecked[p.id]).length} of {autoProposals.length} selected
-                                {autoSavePlan.replaceCount > 0 && <span style={{ color: 'var(--brass)' }}> · {autoSavePlan.replaceCount} replace existing · {autoSavePlan.newCount} new</span>}
-                            </div>
-                            <div style={{ display: 'flex', gap: '12px' }}>
-                                <button onClick={() => setShowAutoPanel(false)} style={{ padding: '14px 24px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Cancel</button>
-                                <button onClick={handleAutoSaveSelected} style={{ padding: '14px 28px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{autoSavePlan.replaceCount > 0 ? `Save (${autoSavePlan.replaceCount} replace · ${autoSavePlan.newCount} new)` : 'Save Selected as Clusters'}</button>
-                            </div>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button onClick={() => { setShowAutoPanel(false); setPreviewNodes([]); }} style={{ padding: '12px 18px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Cancel</button>
+                            <button onClick={handleAutoSaveSelected} style={{ padding: '12px 22px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Save Clusters</button>
                         </div>
                     </div>
                 </div>
