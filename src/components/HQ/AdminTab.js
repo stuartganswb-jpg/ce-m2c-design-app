@@ -815,7 +815,12 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           for (const f of [...globalFinishes, ...colGlobalFinishes, ...inhouseFinishes, ...outsourceFinishes, ...floor]) {
               const id = f.id || f.code; if (!id) continue;
               const key = String(f.code || f.id).trim().toUpperCase(); if (seen.has(key)) continue;
-              seen.add(key); out.push({ id, name: f.name || f.code || id });
+              // Label = code + name combined when they differ (newer finishes carry the code in a
+              // separate field, e.g. MEP*), else whichever field holds the recognizable value.
+              const cd = f.code ? String(f.code).trim() : '';
+              const nm = f.name ? String(f.name).trim() : '';
+              const label = (cd && nm && cd.toUpperCase() !== nm.toUpperCase()) ? `${cd} — ${nm}` : (nm || cd || id);
+              seen.add(key); out.push({ id, name: label });
           }
           return out.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       }
