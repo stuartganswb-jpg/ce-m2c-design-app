@@ -65,7 +65,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
     shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'FINIAL', proj: "", bracketId: "", bracketIdRight: "", bracketIdCenter: "", endsSame: true, poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
+    endStyle: 'FINIAL', proj: "", bracketId: "", bracketIdRight: "", bracketIdCenter: "", endsSame: true, backplateIdLeft: "", backplateIdRight: "", backplatesSame: true, poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   };
 
@@ -208,6 +208,17 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       }
   }, [engData.bracketId, libraryParts, activeFlow]);
 
+  // When BOTH end brackets are flagged Is-Return, the pole miters back into them — auto-switch the
+  // End Style to Miter Return. Only re-fires on a bracket change (endStyle is read via prev, not a
+  // dep), so a later manual End Style override sticks.
+  useEffect(() => {
+      const isRet = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
+      const rId = engData.endsSame !== false ? engData.bracketId : engData.bracketIdRight;
+      if (engData.bracketId && isRet(engData.bracketId) && rId && isRet(rId)) {
+          setEngData(prev => prev.endStyle === 'RETURN_MITER' ? prev : { ...prev, endStyle: 'RETURN_MITER' });
+      }
+  }, [engData.bracketId, engData.bracketIdRight, engData.endsSame, libraryParts]);
+
   // Per-option projection: a Choose/Swap bracket option can carry its own projection
   // (e.g. standard 4.25" vs mini 4.125" backplate — same rendering, different fab).
   // When such an option is selected, its projection drives the fabrication math,
@@ -273,6 +284,18 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const leftBrackets = keepSelected(allBrackets.filter(b => bracketMatchesMount(b, leftMount)), engData.bracketId);
   const rightBrackets = keepSelected(allBrackets.filter(b => bracketMatchesMount(b, rightMount)), engData.bracketIdRight);
   const centerBrackets = keepSelected(allBrackets.filter(b => !isReturnBracketPart(b) && (bracketMatchesMount(b, leftMount) || bracketMatchesMount(b, rightMount))), engData.bracketIdCenter);
+
+  // Backplates for the end-return arms (productType BACKPLATE, pinned to this flow + collection).
+  const allBackplates = libraryParts.filter(p => {
+      const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
+      if (!pt.includes('BACKPLATE') && !pt.includes('BACK PLATE')) return false;
+      if (!flowPins.some(pin => pin.partId === p.id || pin.legacyErpId === p.legacyErpId)) return false;
+      const cols = (p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : [])).map(c => c.toUpperCase());
+      const sel = (quoteSelections.collection || "").toUpperCase();
+      if (sel && cols.length > 0 && !cols.includes(sel) && !cols.includes('N/A')) return false;
+      return true;
+  });
+  const bpDims = (id) => { const par = libraryParts.find(p => p.id === id)?.manufacturingSpecs?.parametric || {}; return { w: parseFloat(par.width) || 0, l: parseFloat(par.length) || 0 }; };
 
   // --- HARDWARE MATH CALCULATIONS (RESTORED) ---
   const rad = (deg) => (deg * Math.PI) / 180;
@@ -900,6 +923,30 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     <select value={engData.bracketIdCenter || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdCenter: e.target.value }))} style={fieldStyle}>
                                         <option value="">-- Select Center Style --</option>
                                         {centerBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                            {/* Backplate step — the end-return arms attach at the MIDDLE of these, so each side's
+                                half-dimension (width if vertical / length if horizontal) feeds the Total System O2O.
+                                Selection + captured dims here; the O2O contribution is wired after the formula is confirmed. */}
+                            <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+                                <div style={{ flex: 1 }}>
+                                    <label style={labelStyle}>Left Backplate</label>
+                                    <select value={engData.backplateIdLeft || ''} onChange={e => setEngData(prev => ({ ...prev, backplateIdLeft: e.target.value, ...(prev.backplatesSame !== false ? { backplateIdRight: e.target.value } : {}) }))} style={fieldStyle}>
+                                        <option value="">-- Select Backplate --</option>
+                                        {allBackplates.map(b => { const d = bpDims(b.id); return <option key={b.id} value={b.id}>{b.itemName}{(d.l || d.w) ? ` · ${d.l}L × ${d.w}W` : ''}</option>; })}
+                                    </select>
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <div style={{ ...labelStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                                        <span>Right Backplate</span>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', textTransform: 'none', letterSpacing: 0, cursor: 'pointer', fontSize: '0.72rem' }}>
+                                            <input type="checkbox" checked={engData.backplatesSame !== false} onChange={e => setEngData(prev => ({ ...prev, backplatesSame: e.target.checked, ...(e.target.checked ? { backplateIdRight: prev.backplateIdLeft } : {}) }))} style={{ cursor: 'pointer' }} /> same as left
+                                        </label>
+                                    </div>
+                                    <select value={(engData.backplatesSame !== false ? engData.backplateIdLeft : engData.backplateIdRight) || ''} disabled={engData.backplatesSame !== false} onChange={e => setEngData(prev => ({ ...prev, backplateIdRight: e.target.value }))} style={{ ...fieldStyle, opacity: engData.backplatesSame !== false ? 0.55 : 1 }}>
+                                        <option value="">-- Select Backplate --</option>
+                                        {allBackplates.map(b => { const d = bpDims(b.id); return <option key={b.id} value={b.id}>{b.itemName}{(d.l || d.w) ? ` · ${d.l}L × ${d.w}W` : ''}</option>; })}
                                     </select>
                                 </div>
                             </div>
