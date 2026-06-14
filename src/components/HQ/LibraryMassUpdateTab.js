@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
+import { mergeWindowConfig } from './systemWindows';
 import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
@@ -10,21 +11,7 @@ const AVAILABLE_BRANDS = [
   { id: 'leyla', name: 'Leyla Gans' }
 ];
 
-const DEFAULT_SYSTEM_WINDOWS = {
-  inHouseFinishes: ['ce', 'm2c'], outsourceFinishes: ['ce', 'm2c'],
-  prodTypes: ['ce', 'm2c', 'uniquity', 'leyla'], uom: ['ce', 'm2c', 'uniquity', 'leyla'],
-  collections: ['ce', 'm2c', 'uniquity', 'leyla'], watchLists: ['ce', 'm2c', 'uniquity', 'leyla'],
-  vendors: ['ce', 'm2c', 'uniquity', 'leyla'], outsourceActions: ['ce', 'm2c', 'uniquity', 'leyla'],
-  pillowSizes: ['uniquity'], fillTypes: ['uniquity'], flangeStyles: ['uniquity'], stitchTypes: ['uniquity'],
-  seamCounts: ['uniquity'], assemblyTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
-  customers: ['ce', 'm2c', 'uniquity', 'leyla'],
-  partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], 
-  inventoryTypes: ['ce', 'm2c', 'uniquity', 'leyla'],
-  projections: ['ce', 'm2c', 'uniquity', 'leyla'],
-  bins: ['ce', 'm2c', 'uniquity', 'leyla'],
-  bracketMounts: ['ce', 'm2c', 'uniquity', 'leyla'], 
-  feeTypes: ['ce', 'm2c', 'uniquity', 'leyla']      
-};
+// DEFAULT_SYSTEM_WINDOWS + merge logic now live in ./systemWindows (single source of truth).
 
 const LIST_LABELS = {
     prodTypes: 'PRODUCT TYPES', uom: 'UOMs',
@@ -108,7 +95,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     });
     
     const [collectionsData, setCollectionsData] = useState([]);
-    const [windowConfig, setWindowConfig] = useState({ system: DEFAULT_SYSTEM_WINDOWS, custom: [] });
+    const [windowConfig, setWindowConfig] = useState(mergeWindowConfig(null));
     const [customSchema, setCustomSchema] = useState([]);
     const [globalFinishes, setGlobalFinishes] = useState([]);
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);
@@ -167,7 +154,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         });
         const unsubCols = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
         const unsubWin = onSnapshot(doc(db, "system", "window_config"), (docSnap) => {
-            if (docSnap.exists()) setWindowConfig({ system: { ...DEFAULT_SYSTEM_WINDOWS, ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
+            setWindowConfig(mergeWindowConfig(docSnap.data()));
         });
         const unsubSchema = onSnapshot(doc(db, "system", "master_schema"), (docSnap) => { if (docSnap.exists() && docSnap.data().inventoryFields) setCustomSchema(docSnap.data().inventoryFields); });
         const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (docSnap) => { if (docSnap.exists() && docSnap.data().finishes) setGlobalFinishes(docSnap.data().finishes); });

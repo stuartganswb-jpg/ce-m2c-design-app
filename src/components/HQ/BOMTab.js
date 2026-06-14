@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
+import { mergeWindowConfig } from './systemWindows';
 import { collection, onSnapshot, query, where, doc, updateDoc } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
 import { loadGLBScene, snapshotPNG } from '../Shared/componentExport';
@@ -32,7 +33,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       partHandling: [], inventoryTypes: [], assemblyTypes: [], projections: [], customers: [],
       bracketMounts: [], feeTypes: [], cpqRoutingTypes: [], bins: []
   }); 
-  const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] }); 
+  const [windowConfig, setWindowConfig] = useState(mergeWindowConfig(null));
   
   const [customSchema, setCustomSchema] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
@@ -89,9 +90,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
     });
     
     const unsubWindowConfig = onSnapshot(doc(db, "system", "window_config"), (docSnap) => {
-      if (docSnap.exists()) {
-          setWindowConfig({ system: { partHandling: ['ce', 'm2c', 'uniquity', 'leyla'], ...(docSnap.data().system || {}) }, custom: docSnap.data().custom || [] });
-      }
+      setWindowConfig(mergeWindowConfig(docSnap.data()));
     });
     const unsubAssets = onSnapshot(collection(db, "hq_dynamic_data"), snap => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     const unsubCollections = onSnapshot(collection(db, "hq_collections"), snap => setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()}))));

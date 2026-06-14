@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db, storage } from '../../firebase';
+import { mergeWindowConfig } from './systemWindows';
 import { collection, onSnapshot, query, where, addDoc, deleteDoc, doc, updateDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Canvas, useThree } from '@react-three/fiber';
@@ -118,7 +119,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [libraryParts, setLibraryParts] = useState([]);
   
   const [globalLists, setGlobalLists] = useState({ prodTypes: [], collections: [], uom: [], partHandling: [], inventoryTypes: [], assemblyTypes: [] });
-  const [windowConfig, setWindowConfig] = useState({ system: {}, custom: [] });
+  const [windowConfig, setWindowConfig] = useState(mergeWindowConfig(null));
   const [customSchema, setCustomSchema] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
 
@@ -182,7 +183,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           }
       });
       const unsubWin = onSnapshot(doc(db, "system", "window_config"), snap => {
-          if(snap.exists()) setWindowConfig({ system: snap.data().system || {}, custom: snap.data().custom || [] });
+          setWindowConfig(mergeWindowConfig(snap.data()));
       });
       const unsubSchema = onSnapshot(doc(db, "system", "master_schema"), snap => {
           if(snap.exists() && snap.data().inventoryFields) setCustomSchema(snap.data().inventoryFields);
