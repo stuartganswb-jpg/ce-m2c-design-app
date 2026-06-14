@@ -778,11 +778,10 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const getDataSourceItems = (source) => {
       if (!source) return [];
       if (source === 'master_finishes') {
-          // Carry the finish code through so every picker can show "CODE · Name" (accuracy).
           return [
-              ...globalFinishes.map(f => ({ id: f.id, name: f.name, code: f.code || '' })),
-              ...outsourceFinishes.map(f => ({ id: f.id, name: f.name, code: f.code || '' }))
-          ].sort((a, b) => (a.code || a.name || '').localeCompare(b.code || b.name || ''));
+              ...globalFinishes.map(f => ({ id: f.id, name: f.name })),
+              ...outsourceFinishes.map(f => ({ id: f.id, name: f.name }))
+          ].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       }
       
       if (globalLists.prodTypes?.includes(source)) {
@@ -978,7 +977,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                         if (e.target.checked) set.add(f.id); else set.delete(f.id);
                                                         setFlowSettings({ ...flowSettings, defaultFinishOptions: [...set] });
                                                     }} />
-                                                    {f.code ? `${f.code} · ${f.name}` : f.name}
+                                                    {f.name}
                                                 </label>
                                             );
                                         })}
@@ -996,10 +995,6 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     <div style={{ maxHeight: '240px', overflowY: 'auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 16px', background: '#fff', border: '1px solid var(--line)', padding: '12px' }}>
                                         {linkedAsm.nodeClusters.map(cl => {
                                             const checked = (flowSettings.hiddenClusters || []).includes(cl.id);
-                                            // Show the matched part's description under the cluster label (like the
-                                            // style-options window) so it's easy to pick the right cluster.
-                                            const pin = linkedBomPins.find(p => p.clusterId === cl.id);
-                                            const desc = pin?.partName && pin.partName !== cl.name ? pin.partName : '';
                                             return (
                                                 <label key={cl.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer', opacity: checked ? 0.55 : 1 }}>
                                                     <input type="checkbox" checked={checked} onChange={(e) => {
@@ -1010,10 +1005,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                     {cl.imageUrl
                                                         ? <img src={cl.imageUrl} alt="" onClick={(e) => { e.preventDefault(); setZoomImg({ url: cl.imageUrl, label: cl.name }); }} title="Click to enlarge" style={{ width: '32px', height: '32px', objectFit: 'contain', background: 'var(--paper)', border: '1px solid var(--line)', flexShrink: 0, cursor: 'zoom-in' }} />
                                                         : <span style={{ width: '32px', height: '32px', flexShrink: 0, border: '1px dashed var(--line)' }} />}
-                                                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                                                        <span style={{ textDecoration: checked ? 'line-through' : 'none' }}>{cl.name}</span>
-                                                        {desc && <span style={{ fontSize: '0.72rem', color: 'var(--ink-soft)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{desc}</span>}
-                                                    </div>
+                                                    <span style={{ textDecoration: checked ? 'line-through' : 'none' }}>{cl.name}</span>
                                                 </label>
                                             );
                                         })}
@@ -1212,7 +1204,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                 else setNewStep({...newStep, allowedOptions: curr.filter(id => id !== item.id)});
                                                             }}
                                                         />
-                                                        {item.code ? `${item.code} · ${item.name}` : item.name}
+                                                        {item.name}
                                                     </label>
                                                 ))}
                                             </div>
@@ -1376,7 +1368,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                                     return { ...prev, finishAllowedOptions: [...set] };
                                                                                 });
                                                                             }} />
-                                                                            {f.code ? `${f.code} · ${f.name}` : f.name}
+                                                                            {f.name}
                                                                         </label>
                                                                     );
                                                                 })}
@@ -1414,7 +1406,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                                                 return { ...so, finishAllowedOptions: [...set] };
                                                                                             }) }));
                                                                                         }} />
-                                                                                        {f.code ? `${f.code} · ${f.name}` : f.name}
+                                                                                        {f.name}
                                                                                     </label>
                                                                                 );
                                                                             })}
@@ -1480,7 +1472,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                     return (
                                                         <React.Fragment key={opt.id}>
                                                             <div style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', color: 'var(--ink)' }}>
-                                                                {opt.code ? `${opt.code} · ${opt.name}` : opt.name}
+                                                                {opt.name}
                                                             </div>
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                                 <input type="number" step="0.5" value={newStep.priceMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, priceMap: { ...prev.priceMap, [opt.id]: parseFloat(e.target.value) || 0 } }))} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid var(--line)', outline: 'none' }} disabled={newStep.useClientPricing || !!newStep.priceOverride} />
