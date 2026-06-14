@@ -65,7 +65,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
     shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'FINIAL', proj: "", bracketId: "", bracketIdRight: "", bracketIdCenter: "", endsSame: true, backplateIdLeft: "", backplateIdRight: "", backplatesSame: true, poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
+    endStyle: 'FINIAL', endStyleRight: '', proj: "", bracketId: "", bracketIdRight: "", bracketIdCenter: "", backplateIdLeft: "", backplateIdRight: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   };
 
@@ -213,11 +213,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   // dep), so a later manual End Style override sticks.
   useEffect(() => {
       const isRet = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
-      const rId = engData.endsSame !== false ? engData.bracketId : engData.bracketIdRight;
+      const rId = engData.bracketIdRight;
       if (engData.bracketId && isRet(engData.bracketId) && rId && isRet(rId)) {
           setEngData(prev => prev.endStyle === 'RETURN_MITER' ? prev : { ...prev, endStyle: 'RETURN_MITER' });
       }
-  }, [engData.bracketId, engData.bracketIdRight, engData.endsSame, libraryParts]);
+  }, [engData.bracketId, engData.bracketIdRight, libraryParts]);
 
   // Per-option projection: a Choose/Swap bracket option can carry its own projection
   // (e.g. standard 4.25" vs mini 4.125" backplate — same rendering, different fab).
@@ -372,8 +372,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       return ((dim || 0)) / 2;
   };
   const isRetBkt = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
-  const o2oRightBktId = engData.endsSame !== false ? engData.bracketId : engData.bracketIdRight;
-  const o2oRightBpId = engData.backplatesSame !== false ? engData.backplateIdLeft : engData.backplateIdRight;
+  const o2oRightBktId = engData.bracketIdRight;
+  const o2oRightBpId = engData.backplateIdRight;
   // Return-bracket arm thickness (e.g. ½" flat-iron stock) is set on the bracket item and adds
   // to each return end's O2O on top of the half-backplate.
   const armThk = (id) => parseFloat(libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.armThickness) || 0;
@@ -545,7 +545,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       const isRet = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
       const snap = (n) => Math.round(n * 8) / 8;
       const leftOff = isRet(engData.bracketId) ? 0 : 3;
-      const rightOff = isRet(engData.endsSame !== false ? engData.bracketId : engData.bracketIdRight) ? 0 : 3;
+      const rightOff = isRet(engData.bracketIdRight) ? 0 : 3;
       let idc = Date.now();
       const next = [
           { id: idc++, type: 'bracket', segId: 2, distInches: snap(leftOff), ref: 'START', note: 'End · L' },
@@ -916,25 +916,19 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                         <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>3. Fabrication Settings</div>
                         <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                            {/* Bracket selection — Left + Right end brackets are independent (even same-mount ends
-                                can differ, e.g. L end-return + R passing-with-endcap). "Same as left" mirrors L→R for
-                                symmetric jobs. + Center (passing, excludes end-return). bracketId = Left for back-compat. */}
+                            {/* Bracket selection — independent Left / Center / Right (fill all three). bracketId = Left
+                                for back-compat (dim-sync + push-to-CPQ); bracketIdRight = Right; bracketIdCenter = Center. */}
                             <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Left End Bracket{leftMount ? ` · ${leftMount}` : ''} (Auto-Syncs Dims)</label>
-                                    <select value={engData.bracketId || ''} onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value, ...(prev.endsSame !== false ? { bracketIdRight: e.target.value } : {}) }))} style={fieldStyle}>
+                                    <select value={engData.bracketId || ''} onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))} style={fieldStyle}>
                                         <option value="">{quoteFlowId ? '-- Select --' : '-- Select CPQ Flow First --'}</option>
                                         {leftBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
                                     </select>
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <div style={{ ...labelStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                                        <span>Right End Bracket{rightMount ? ` · ${rightMount}` : ''}</span>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', textTransform: 'none', letterSpacing: 0, cursor: 'pointer', fontSize: '0.72rem' }}>
-                                            <input type="checkbox" checked={engData.endsSame !== false} onChange={e => setEngData(prev => ({ ...prev, endsSame: e.target.checked, ...(e.target.checked ? { bracketIdRight: prev.bracketId } : {}) }))} style={{ cursor: 'pointer' }} /> same as left
-                                        </label>
-                                    </div>
-                                    <select value={(engData.endsSame !== false ? engData.bracketId : engData.bracketIdRight) || ''} disabled={engData.endsSame !== false} onChange={e => setEngData(prev => ({ ...prev, bracketIdRight: e.target.value }))} style={{ ...fieldStyle, opacity: engData.endsSame !== false ? 0.55 : 1 }}>
+                                    <label style={labelStyle}>Right End Bracket{rightMount ? ` · ${rightMount}` : ''}</label>
+                                    <select value={engData.bracketIdRight || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdRight: e.target.value }))} style={fieldStyle}>
                                         <option value="">-- Select --</option>
                                         {rightBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
                                     </select>
@@ -953,19 +947,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                             <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Left Backplate</label>
-                                    <select value={engData.backplateIdLeft || ''} onChange={e => setEngData(prev => ({ ...prev, backplateIdLeft: e.target.value, ...(prev.backplatesSame !== false ? { backplateIdRight: e.target.value } : {}) }))} style={fieldStyle}>
+                                    <select value={engData.backplateIdLeft || ''} onChange={e => setEngData(prev => ({ ...prev, backplateIdLeft: e.target.value }))} style={fieldStyle}>
                                         <option value="">-- Select Backplate --</option>
                                         {allBackplates.map(b => { const d = bpDims(b.id); return <option key={b.id} value={b.id}>{b.itemName}{(d.l || d.w) ? ` · ${d.l}L × ${d.w}W` : ''}</option>; })}
                                     </select>
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <div style={{ ...labelStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                                        <span>Right Backplate</span>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', textTransform: 'none', letterSpacing: 0, cursor: 'pointer', fontSize: '0.72rem' }}>
-                                            <input type="checkbox" checked={engData.backplatesSame !== false} onChange={e => setEngData(prev => ({ ...prev, backplatesSame: e.target.checked, ...(e.target.checked ? { backplateIdRight: prev.backplateIdLeft } : {}) }))} style={{ cursor: 'pointer' }} /> same as left
-                                        </label>
-                                    </div>
-                                    <select value={(engData.backplatesSame !== false ? engData.backplateIdLeft : engData.backplateIdRight) || ''} disabled={engData.backplatesSame !== false} onChange={e => setEngData(prev => ({ ...prev, backplateIdRight: e.target.value }))} style={{ ...fieldStyle, opacity: engData.backplatesSame !== false ? 0.55 : 1 }}>
+                                    <label style={labelStyle}>Right Backplate</label>
+                                    <select value={engData.backplateIdRight || ''} onChange={e => setEngData(prev => ({ ...prev, backplateIdRight: e.target.value }))} style={fieldStyle}>
                                         <option value="">-- Select Backplate --</option>
                                         {allBackplates.map(b => { const d = bpDims(b.id); return <option key={b.id} value={b.id}>{b.itemName}{(d.l || d.w) ? ` · ${d.l}L × ${d.w}W` : ''}</option>; })}
                                     </select>
