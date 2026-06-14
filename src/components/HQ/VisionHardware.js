@@ -65,7 +65,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
     shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'FINIAL', proj: "", bracketId: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
+    endStyle: 'FINIAL', proj: "", bracketId: "", bracketIdRight: "", bracketIdCenter: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   };
 
@@ -252,6 +252,28 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           return true;
       });
   }, [libraryParts, quoteSelections.collection, activeFlow, flowPins]);
+
+  // Narrow brackets by mount (open→wall, ceiling→ceiling, inside→inside) for the Outer/Left/
+  // Right + Center pickers. Center excludes end-return brackets. Tolerant on the bracketType
+  // vocabulary. The currently-selected bracket is always kept in its list so a mount change
+  // never silently drops a pick.
+  const bracketMatchesMount = (b, mount) => {
+      const bt = (b.manufacturingSpecs?.customData?.bracketType || '').toUpperCase();
+      const m = (mount || '').toUpperCase();
+      if (!m) return true;
+      if (m === 'OPEN') return bt.includes('WALL');
+      if (m === 'CEILING') return bt.includes('CEIL');
+      if (m === 'INSIDE') return bt.includes('INSIDE') || bt.includes('IM');
+      return true;
+  };
+  const isReturnBracketPart = (b) => !!b.manufacturingSpecs?.customData?.isReturnBracket;
+  const keepSelected = (list, selId) => (selId && !list.some(b => b.id === selId)) ? list.concat(allBrackets.filter(b => b.id === selId)) : list;
+  const leftMount = engData.shape === 'STRAIGHT' ? engData.mountLeft : engData.mountOuter;
+  const rightMount = engData.shape === 'STRAIGHT' ? engData.mountRight : engData.mountOuter;
+  const splitEnds = engData.shape === 'STRAIGHT' && leftMount !== rightMount;
+  const leftBrackets = keepSelected(allBrackets.filter(b => bracketMatchesMount(b, leftMount)), engData.bracketId);
+  const rightBrackets = keepSelected(allBrackets.filter(b => bracketMatchesMount(b, rightMount)), engData.bracketIdRight);
+  const centerBrackets = keepSelected(allBrackets.filter(b => !isReturnBracketPart(b) && (bracketMatchesMount(b, leftMount) || bracketMatchesMount(b, rightMount))), engData.bracketIdCenter);
 
   // --- HARDWARE MATH CALCULATIONS (RESTORED) ---
   const rad = (deg) => (deg * Math.PI) / 180;
@@ -829,18 +851,43 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                         <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>3. Fabrication Settings</div>
                         <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                            {/* Bracket selection — Outer (L+R) + Center, narrowed by mount; auto-splits to Left/Right when the end mounts differ. bracketId stays = Outer/Left for back-compat (dim-sync + push-to-CPQ). */}
                             <div style={{ display: 'flex', gap: '16px' }}>
-                                <div style={{ flex: 1.5 }}>
-                                    <label style={labelStyle}>Select Bracket (Auto-Syncs Dims)</label>
-                                    <select 
-                                        value={engData.bracketId || ''} 
-                                        onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))}
-                                        style={fieldStyle}
-                                    >
-                                        <option value="">{quoteFlowId ? '-- Select Bracket --' : '-- Select CPQ Flow First --'}</option>
-                                        {allBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
+                                {splitEnds ? (
+                                    <>
+                                        <div style={{ flex: 1 }}>
+                                            <label style={labelStyle}>Left End Bracket · {leftMount}</label>
+                                            <select value={engData.bracketId || ''} onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))} style={fieldStyle}>
+                                                <option value="">{quoteFlowId ? '-- Select --' : '-- Select CPQ Flow First --'}</option>
+                                                {leftBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
+                                            </select>
+                                        </div>
+                                        <div style={{ flex: 1 }}>
+                                            <label style={labelStyle}>Right End Bracket · {rightMount}</label>
+                                            <select value={engData.bracketIdRight || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdRight: e.target.value }))} style={fieldStyle}>
+                                                <option value="">-- Select --</option>
+                                                {rightBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
+                                            </select>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div style={{ flex: 1.5 }}>
+                                        <label style={labelStyle}>Outer Bracket · L + R{leftMount ? ` · ${leftMount}` : ''} (Auto-Syncs Dims)</label>
+                                        <select value={engData.bracketId || ''} onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value, bracketIdRight: '' }))} style={fieldStyle}>
+                                            <option value="">{quoteFlowId ? '-- Select Outer Bracket --' : '-- Select CPQ Flow First --'}</option>
+                                            {leftBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
+                                        </select>
+                                    </div>
+                                )}
+                                <div style={{ flex: 1 }}>
+                                    <label style={labelStyle}>Center Bracket · passing</label>
+                                    <select value={engData.bracketIdCenter || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdCenter: e.target.value }))} style={fieldStyle}>
+                                        <option value="">-- Select Center Style --</option>
+                                        {centerBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
                                     </select>
                                 </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '16px' }}>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Projection (in)</label>
                                     <input type="number" step="0.125" value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={fieldStyle} />
