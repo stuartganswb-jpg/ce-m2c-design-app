@@ -3,13 +3,13 @@
   "brandId": "m2c",
   "legacyErpId": "PENDING",
   "basePrice": "0",
-  "linkedAssemblyId": "M2C-ASM-6776",
+  "linkedAssemblyId": "",
   "fabShape": "STRAIGHT",
   "fabEndStyle": "",
   "fabProjection": "",
   "defaultFinishOptions": [],
   "hiddenClusters": [],
-  "_note_top": "Shape-only preset: fabEndStyle + fabProjection are blank on purpose — Vision supplies end style + projection per line. One flow covers wall/ceiling/inside because each bracket option carries its own geometryMap (show selected, hide others), which replaces the old static hiddenClusters. Fill every PLACEHOLDER-* with your real M2C-INV part id (styleOptions) or the real mesh names from the .glb (geometryMap). The importer drops these _note keys.",
+  "_note_top": "FIRST: link this flow to your real Flat Iron Master Assembly via the 'Link to Master Assembly' dropdown (linkedAssemblyId is intentionally blank — the assembly's DOC id differs per database, so a hardcoded one imports as UNLINKED). Shape-only preset: fabEndStyle + fabProjection are blank on purpose — Vision supplies end style + projection per line. One flow covers wall/ceiling/inside because each bracket option carries its own geometryMap (show selected, hide others), which replaces the old static hiddenClusters. Fill every PLACEHOLDER-* with your real M2C-INV part id (styleOptions) or the real mesh names from the .glb (geometryMap). The importer drops these _note keys.",
   "steps": [
     {
       "id": "STEP-POLE",

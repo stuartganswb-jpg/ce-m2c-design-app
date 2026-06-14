@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc, orderBy, limit, writeBatch } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -211,27 +211,32 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
              rType.includes('CPQ');
   });
 
+  // Populate the editor ONCE per flow selection. Re-running on every cpqFlows snapshot (e.g. after
+  // Apply-Finishes or any save elsewhere) would overwrite the operator's unsaved edits — most
+  // visibly the Master Assembly link, which then reads back as "UNLINKED" and the cluster badges
+  // disappear. The ref lets a genuine flow switch re-load, but a same-flow snapshot won't clobber.
+  const loadedFlowRef = useRef(null);
   useEffect(() => {
-      if (activeFlowId && cpqFlows.length > 0) {
-          const flow = cpqFlows.find(f => f.id === activeFlowId);
-          if (flow) {
-              setFlowSettings({
-                  name: flow.name || '',
-                  legacyErpId: flow.legacyErpId || '',
-                  basePrice: flow.basePrice || '',
-                  linkedAssemblyId: flow.linkedAssemblyId || '',
-                  nsRollupItemId: flow.nsRollupItemId || '',
-                  nsRollupItemName: flow.nsRollupItemName || '',
-                  fabEndStyle: flow.fabEndStyle || '',
-                  fabProjection: flow.fabProjection !== undefined && flow.fabProjection !== null ? flow.fabProjection : '',
-                  fabShape: flow.fabShape || '',
-                  defaultFinishOptions: flow.defaultFinishOptions || [],
-                  hiddenClusters: flow.hiddenClusters || []
-              });
-              setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
-          }
-      }
-      setInspectedNodes([]); 
+      if (!activeFlowId || cpqFlows.length === 0) return;
+      if (loadedFlowRef.current === activeFlowId) return;
+      const flow = cpqFlows.find(f => f.id === activeFlowId);
+      if (!flow) return;
+      loadedFlowRef.current = activeFlowId;
+      setFlowSettings({
+          name: flow.name || '',
+          legacyErpId: flow.legacyErpId || '',
+          basePrice: flow.basePrice || '',
+          linkedAssemblyId: flow.linkedAssemblyId || '',
+          nsRollupItemId: flow.nsRollupItemId || '',
+          nsRollupItemName: flow.nsRollupItemName || '',
+          fabEndStyle: flow.fabEndStyle || '',
+          fabProjection: flow.fabProjection !== undefined && flow.fabProjection !== null ? flow.fabProjection : '',
+          fabShape: flow.fabShape || '',
+          defaultFinishOptions: flow.defaultFinishOptions || [],
+          hiddenClusters: flow.hiddenClusters || []
+      });
+      setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
+      setInspectedNodes([]);
   }, [activeFlowId, cpqFlows]);
 
   useEffect(() => {
@@ -989,13 +994,15 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         value={flowSettings.linkedAssemblyId || ""} 
                                         onChange={(e) => {
                                             const asm = masterAssemblies.find(a => a.id === e.target.value);
-                                            setFlowSettings({
-                                                ...flowSettings, 
-                                                linkedAssemblyId: e.target.value, 
-                                                legacyErpId: asm?.legacyErpId || '', 
-                                                name: asm?.itemName || flowSettings.name, 
-                                                basePrice: asm?.manufacturingSpecs?.basePrice || flowSettings.basePrice 
-                                            });
+                                            const patch = {
+                                                linkedAssemblyId: e.target.value,
+                                                legacyErpId: asm?.legacyErpId || '',
+                                                name: asm?.itemName || flowSettings.name,
+                                                basePrice: asm?.manufacturingSpecs?.basePrice || flowSettings.basePrice
+                                            };
+                                            setFlowSettings({ ...flowSettings, ...patch });
+                                            // Persist the link immediately so it survives a reload (not just until the next Save).
+                                            if (activeFlowId) updateDoc(doc(db, "cpq_flows", activeFlowId), stripUndefined(patch)).catch(err => console.error("Link save failed:", err));
                                         }}
                                         style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: '#fff' }}
                                     >
