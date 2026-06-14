@@ -36,8 +36,18 @@ const LIST_LABELS = {
     inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS',
     projections: 'BRACKET PROJECTIONS',
     bins: 'WAREHOUSE BIN LOCATIONS',
-    bracketMounts: 'BRACKET MOUNT TYPES', 
-    feeTypes: 'SERVICE / FEE TYPES'      
+    bracketMounts: 'BRACKET MOUNT TYPES',
+    feeTypes: 'SERVICE / FEE TYPES'
+};
+
+// Labels for the Brand Window manager — covers every system window key, including
+// ones not surfaced as editable Master Dictionaries (finishes, collections).
+const WINDOW_LABELS = {
+    ...LIST_LABELS,
+    prodTypes: 'PRODUCT TYPES',
+    collections: 'COLLECTIONS',
+    inHouseFinishes: 'IN-HOUSE FINISHES',
+    outsourceFinishes: 'OUTSOURCED FINISHES'
 };
 
 const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
@@ -626,6 +636,24 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const handleDeleteCustomWindow = async (windowId) => {
         if (!window.confirm("Delete this custom dictionary? Data items will be orphaned.")) return;
         await setDoc(doc(db, "system", "window_config"), { system: windowConfig.system, custom: windowConfig.custom.filter(w => w.id !== windowId) }, { merge: true });
+    };
+
+    // Brand Window manager: toggle whether a given brand can see/use a SYSTEM dictionary
+    // window (prodTypes, partHandling, etc.). This is the gate read by LibraryTab/BOMTab.
+    const handleToggleSystemWindowBrand = async (listKey, brandId) => {
+        const current = windowConfig.system[listKey] || [];
+        const updated = current.includes(brandId) ? current.filter(b => b !== brandId) : [...current, brandId];
+        await setDoc(doc(db, "system", "window_config"), { system: { ...windowConfig.system, [listKey]: updated }, custom: windowConfig.custom }, { merge: true });
+    };
+
+    // Same, but for a CUSTOM CPQ dictionary window (stored on the window's own brands array).
+    const handleToggleCustomWindowBrand = async (windowId, brandId) => {
+        const newCustom = windowConfig.custom.map(w => {
+            if (w.id !== windowId) return w;
+            const brands = w.brands || [];
+            return { ...w, brands: brands.includes(brandId) ? brands.filter(b => b !== brandId) : [...brands, brandId] };
+        });
+        await setDoc(doc(db, "system", "window_config"), { system: windowConfig.system, custom: newCustom }, { merge: true });
     };
 
     const handleAddSchemaField = async () => {
@@ -1555,6 +1583,64 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     </div>
                 )}
             </div>
+
+            {showWindowManager && (
+                <div onClick={() => setShowWindowManager(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', border: `1px solid ${theme.line}`, borderRadius: '2px', width: '100%', maxWidth: '920px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.25)' }}>
+
+                        <div style={{ padding: '24px', background: theme.paper2, borderBottom: `1px solid ${theme.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Manage Brand Windows</div>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Toggle which brands can see and use each dictionary window</div>
+                            </div>
+                            <button onClick={() => setShowWindowManager(false)} style={{ background: 'none', border: 'none', fontSize: '1.8rem', cursor: 'pointer', color: theme.inkSoft, lineHeight: 1 }} title="Close">×</button>
+                        </div>
+
+                        <div style={{ padding: '12px 24px 24px', overflowY: 'auto' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(170px, 1fr) repeat(4, 84px)', alignItems: 'end', gap: '8px', padding: '12px', borderBottom: `1px solid ${theme.line}`, position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>Window / Dictionary</div>
+                                {AVAILABLE_BRANDS.map(b => (
+                                    <div key={b.id} title={b.name} style={{ textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: b.id === activeBrand ? theme.ink : theme.inkSoft, fontWeight: b.id === activeBrand ? 700 : 400, borderBottom: b.id === activeBrand ? `2px solid ${theme.brass}` : 'none', paddingBottom: '4px' }}>{b.id.toUpperCase()}</div>
+                                ))}
+                            </div>
+
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.brass, padding: '16px 12px 6px' }}>System Dictionaries</div>
+                            {Object.keys(windowConfig.system).sort((a, b) => (WINDOW_LABELS[a] || a).localeCompare(WINDOW_LABELS[b] || b)).map(key => (
+                                <div key={key} style={{ display: 'grid', gridTemplateColumns: 'minmax(170px, 1fr) repeat(4, 84px)', alignItems: 'center', gap: '8px', padding: '10px 12px', borderBottom: `1px solid ${theme.line}` }}>
+                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: theme.ink }}>{WINDOW_LABELS[key] || key.replace(/([A-Z])/g, ' $1').trim()}</div>
+                                    {AVAILABLE_BRANDS.map(b => (
+                                        <label key={b.id} style={{ textAlign: 'center', cursor: 'pointer', background: b.id === activeBrand ? 'rgba(176,141,87,0.06)' : 'transparent', padding: '4px 0' }}>
+                                            <input type="checkbox" checked={(windowConfig.system[key] || []).includes(b.id)} onChange={() => handleToggleSystemWindowBrand(key, b.id)} style={{ cursor: 'pointer', width: '16px', height: '16px' }} />
+                                        </label>
+                                    ))}
+                                </div>
+                            ))}
+
+                            {windowConfig.custom.length > 0 && (
+                                <>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.brass, padding: '20px 12px 6px' }}>Custom CPQ Dictionaries</div>
+                                    {windowConfig.custom.map(w => (
+                                        <div key={w.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(170px, 1fr) repeat(4, 84px)', alignItems: 'center', gap: '8px', padding: '10px 12px', borderBottom: `1px solid ${theme.line}` }}>
+                                            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: theme.ink }}>{w.name}</div>
+                                            {AVAILABLE_BRANDS.map(b => (
+                                                <label key={b.id} style={{ textAlign: 'center', cursor: 'pointer', background: b.id === activeBrand ? 'rgba(176,141,87,0.06)' : 'transparent', padding: '4px 0' }}>
+                                                    <input type="checkbox" checked={(w.brands || []).includes(b.id)} onChange={() => handleToggleCustomWindowBrand(w.id, b.id)} style={{ cursor: 'pointer', width: '16px', height: '16px' }} />
+                                                </label>
+                                            ))}
+                                        </div>
+                                    ))}
+                                </>
+                            )}
+                        </div>
+
+                        <div style={{ padding: '20px 24px', borderTop: `1px solid ${theme.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.paper }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.05em' }}>Changes save instantly</span>
+                            <button onClick={() => setShowWindowManager(false)} style={{ padding: '12px 28px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Done</button>
+                        </div>
+
+                    </div>
+                </div>
+            )}
 
         </div>
     );
