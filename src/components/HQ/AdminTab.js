@@ -1440,7 +1440,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                         // so the Location/Position tags surface regardless of how the pin was bound.
                                                         const _norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
                                                         const _pinMeshes = String(pin.targetNode || '').split(',').map(_norm).filter(Boolean);
-                                                        const cluster = linkedAsm?.nodeClusters?.find(c => (pin.clusterId && c.id === pin.clusterId) || (c.nodes || c.meshes || []).some(n => _pinMeshes.includes(_norm(n))));
+                                                        const _matches = (linkedAsm?.nodeClusters || []).filter(c => (pin.clusterId && c.id === pin.clusterId) || (c.nodes || c.meshes || []).some(n => _pinMeshes.includes(_norm(n))));
+                                                        const cluster = _matches.find(c => c.location || c.position) || _matches[0]; // prefer a tagged match over an untagged duplicate
                                                         const posLabel = [cluster?.location, cluster?.position].filter(Boolean).join(' · ');
                                                         const locLabel = posLabel || (cluster?.name || pin.partName || '').replace(/_/g, ' ');
                                                         const matches = (o) => (o.optId ? o.optId === optId : o.partId === pin.partId);

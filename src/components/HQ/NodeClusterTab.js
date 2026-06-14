@@ -467,18 +467,18 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         if (!newClusterName.trim()) return alert("Please enter a name for this Sub-Assembly/Cluster.");
         if (selectedNodes.length === 0) return alert("Please select at least one 3D Node or Mesh.");
 
-        const currentClusters = activeAssembly.nodeClusters || [];
-        
         const newCluster = {
             id: `CLUSTER-${Date.now()}`,
             name: newClusterName.toUpperCase().trim(),
-            nodes: selectedNodes 
+            nodes: selectedNodes
         };
 
-        const updatedClusters = [...currentClusters, newCluster];
-
         try {
-            await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updatedClusters });
+            // Re-read the latest clusters first so adding one can't wipe Location/Position tags set elsewhere.
+            const ref = doc(db, "Approved_Designs", activeAssembly.id);
+            const snap = await getDoc(ref);
+            const currentClusters = (snap.exists() ? snap.data().nodeClusters : activeAssembly.nodeClusters) || [];
+            await updateDoc(ref, { nodeClusters: [...currentClusters, newCluster] });
             setNewClusterName("");
             setSelectedNodes([]);
         } catch (err) { console.error(err); alert("Failed to save cluster."); }
@@ -500,9 +500,11 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
 
     const handleDeleteCluster = async (clusterId) => {
         if (!window.confirm("Delete this grouping? The meshes will return to being unassigned.")) return;
-        const updatedClusters = (activeAssembly.nodeClusters || []).filter(c => c.id !== clusterId);
         try {
-            await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updatedClusters });
+            const ref = doc(db, "Approved_Designs", activeAssembly.id);
+            const snap = await getDoc(ref);
+            const updatedClusters = ((snap.exists() ? snap.data().nodeClusters : activeAssembly.nodeClusters) || []).filter(c => c.id !== clusterId);
+            await updateDoc(ref, { nodeClusters: updatedClusters });
         } catch (err) { console.error(err); }
     };
 
