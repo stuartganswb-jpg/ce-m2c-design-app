@@ -397,6 +397,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
 
   const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
   const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;
+  const qtyCenterBrackets = attachments.filter(a => a.type === 'bracket' && /center/i.test(a.note || '')).length;
   const qtySplices = attachments.filter(a => a.type === 'splice').length;
   const qtyMiters = engData.shape === 'MITERED' ? 2 : 0;
   const qtyBends = (endStyleL === 'RETURN_BEND' && !isLeftInside ? 1 : 0) + (endStyleR === 'RETURN_BEND' && !isRightInside ? 1 : 0);
@@ -805,7 +806,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               collection: quoteSelections.collection,
               bracketId: engData.bracketId,
               engineeringNotes: {
-                  poleFeetQty, qtyBrackets, recRings, qtyFinials, qtySplices, qtyMiters,
+                  poleFeetQty, qtyBrackets, qtyCenterBrackets, recRings, qtyFinials, qtySplices, qtyMiters,
                   qtyBends, qtyMiterReturns, qtyCustomProjBrackets, shape: engData.shape,
                   poleO2O, totalSystemO2O, pole1, pole2, pole3, hangerLocations, svgString: capturedSvg
               },

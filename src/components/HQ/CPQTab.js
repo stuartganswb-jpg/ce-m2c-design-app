@@ -462,6 +462,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               // bracketId) — copy only the step-keyed params so dynamicConfigParams stays clean.
               const { engineeringNotes: _en, collection: _c, bracketId: _b, ...stepParams } = draft.specs || {};
               Object.assign(translatedParams, stepParams);
+
+              // Pre-select each choose-swap step from the Vision part selections: match a step's
+              // styleOption.partId to a part Vision chose (end bracket / backplate / center bracket).
+              // Config-agnostic — works for any collection's flow without hard-coded step ids.
+              const eng = draft.spatialData || {};
+              const visionPartIds = [eng.bracketId, eng.bracketIdRight, eng.bracketIdCenter, eng.backplateIdLeft, eng.backplateIdRight, draft.specs?.bracketId].filter(Boolean);
+              (Array.isArray(targetFlow.steps) ? targetFlow.steps : []).forEach(step => {
+                  if (Array.isArray(step.styleOptions) && !translatedParams[step.id]) {
+                      const match = step.styleOptions.find(o => o.partId && visionPartIds.includes(o.partId));
+                      if (match) translatedParams[step.id] = match.optId;
+                  }
+                  // A "clone along pole" step shows the CENTER count, not the total bracket count.
+                  if (step.isCenterClone && engineeringNotes) {
+                      const center = engineeringNotes.qtyCenterBrackets;
+                      newStepQuantities[step.id] = (center !== undefined && center !== null) ? center : Math.max(0, (parseInt(engineeringNotes.qtyBrackets) || 0) - 2);
+                  }
+              });
           }
       } catch (e) {
           console.error("Resume draft: param translation failed; opening the flow with defaults.", e);
