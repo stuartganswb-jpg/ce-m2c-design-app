@@ -992,6 +992,13 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               {renderOptionFallback(editSpecs.customData?.bracketType, globalLists.bracketMounts)}
                           </select>
                       </div>
+                      <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '6px 0' }}>
+                          <input type="checkbox" checked={!!editSpecs.customData?.isReturnBracket} onChange={(e) => handleCustomFieldChange("isReturnBracket", e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer', marginTop: '2px', flexShrink: 0 }} />
+                          <div>
+                              <label style={labelStyle}>Is Return Bracket (End-Return)</label>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '2px' }}>Sits right at the pole end and its width adds to the O2O. End-return brackets are the only ones placed at the very end — and they're never offered as a center support. (e.g. FIWERA, FICERA)</div>
+                          </div>
+                      </div>
                       <div style={{ gridColumn: 'span 2' }}>
                           <label style={labelStyle}>Service / Fee Type (Auto-Append)</label>
                           <select value={String(editSpecs.customData?.feeType || "").toUpperCase()} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
