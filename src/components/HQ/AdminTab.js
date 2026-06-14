@@ -1437,7 +1437,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                         // The cluster name carries the Auto-Group position label; use it to tell
                                                         // the three instances apart in the builder.
                                                         const cluster = linkedAsm?.nodeClusters?.find(c => c.id === pin.clusterId);
-                                                        const locLabel = (cluster?.name || pin.partName || '').replace(/_/g, ' ');
+                                                        const posLabel = [cluster?.location, cluster?.position].filter(Boolean).join(' · ');
+                                                        const locLabel = posLabel || (cluster?.name || pin.partName || '').replace(/_/g, ' ');
                                                         const matches = (o) => (o.optId ? o.optId === optId : o.partId === pin.partId);
                                                         const sel = (newStep.styleOptions || []).find(matches);
                                                         const part = allApprovedDesigns.find(d => d.id === pin.partId || d.legacyErpId === pin.partId || d.itemId === pin.partId);
@@ -1459,7 +1460,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                                     : <span style={{ width: '40px', height: '40px', flexShrink: 0, border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)', textAlign: 'center' }}>no img</span>}
                                                                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                                                                     <span style={{ fontSize: '0.9rem', color: 'var(--ink)', fontWeight: 500 }}>{locLabel}</span>
-                                                                    {cluster && cluster.name !== pin.partName && <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{pin.partName}</span>}
+                                                                    {locLabel !== pin.partName && <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{pin.partName}</span>}
                                                                 </div>
                                                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={meshNode}>mesh: {meshNode}</span>
                                                                 <span style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>$</span>
