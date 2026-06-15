@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
 import { ref, deleteObject } from "firebase/storage";
+import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 
 const printStyles = `
   @media print {
@@ -47,6 +48,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [endDate, setEndDate] = useState('');
 
   const [activeModalJob, setActiveModalJob] = useState(null);
+  const [cfgQuote, setCfgQuote] = useState(null); // read-only configured-item 3D viewer (opens a CONFIGURED job straight from the pipeline)
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
   const [activeAssemblyName, setActiveAssemblyName] = useState('');
   
@@ -840,6 +842,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                   {job.status === 'CONFIGURED' && (
                                                       <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Approve</button>
                                                   )}
+                                                  <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ padding: '8px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>🔍 View Item</button>
                                                   <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Docs</button>
                                                   <button onClick={() => openEditJobModal(job)} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Modify</button>
                                                   <button onClick={() => handleDeleteJob(job.id)} style={{ padding: '8px 16px', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Delete</button>
@@ -854,6 +857,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
               )}
           </div>
       </div>
+
+      {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} onClose={() => setCfgQuote(null)} />}
 
       {showNewCrmModal && (
           <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
