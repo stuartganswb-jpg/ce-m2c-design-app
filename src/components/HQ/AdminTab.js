@@ -433,7 +433,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       pins.forEach(p => { if (p.clusterId) pinByCluster[p.clusterId] = p; });
       const partsById = {};
       allApprovedDesigns.forEach(p => { partsById[p.id] = p; if (p.itemId) partsById[p.itemId] = p; if (p.legacyErpId) partsById[p.legacyErpId] = p; });
-      const classifyCat = (pt) => { const t = String(pt || '').toUpperCase(); if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE'; if (t.includes('BRACKET')) return 'BRACKET'; if (t.includes('FINIAL')) return 'FINIAL'; if (t.includes('POLE') || t.includes('ROD')) return 'POLE'; return ''; };
+      const classifyCat = (pt) => { const t = String(pt || '').toUpperCase(); if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE'; if (t.includes('BRACKET')) return 'BRACKET'; if (t.includes('FINIAL')) return 'FINIAL'; if (t.includes('RING')) return 'RING'; if (t.includes('POLE') || t.includes('ROD')) return 'POLE'; return ''; };
       // Category from the cluster tag, falling back to the pin's part product type (so clusters
       // tagged only with Location/Position still classify).
       const catOf = (cl) => { if (cl.category) return String(cl.category).toUpperCase(); const pin = pinByCluster[cl.id]; const part = pin && partsById[pin.partId]; return classifyCat(part?.manufacturingSpecs?.productType || part?.productType); };
@@ -463,6 +463,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const brackets = groupPlacements('BRACKET');
       const backplates = groupPlacements('BACKPLATE');
       const poleNodes = pole.map(o => o.targetNode).filter(Boolean).join(', ');
+      const rings = groupPlacements('RING');
+      const ringNodes = rings.map(o => o.targetNode).filter(Boolean).join(', ');
 
       // Backplates ride as a SECOND chooser on their position's bracket step, so you pick the
       // correct plate among the several at that position (not auto-merged). Any backplate whose
@@ -528,7 +530,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate' });
       if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
       addEndTreatment(finial);
-      add({ title: 'Rings', type: 'DROPDOWN', dataSource: 'master_finishes', partHandling: 'Small Parts', qtyHelperText: 'Number of rings', geometryMap: {} });
+      add({ title: 'Rings', type: 'DROPDOWN', dataSource: 'master_finishes', partHandling: 'Small Parts', qtyHelperText: 'Number of rings', geometryMap: {}, targetNodes: ringNodes });
       add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
       add({ title: 'Cut / Splice Fee', type: 'STATIC_FEE', qtyHelperText: 'Per cut / splice', basePrice: '0' });
 

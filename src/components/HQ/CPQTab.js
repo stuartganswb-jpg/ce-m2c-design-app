@@ -110,12 +110,19 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
 
                     let isVis = child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
+                        let anyShow = false, anyHide = false;
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
                             const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
                             if (targets.some(hitTarget)) {
-                                isVis = isVisibleFlag;
+                                if (isVisibleFlag) anyShow = true; else anyHide = true;
                             }
                         }
+                        // A mesh explicitly shown by ANY control wins over an incidental hide from
+                        // another control's fuzzy/ancestry match — fixes a just-selected part not
+                        // appearing until another change "triggers" a redraw. Deterministic
+                        // (order-independent), unlike the previous last-match-wins.
+                        if (anyShow) isVis = true;
+                        else if (anyHide) isVis = false;
                     }
                     child.visible = isVis;
 
