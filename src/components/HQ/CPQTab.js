@@ -178,11 +178,16 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
                     const group = new THREE.Group(); group.name = '__centerClones';
                     specs.forEach(spec => {
                         const n = parseInt(spec.count) || 0;
-                        const wanted = (spec.meshNames || []).map(s => String(s).trim().toLowerCase().replace(/[^a-z0-9]/g, '')).filter(Boolean);
+                        const sani = (s) => String(s).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+                        const wanted = (spec.meshNames || []).map(sani).filter(Boolean);
+                        const anchorWanted = (spec.anchorNames || []).map(sani).filter(Boolean);
                         const src = [];
-                        clonedScene.traverse(c => { if (c.isMesh && !isFastener(c)) { const k = c.name.toLowerCase().replace(/[^a-z0-9]/g, ''); if (wanted.some(w => k === w || k.startsWith(w))) src.push(c); } });
+                        clonedScene.traverse(c => { if (c.isMesh && !isFastener(c)) { const k = sani(c.name); if (wanted.some(w => k === w || k.startsWith(w))) src.push(c); } });
                         if (!src.length) return;
-                        const srcBox = new THREE.Box3(); src.forEach(m => srcBox.expandByObject(m));
+                        // Anchor placement on the MAIN bracket meshes only (fall back to all src), so
+                        // the bracket lands at the target spot no matter what's cloned alongside it.
+                        const anchorSrc = anchorWanted.length ? src.filter(m => { const k = sani(m.name); return anchorWanted.some(w => k === w || k.startsWith(w)); }) : src;
+                        const srcBox = new THREE.Box3(); (anchorSrc.length ? anchorSrc : src).forEach(m => srcBox.expandByObject(m));
                         const srcAlong = srcBox.getCenter(new THREE.Vector3())[axis];
                         src.forEach(m => { m.visible = false; }); // hide the single middle original; clones replace it
                         for (let i = 1; i <= n; i++) {
@@ -1392,15 +1397,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           const selSub = dynamicConfigParams[`${step.id}__sub`];
           // Clone the chosen bracket AND its chosen backplate together, so each center clone
           // carries its plate.
-          const meshStr = [
-              (selId && step.geometryMap) ? step.geometryMap[selId] : '',
-              (selSub && step.subGeometryMap) ? step.subGeometryMap[selSub] : ''
-          ].filter(Boolean).join(',');
+          const mainStr = (selId && step.geometryMap) ? (step.geometryMap[selId] || '') : '';
+          const subStr = (selSub && step.subGeometryMap) ? (step.subGeometryMap[selSub] || '') : '';
+          const meshStr = [mainStr, subStr].filter(Boolean).join(',');
           if (!meshStr) return;
           const meshNames = String(meshStr).split(',').map(m => m.trim()).filter(Boolean);
+          // The bracket arm (main geometry) is the placement ANCHOR: spacing is computed from it
+          // alone, so a backplate/extras cloned alongside can't shift where the bracket lands.
+          const anchorNames = String(mainStr).split(',').map(m => m.trim()).filter(Boolean);
           const rawQty = stepQuantities[step.id];
           const count = (rawQty !== undefined && rawQty !== '') ? (parseInt(rawQty) || 0) : 1;
-          if (count >= 1 && meshNames.length) out.push({ stepId: step.id, meshNames, count });
+          if (count >= 1 && meshNames.length) out.push({ stepId: step.id, meshNames, anchorNames, count });
       });
       return out;
   }, [activeFlow, dynamicConfigParams, stepQuantities]);
