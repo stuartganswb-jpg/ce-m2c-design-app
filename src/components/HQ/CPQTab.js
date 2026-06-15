@@ -178,24 +178,29 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
                     const group = new THREE.Group(); group.name = '__centerClones';
                     specs.forEach(spec => {
                         const n = parseInt(spec.count) || 0;
-                        const sani = (s) => String(s).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-                        const wanted = (spec.meshNames || []).map(sani).filter(Boolean);
-                        const anchorWanted = (spec.anchorNames || []).map(sani).filter(Boolean);
+                        // Match meshes EXACTLY by name, walking ancestors — identical to the render
+                        // matcher. The old sanitized+prefix matching over-reached, pulling in meshes
+                        // scattered across the model, so the matched set's "center" sat off to one
+                        // side and clones never truly centered.
+                        const norm = (s) => String(s).trim().toLowerCase();
+                        const hitter = (names) => { const set = new Set((names || []).map(norm)); return (mesh) => { let nd = mesh; while (nd) { if (nd.name && set.has(nd.name.toLowerCase())) return true; nd = nd.parent; } return false; }; };
+                        const anchorHit = hitter(spec.anchorNames);
+                        const railHit = hitter(spec.railNames);
+                        const wantedHit = hitter(spec.meshNames);
                         const src = [];
-                        clonedScene.traverse(c => { if (c.isMesh && !isFastener(c)) { const k = sani(c.name); if (wanted.some(w => k === w || k.startsWith(w))) src.push(c); } });
+                        clonedScene.traverse(c => { if (c.isMesh && !isFastener(c) && wantedHit(c)) src.push(c); });
                         if (!src.length) return;
                         // Anchor placement on the MAIN bracket meshes only (fall back to all src), so
                         // the bracket lands at the target spot no matter what's cloned alongside it.
-                        const anchorSrc = anchorWanted.length ? src.filter(m => { const k = sani(m.name); return anchorWanted.some(w => k === w || k.startsWith(w)); }) : src;
+                        const anchorSrc = (spec.anchorNames || []).length ? src.filter(anchorHit) : src;
                         const srcBox = new THREE.Box3(); (anchorSrc.length ? anchorSrc : src).forEach(m => srcBox.expandByObject(m));
                         const srcAlong = srcBox.getCenter(new THREE.Vector3())[axis];
                         // Rail extent = the pole's meshes unioned (full length even if segmented),
                         // falling back to the model box. This is the span clones are centered along.
                         let lo = defLo, hi = defHi;
-                        const railWanted = (spec.railNames || []).map(sani).filter(Boolean);
-                        if (railWanted.length) {
+                        if ((spec.railNames || []).length) {
                             const railBox = new THREE.Box3(); let railFound = false;
-                            clonedScene.traverse(c => { if (c.isMesh && !isFastener(c)) { const k = sani(c.name); if (railWanted.some(w => k === w || k.startsWith(w))) { railBox.expandByObject(c); railFound = true; } } });
+                            clonedScene.traverse(c => { if (c.isMesh && !isFastener(c) && railHit(c)) { railBox.expandByObject(c); railFound = true; } });
                             if (railFound) { lo = railBox.min[axis]; hi = railBox.max[axis]; }
                         }
                         try { console.log('[centerClone] ' + JSON.stringify({ axis, modelBox: [+defLo.toFixed(2), +defHi.toFixed(2)], rail: [+lo.toFixed(2), +hi.toFixed(2)], railNames: spec.railNames, anchorNames: spec.anchorNames, srcCount: src.length, anchorCount: anchorSrc.length, srcAlong: +srcAlong.toFixed(2), n })); } catch (e) {}
