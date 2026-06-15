@@ -53,6 +53,7 @@
       "id": "STEP-ENDTREAT",
       "title": "End Treatment",
       "type": "STYLE_SWAP",
+      "required": false,
       "partHandling": "Custom",
       "finishDataSource": "master_finishes",
       "styleOptions": [
@@ -67,7 +68,7 @@
         "RETURN_BEND": "PLACEHOLDER-bend-end-meshes",
         "FLUSH": ""
       },
-      "_note": "End style. The optId values deliberately equal Vision's endStyle values (FINIAL / RETURN_MITER / RETURN_BEND / FLUSH) so we can auto-pre-fill this step from Vision next. geometryMap: each -> the end geometry that should show."
+      "_note": "OPTIONAL (required=false) — it's the ALTERNATIVE to an end-arm bracket: a job either has an end arm (the End Bracket step) OR the rod is mitered/bent (a fab FEE, set as the option's price). Skip this whole step when an end arm is used. FINIAL = a physical end cap (real pin); RETURN_MITER / RETURN_BEND = fee options (no part, put the charge in price); FLUSH = nothing. optIds match Vision's endStyle so Push pre-fills it. Because it's optional, skipping it hides none of its geometry — so the miter/bend/finial parts should be default-hidden in the .glb (or pick FLUSH) when an end arm is chosen instead."
     },
     {
       "id": "STEP-BKT-L",

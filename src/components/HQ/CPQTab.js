@@ -1240,6 +1240,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           }
           if (!step.geometryMap || Object.keys(step.geometryMap).length === 0) return;
           const selectedOptId = dynamicConfigParams[step.id];
+          if (!selectedOptId) return; // step not chosen yet (or skipped, e.g. optional End Treatment) → don't hide its geometry
           const controlled = new Set();
           const inSelected = new Set();
           Object.entries(step.geometryMap).forEach(([optId, csv]) => {
