@@ -7,6 +7,32 @@ import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } fro
 
 const globalTextureCache = {};
 
+// Coerce any value into something Firestore will accept before a write: drop undefined / functions /
+// symbols, turn NaN/Infinity into null, plain-ify class instances, and — since Firestore forbids an
+// array directly inside another array — wrap nested arrays in a small map. The finalized quote mixes
+// CPQ output with Vision-derived data of unpredictable shape, which otherwise throws
+// "cpqData contains an invalid nested entity" and aborts the whole save.
+const fsSafe = (v) => {
+    if (v === null) return null;
+    const t = typeof v;
+    if (t === 'number') return Number.isFinite(v) ? v : null;
+    if (t === 'string' || t === 'boolean') return v;
+    if (t === 'undefined' || t === 'function' || t === 'symbol') return undefined;
+    if (v instanceof Date) return v;
+    if (Array.isArray(v)) {
+        return v.map(x => (Array.isArray(x) ? { _items: fsSafe(x) } : fsSafe(x))).filter(x => x !== undefined);
+    }
+    if (t === 'object') {
+        const out = {};
+        for (const k of Object.keys(v)) {
+            const c = fsSafe(v[k]);
+            if (c !== undefined) out[k] = c;
+        }
+        return out;
+    }
+    return undefined;
+};
+
 const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, style }) => {
     const [search, setSearch] = useState('');
     const [isOpen, setIsOpen] = useState(false);
@@ -1179,7 +1205,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           shippingAddressId: jobData.shippingAddressId || null,
           customShippingAddress: jobData.shippingMethod === 'CUSTOM' ? jobData.customShippingAddress : null,
 
-          cpqData: {
+          // fsSafe hardens the whole blob — Vision-derived fields can carry undefined / NaN / nested
+          // arrays that Firestore rejects ("cpqData contains an invalid nested entity").
+          cpqData: fsSafe({
               totalPrice: grandTotal,
               appliedRules: engineFlags.warnings,
               breakdown: mergedBreakdown,
@@ -1188,8 +1216,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               configuration: mergedConfiguration,
               quantities: mergedQuantities,
               dimensions: mergedDimensions
-          },
-          engineeringNotes: mergedNotesObj, 
+          }),
+          engineeringNotes: fsSafe(mergedNotesObj),
           dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, sewing: false, packing: false },
           dateSaved: new Date().toISOString().split('T')[0], author: currentUser, createdAt: serverTimestamp()
       };
