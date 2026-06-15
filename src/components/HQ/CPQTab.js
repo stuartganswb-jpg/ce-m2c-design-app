@@ -92,8 +92,13 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
         const texMap = {}; 
 
         const applyAllOverrides = () => {
+            // Fasteners (screws/bolts/washers/nuts) are BOM-only — never rendered, here or as clones.
+            // Match on the mesh OR any ancestor group name. \bnut\b is used so WALNUT isn't caught.
+            const FASTENER_RX = /screw|bolt|washer|fastener|rivet|\bnut\b/i;
+            const isFastener = (node) => { let n = node; while (n) { if (n.name && FASTENER_RX.test(n.name)) return true; n = n.parent; } return false; };
             clonedScene.traverse((child) => {
                 if (child.isMesh && child.userData.originalMaterial && typeof child.userData.originalMaterial.clone === 'function') {
+                    if (isFastener(child)) { child.visible = false; return; }
                     // Match a node name EXACTLY (case-insensitive), then walk the mesh's ancestors —
                     // identical to Node Grouping's matcher (isDescendantOf). The earlier
                     // prefix/sanitized fallbacks were too loose: one cluster node would match its
@@ -175,7 +180,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
                         const n = parseInt(spec.count) || 0;
                         const wanted = (spec.meshNames || []).map(s => String(s).trim().toLowerCase().replace(/[^a-z0-9]/g, '')).filter(Boolean);
                         const src = [];
-                        clonedScene.traverse(c => { if (c.isMesh) { const k = c.name.toLowerCase().replace(/[^a-z0-9]/g, ''); if (wanted.some(w => k === w || k.startsWith(w))) src.push(c); } });
+                        clonedScene.traverse(c => { if (c.isMesh && !isFastener(c)) { const k = c.name.toLowerCase().replace(/[^a-z0-9]/g, ''); if (wanted.some(w => k === w || k.startsWith(w))) src.push(c); } });
                         if (!src.length) return;
                         const srcBox = new THREE.Box3(); src.forEach(m => srcBox.expandByObject(m));
                         const srcAlong = srcBox.getCenter(new THREE.Vector3())[axis];
