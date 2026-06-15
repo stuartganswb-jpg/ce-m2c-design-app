@@ -283,7 +283,10 @@ const ViewCapturer = ({ onReady }) => {
     useEffect(() => {
         onReady(() => {
             try {
-                const box = new THREE.Box3().setFromObject(scene);
+                // Fit to the VISIBLE model only — hidden meshes (unselected options, the center
+                // source, fasteners) were inflating the box, so the real model came out tiny.
+                const box = new THREE.Box3();
+                scene.traverse(o => { if (o.isMesh && o.visible && o.geometry) box.expandByObject(o); });
                 if (box.isEmpty()) return null;
                 const size = box.getSize(new THREE.Vector3());
                 const center = box.getCenter(new THREE.Vector3());
@@ -328,6 +331,73 @@ const ViewCapturer = ({ onReady }) => {
         });
     }, [gl, scene, camera, onReady]);
     return null;
+};
+
+// Engineering Specs strip — the Vision "post-it" laid out HORIZONTALLY, shown in the pricing row
+// (between the unit price and the breakdown) so the full spec list never gets clipped by the 3D
+// viewport height (the old vertical overlay cut off the center-bracket specs at the bottom).
+const EngineeringSpecsStrip = ({ draft, notes, parts }) => {
+    const nm = (id) => { if (!id) return null; const p = parts.find(x => x.id === id || x.itemId === id || x.legacyErpId === id); return p ? p.itemName : id; };
+    const sd = draft.spatialData || {};
+    const picks = [
+        ['Left arm', nm(sd.bracketId)], ['Left plate', nm(sd.backplateIdLeft)],
+        ['Right arm', nm(sd.bracketIdRight)], ['Right plate', nm(sd.backplateIdRight)],
+        ['Center arm', nm(sd.bracketIdCenter)], ['Center plate', nm(sd.backplateIdCenter)],
+    ].filter(r => r[1]);
+    const hasFees = notes.qtySplices > 0 || notes.qtyBends > 0 || notes.qtyMiters > 0 || notes.qtyMiterReturns > 0;
+    const hasCounts = notes.qtyBrackets > 0 || notes.recRings > 0 || notes.qtyFinials > 0;
+    const hangers = Array.isArray(notes.hangerLocations) ? notes.hangerLocations : [];
+    const Hdr = ({ children }) => <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', display: 'block', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>{children}</span>;
+    const Row = ({ k, v }) => <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px', marginBottom: '3px' }}><span style={{ color: 'var(--ink-soft)' }}>{k}</span><span style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{v}</span></div>;
+    const col = { minWidth: '150px', fontSize: '0.8rem', color: 'var(--ink)' };
+    return (
+        <div style={{ flex: 1, margin: '0 28px', alignSelf: 'stretch', background: '#fdfbf7', border: '1px solid var(--brass)', borderRadius: '2px', padding: '16px 18px' }}>
+            <div style={{ fontFamily: 'var(--serif)', fontWeight: 500, fontSize: '0.95rem', marginBottom: '14px', display: 'flex', alignItems: 'baseline', gap: '12px', color: 'var(--ink)' }}>
+                Engineering Specs
+                <span style={{ fontSize: '9px', fontFamily: 'var(--mono)', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Manual Entry — match the note</span>
+                {draft.jobName && <span style={{ marginLeft: 'auto', fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{draft.jobName}{draft.sidemark ? ` · ${draft.sidemark}` : ''}</span>}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '28px' }}>
+                <div style={col}>
+                    <Hdr>Dimensions</Hdr>
+                    {notes.poleO2O != null && <Row k="Pole O2O" v={`${notes.poleO2O.toFixed(2)}"`} />}
+                    {notes.totalSystemO2O != null && <Row k="Total Sys O2O" v={`${notes.totalSystemO2O.toFixed(2)}"`} />}
+                    {notes.shape === 'MITERED' && notes.pole1 != null && <Row k="Left Wall C2C" v={`${notes.pole1.toFixed(2)}"`} />}
+                    {notes.pole2 != null && <Row k={notes.shape === 'STRAIGHT' ? 'Main Wall C2C' : 'Center Wall C2C'} v={`${notes.pole2.toFixed(2)}"`} />}
+                    {notes.shape === 'MITERED' && notes.pole3 != null && <Row k="Right Wall C2C" v={`${notes.pole3.toFixed(2)}"`} />}
+                    {notes.poleFeetQty != null && <Row k="Pole Qty (ft)" v={notes.poleFeetQty} />}
+                </div>
+                <div style={col}>
+                    <Hdr>Counts (Rec)</Hdr>
+                    {notes.qtyBrackets > 0 && <Row k="Brackets" v={notes.qtyBrackets} />}
+                    {notes.recRings > 0 && <Row k="Rings" v={notes.recRings} />}
+                    {notes.qtyFinials > 0 && <Row k="Finials" v={notes.qtyFinials} />}
+                    {!hasCounts && <div style={{ color: 'var(--ink-soft)' }}>—</div>}
+                </div>
+                {hasFees && (
+                    <div style={col}>
+                        <Hdr>Fees to Add</Hdr>
+                        {notes.qtySplices > 0 && <Row k="Splice" v={`×${notes.qtySplices}`} />}
+                        {notes.qtyBends > 0 && <Row k="Bent Return" v={`×${notes.qtyBends}`} />}
+                        {notes.qtyMiters > 0 && <Row k="Miter Cut" v={`×${notes.qtyMiters}`} />}
+                        {notes.qtyMiterReturns > 0 && <Row k="Miter Return" v={`×${notes.qtyMiterReturns}`} />}
+                    </div>
+                )}
+                {picks.length > 0 && (
+                    <div style={col}>
+                        <Hdr>Vision Picks · match these</Hdr>
+                        {picks.map((r, i) => <Row key={i} k={r[0]} v={r[1]} />)}
+                    </div>
+                )}
+                {hangers.length > 0 && (
+                    <div style={{ ...col, minWidth: '190px' }}>
+                        <Hdr>Hanger Placement · drill points</Hdr>
+                        {hangers.map((h, i) => <div key={i} style={{ marginBottom: '3px' }}>• <strong style={{ fontWeight: 500 }}>{h.anchor}</strong> — {h.position}{h.note ? <span style={{ color: 'var(--ink-soft)' }}> · {h.note}</span> : null}</div>)}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 };
 
 const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
@@ -1920,101 +1990,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           </div>
                       )}
                       
-                      {/* --- STATIC HARDWARE POST-IT OVERLAY --- */}
-                      {activeDraftId && previousDrafts.find(d => d.id === activeDraftId)?.specs?.engineeringNotes && (
-                          <div style={{
-                              position: 'absolute', top: '24px', left: '24px', width: '280px',
-                              background: '#fdfbf7', padding: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
-                              transform: 'rotate(1deg)', border: '1px solid var(--brass)', zIndex: 100,
-                              color: 'var(--ink)', fontFamily: 'var(--sans)'
-                          }}>
-                              <div style={{ fontFamily: 'var(--serif)', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '10px', marginBottom: '16px', fontSize: '1.2rem', textAlign: 'center' }}>
-                                  Engineering Specs
-                                  <div style={{fontSize: '9px', fontFamily: 'var(--mono)', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '6px'}}>Manual Entry Required</div>
-                              </div>
-                              {(() => {
-                                  const draft = previousDrafts.find(d => d.id === activeDraftId);
-                                  const notes = draft.specs.engineeringNotes;
-                                  return (
-                                      <div style={{ fontSize: '0.85rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                          {draft.jobName && <div><span style={{fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginRight: '6px'}}>JOB</span> {draft.jobName}</div>}
-                                          {draft.sidemark && <div><span style={{fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginRight: '6px'}}>MARK</span> {draft.sidemark}</div>}
-                                          
-                                          <div style={{ background: '#fff', padding: '12px', border: '1px solid var(--line)', marginTop: '8px' }}>
-                                              
-                                              <div style={{ color: 'var(--ink)', fontSize: '0.85rem', marginBottom: '12px', borderBottom: '1px dashed var(--line)', paddingBottom: '10px' }}>
-                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>Pole O2O (Edge-to-Edge):</span> <span>{notes.poleO2O?.toFixed(2)}"</span></div>
-                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>Total System O2O:</span> <span>{notes.totalSystemO2O?.toFixed(2)}"</span></div>
-                                                  
-                                                  {notes.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>Left Wall C2C:</span> <span>{notes.pole1?.toFixed(2)}"</span></div>}
-                                                  
-                                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span style={{color: 'var(--ink-soft)'}}>{notes.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</span> <span>{notes.pole2?.toFixed(2)}"</span></div>
-                                                  
-                                                  {notes.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{color: 'var(--ink-soft)'}}>Right Wall C2C:</span> <span>{notes.pole3?.toFixed(2)}"</span></div>}
-                                              </div>
-
-                                              <div style={{ color: 'var(--ink)', fontWeight: 500, marginBottom: '12px', fontSize: '0.9rem', textAlign: 'center' }}>
-                                                  Pole Qty (ft) to Enter: {notes.poleFeetQty}
-                                              </div>
-                                              
-                                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', color: 'var(--ink-soft)' }}>
-                                                {notes.qtyBrackets > 0 && <div>Brackets: {notes.qtyBrackets}</div>}
-                                                {notes.recRings > 0 && <div>Rings (Rec): {notes.recRings}</div>}
-                                                {notes.qtyFinials > 0 && <div>Finials: {notes.qtyFinials}</div>}
-                                              </div>
-                                          </div>
-
-                                          {(notes.qtySplices > 0 || notes.qtyBends > 0 || notes.qtyMiters > 0 || notes.qtyMiterReturns > 0) && (
-                                              <div style={{ background: 'var(--paper-2)', padding: '12px', border: '1px solid var(--line)', marginTop: '8px' }}>
-                                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>Fees to Add</span>
-                                                  {notes.qtySplices > 0 && <div>• Splice Fee: x{notes.qtySplices}</div>}
-                                                  {notes.qtyBends > 0 && <div>• Bent Return Fee: x{notes.qtyBends}</div>}
-                                                  {notes.qtyMiters > 0 && <div>• Miter Cut Fee: x{notes.qtyMiters}</div>}
-                                                  {notes.qtyMiterReturns > 0 && <div>• Miter Return Fee: x{notes.qtyMiterReturns}</div>}
-                                              </div>
-                                          )}
-
-                                          {/* Carried from Vision — what the operator must match so O2O stays right */}
-                                          {(() => {
-                                              const sd = draft.spatialData || {};
-                                              const all = [...libraryParts, ...liveAssemblies];
-                                              const nm = (id) => { if (!id) return null; const p = all.find(x => x.id === id || x.itemId === id || x.legacyErpId === id); return p ? p.itemName : id; };
-                                              const rows = [
-                                                  ['Left arm', nm(sd.bracketId)], ['Left plate', nm(sd.backplateIdLeft)],
-                                                  ['Right arm', nm(sd.bracketIdRight)], ['Right plate', nm(sd.backplateIdRight)],
-                                                  ['Center arm', nm(sd.bracketIdCenter)], ['Center plate', nm(sd.backplateIdCenter)],
-                                              ].filter(r => r[1]);
-                                              if (!rows.length) return null;
-                                              return (
-                                                  <div style={{ background: 'var(--paper-2)', padding: '12px', border: '1px solid var(--line)', marginTop: '8px' }}>
-                                                      <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>Vision Picks · match these</span>
-                                                      {rows.map((r, i) => <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}><span style={{ color: 'var(--ink-soft)' }}>{r[0]}:</span> <span style={{ textAlign: 'right' }}>{r[1]}</span></div>)}
-                                                  </div>
-                                              );
-                                          })()}
-
-                                          {Array.isArray(notes.hangerLocations) && notes.hangerLocations.length > 0 && (
-                                              <div style={{ background: '#fff', padding: '12px', border: '1px solid var(--line)', marginTop: '8px' }}>
-                                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>Hanger Placement · drill points</span>
-                                                  {notes.hangerLocations.map((h, i) => (
-                                                      <div key={i} style={{ marginBottom: '4px' }}>• <strong style={{ fontWeight: 500 }}>{h.anchor}</strong> — {h.position}{h.note ? <span style={{ color: 'var(--ink-soft)' }}> · {h.note}</span> : null}</div>
-                                                  ))}
-                                              </div>
-                                          )}
-                                      </div>
-                                  )
-                              })()}
-                          </div>
-                      )}
 
                   </div>
               </div>
 
-              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                   <div>
                       <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px' }}>Estimated Unit Price</div>
                       <div style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', fontWeight: 500, color: 'var(--ink)' }}>${pricing.finalPrice.toFixed(2)}</div>
                   </div>
+                  {activeDraftId && (() => {
+                      const d = previousDrafts.find(x => x.id === activeDraftId);
+                      const n = d?.specs?.engineeringNotes;
+                      return n ? <EngineeringSpecsStrip draft={d} notes={n} parts={[...libraryParts, ...liveAssemblies]} /> : null;
+                  })()}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', textAlign: 'right', fontSize: '0.85rem', maxWidth: '350px' }}>
                       <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '6px', color: 'var(--ink)' }}>Pricing Breakdown</div>
                       <div style={{ maxHeight: '80px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', paddingRight: '10px' }}>
