@@ -386,20 +386,27 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setDynamicConfigParams(prev => {
           const next = { ...prev };
           let changed = false;
+          // Pick the first option that actually controls geometry (so the default shows a real
+          // part, not a fee-only placeholder like the End Treatment miter/bend fees), falling
+          // back to the first option.
+          const firstGeom = (opts, gmap) => {
+              const withGeom = (opts || []).find(o => {
+                  const id = o.optId || o.partId;
+                  const csv = (gmap && gmap[id]) || o.targetNode;
+                  return csv && String(csv).trim();
+              });
+              const pick = withGeom || (opts || [])[0];
+              return pick && (pick.optId || pick.partId);
+          };
           steps.forEach(step => {
-              if (next[step.id]) return; // already chosen (default, user, or prior pass)
               if (step.type === 'STYLE_SWAP' && Array.isArray(step.styleOptions) && step.styleOptions.length) {
-                  // Prefer an option that actually controls geometry so the default shows a real
-                  // part, not a fee-only placeholder (e.g. the End Treatment miter/bend fees).
-                  const hasGeom = (o) => {
-                      const id = o.optId || o.partId;
-                      const csv = (step.geometryMap && step.geometryMap[id]) || o.targetNode;
-                      return csv && String(csv).trim();
-                  };
-                  const pick = step.styleOptions.find(hasGeom) || step.styleOptions[0];
-                  const id = pick.optId || pick.partId;
-                  if (id) { next[step.id] = id; changed = true; }
-              } else if (step.mountSelector) {
+                  if (!next[step.id]) { const id = firstGeom(step.styleOptions, step.geometryMap); if (id) { next[step.id] = id; changed = true; } }
+                  // Secondary chooser in the same step (e.g. the backplate paired with the bracket).
+                  if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
+                      const sid = firstGeom(step.subOptions, step.subGeometryMap);
+                      if (sid) { next[`${step.id}__sub`] = sid; changed = true; }
+                  }
+              } else if (step.mountSelector && !next[step.id]) {
                   // Needs activeAssembly's clusters (loaded async after the flow); on the pass
                   // where they're absent this is skipped and filled once they arrive.
                   const ORDER = { WALL: 0, CEILING: 1, END: 2 };
@@ -1302,21 +1309,27 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               controlled.forEach(n => { const allowed = inSelected.has(n); overrides[n] = (n in overrides) ? (overrides[n] && allowed) : allowed; });
               return;
           }
-          if (!step.geometryMap || Object.keys(step.geometryMap).length === 0) return;
-          const selectedOptId = dynamicConfigParams[step.id];
-          const controlled = new Set();
-          const inSelected = new Set();
-          Object.entries(step.geometryMap).forEach(([optId, csv]) => {
-              if (!csv) return;
-              String(csv).split(',').map(s => s.trim()).filter(Boolean).forEach(n => {
-                  controlled.add(n);
-                  if (optId === selectedOptId) inSelected.add(n);
+          const applyMap = (gmap, sel) => {
+              if (!gmap || Object.keys(gmap).length === 0) return;
+              const controlled = new Set();
+              const inSelected = new Set();
+              Object.entries(gmap).forEach(([optId, csv]) => {
+                  if (!csv) return;
+                  String(csv).split(',').map(s => s.trim()).filter(Boolean).forEach(n => {
+                      controlled.add(n);
+                      if (optId === sel) inSelected.add(n);
+                  });
               });
-          });
-          controlled.forEach(n => {
-              const allowed = inSelected.has(n);
-              overrides[n] = (n in overrides) ? (overrides[n] && allowed) : allowed;
-          });
+              controlled.forEach(n => {
+                  const allowed = inSelected.has(n);
+                  overrides[n] = (n in overrides) ? (overrides[n] && allowed) : allowed;
+              });
+          };
+          // Main style choice + an optional second geometry chooser in the same step (e.g. the
+          // backplate paired with the chosen bracket/mount). Each is independent hidden-until-chosen,
+          // AND-combined per node like any other dimension.
+          applyMap(step.geometryMap, dynamicConfigParams[step.id]);
+          applyMap(step.subGeometryMap, dynamicConfigParams[`${step.id}__sub`]);
       });
 
       // Flow-level hidden geometry: force-hide whole clusters this config never shows.
@@ -1336,7 +1349,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       (activeFlow.steps || []).forEach(step => {
           if (!step.isCenterClone) return;
           const selId = dynamicConfigParams[step.id];
-          const meshStr = selId && step.geometryMap ? step.geometryMap[selId] : '';
+          const selSub = dynamicConfigParams[`${step.id}__sub`];
+          // Clone the chosen bracket AND its chosen backplate together, so each center clone
+          // carries its plate.
+          const meshStr = [
+              (selId && step.geometryMap) ? step.geometryMap[selId] : '',
+              (selSub && step.subGeometryMap) ? step.subGeometryMap[selSub] : ''
+          ].filter(Boolean).join(',');
           if (!meshStr) return;
           const meshNames = String(meshStr).split(',').map(m => m.trim()).filter(Boolean);
           const rawQty = stepQuantities[step.id];
@@ -1478,6 +1497,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                       <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</option>
                                   ))}
                               </select>
+                          )}
+
+                          {/* Second geometry chooser in the same step (e.g. the backplate that pairs
+                              with the chosen bracket/mount): pick the correct plate among several at
+                              this position. Drives visibility like the main style choice. */}
+                          {currentStep.type === 'STYLE_SWAP' && Array.isArray(currentStep.subOptions) && currentStep.subOptions.length > 0 && (
+                              <div style={{ marginBottom: '20px' }}>
+                                  <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>{currentStep.subLabel || 'Backplate'}</label>
+                                  <select value={dynamicConfigParams[`${currentStep.id}__sub`] || ''} onChange={(e) => handleParamChange(`${currentStep.id}__sub`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none' }}>
+                                      <option value="">-- None --</option>
+                                      {currentStep.subOptions.map(o => (
+                                          <option key={o.optId} value={o.optId}>{o.partName}</option>
+                                      ))}
+                                  </select>
+                              </div>
                           )}
 
                           {/* Compound step: an optional second "Finish" dropdown applied to the

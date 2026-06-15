@@ -463,21 +463,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const brackets = groupPlacements('BRACKET');
       const backplates = groupPlacements('BACKPLATE');
 
-      // A bracket and the backplate sharing its (position, location) tags are one physical mount,
-      // so fold the matching backplate's geometry INTO the bracket option — picking the bracket +
-      // mount brings its plate along (no separate plate pick). A backplate with no matching bracket
-      // falls back to its own per-position step so nothing is lost.
-      const tagKey = (o) => `${o.position || ''}|${o.location || ''}`;
-      const bundledBackplates = new Set();
-      brackets.forEach(b => {
-          backplates.forEach(bp => {
-              if (bp.targetNode && tagKey(bp) === tagKey(b)) {
-                  b.targetNode = [b.targetNode, bp.targetNode].filter(Boolean).join(', ');
-                  bundledBackplates.add(bp.optId);
-              }
-          });
-      });
-      const looseBackplates = backplates.filter(bp => !bundledBackplates.has(bp.optId));
+      // Backplates ride as a SECOND chooser on their position's bracket step, so you pick the
+      // correct plate among the several at that position (not auto-merged). Any backplate whose
+      // position has no bracket step falls back to its own per-position step so nothing is lost.
+      const bracketPositions = new Set(brackets.map(b => b.position || ''));
+      const looseBackplates = backplates.filter(bp => !bracketPositions.has(bp.position || ''));
 
       const ts = Date.now();
       const steps = [];
@@ -490,7 +480,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       // generated flow adapts to whatever you tagged (unknown positions fall through under their
       // own label; untagged collapse to a single base step).
       const POS_LABEL = { LEFT: 'Left', CENTER: 'Center', RIGHT: 'Right', '': '' };
-      const addPerPosition = (opts, base, { clone = false } = {}) => {
+      const addPerPosition = (opts, base, { clone = false, subOpts = null, subLabel = '' } = {}) => {
           const present = [...new Set(opts.map(o => o.position || ''))];
           const ordered = ['LEFT', 'CENTER', 'RIGHT', ''].filter(p => present.includes(p))
               .concat(present.filter(p => !['LEFT', 'CENTER', 'RIGHT', ''].includes(p)));
@@ -498,11 +488,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               const group = opts.filter(o => (o.position || '') === pos);
               if (!group.length) return;
               const label = POS_LABEL[pos] !== undefined ? POS_LABEL[pos] : pos;
+              const subs = subOpts ? subOpts.filter(o => (o.position || '') === pos) : [];
               add({
                   title: label ? `${label} ${base}` : base,
                   type: 'STYLE_SWAP', partHandling: 'Custom', required: false,
                   ...(clone && pos === 'CENTER' ? { isCenterClone: true, qtyHelperText: 'Number of center passing brackets' } : {}),
-                  styleOptions: group, geometryMap: geom(group)
+                  styleOptions: group, geometryMap: geom(group),
+                  ...(subs.length ? { subLabel, subOptions: subs, subGeometryMap: geom(subs) } : {})
               });
           });
       };
@@ -532,7 +524,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
       add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, styleOptions: pole, geometryMap: geom(pole) });
       add({ title: 'Pole Length & Finish', type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: 'calc_straight_pole', qtyHelperText: 'Pole length (feet)', required: true, geometryMap: {} });
-      addPerPosition(brackets, 'Bracket & Mount', { clone: true });
+      addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate' });
       if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
       addEndTreatment(finial);
       add({ title: 'Rings', type: 'DROPDOWN', dataSource: 'master_finishes', partHandling: 'Small Parts', qtyHelperText: 'Number of rings', geometryMap: {} });
@@ -548,7 +540,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }));
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;
-          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Pole materials: ${pole.length}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${bundledBackplates.size} bundled into matching brackets, ${looseBackplates.length} standalone\n• Finials: ${finial.length} (End Treatment split per end)\n\nBracket + its same-tag backplate are now one choice; End Treatment is per end; no standalone Mount step. Review + set prices, then test. Nothing was deleted.`);
+          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Pole materials: ${pole.length}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} (each position's plates are a 2nd chooser on its bracket step; ${looseBackplates.length} standalone)\n• Finials: ${finial.length} (End Treatment split per end)\n\nEach bracket step now has a Backplate chooser; End Treatment is per end; no standalone Mount step. Review + set prices, then test. Nothing was deleted.`);
       } catch (err) { console.error("Generate failed:", err); alert("Generate failed: " + (err?.message || err)); }
   };
 
