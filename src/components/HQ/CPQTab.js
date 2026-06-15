@@ -284,9 +284,20 @@ const ViewCapturer = ({ onReady }) => {
         onReady(() => {
             try {
                 // Fit to the VISIBLE model only — hidden meshes (unselected options, the center
-                // source, fasteners) were inflating the box, so the real model came out tiny.
+                // source, fasteners) inflate the scene box and shrink the real model to nothing.
+                // Update world matrices first, then union each mesh's world-space geometry box by
+                // hand (expandByObject can read stale matrices, which framed the camera off the
+                // model → blank captures). effVis walks ancestors so a hidden parent counts as hidden.
+                scene.updateMatrixWorld(true);
+                const effVis = (o) => { let n = o; while (n) { if (!n.visible) return false; n = n.parent; } return true; };
                 const box = new THREE.Box3();
-                scene.traverse(o => { if (o.isMesh && o.visible && o.geometry) box.expandByObject(o); });
+                const tmpBox = new THREE.Box3();
+                scene.traverse(o => {
+                    if (!o.isMesh || !o.geometry || !effVis(o)) return;
+                    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+                    tmpBox.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+                    box.union(tmpBox);
+                });
                 if (box.isEmpty()) return null;
                 const size = box.getSize(new THREE.Vector3());
                 const center = box.getCenter(new THREE.Vector3());
@@ -347,18 +358,20 @@ const EngineeringSpecsStrip = ({ draft, notes, parts }) => {
     const hasFees = notes.qtySplices > 0 || notes.qtyBends > 0 || notes.qtyMiters > 0 || notes.qtyMiterReturns > 0;
     const hasCounts = notes.qtyBrackets > 0 || notes.recRings > 0 || notes.qtyFinials > 0;
     const hangers = Array.isArray(notes.hangerLocations) ? notes.hangerLocations : [];
-    const Hdr = ({ children }) => <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', display: 'block', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>{children}</span>;
-    const Row = ({ k, v }) => <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px', marginBottom: '3px' }}><span style={{ color: 'var(--ink-soft)' }}>{k}</span><span style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{v}</span></div>;
-    const col = { minWidth: '150px', fontSize: '0.8rem', color: 'var(--ink)' };
+    const Hdr = ({ children }) => <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '6px', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>{children}</span>;
+    const Row = ({ k, v }) => <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '2px' }}><span style={{ color: 'var(--ink-soft)' }}>{k}</span><span style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{v}</span></div>;
+    // Sections auto-flow into balanced CSS columns (no manual wrap), capped height so the strip
+    // never dominates the screen. breakInside keeps a section intact within one column.
+    const sec = { fontSize: '0.78rem', color: 'var(--ink)', breakInside: 'avoid', WebkitColumnBreakInside: 'avoid', marginBottom: '14px' };
     return (
-        <div style={{ flex: 1, margin: '0 28px', alignSelf: 'stretch', background: '#fdfbf7', border: '1px solid var(--brass)', borderRadius: '2px', padding: '16px 18px' }}>
-            <div style={{ fontFamily: 'var(--serif)', fontWeight: 500, fontSize: '0.95rem', marginBottom: '14px', display: 'flex', alignItems: 'baseline', gap: '12px', color: 'var(--ink)' }}>
+        <div style={{ flex: 1, alignSelf: 'stretch', maxHeight: '320px', overflowY: 'auto', background: '#fdfbf7', border: '1px solid var(--brass)', borderRadius: '2px', padding: '14px 16px' }}>
+            <div style={{ fontFamily: 'var(--serif)', fontWeight: 500, fontSize: '0.95rem', marginBottom: '12px', display: 'flex', alignItems: 'baseline', gap: '12px', color: 'var(--ink)', position: 'sticky', top: 0, background: '#fdfbf7', zIndex: 1 }}>
                 Engineering Specs
                 <span style={{ fontSize: '9px', fontFamily: 'var(--mono)', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Manual Entry — match the note</span>
                 {draft.jobName && <span style={{ marginLeft: 'auto', fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{draft.jobName}{draft.sidemark ? ` · ${draft.sidemark}` : ''}</span>}
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '28px' }}>
-                <div style={col}>
+            <div style={{ columnWidth: '210px', columnGap: '26px' }}>
+                <div style={sec}>
                     <Hdr>Dimensions</Hdr>
                     {notes.poleO2O != null && <Row k="Pole O2O" v={`${notes.poleO2O.toFixed(2)}"`} />}
                     {notes.totalSystemO2O != null && <Row k="Total Sys O2O" v={`${notes.totalSystemO2O.toFixed(2)}"`} />}
@@ -367,7 +380,7 @@ const EngineeringSpecsStrip = ({ draft, notes, parts }) => {
                     {notes.shape === 'MITERED' && notes.pole3 != null && <Row k="Right Wall C2C" v={`${notes.pole3.toFixed(2)}"`} />}
                     {notes.poleFeetQty != null && <Row k="Pole Qty (ft)" v={notes.poleFeetQty} />}
                 </div>
-                <div style={col}>
+                <div style={sec}>
                     <Hdr>Counts (Rec)</Hdr>
                     {notes.qtyBrackets > 0 && <Row k="Brackets" v={notes.qtyBrackets} />}
                     {notes.recRings > 0 && <Row k="Rings" v={notes.recRings} />}
@@ -375,7 +388,7 @@ const EngineeringSpecsStrip = ({ draft, notes, parts }) => {
                     {!hasCounts && <div style={{ color: 'var(--ink-soft)' }}>—</div>}
                 </div>
                 {hasFees && (
-                    <div style={col}>
+                    <div style={sec}>
                         <Hdr>Fees to Add</Hdr>
                         {notes.qtySplices > 0 && <Row k="Splice" v={`×${notes.qtySplices}`} />}
                         {notes.qtyBends > 0 && <Row k="Bent Return" v={`×${notes.qtyBends}`} />}
@@ -383,16 +396,21 @@ const EngineeringSpecsStrip = ({ draft, notes, parts }) => {
                         {notes.qtyMiterReturns > 0 && <Row k="Miter Return" v={`×${notes.qtyMiterReturns}`} />}
                     </div>
                 )}
-                {picks.length > 0 && (
-                    <div style={col}>
-                        <Hdr>Vision Picks · match these</Hdr>
-                        {picks.map((r, i) => <Row key={i} k={r[0]} v={r[1]} />)}
+                {hangers.length > 0 && (
+                    <div style={sec}>
+                        <Hdr>Hanger Placement · drill points</Hdr>
+                        {hangers.map((h, i) => <div key={i} style={{ marginBottom: '3px', lineHeight: 1.3 }}>• <strong style={{ fontWeight: 500 }}>{h.anchor}</strong> — {h.position}{h.note ? <span style={{ color: 'var(--ink-soft)' }}> · {h.note}</span> : null}</div>)}
                     </div>
                 )}
-                {hangers.length > 0 && (
-                    <div style={{ ...col, minWidth: '190px' }}>
-                        <Hdr>Hanger Placement · drill points</Hdr>
-                        {hangers.map((h, i) => <div key={i} style={{ marginBottom: '3px' }}>• <strong style={{ fontWeight: 500 }}>{h.anchor}</strong> — {h.position}{h.note ? <span style={{ color: 'var(--ink-soft)' }}> · {h.note}</span> : null}</div>)}
+                {picks.length > 0 && (
+                    <div style={sec}>
+                        <Hdr>Vision Picks · match these</Hdr>
+                        {picks.map((r, i) => (
+                            <div key={i} style={{ marginBottom: '5px', lineHeight: 1.25 }}>
+                                <span style={{ color: 'var(--ink-soft)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '.04em', marginRight: '6px' }}>{r[0]}</span>
+                                {r[1]}
+                            </div>
+                        ))}
                     </div>
                 )}
             </div>
@@ -1908,7 +1926,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           </div>
 
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '24px', minHeight: '800px' }}>
-              <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+              <div style={{ flexShrink: 0, background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
                   
                   <div style={{ padding: '20px 24px', background: 'var(--paper)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 999, borderBottom: '1px solid var(--line)' }}>
                       <div style={{ color: 'var(--ink)', fontSize: '1.2rem', fontFamily: 'var(--serif)', fontWeight: 500 }}>
@@ -1936,7 +1954,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       </div>
                   </div>
                   
-                  <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--paper-2)' }}>
+                  <div style={{ height: '440px', flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--paper-2)' }}>
                       {!activeAssembly ? (
                           <div style={{ color: 'var(--ink-soft)', textAlign: 'center', zIndex: 1 }}>
                               <div style={{ fontSize: '2rem', marginBottom: '16px', opacity: 0.5 }}>⚙️</div>
@@ -1994,17 +2012,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   </div>
               </div>
 
-              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                  <div>
-                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px' }}>Estimated Unit Price</div>
-                      <div style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', fontWeight: 500, color: 'var(--ink)' }}>${pricing.finalPrice.toFixed(2)}</div>
-                  </div>
+              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '28px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                   {activeDraftId && (() => {
                       const d = previousDrafts.find(x => x.id === activeDraftId);
                       const n = d?.specs?.engineeringNotes;
-                      return n ? <EngineeringSpecsStrip draft={d} notes={n} parts={[...libraryParts, ...liveAssemblies]} /> : null;
+                      return n ? <EngineeringSpecsStrip draft={d} notes={n} parts={[...libraryParts, ...liveAssemblies]} /> : <div style={{ flex: 1 }} />;
                   })()}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', textAlign: 'right', fontSize: '0.85rem', maxWidth: '350px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', textAlign: 'right', fontSize: '0.85rem', width: '300px', flexShrink: 0 }}>
                       <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '6px', color: 'var(--ink)' }}>Pricing Breakdown</div>
                       <div style={{ maxHeight: '80px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', paddingRight: '10px' }}>
                           {pricingBreakdown.map((item, i) => (
@@ -2016,6 +2030,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       </div>
                       <div style={{ borderTop: '1px solid var(--line)', marginTop: '6px', paddingTop: '8px', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>
                           Total Dynamic Sum: <span style={{ color: 'var(--ink)', marginLeft: '8px' }}>${pricing.base.toFixed(2)}</span>
+                      </div>
+                      <div style={{ borderTop: '2px solid var(--ink)', marginTop: '12px', paddingTop: '12px' }}>
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '4px' }}>Estimated Unit Price</div>
+                          <div style={{ fontFamily: 'var(--serif)', fontSize: '2.1rem', fontWeight: 500, color: 'var(--ink)' }}>${pricing.finalPrice.toFixed(2)}</div>
                       </div>
                   </div>
               </div>
