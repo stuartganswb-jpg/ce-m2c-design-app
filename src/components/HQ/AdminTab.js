@@ -419,6 +419,63 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       e.target.value = '';
   };
 
+  // One-click flow build from the assembly's Node-Grouping tags. Groups tagged clusters by
+  // Category + part (unioning each part's placement nodes into one option), then stamps out the
+  // standard hardware steps fully wired — no hand-picking pins. Creates a NEW flow; touches nothing.
+  const handleGenerateHardwareFlow = async () => {
+      if (!flowSettings.linkedAssemblyId || !linkedAsm) return alert("Link a Master Assembly first (the dropdown above), then Generate.");
+      const clusters = (linkedAsm.nodeClusters || []).filter(c => c.category);
+      if (!clusters.length) return alert("No tagged clusters on this assembly. Tag them in Node Grouping (Category + Location + Position) first.");
+      const pinByCluster = {};
+      (linkedBomPins || []).forEach(p => { if (p.clusterId) pinByCluster[p.clusterId] = p; });
+      // Group a category's clusters by part; union each part's placement nodes into one option.
+      const groupByPart = (cat, filterFn) => {
+          const map = {};
+          clusters.filter(c => c.category === cat && (!filterFn || filterFn(c))).forEach(cl => {
+              const pin = pinByCluster[cl.id];
+              const partId = pin?.partId || cl.name;
+              const partName = pin?.partName || cl.name;
+              const key = partId || cl.id;
+              const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(key).replace(/[^A-Za-z0-9]/g, '').slice(0, 40)}`, partId, partName, nodes: new Set() };
+              (cl.nodes || cl.meshes || []).forEach(n => { if (n) e.nodes.add(n); });
+          });
+          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, targetNode: [...e.nodes].join(', '), price: 0 }));
+      };
+      const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
+      const isCenter = (c) => (c.position || '').toUpperCase() === 'CENTER';
+
+      const pole = groupByPart('POLE');
+      const finial = groupByPart('FINIAL');
+      const bktCenter = groupByPart('BRACKET', isCenter);
+      const bktEnd = groupByPart('BRACKET', c => !isCenter(c));
+      const backplate = groupByPart('BACKPLATE', c => !isCenter(c));
+
+      const ts = Date.now();
+      const s = (n, extra) => ({ id: `STEP-${ts}-${n}`, ...extra });
+      const steps = [
+          s(1, { title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, styleOptions: pole, geometryMap: geom(pole) }),
+          s(2, { title: 'Pole Length & Finish', type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: 'calc_straight_pole', qtyHelperText: 'Pole length (feet)', required: true, geometryMap: {} }),
+          s(3, { title: 'Mount', type: 'DROPDOWN', mountSelector: true, mountPosition: '', required: true, geometryMap: {} }),
+          s(4, { title: 'End Treatment', type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, finishDataSource: 'master_finishes', styleOptions: [...finial, { optId: 'OPT-MITER', partId: '', partName: 'Mitered Return (fee — set price)', targetNode: '', price: 0 }, { optId: 'OPT-BEND', partId: '', partName: 'Bent Return (fee — set price)', targetNode: '', price: 0 }, { optId: 'OPT-FLUSH', partId: '', partName: 'Flush Cut', targetNode: '', price: 0 }], geometryMap: geom(finial) }),
+          s(5, { title: 'End Bracket', type: 'STYLE_SWAP', partHandling: 'Custom', required: false, styleOptions: bktEnd, geometryMap: geom(bktEnd) }),
+          s(6, { title: 'Backplate', type: 'STYLE_SWAP', partHandling: 'Custom', required: false, styleOptions: backplate, geometryMap: geom(backplate) }),
+          s(7, { title: 'Center Passing Bracket', type: 'STYLE_SWAP', partHandling: 'Custom', isCenterClone: true, qtyHelperText: 'Number of center passing brackets', styleOptions: bktCenter, geometryMap: geom(bktCenter) }),
+          s(8, { title: 'Rings', type: 'DROPDOWN', dataSource: 'master_finishes', partHandling: 'Small Parts', qtyHelperText: 'Number of rings', geometryMap: {} }),
+          s(9, { title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' }),
+          s(10, { title: 'Cut / Splice Fee', type: 'STATIC_FEE', qtyHelperText: 'Per cut / splice', basePrice: '0' }),
+      ];
+      const flowId = `FLOW-${ts}`;
+      try {
+          await setDoc(doc(db, "cpq_flows", flowId), stripUndefined({
+              id: flowId, brandId: activeBrand, name: `${String(linkedAsm.itemName || 'HARDWARE').toUpperCase()} — GENERATED`,
+              legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: flowSettings.linkedAssemblyId,
+              fabShape: 'STRAIGHT', fabEndStyle: '', fabProjection: '', defaultFinishOptions: [], hiddenClusters: [], steps
+          }));
+          setActiveFlowId(flowId);
+          alert(`Generated "${String(linkedAsm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Pole materials: ${pole.length}\n• End brackets: ${bktEnd.length}\n• Backplates: ${backplate.length}\n• Center brackets: ${bktCenter.length}\n• Finials: ${finial.length}\n\nReview the steps + set prices, then test. Nothing was deleted. Mount/center/backplate are wired from the tags; finial miter/bend are fee placeholders.`);
+      } catch (err) { console.error("Generate failed:", err); alert("Generate failed: " + (err?.message || err)); }
+  };
+
   const handleSaveFlowSettings = async () => {
       if (!activeFlowId) return;
       setIsSavingFlowSettings(true);
@@ -943,6 +1000,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                         <button onClick={handleExportFlow} title="Download the selected flow as JSON (back up / copy to another collection)" style={{ flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Export Flow</button>
                         <label title="Create a fresh flow from a JSON file (for review before use)" style={{ flex: 1, textAlign: 'center', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Import Flow<input type="file" accept="application/json,.json" onChange={handleImportFlow} style={{ display: 'none' }} /></label>
                     </div>
+                    <button onClick={handleGenerateHardwareFlow} title="Build a complete hardware flow automatically from the linked assembly's Node-Grouping tags — no hand-picking pins" style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⚙ Generate Flow from Tags</button>
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', flex: 1 }}>
                         {cpqFlows.filter(f => f.brandId === activeBrand).length === 0 && <div style={{color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem'}}>No flows exist. Create one above!</div>}
