@@ -646,7 +646,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       if (!newStep.title) return alert("Step title is required");
       // Fees roll into the flow's NetSuite rollup item, so they don't map to a physical
       // part and don't need a Part Handling / Routing division.
-      if (newStep.type !== 'STATIC_FEE' && !newStep.partHandling) return alert("❌ ERROR: Part Handling / Routing is required for every step.");
+      if (newStep.type !== 'STATIC_FEE' && !newStep.mountSelector && !newStep.partHandling) return alert("❌ ERROR: Part Handling / Routing is required for every step.");
 
       try {
           let updatedSteps;
@@ -1272,6 +1272,24 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     </div>
                                     )}
 
+                                    <div style={{ background: '#fff', padding: '15px', border: '1px solid var(--line)' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                                            <input type="checkbox" checked={!!newStep.mountSelector} onChange={e => setNewStep({...newStep, mountSelector: e.target.checked})} />
+                                            <span style={{ fontSize: '0.85rem', color: 'var(--ink)' }}>Tag-driven Mount selector</span>
+                                        </label>
+                                        <span style={{ fontSize: '0.72rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>Options come from the assembly's Location tags (Wall / Ceiling / Inside). Picking one hides every end cluster of the OTHER locations — no geometryMap or data source needed. Use a DROPDOWN step.</span>
+                                        {newStep.mountSelector && (
+                                            <div style={{ marginTop: '10px' }}>
+                                                <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Applies to position</label>
+                                                <select value={newStep.mountPosition || ''} onChange={e => setNewStep({...newStep, mountPosition: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
+                                                    <option value="">All positions (whole mount)</option>
+                                                    <option value="LEFT">Left only</option>
+                                                    <option value="RIGHT">Right only</option>
+                                                </select>
+                                            </div>
+                                        )}
+                                    </div>
+
                                     {newStep.type !== 'STYLE_SWAP' && (
                                     <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '15px' }}>Item Mapping & Base Price</label>
@@ -1643,7 +1661,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                     </label>
                                     
                                     <div style={{ display: 'flex', gap: '15px', marginTop: '10px' }}>
-                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={(newStep.type !== 'STATIC_FEE' && !newStep.partHandling) || (newStep.type === 'STYLE_SWAP' ? !(newStep.styleOptions && newStep.styleOptions.length) : ((newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE') && !newStep.dataSource))} style={{ flex: 1, padding: '15px', background: (newStep.type !== 'STATIC_FEE' && !newStep.partHandling) ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', border: 'none', cursor: (newStep.type !== 'STATIC_FEE' && !newStep.partHandling) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={(newStep.type !== 'STATIC_FEE' && !newStep.mountSelector && !newStep.partHandling) || (newStep.type === 'STYLE_SWAP' ? !(newStep.styleOptions && newStep.styleOptions.length) : ((newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && !newStep.mountSelector) && !newStep.dataSource))} style={{ flex: 1, padding: '15px', background: (newStep.type !== 'STATIC_FEE' && !newStep.mountSelector && !newStep.partHandling) ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', border: 'none', cursor: (newStep.type !== 'STATIC_FEE' && !newStep.mountSelector && !newStep.partHandling) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                                             {newStep.id ? "Save Edits to Step" : "Add Step"}
                                         </button>
                                         {newStep.id && (

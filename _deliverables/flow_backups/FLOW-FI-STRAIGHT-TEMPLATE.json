@@ -40,6 +40,16 @@
       "_note": "Finish grid + length. Comes AFTER the material swap; no geometry here (the material step already chose the pole)."
     },
     {
+      "id": "STEP-MOUNT",
+      "title": "Mount",
+      "type": "DROPDOWN",
+      "mountSelector": true,
+      "mountPosition": "",
+      "required": true,
+      "geometryMap": {},
+      "_note": "Tag-driven Mount selector — options auto-fill from the assembly's Location tags (Wall/Ceiling/Inside); picking one hides every end cluster of the OTHER locations. No part/data/geometry wiring. 'mountPosition' = '' means the whole mount; for asymmetric ends split into two Mount steps with mountPosition 'LEFT' and 'RIGHT'. Check the box in the step builder; it needs no Part Handling."
+    },
+    {
       "id": "STEP-ENDTREAT",
       "title": "End Treatment",
       "type": "STYLE_SWAP",

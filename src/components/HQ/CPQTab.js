@@ -351,6 +351,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const availableProductTypes = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.productType).filter(Boolean))];
 
   const getOptionsForStep = (step) => {
+      // Tag-driven Mount selector: options are the distinct Location tags on the linked assembly's
+      // clusters (Wall / Ceiling / Inside-End). Picking one hides the off-mount end regions.
+      if (step?.mountSelector) {
+          const LOC_LABEL = { WALL: 'Wall', CEILING: 'Ceiling', END: 'Inside / End' };
+          const ORDER = { WALL: 0, CEILING: 1, END: 2 };
+          const locs = [...new Set((activeAssembly?.nodeClusters || []).map(c => c.location).filter(Boolean))];
+          return locs.sort((a, b) => (ORDER[a] ?? 9) - (ORDER[b] ?? 9)).map(loc => ({ id: loc, itemName: LOC_LABEL[loc] || loc }));
+      }
       // Choose / Swap Style: options are the curated BOM items on the step itself.
       if (step?.type === 'STYLE_SWAP') {
           // Identify each option by optId (unique per instance) so a part repeated at
@@ -477,6 +485,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (step.isCenterClone && engineeringNotes) {
                       const center = engineeringNotes.qtyCenterBrackets;
                       newStepQuantities[step.id] = (center !== undefined && center !== null) ? center : Math.max(0, (parseInt(engineeringNotes.qtyBrackets) || 0) - 2);
+                  }
+                  // Tag-driven Mount step: pre-pick the Location from Vision's mount (OPEN→WALL,
+                  // CEILING→CEILING, INSIDE→END), using the side this step applies to.
+                  if (step.mountSelector && !translatedParams[step.id]) {
+                      const MOUNT_TO_LOC = { OPEN: 'WALL', CEILING: 'CEILING', INSIDE: 'END' };
+                      const vm = step.mountPosition === 'LEFT' ? (eng.shape === 'STRAIGHT' ? eng.mountLeft : eng.mountOuter)
+                               : step.mountPosition === 'RIGHT' ? (eng.shape === 'STRAIGHT' ? eng.mountRight : eng.mountOuter)
+                               : (eng.mountOuter || eng.mountLeft);
+                      const loc = MOUNT_TO_LOC[vm];
+                      if (loc) translatedParams[step.id] = loc;
                   }
               });
           }
@@ -1206,6 +1224,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       // node (not the comma list) so the AND is computed node-by-node.
       const overrides = {};
       (activeFlow.steps || []).forEach(step => {
+          // Tag-driven Mount selector: controls every location-tagged end cluster; only those whose
+          // Location matches the customer's pick stay allowed (AND-combined like any other step).
+          if (step.mountSelector) {
+              const selectedLoc = dynamicConfigParams[step.id];
+              if (!selectedLoc) return; // nothing picked yet → hide nothing
+              const pos = step.mountPosition; // 'LEFT' | 'RIGHT' | '' (all positions)
+              const controlled = new Set(); const inSelected = new Set();
+              (activeAssembly?.nodeClusters || []).forEach(cl => {
+                  if (!cl.location || (pos && cl.position !== pos)) return;
+                  (cl.nodes || cl.meshes || []).forEach(n => { if (!n) return; controlled.add(n); if (cl.location === selectedLoc) inSelected.add(n); });
+              });
+              controlled.forEach(n => { const allowed = inSelected.has(n); overrides[n] = (n in overrides) ? (overrides[n] && allowed) : allowed; });
+              return;
+          }
           if (!step.geometryMap || Object.keys(step.geometryMap).length === 0) return;
           const selectedOptId = dynamicConfigParams[step.id];
           const controlled = new Set();
