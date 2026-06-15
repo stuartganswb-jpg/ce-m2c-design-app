@@ -173,16 +173,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
                     const modelBox = new THREE.Box3().setFromObject(clonedScene);
                     const size = modelBox.getSize(new THREE.Vector3());
                     const axis = size.x >= size.y && size.x >= size.z ? 'x' : (size.y >= size.z ? 'y' : 'z');
-                    // Space along the RAIL (the pole = the longest single mesh on the axis), not the
-                    // whole-model box — otherwise an off-center part (e.g. the un-cloned center
-                    // source, which the glb models off to one side) skews where "centered" lands.
-                    let lo = modelBox.min[axis], hi = modelBox.max[axis], bestSpan = -1;
-                    clonedScene.traverse(c => {
-                        if (!c.isMesh || isFastener(c)) return;
-                        const b = new THREE.Box3().setFromObject(c);
-                        const span = b.max[axis] - b.min[axis];
-                        if (span > bestSpan) { bestSpan = span; lo = b.min[axis]; hi = b.max[axis]; }
-                    });
+                    const defLo = modelBox.min[axis], defHi = modelBox.max[axis];
                     const invRoot = new THREE.Matrix4().copy(clonedScene.matrixWorld).invert();
                     const group = new THREE.Group(); group.name = '__centerClones';
                     specs.forEach(spec => {
@@ -198,6 +189,15 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
                         const anchorSrc = anchorWanted.length ? src.filter(m => { const k = sani(m.name); return anchorWanted.some(w => k === w || k.startsWith(w)); }) : src;
                         const srcBox = new THREE.Box3(); (anchorSrc.length ? anchorSrc : src).forEach(m => srcBox.expandByObject(m));
                         const srcAlong = srcBox.getCenter(new THREE.Vector3())[axis];
+                        // Rail extent = the pole's meshes unioned (full length even if segmented),
+                        // falling back to the model box. This is the span clones are centered along.
+                        let lo = defLo, hi = defHi;
+                        const railWanted = (spec.railNames || []).map(sani).filter(Boolean);
+                        if (railWanted.length) {
+                            const railBox = new THREE.Box3(); let railFound = false;
+                            clonedScene.traverse(c => { if (c.isMesh && !isFastener(c)) { const k = sani(c.name); if (railWanted.some(w => k === w || k.startsWith(w))) { railBox.expandByObject(c); railFound = true; } } });
+                            if (railFound) { lo = railBox.min[axis]; hi = railBox.max[axis]; }
+                        }
                         src.forEach(m => { m.visible = false; }); // hide the single middle original; clones replace it
                         for (let i = 1; i <= n; i++) {
                             const targetAlong = lo + (hi - lo) * (i / (n + 1));
@@ -1399,8 +1399,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // the selected option's meshes are cloned (qty) times and spaced down the pole in DynamicModel.
   const cloneSpecs = useMemo(() => {
       if (!activeFlow) return [];
+      const steps = activeFlow.steps || [];
+      // Rail = the pole's selected geometry (all of it), so center clones space along the FULL pole
+      // even when it's modeled as many small segments — the longest single mesh would be one rib.
+      const poleStep = steps.find(s => s.type === 'STYLE_SWAP' && /pole|rod/i.test(s.title || '') && s.geometryMap && Object.keys(s.geometryMap).length)
+                    || steps.find(s => s.type === 'STYLE_SWAP' && s.geometryMap && Object.keys(s.geometryMap).length);
+      const poleSel = poleStep && dynamicConfigParams[poleStep.id];
+      const railNames = String((poleStep && poleSel && poleStep.geometryMap[poleSel]) || '').split(',').map(m => m.trim()).filter(Boolean);
       const out = [];
-      (activeFlow.steps || []).forEach(step => {
+      steps.forEach(step => {
           if (!step.isCenterClone) return;
           const selId = dynamicConfigParams[step.id];
           const selSub = dynamicConfigParams[`${step.id}__sub`];
@@ -1416,7 +1423,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           const anchorNames = String(mainStr).split(',').map(m => m.trim()).filter(Boolean);
           const rawQty = stepQuantities[step.id];
           const count = (rawQty !== undefined && rawQty !== '') ? (parseInt(rawQty) || 0) : 1;
-          if (count >= 1 && meshNames.length) out.push({ stepId: step.id, meshNames, anchorNames, count });
+          if (count >= 1 && meshNames.length) out.push({ stepId: step.id, meshNames, anchorNames, railNames, count });
       });
       return out;
   }, [activeFlow, dynamicConfigParams, stepQuantities]);
