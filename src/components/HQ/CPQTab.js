@@ -204,6 +204,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
                             const targetAlong = lo + (hi - lo) * (i / (n + 1));
                             const delta = targetAlong - srcAlong;
                             const offset = new THREE.Matrix4().makeTranslation(axis === 'x' ? delta : 0, axis === 'y' ? delta : 0, axis === 'z' ? delta : 0);
+                            try { const _ai = axis === 'x' ? 0 : axis === 'y' ? 1 : 2; const _wp = new THREE.Vector3().setFromMatrixPosition(offset.clone().multiply(src[0].matrixWorld)); console.log('[clonePos] ' + JSON.stringify({ i, targetAlong: +targetAlong.toFixed(3), delta: +delta.toFixed(3), src0World: +src[0].matrixWorld.elements[12 + _ai].toFixed(3), cloneWorld: +_wp.getComponent(_ai).toFixed(3), src0Visible: src[0].visible })); } catch (e) {}
                             src.forEach(m => {
                                 const c = m.clone();
                                 c.visible = true;
