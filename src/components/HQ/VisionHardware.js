@@ -66,7 +66,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
     shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountCenter: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'FINIAL', endStyleRight: '', proj: "", bracketId: "", bracketIdRight: "", bracketIdCenter: "", backplateIdLeft: "", backplateIdRight: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,          
+    endStyle: 'FINIAL', endStyleRight: '', proj: "", bracketId: "", bracketIdRight: "", bracketIdCenter: "", backplateIdLeft: "", backplateIdRight: "", backplateIdCenter: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   };
 
@@ -977,6 +977,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Right Backplate</label>
                                     <select value={engData.backplateIdRight || ''} onChange={e => setEngData(prev => ({ ...prev, backplateIdRight: e.target.value }))} style={fieldStyle}>
+                                        <option value="">-- Select Backplate --</option>
+                                        {allBackplates.map(b => { const d = bpDims(b.id); return <option key={b.id} value={b.id}>{b.itemName}{(d.l || d.w) ? ` · ${d.l}L × ${d.w}W` : ''}</option>; })}
+                                    </select>
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <label style={labelStyle}>Center Backplate</label>
+                                    <select value={engData.backplateIdCenter || ''} onChange={e => setEngData(prev => ({ ...prev, backplateIdCenter: e.target.value }))} style={fieldStyle}>
                                         <option value="">-- Select Backplate --</option>
                                         {allBackplates.map(b => { const d = bpDims(b.id); return <option key={b.id} value={b.id}>{b.itemName}{(d.l || d.w) ? ` · ${d.l}L × ${d.w}W` : ''}</option>; })}
                                     </select>

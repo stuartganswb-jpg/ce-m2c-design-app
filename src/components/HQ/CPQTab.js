@@ -637,11 +637,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               // styleOption.partId to a part Vision chose (end bracket / backplate / center bracket).
               // Config-agnostic — works for any collection's flow without hard-coded step ids.
               const eng = draft.spatialData || {};
-              const visionPartIds = [eng.bracketId, eng.bracketIdRight, eng.bracketIdCenter, eng.backplateIdLeft, eng.backplateIdRight, draft.specs?.bracketId].filter(Boolean);
+              const visionPartIds = [eng.bracketId, eng.bracketIdRight, eng.bracketIdCenter, eng.backplateIdLeft, eng.backplateIdRight, eng.backplateIdCenter, draft.specs?.bracketId].filter(Boolean);
+              // Tolerant match: a Vision id and a flow option's partId may be stored as different keys
+              // (doc .id vs itemId vs legacyErpId). Resolve BOTH through the parts index and match on
+              // any shared identity, so the operator's arm/backplate picks carry over (keeping O2O right).
+              const partsIndex = {};
+              [...libraryParts, ...liveAssemblies].forEach(p => { [p.id, p.itemId, p.legacyErpId].forEach(k => { if (k) partsIndex[k] = p; }); });
+              const idSet = (id) => { const s = new Set([id]); const p = partsIndex[id]; if (p) [p.id, p.itemId, p.legacyErpId].forEach(k => k && s.add(k)); return s; };
+              const visionSets = visionPartIds.map(idSet);
+              const idMatchesVision = (partId) => { if (!partId) return false; const os = idSet(partId); return visionSets.some(vs => [...vs].some(x => os.has(x))); };
               (Array.isArray(targetFlow.steps) ? targetFlow.steps : []).forEach(step => {
                   if (Array.isArray(step.styleOptions) && !translatedParams[step.id]) {
-                      const match = step.styleOptions.find(o => o.partId && visionPartIds.includes(o.partId));
+                      const match = step.styleOptions.find(o => idMatchesVision(o.partId));
                       if (match) translatedParams[step.id] = match.optId;
+                  }
+                  // Backplate sub-chooser: pre-select the plate Vision chose for this position, so the
+                  // O2O-affecting backplate isn't dropped (the operator no longer has to re-pick it).
+                  if (Array.isArray(step.subOptions) && step.subOptions.length && !translatedParams[`${step.id}__sub`]) {
+                      const subMatch = step.subOptions.find(o => idMatchesVision(o.partId));
+                      if (subMatch) translatedParams[`${step.id}__sub`] = subMatch.optId;
                   }
                   // A "clone along pole" step shows the CENTER count, not the total bracket count.
                   if (step.isCenterClone && engineeringNotes) {
@@ -1957,6 +1971,34 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                                   {notes.qtyBends > 0 && <div>• Bent Return Fee: x{notes.qtyBends}</div>}
                                                   {notes.qtyMiters > 0 && <div>• Miter Cut Fee: x{notes.qtyMiters}</div>}
                                                   {notes.qtyMiterReturns > 0 && <div>• Miter Return Fee: x{notes.qtyMiterReturns}</div>}
+                                              </div>
+                                          )}
+
+                                          {/* Carried from Vision — what the operator must match so O2O stays right */}
+                                          {(() => {
+                                              const sd = draft.spatialData || {};
+                                              const all = [...libraryParts, ...liveAssemblies];
+                                              const nm = (id) => { if (!id) return null; const p = all.find(x => x.id === id || x.itemId === id || x.legacyErpId === id); return p ? p.itemName : id; };
+                                              const rows = [
+                                                  ['Left arm', nm(sd.bracketId)], ['Left plate', nm(sd.backplateIdLeft)],
+                                                  ['Right arm', nm(sd.bracketIdRight)], ['Right plate', nm(sd.backplateIdRight)],
+                                                  ['Center arm', nm(sd.bracketIdCenter)], ['Center plate', nm(sd.backplateIdCenter)],
+                                              ].filter(r => r[1]);
+                                              if (!rows.length) return null;
+                                              return (
+                                                  <div style={{ background: 'var(--paper-2)', padding: '12px', border: '1px solid var(--line)', marginTop: '8px' }}>
+                                                      <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>Vision Picks · match these</span>
+                                                      {rows.map((r, i) => <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}><span style={{ color: 'var(--ink-soft)' }}>{r[0]}:</span> <span style={{ textAlign: 'right' }}>{r[1]}</span></div>)}
+                                                  </div>
+                                              );
+                                          })()}
+
+                                          {Array.isArray(notes.hangerLocations) && notes.hangerLocations.length > 0 && (
+                                              <div style={{ background: '#fff', padding: '12px', border: '1px solid var(--line)', marginTop: '8px' }}>
+                                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>Hanger Placement · drill points</span>
+                                                  {notes.hangerLocations.map((h, i) => (
+                                                      <div key={i} style={{ marginBottom: '4px' }}>• <strong style={{ fontWeight: 500 }}>{h.anchor}</strong> — {h.position}{h.note ? <span style={{ color: 'var(--ink-soft)' }}> · {h.note}</span> : null}</div>
+                                                  ))}
                                               </div>
                                           )}
                                       </div>
