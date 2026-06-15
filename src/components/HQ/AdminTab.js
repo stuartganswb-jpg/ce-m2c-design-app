@@ -424,14 +424,20 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   // standard hardware steps fully wired — no hand-picking pins. Creates a NEW flow; touches nothing.
   const handleGenerateHardwareFlow = async () => {
       if (!flowSettings.linkedAssemblyId || !linkedAsm) return alert("Link a Master Assembly first (the dropdown above), then Generate.");
-      const clusters = (linkedAsm.nodeClusters || []).filter(c => c.category);
-      if (!clusters.length) return alert("No tagged clusters on this assembly. Tag them in Node Grouping (Category + Location + Position) first.");
       const pinByCluster = {};
       (linkedBomPins || []).forEach(p => { if (p.clusterId) pinByCluster[p.clusterId] = p; });
+      const partsById = {};
+      allApprovedDesigns.forEach(p => { partsById[p.id] = p; if (p.itemId) partsById[p.itemId] = p; if (p.legacyErpId) partsById[p.legacyErpId] = p; });
+      const classifyCat = (pt) => { const t = String(pt || '').toUpperCase(); if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE'; if (t.includes('BRACKET')) return 'BRACKET'; if (t.includes('FINIAL')) return 'FINIAL'; if (t.includes('POLE') || t.includes('ROD')) return 'POLE'; return ''; };
+      // Category from the cluster tag, falling back to the pin's part product type (so clusters
+      // tagged only with Location/Position still classify).
+      const catOf = (cl) => { if (cl.category) return String(cl.category).toUpperCase(); const pin = pinByCluster[cl.id]; const part = pin && partsById[pin.partId]; return classifyCat(part?.manufacturingSpecs?.productType || part?.productType); };
+      const clusters = (linkedAsm.nodeClusters || []).filter(c => catOf(c));
+      if (!clusters.length) return alert("No usable clusters — none have a Category tag or a classifiable part. Tag them in Node Grouping first (or set the parts' Product Type).");
       // Group a category's clusters by part; union each part's placement nodes into one option.
       const groupByPart = (cat, filterFn) => {
           const map = {};
-          clusters.filter(c => c.category === cat && (!filterFn || filterFn(c))).forEach(cl => {
+          clusters.filter(c => catOf(c) === cat && (!filterFn || filterFn(c))).forEach(cl => {
               const pin = pinByCluster[cl.id];
               const partId = pin?.partId || cl.name;
               const partName = pin?.partName || cl.name;
