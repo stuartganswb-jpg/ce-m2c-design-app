@@ -10,6 +10,7 @@ import './shopStyles.css';
 // IMPORT THE COMPONENTS
 import ShopEngineering from './ShopEngineering';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
+import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 import { mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
 
@@ -23,6 +24,7 @@ const ShopFloor = () => {
     const [user, setUser] = useState(null);
     const [pinInput, setPinInput] = useState("");
     const [activeTab, setActiveTab] = useState('floor');
+    const [cfgQuote, setCfgQuote] = useState(null); // "view configured item" read-only 3D modal
     const [perms, setPerms] = useState({});
 
     // STATE
@@ -896,6 +898,9 @@ const ShopFloor = () => {
                                 {order.isOutsourced ? 'Send to Plating' : 'Complete & Label'}
                             </button>
                         )}
+                        {order.quoteId && (
+                            <button onClick={() => setCfgQuote(order.quoteId)} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🔍 View Item</button>
+                        )}
                     </div>
                 </div>
             );
@@ -986,6 +991,7 @@ const ShopFloor = () => {
             </main>
 
             {renderModal()}
+            {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} onClose={() => setCfgQuote(null)} />}
         </div>
     );
 };

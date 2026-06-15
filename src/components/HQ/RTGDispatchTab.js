@@ -3,6 +3,7 @@ import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { classifyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
 import { makeFullTasks } from '../Shared/workOrderContract';
+import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers).
 const getJobLines = (job) => (job?.cpqData?.breakdown || []).filter(l => l && !l.isHeader);
@@ -29,6 +30,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
     const [activeViewOrder, setActiveViewOrder] = useState(null);
     const [activeJobDetails, setActiveJobDetails] = useState(null);
+    const [cfgQuote, setCfgQuote] = useState(null); // "view configured item" read-only 3D modal
 
     const addLog = (msg, type = 'info') => {
         const time = new Date().toLocaleTimeString();
@@ -748,6 +750,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                             {so.autoSplit ? 'Auto-Split ✓' : '⚡ Import & Auto-Split to Floors'}
                                         </button>
                                         <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(so, 'sales')}>View</button>
+                                        {so.hqJobId && <button style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }} onClick={() => setCfgQuote(so.hqJobId)}>🔍 Config</button>}
                                     </div>
                                 </div>
                             ))}
@@ -866,6 +869,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 </div>
 
             </div>
+
+            {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} onClose={() => setCfgQuote(null)} />}
 
             {/* VIEW ORDER MODAL */}
             {activeViewOrder && (

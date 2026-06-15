@@ -3,6 +3,7 @@ import { db } from '../../firebase';
 import { doc, updateDoc, setDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
 import { btnStyle, inputStyle, labelStyle, sectionHeaderStyle, cardStyle } from './finishingStyles';
 import { makeFullTasks } from '../Shared/workOrderContract';
+import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 
 const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
   const getThreeWeeksOut = () => {
@@ -27,6 +28,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
   const [aiOptimized, setAiOptimized] = useState(false);
 
   const [activeSpecs, setActiveSpecs] = useState(null);
+  const [cfgQuote, setCfgQuote] = useState(null); // "view configured item" read-only 3D modal
 
   useEffect(() => { setReqDate(getThreeWeeksOut()); }, [orderType]);
 
@@ -247,6 +249,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
                 
                 <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
                     <button onClick={() => setActiveSpecs(wo)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>Specs</button>
+                    {wo.quoteId && <button onClick={() => setCfgQuote(wo.quoteId)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>🔍 View Item</button>}
                     {wo.stepStatus === "Pending" ? (
                         <button onClick={() => startSetup(wo)} style={{ ...btnStyle, flex: 2, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup</button>
                     ) : (
@@ -257,6 +260,8 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
           ))
         )}
       </div>
+
+      {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} onClose={() => setCfgQuote(null)} />}
 
       {activeSpecs && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

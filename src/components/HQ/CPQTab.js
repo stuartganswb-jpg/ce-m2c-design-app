@@ -62,7 +62,7 @@ const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, sty
     );
 };
 
-const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides }) => {
+export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
@@ -347,7 +347,7 @@ const ViewCapturer = ({ onReady }) => {
 // Engineering Specs strip — the Vision "post-it" laid out HORIZONTALLY, shown in the pricing row
 // (between the unit price and the breakdown) so the full spec list never gets clipped by the 3D
 // viewport height (the old vertical overlay cut off the center-bracket specs at the bottom).
-const EngineeringSpecsStrip = ({ draft, notes, parts }) => {
+export const EngineeringSpecsStrip = ({ draft, notes, parts }) => {
     const nm = (id) => { if (!id) return null; const p = parts.find(x => x.id === id || x.itemId === id || x.legacyErpId === id); return p ? p.itemName : id; };
     const sd = draft.spatialData || {};
     const picks = [
@@ -1063,8 +1063,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           stepQuantities: { ...stepQuantities },
           dimensionInputs: { ...dimensionInputs },
           engineeringNotes: activeDraft ? activeDraft.specs?.engineeringNotes : null,
+          spatialData: activeDraft?.spatialData || null,
           draftSvg: activeDraftSvg,
-          capturedViews: capturedViews || null
+          capturedViews: capturedViews || null,
+          // Snapshot the resolved render so this exact configuration re-renders later (shop/finishing
+          // floor viewer + HQ) even if the flow or assembly is edited afterward. cadUrl + the three
+          // plain override maps fully drive DynamicModel — no live recompute, frozen as ordered.
+          renderState: activeAssembly?.manufacturingSpecs?.cadUrl ? {
+              cadUrl: activeAssembly.manufacturingSpecs.cadUrl,
+              textureOverrides: { ...textureOverrides },
+              visibilityOverrides: { ...visibilityOverrides },
+              cloneSpecs: JSON.parse(JSON.stringify(cloneSpecs || []))
+          } : null
       };
       setCart([...cart, item]);
       
