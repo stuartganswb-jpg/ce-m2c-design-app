@@ -269,6 +269,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [activeDraftSvg, setActiveDraftSvg] = useState(null);
 
   const [viewMode, setViewMode] = useState("3D");
+  // TEMP (Stage 1 debug): when on, bypass hidden-until-chosen so the full glb renders.
+  // Used to tell a glb-load problem apart from a visibility problem. Remove before merge.
+  const [debugShowAll, setDebugShowAll] = useState(false);
 
   useEffect(() => {
       const sessionStr = localStorage.getItem('hq_active_quote_session');
@@ -346,6 +349,47 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       });
       return () => unsub();
   }, [activeAssemblyId, liveAssemblies]);
+
+  // Stage 1 — default a starting configuration when a generated flow opens with no draft.
+  // Hidden-until-chosen (see visibilityOverrides) hides every mesh a STYLE_SWAP step could
+  // control until that step has a selection, so an un-touched flow renders nearly blank.
+  // Seeding the first geometry-bearing option for each style step (+ the first Mount location)
+  // makes the FULL default model show; the customer can still swap any option afterward.
+  // Guardrails: never runs while a resumed draft owns the selections, and only fills steps
+  // that have no value yet (so a customer's pick, or a value seeded on an earlier pass once
+  // activeAssembly loads, is never clobbered) — which also makes re-fires from cpq_flows
+  // snapshots a no-op.
+  useEffect(() => {
+      if (!activeFlow || activeDraftId) return;
+      const steps = activeFlow.steps || [];
+      setDynamicConfigParams(prev => {
+          const next = { ...prev };
+          let changed = false;
+          steps.forEach(step => {
+              if (next[step.id]) return; // already chosen (default, user, or prior pass)
+              if (step.type === 'STYLE_SWAP' && Array.isArray(step.styleOptions) && step.styleOptions.length) {
+                  // Prefer an option that actually controls geometry so the default shows a real
+                  // part, not a fee-only placeholder (e.g. the End Treatment miter/bend fees).
+                  const hasGeom = (o) => {
+                      const id = o.optId || o.partId;
+                      const csv = (step.geometryMap && step.geometryMap[id]) || o.targetNode;
+                      return csv && String(csv).trim();
+                  };
+                  const pick = step.styleOptions.find(hasGeom) || step.styleOptions[0];
+                  const id = pick.optId || pick.partId;
+                  if (id) { next[step.id] = id; changed = true; }
+              } else if (step.mountSelector) {
+                  // Needs activeAssembly's clusters (loaded async after the flow); on the pass
+                  // where they're absent this is skipped and filled once they arrive.
+                  const ORDER = { WALL: 0, CEILING: 1, END: 2 };
+                  const locs = [...new Set((activeAssembly?.nodeClusters || []).map(c => c.location).filter(Boolean))]
+                      .sort((a, b) => (ORDER[a] ?? 9) - (ORDER[b] ?? 9));
+                  if (locs.length) { next[step.id] = locs[0]; changed = true; }
+              }
+          });
+          return changed ? next : prev;
+      });
+  }, [activeFlow, activeAssembly, activeDraftId]);
 
   const currentStep = activeFlow?.steps?.[currentStepIndex];
   const availableProductTypes = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.productType).filter(Boolean))];
@@ -1592,9 +1636,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       <div style={{ color: 'var(--ink)', fontSize: '1.2rem', fontFamily: 'var(--serif)', fontWeight: 500 }}>
                           Live {viewMode} Engine
                       </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                      {viewMode === '3D' && activeAssembly?.manufacturingSpecs?.cadUrl && (
+                          /* TEMP (Stage 1 debug): show every mesh regardless of selection. Remove before merge. */
+                          <label title="Debug: render the full glb, ignoring hidden-until-chosen" style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: debugShowAll ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                              <input type="checkbox" checked={debugShowAll} onChange={e => setDebugShowAll(e.target.checked)} style={{ cursor: 'pointer' }} />
+                              Show all
+                          </label>
+                      )}
                       <div style={{ display: 'flex', border: '1px solid var(--line)', borderRadius: '2px', overflow: 'hidden', background: '#fff' }}>
                           <button onClick={() => setViewMode('2D')} style={{ padding: '8px 16px', background: viewMode === '2D' ? 'var(--ink)' : 'transparent', color: viewMode === '2D' ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', transition: 'all 0.2s' }}>2D</button>
                           <button onClick={() => setViewMode('3D')} disabled={!activeAssembly?.manufacturingSpecs?.cadUrl} style={{ padding: '8px 16px', background: viewMode === '3D' ? 'var(--ink)' : 'transparent', color: viewMode === '3D' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: activeAssembly?.manufacturingSpecs?.cadUrl ? 'pointer' : 'not-allowed', opacity: activeAssembly?.manufacturingSpecs?.cadUrl ? 1 : 0.5, fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', transition: 'all 0.2s' }}>3D</button>
+                      </div>
                       </div>
                   </div>
                   
@@ -1616,7 +1669,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   <DynamicModel
                                       url={activeAssembly.manufacturingSpecs.cadUrl}
                                       textureOverrides={textureOverrides}
-                                      visibilityOverrides={visibilityOverrides}
+                                      visibilityOverrides={debugShowAll ? {} : visibilityOverrides}
                                       cloneSpecs={cloneSpecs}
                                   />
                               </Bounds>
