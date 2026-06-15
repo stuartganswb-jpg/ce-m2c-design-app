@@ -1199,24 +1199,34 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
   const visibilityOverrides = useMemo(() => {
       if (!activeFlow) return {};
+      // AND across steps: a node renders only if EVERY step that lists it (in any of its options'
+      // geometry) has the customer's CURRENT selection include it. This lets independent dimensions
+      // intersect — e.g. a ceiling-vertical backplate hides when Mount=Wall even though Type=Vertical
+      // — instead of the old last-pick-wins, which couldn't combine two choices. Keyed per individual
+      // node (not the comma list) so the AND is computed node-by-node.
       const overrides = {};
-      
-      activeFlow.steps?.forEach(step => {
-          const selectedValueId = dynamicConfigParams[step.id];
-          if (selectedValueId && step.geometryMap && Object.keys(step.geometryMap).length > 0) {
-              Object.keys(step.geometryMap).forEach(optId => {
-                  const targetMesh = step.geometryMap[optId];
-                  if (targetMesh) overrides[targetMesh] = (optId === selectedValueId);
+      (activeFlow.steps || []).forEach(step => {
+          if (!step.geometryMap || Object.keys(step.geometryMap).length === 0) return;
+          const selectedOptId = dynamicConfigParams[step.id];
+          const controlled = new Set();
+          const inSelected = new Set();
+          Object.entries(step.geometryMap).forEach(([optId, csv]) => {
+              if (!csv) return;
+              String(csv).split(',').map(s => s.trim()).filter(Boolean).forEach(n => {
+                  controlled.add(n);
+                  if (optId === selectedOptId) inSelected.add(n);
               });
-          }
+          });
+          controlled.forEach(n => {
+              const allowed = inSelected.has(n);
+              overrides[n] = (n in overrides) ? (overrides[n] && allowed) : allowed;
+          });
       });
 
-      // Flow-level hidden geometry: when one CAD file holds several configs (wall /
-      // ceiling / end brackets), hide the clusters this flow doesn't use so only this
-      // config's parts render — e.g. the wall flow never shows ceiling/end brackets.
+      // Flow-level hidden geometry: force-hide whole clusters this config never shows.
       (activeFlow.hiddenClusters || []).forEach(cid => {
           const cl = (activeAssembly?.nodeClusters || []).find(c => c.id === cid);
-          (cl?.nodes || []).forEach(n => { if (n) overrides[n] = false; });
+          (cl?.nodes || cl?.meshes || []).forEach(n => { if (n) overrides[n] = false; });
       });
 
       return overrides;

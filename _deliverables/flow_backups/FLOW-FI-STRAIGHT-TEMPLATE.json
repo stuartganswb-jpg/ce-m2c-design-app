@@ -12,8 +12,24 @@
   "_note_top": "FIRST: link this flow to your real Flat Iron Master Assembly via the 'Link to Master Assembly' dropdown (linkedAssemblyId is intentionally blank — the assembly's DOC id differs per database, so a hardcoded one imports as UNLINKED). Shape-only preset: fabEndStyle + fabProjection are blank on purpose — Vision supplies end style + projection per line. One flow covers wall/ceiling/inside because each bracket option carries its own geometryMap (show selected, hide others), which replaces the old static hiddenClusters. Fill every PLACEHOLDER-* with your real M2C-INV part id (styleOptions) or the real mesh names from the .glb (geometryMap). The importer drops these _note keys.",
   "steps": [
     {
+      "id": "STEP-MATERIAL",
+      "title": "Pole / Rod Material",
+      "type": "STYLE_SWAP",
+      "partHandling": "Custom",
+      "hideQty": true,
+      "styleOptions": [
+        { "optId": "WOOD", "partId": "PLACEHOLDER-WOOD-POLE", "partName": "Wood Pole", "price": 0 },
+        { "optId": "STEEL", "partId": "PLACEHOLDER-STEEL-POLE", "partName": "Steel Pole", "price": 0 }
+      ],
+      "geometryMap": {
+        "WOOD": "PLACEHOLDER-wood-pole-meshes",
+        "STEEL": "PLACEHOLDER-steel-pole-meshes"
+      },
+      "_note": "Material SWAP — pick Wood vs Steel. Delete these placeholders and check the two REAL pole pins (wood-pole + steel-pole); each one's geometry then shows that pole and hides the other. It's a STYLE_SWAP (not dimensions) so it can swap geometry. hideQty=true (material has no quantity)."
+    },
+    {
       "id": "STEP-POLE",
-      "title": "Pole — Material, Finish & Length",
+      "title": "Pole Length & Finish",
       "type": "VISUAL_DIMENSIONS",
       "dataSource": "master_finishes",
       "partHandling": "Custom",
@@ -21,7 +37,7 @@
       "qtyHelperText": "Pole length (feet)",
       "required": true,
       "geometryMap": {},
-      "_note": "Finish grid + length. If steel vs wood changes the model, add each material as an option here (or a small material DROPDOWN before this) and map it in geometryMap to its pole meshes."
+      "_note": "Finish grid + length. Comes AFTER the material swap; no geometry here (the material step already chose the pole)."
     },
     {
       "id": "STEP-ENDTREAT",
