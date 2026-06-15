@@ -93,7 +93,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
 
         const applyAllOverrides = () => {
             clonedScene.traverse((child) => {
-                if (child.isMesh && child.userData.originalMaterial) {
+                if (child.isMesh && child.userData.originalMaterial && typeof child.userData.originalMaterial.clone === 'function') {
                     // Match a target string against ONE node name: exact, dotted/underscored
                     // prefix, or format-agnostic (strip non-alphanumerics so a sanitized cluster
                     // node "body1048" matches a raw mesh "Body1.048"). Without the sanitized key a
@@ -183,7 +183,19 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
                             const targetAlong = lo + (hi - lo) * (i / (n + 1));
                             const delta = targetAlong - srcAlong;
                             const offset = new THREE.Matrix4().makeTranslation(axis === 'x' ? delta : 0, axis === 'y' ? delta : 0, axis === 'z' ? delta : 0);
-                            src.forEach(m => { const c = m.clone(); c.visible = true; c.matrixAutoUpdate = false; c.matrix.copy(invRoot).multiply(offset).multiply(m.matrixWorld); group.add(c); });
+                            src.forEach(m => {
+                                const c = m.clone();
+                                c.visible = true;
+                                c.matrixAutoUpdate = false;
+                                c.matrix.copy(invRoot).multiply(offset).multiply(m.matrixWorld);
+                                // Object3D.clone() JSON-serializes userData, turning originalMaterial
+                                // into a plain object (no .clone()). Restore the real Material refs so
+                                // the next texture pass over these clones doesn't throw and lose the
+                                // WebGL context (the "white-out" after a few choices).
+                                c.userData.originalMaterial = m.userData.originalMaterial;
+                                c.userData.originalVisible = true;
+                                group.add(c);
+                            });
                         }
                     });
                     if (group.children.length) clonedScene.add(group);
