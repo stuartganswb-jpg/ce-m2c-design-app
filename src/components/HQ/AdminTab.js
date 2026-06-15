@@ -463,6 +463,22 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const brackets = groupPlacements('BRACKET');
       const backplates = groupPlacements('BACKPLATE');
 
+      // A bracket and the backplate sharing its (position, location) tags are one physical mount,
+      // so fold the matching backplate's geometry INTO the bracket option — picking the bracket +
+      // mount brings its plate along (no separate plate pick). A backplate with no matching bracket
+      // falls back to its own per-position step so nothing is lost.
+      const tagKey = (o) => `${o.position || ''}|${o.location || ''}`;
+      const bundledBackplates = new Set();
+      brackets.forEach(b => {
+          backplates.forEach(bp => {
+              if (bp.targetNode && tagKey(bp) === tagKey(b)) {
+                  b.targetNode = [b.targetNode, bp.targetNode].filter(Boolean).join(', ');
+                  bundledBackplates.add(bp.optId);
+              }
+          });
+      });
+      const looseBackplates = backplates.filter(bp => !bundledBackplates.has(bp.optId));
+
       const ts = Date.now();
       const steps = [];
       let n = 0;
@@ -491,11 +507,34 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           });
       };
 
+      // End Treatment per END position (Left/Right/...), each with that end's finials plus the
+      // shared miter / bend / flush fee options, so each end is finished independently. With no
+      // position-tagged finials it collapses to a single End Treatment (just the fee options).
+      const addEndTreatment = (opts) => {
+          const present = [...new Set(opts.map(o => o.position || ''))];
+          const ordered = ['LEFT', 'CENTER', 'RIGHT', ''].filter(p => present.includes(p))
+              .concat(present.filter(p => !['LEFT', 'CENTER', 'RIGHT', ''].includes(p)));
+          (ordered.length ? ordered : ['']).forEach(pos => {
+              const group = opts.filter(o => (o.position || '') === pos);
+              const label = POS_LABEL[pos] !== undefined ? POS_LABEL[pos] : pos;
+              const sfx = pos || 'X';
+              add({
+                  title: label ? `${label} End Treatment` : 'End Treatment',
+                  type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, finishDataSource: 'master_finishes',
+                  styleOptions: [...group,
+                      { optId: `OPT-MITER-${sfx}`, partId: '', partName: 'Mitered Return (fee — set price)', targetNode: '', price: 0 },
+                      { optId: `OPT-BEND-${sfx}`, partId: '', partName: 'Bent Return (fee — set price)', targetNode: '', price: 0 },
+                      { optId: `OPT-FLUSH-${sfx}`, partId: '', partName: 'Flush Cut', targetNode: '', price: 0 }],
+                  geometryMap: geom(group)
+              });
+          });
+      };
+
       add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, styleOptions: pole, geometryMap: geom(pole) });
       add({ title: 'Pole Length & Finish', type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: 'calc_straight_pole', qtyHelperText: 'Pole length (feet)', required: true, geometryMap: {} });
       addPerPosition(brackets, 'Bracket & Mount', { clone: true });
-      addPerPosition(backplates, 'Backplate');
-      add({ title: 'End Treatment', type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, finishDataSource: 'master_finishes', styleOptions: [...finial, { optId: 'OPT-MITER', partId: '', partName: 'Mitered Return (fee — set price)', targetNode: '', price: 0 }, { optId: 'OPT-BEND', partId: '', partName: 'Bent Return (fee — set price)', targetNode: '', price: 0 }, { optId: 'OPT-FLUSH', partId: '', partName: 'Flush Cut', targetNode: '', price: 0 }], geometryMap: geom(finial) });
+      if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
+      addEndTreatment(finial);
       add({ title: 'Rings', type: 'DROPDOWN', dataSource: 'master_finishes', partHandling: 'Small Parts', qtyHelperText: 'Number of rings', geometryMap: {} });
       add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
       add({ title: 'Cut / Splice Fee', type: 'STATIC_FEE', qtyHelperText: 'Per cut / splice', basePrice: '0' });
@@ -509,7 +548,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }));
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;
-          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Pole materials: ${pole.length}\n• Bracket options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} across ${posCount(backplates)} step(s)\n• Finials: ${finial.length}\n\nEach bracket/backplate position is its own step (bracket + mount combined via tags); the standalone Mount step is gone. Review + set prices, then test. Nothing was deleted.`);
+          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Pole materials: ${pole.length}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${bundledBackplates.size} bundled into matching brackets, ${looseBackplates.length} standalone\n• Finials: ${finial.length} (End Treatment split per end)\n\nBracket + its same-tag backplate are now one choice; End Treatment is per end; no standalone Mount step. Review + set prices, then test. Nothing was deleted.`);
       } catch (err) { console.error("Generate failed:", err); alert("Generate failed: " + (err?.message || err)); }
   };
 
