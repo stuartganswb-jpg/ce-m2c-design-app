@@ -108,21 +108,23 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
                     // ancestry rule Node Grouping highlights with, so render == what you grouped.
                     const hitTarget = (t) => { let n = child; while (n) { if (n.name && nameHit(n.name, t)) return true; n = n.parent; } return false; };
 
-                    // Visibility = AND across control GROUPS. A mesh hides only if some group
-                    // controls it (matches one of its node names) but the group's CURRENT selection
-                    // doesn't include it. A mesh matching its selected option stays visible even if
-                    // it also matches a sibling option's node — order-independent, no "trigger"
-                    // needed, and sub-options stay hidden-until-chosen.
-                    let hidden = false;
-                    const groups = visibilityOverrides && visibilityOverrides.groups;
-                    if (Array.isArray(groups)) {
-                        for (const g of groups) {
-                            if (g.controlled.some(hitTarget) && !g.selected.some(hitTarget)) { hidden = true; break; }
+                    let isVis = child.userData.originalVisible;
+                    if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
+                        let anyShow = false, anyHide = false;
+                        for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
+                            const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+                            if (targets.some(hitTarget)) {
+                                if (isVisibleFlag) anyShow = true; else anyHide = true;
+                            }
                         }
-                        const fh = visibilityOverrides.forceHidden;
-                        if (!hidden && Array.isArray(fh) && fh.some(hitTarget)) hidden = true;
+                        // A mesh explicitly shown by ANY control wins over an incidental hide from
+                        // another control's fuzzy/ancestry match — fixes a just-selected part not
+                        // appearing until another change "triggers" a redraw. Deterministic
+                        // (order-independent), unlike the previous last-match-wins.
+                        if (anyShow) isVis = true;
+                        else if (anyHide) isVis = false;
                     }
-                    child.visible = hidden ? false : child.userData.originalVisible;
+                    child.visible = isVis;
 
                     let matchedTexUrl = null;
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
@@ -1327,56 +1329,57 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   }, [dynamicConfigParams, activeFlow, globalFinishes, outsourceFinishes, dynamicAssets]);
 
   const visibilityOverrides = useMemo(() => {
-      if (!activeFlow) return { groups: [], forceHidden: [] };
-      // Each control GROUP = { controlled, selected }: the node names a dimension can show/hide, and
-      // the subset the CURRENT selection allows. The renderer hides a mesh only if some group
-      // controls it but doesn't currently select it (AND across groups). Kept as discrete groups
-      // (not a flattened node->bool map) so a mesh that matches its SELECTED option is never hidden
-      // just because it also matches a sibling option's node — order-independent and correct when
-      // one mesh matches several entries (the cause of "selected part won't show" / "all sub-options
-      // show until one is picked").
-      const groups = [];
-      const norm = (n) => String(n).trim().toLowerCase();
-      const pushMap = (gmap, sel) => {
-          if (!gmap || Object.keys(gmap).length === 0) return;
-          const controlled = new Set(); const selected = new Set();
-          Object.entries(gmap).forEach(([optId, csv]) => {
-              if (!csv) return;
-              String(csv).split(',').map(norm).filter(Boolean).forEach(n => {
-                  controlled.add(n);
-                  if (optId === sel) selected.add(n);
-              });
-          });
-          if (controlled.size) groups.push({ controlled: [...controlled], selected: [...selected] });
-      };
+      if (!activeFlow) return {};
+      // AND across steps: a node renders only if EVERY step that lists it (in any of its options'
+      // geometry) has the customer's CURRENT selection include it. This lets independent dimensions
+      // intersect — e.g. a ceiling-vertical backplate hides when Mount=Wall even though Type=Vertical
+      // — instead of the old last-pick-wins, which couldn't combine two choices. Keyed per individual
+      // node (not the comma list) so the AND is computed node-by-node.
+      const overrides = {};
       (activeFlow.steps || []).forEach(step => {
-          // Tag-driven Mount selector: controls every location-tagged cluster; only the picked
-          // Location's nodes are "selected".
+          // Tag-driven Mount selector: controls every location-tagged end cluster; only those whose
+          // Location matches the customer's pick stay allowed (AND-combined like any other step).
           if (step.mountSelector) {
               const selectedLoc = dynamicConfigParams[step.id];
               const pos = step.mountPosition; // 'LEFT' | 'RIGHT' | '' (all positions)
-              const controlled = new Set(); const selected = new Set();
+              const controlled = new Set(); const inSelected = new Set();
               (activeAssembly?.nodeClusters || []).forEach(cl => {
                   if (!cl.location || (pos && cl.position !== pos)) return;
-                  (cl.nodes || cl.meshes || []).forEach(n => { if (!n) return; const k = norm(n); controlled.add(k); if (cl.location === selectedLoc) selected.add(k); });
+                  (cl.nodes || cl.meshes || []).forEach(n => { if (!n) return; controlled.add(n); if (cl.location === selectedLoc) inSelected.add(n); });
               });
-              if (controlled.size) groups.push({ controlled: [...controlled], selected: [...selected] });
+              controlled.forEach(n => { const allowed = inSelected.has(n); overrides[n] = (n in overrides) ? (overrides[n] && allowed) : allowed; });
               return;
           }
-          // Main style choice + an optional second geometry chooser (e.g. the backplate paired with
-          // the bracket). Each is its own group: independent hidden-until-chosen, AND-combined.
-          pushMap(step.geometryMap, dynamicConfigParams[step.id]);
-          pushMap(step.subGeometryMap, dynamicConfigParams[`${step.id}__sub`]);
+          const applyMap = (gmap, sel) => {
+              if (!gmap || Object.keys(gmap).length === 0) return;
+              const controlled = new Set();
+              const inSelected = new Set();
+              Object.entries(gmap).forEach(([optId, csv]) => {
+                  if (!csv) return;
+                  String(csv).split(',').map(s => s.trim()).filter(Boolean).forEach(n => {
+                      controlled.add(n);
+                      if (optId === sel) inSelected.add(n);
+                  });
+              });
+              controlled.forEach(n => {
+                  const allowed = inSelected.has(n);
+                  overrides[n] = (n in overrides) ? (overrides[n] && allowed) : allowed;
+              });
+          };
+          // Main style choice + an optional second geometry chooser in the same step (e.g. the
+          // backplate paired with the chosen bracket/mount). Each is independent hidden-until-chosen,
+          // AND-combined per node like any other dimension.
+          applyMap(step.geometryMap, dynamicConfigParams[step.id]);
+          applyMap(step.subGeometryMap, dynamicConfigParams[`${step.id}__sub`]);
       });
 
       // Flow-level hidden geometry: force-hide whole clusters this config never shows.
-      const forceHidden = [];
       (activeFlow.hiddenClusters || []).forEach(cid => {
           const cl = (activeAssembly?.nodeClusters || []).find(c => c.id === cid);
-          (cl?.nodes || cl?.meshes || []).forEach(n => { if (n) forceHidden.push(norm(n)); });
+          (cl?.nodes || cl?.meshes || []).forEach(n => { if (n) overrides[n] = false; });
       });
 
-      return { groups, forceHidden };
+      return overrides;
   }, [dynamicConfigParams, activeFlow, activeAssembly]);
 
   // Steps flagged "clone along pole" (e.g. the center passing bracket) drive procedural cloning:
@@ -1785,7 +1788,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   <DynamicModel
                                       url={activeAssembly.manufacturingSpecs.cadUrl}
                                       textureOverrides={textureOverrides}
-                                      visibilityOverrides={debugShowAll ? { groups: [], forceHidden: [] } : visibilityOverrides}
+                                      visibilityOverrides={debugShowAll ? {} : visibilityOverrides}
                                       cloneSpecs={cloneSpecs}
                                       highlightOverrides={highlightOverrides}
                                   />
