@@ -401,9 +401,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           steps.forEach(step => {
               if (step.type === 'STYLE_SWAP' && Array.isArray(step.styleOptions) && step.styleOptions.length) {
                   if (!next[step.id]) { const id = firstGeom(step.styleOptions, step.geometryMap); if (id) { next[step.id] = id; changed = true; } }
-                  // Secondary chooser in the same step (e.g. the backplate paired with the bracket).
+                  // Secondary chooser in the same step (e.g. the backplate paired with the bracket),
+                  // seeded to a plate whose location matches the chosen bracket's mount.
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
-                      const sid = firstGeom(step.subOptions, step.subGeometryMap);
+                      const mainOpt = step.styleOptions.find(o => (o.optId || o.partId) === next[step.id]);
+                      const loc = mainOpt?.location;
+                      const cands = loc ? step.subOptions.filter(o => !o.location || o.location === loc) : step.subOptions;
+                      const sid = firstGeom(cands.length ? cands : step.subOptions, step.subGeometryMap);
                       if (sid) { next[`${step.id}__sub`] = sid; changed = true; }
                   }
               } else if (step.mountSelector && !next[step.id]) {
@@ -829,7 +833,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // styles can scope different finish sets (e.g. a Wood rod offers wood-clear finishes, a
   // Metal rod offers metal finishes), so a carried-over finish could be invalid for — and
   // applied to the wrong mesh of — the new selection.
-  const handleStyleChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value, [`${stepId}__finish`]: '' }));
+  const handleStyleChange = (stepId, value) => setDynamicConfigParams(prev => {
+      const next = { ...prev, [stepId]: value, [`${stepId}__finish`]: '' };
+      // When the main choice changes on a step with a secondary chooser (e.g. bracket -> backplate),
+      // auto-pick the first sub option whose location matches the new choice's mount, so the plate
+      // stays coherent with the chosen mount.
+      const step = activeFlow?.steps?.find(s => s.id === stepId);
+      if (step && Array.isArray(step.subOptions) && step.subOptions.length) {
+          const mainOpt = (step.styleOptions || []).find(o => (o.optId || o.partId) === value);
+          const loc = mainOpt?.location;
+          const cands = loc ? step.subOptions.filter(o => !o.location || o.location === loc) : step.subOptions;
+          const pick = cands.find(o => o.targetNode) || cands[0];
+          next[`${stepId}__sub`] = pick ? pick.optId : '';
+      }
+      return next;
+  });
 
   const handleNextStep = () => {
       if (!activeFlow) return;
@@ -1274,13 +1292,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // (auto-resolved from the BOM-derived geometryMap — no manual node needed).
           if (step.finishDataSource) {
               const finishId = dynamicConfigParams[`${step.id}__finish`];
-              const selectedStyleId = dynamicConfigParams[step.id];
-              const targetNode = (step.geometryMap && step.geometryMap[selectedStyleId])
-                  || (step.styleOptions || []).find(o => (o.optId || o.partId) === selectedStyleId)?.targetNode
-                  || step.finishTargetNodes;
-              if (finishId && targetNode) {
-                  const fData = [...globalFinishes, ...outsourceFinishes, ...dynamicAssets].find(f => f.id === finishId);
-                  if (fData?.textureUrl) overrides[targetNode] = fData.textureUrl;
+              const fData = finishId && [...globalFinishes, ...outsourceFinishes, ...dynamicAssets].find(f => f.id === finishId);
+              if (fData?.textureUrl) {
+                  // Apply the step's finish to BOTH its selected geometry and its selected sub
+                  // geometry (e.g. the bracket AND its chosen backplate share one finish).
+                  const selMain = dynamicConfigParams[step.id];
+                  const selSub = dynamicConfigParams[`${step.id}__sub`];
+                  const mainNode = (step.geometryMap && step.geometryMap[selMain])
+                      || (step.styleOptions || []).find(o => (o.optId || o.partId) === selMain)?.targetNode
+                      || step.finishTargetNodes;
+                  const subNode = (step.subGeometryMap && selSub) ? step.subGeometryMap[selSub] : '';
+                  [mainNode, subNode].filter(Boolean).forEach(node => { overrides[node] = fData.textureUrl; });
               }
           }
       });
@@ -1502,17 +1524,24 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           {/* Second geometry chooser in the same step (e.g. the backplate that pairs
                               with the chosen bracket/mount): pick the correct plate among several at
                               this position. Drives visibility like the main style choice. */}
-                          {currentStep.type === 'STYLE_SWAP' && Array.isArray(currentStep.subOptions) && currentStep.subOptions.length > 0 && (
+                          {currentStep.type === 'STYLE_SWAP' && Array.isArray(currentStep.subOptions) && currentStep.subOptions.length > 0 && (() => {
+                              // Narrow the plate list to the chosen bracket's mount/location, so only
+                              // matching plates show (e.g. wall plates when a wall arm is selected).
+                              const selMainOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === dynamicConfigParams[currentStep.id]);
+                              const selLoc = selMainOpt?.location;
+                              const subs = currentStep.subOptions.filter(o => !selLoc || !o.location || o.location === selLoc);
+                              return (
                               <div style={{ marginBottom: '20px' }}>
                                   <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>{currentStep.subLabel || 'Backplate'}</label>
                                   <select value={dynamicConfigParams[`${currentStep.id}__sub`] || ''} onChange={(e) => handleParamChange(`${currentStep.id}__sub`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none' }}>
                                       <option value="">-- None --</option>
-                                      {currentStep.subOptions.map(o => (
+                                      {subs.map(o => (
                                           <option key={o.optId} value={o.optId}>{o.partName}</option>
                                       ))}
                                   </select>
                               </div>
-                          )}
+                              );
+                          })()}
 
                           {/* Compound step: an optional second "Finish" dropdown applied to the
                               selected (visible) item's mesh. The finish set is scoped to the chosen

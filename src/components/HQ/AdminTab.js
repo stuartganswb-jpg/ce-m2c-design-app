@@ -462,6 +462,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const finial = groupPlacements('FINIAL');
       const brackets = groupPlacements('BRACKET');
       const backplates = groupPlacements('BACKPLATE');
+      const poleNodes = pole.map(o => o.targetNode).filter(Boolean).join(', ');
 
       // Backplates ride as a SECOND chooser on their position's bracket step, so you pick the
       // correct plate among the several at that position (not auto-merged). Any backplate whose
@@ -491,7 +492,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               const subs = subOpts ? subOpts.filter(o => (o.position || '') === pos) : [];
               add({
                   title: label ? `${label} ${base}` : base,
-                  type: 'STYLE_SWAP', partHandling: 'Custom', required: false,
+                  type: 'STYLE_SWAP', partHandling: 'Custom', required: false, finishDataSource: 'master_finishes',
                   ...(clone && pos === 'CENTER' ? { isCenterClone: true, qtyHelperText: 'Number of center passing brackets' } : {}),
                   styleOptions: group, geometryMap: geom(group),
                   ...(subs.length ? { subLabel, subOptions: subs, subGeometryMap: geom(subs) } : {})
@@ -523,7 +524,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       };
 
       add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, styleOptions: pole, geometryMap: geom(pole) });
-      add({ title: 'Pole Length & Finish', type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: 'calc_straight_pole', qtyHelperText: 'Pole length (feet)', required: true, geometryMap: {} });
+      add({ title: 'Pole Length & Finish', type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: 'calc_straight_pole', qtyHelperText: 'Pole length (feet)', required: true, geometryMap: {}, targetNodes: poleNodes });
       addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate' });
       if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
       addEndTreatment(finial);
