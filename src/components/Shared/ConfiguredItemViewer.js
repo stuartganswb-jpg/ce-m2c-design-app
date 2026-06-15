@@ -47,6 +47,13 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
         : (job ? [{ assemblyName: job.jobName, sidemark: job.sidemark, engineeringNotes: job.engineeringNotes, spatialData: job.spatialData, renderState: null }] : []);
     const item = items[Math.min(lineIdx, Math.max(0, items.length - 1))] || null;
     const rs = item?.renderState || null;
+    // Overrides are saved as entry-arrays (their keys are GLB node names Firestore won't store as
+    // field names); rebuild the node-name -> value maps DynamicModel expects, in memory.
+    const texMap = {}, visMap = {};
+    if (rs) {
+        (rs.textureEntries || []).forEach(e => { if (e && e.target != null) texMap[e.target] = e.url; });
+        (rs.visibilityEntries || []).forEach(e => { if (e && e.target != null) visMap[e.target] = e.visible; });
+    }
     const notes = item?.engineeringNotes || job?.engineeringNotes || null;
     const pseudoDraft = job ? {
         jobName: job.jobName,
@@ -96,8 +103,8 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                                             <Bounds fit clip margin={1.2}>
                                                 <DynamicModel
                                                     url={rs.cadUrl}
-                                                    textureOverrides={rs.textureOverrides}
-                                                    visibilityOverrides={rs.visibilityOverrides}
+                                                    textureOverrides={texMap}
+                                                    visibilityOverrides={visMap}
                                                     cloneSpecs={rs.cloneSpecs}
                                                 />
                                             </Bounds>

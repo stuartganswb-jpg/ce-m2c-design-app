@@ -55,6 +55,7 @@ const findFsViolation = (v, path) => {
         const proto = Object.getPrototypeOf(v);
         if (proto !== Object.prototype && proto !== null) return `${path} is a ${v.constructor ? v.constructor.name : 'non-plain'} instance`;
         for (const k of Object.keys(v)) {
+            if (k === '' || /[.~*\/\[\]]/.test(k)) return `${path} has invalid map key "${k}" (empty or contains . ~ * / [ ])`;
             const r = findFsViolation(v[k], `${path}.${k}`);
             if (r) return r;
         }
@@ -1132,13 +1133,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           draftSvg: activeDraftSvg,
           capturedViews: capturedViews || null,
           // Snapshot the resolved render so this exact configuration re-renders later (shop/finishing
-          // floor viewer + HQ) even if the flow or assembly is edited afterward. cadUrl + the plain
-          // override maps fully drive DynamicModel — no live recompute, frozen as ordered. The JSON
-          // round-trip strips any undefined values (e.g. a finish with no texture) Firestore rejects.
+          // floor viewer + HQ) even if the flow or assembly is edited afterward. Overrides are stored
+          // as ENTRY ARRAYS, not maps: their keys are GLB node names (e.g. "Bracket.001") and Firestore
+          // forbids dots/special chars in field names ("invalid nested entity"). The viewer rebuilds the
+          // maps in memory. cloneSpecs is safe — node names live as array VALUES there, not keys.
           renderState: activeAssembly?.manufacturingSpecs?.cadUrl ? JSON.parse(JSON.stringify({
               cadUrl: activeAssembly.manufacturingSpecs.cadUrl,
-              textureOverrides: textureOverrides || {},
-              visibilityOverrides: visibilityOverrides || {},
+              textureEntries: Object.entries(textureOverrides || {}).map(([target, url]) => ({ target, url })),
+              visibilityEntries: Object.entries(visibilityOverrides || {}).map(([target, visible]) => ({ target, visible })),
               cloneSpecs: cloneSpecs || []
           })) : null
       };
@@ -1254,7 +1256,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       // DIAGNOSTIC (build-D): proves this build is live + names any value Firestore still rejects.
       const _viol = findFsViolation(payload.cpqData, 'cpqData') || findFsViolation(payload.engineeringNotes, 'engineeringNotes');
-      console.log('%c[CPQ finalize build-D]', 'color:#b80;font-weight:bold', _viol ? ('REMAINING VIOLATION -> ' + _viol) : 'payload clean (fsSafe active)');
+      console.log('%c[CPQ finalize build-E]', 'color:#b80;font-weight:bold', _viol ? ('REMAINING VIOLATION -> ' + _viol) : 'payload clean (fsSafe active)');
 
       try {
           await setDoc(doc(db, "jobs", targetJobId), payload, { merge: true });
