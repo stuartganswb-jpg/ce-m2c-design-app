@@ -287,16 +287,28 @@ const ViewCapturer = ({ onReady }) => {
                 if (box.isEmpty()) return null;
                 const size = box.getSize(new THREE.Vector3());
                 const center = box.getCenter(new THREE.Vector3());
-                const R = box.getBoundingSphere(new THREE.Sphere()).radius || 1;
                 const ranked = [['x', size.x], ['y', size.y], ['z', size.z]].sort((a, b) => a[1] - b[1]);
                 const depthAxis = ranked[0][0], vertAxis = ranked[1][0], longAxis = ranked[2][0];
                 const dirFrom = (d, v, l) => { const o = new THREE.Vector3(); o[depthAxis] = d; o[vertAxis] = v; o[longAxis] = l; return o.normalize(); };
                 const fov = (camera.fov || 50) * Math.PI / 180;
-                const dist = (R / Math.sin(fov / 2)) * 1.1;
+                const half = size.clone().multiplyScalar(0.5);
                 const savePos = camera.position.clone(), saveUp = camera.up.clone(), saveQuat = camera.quaternion.clone();
                 const shoot = (dir) => {
+                    const d = dir.clone().normalize();
                     camera.up.set(0, 1, 0);
-                    camera.position.copy(center).add(dir.clone().multiplyScalar(dist));
+                    // Tight per-view fit: project the box half-extents onto this view's right/up axes and
+                    // fit both to the REAL canvas aspect, so a long pole fills the frame instead of sitting
+                    // tiny in the middle (the old bounding-sphere fit was far too zoomed out).
+                    let right = new THREE.Vector3().crossVectors(camera.up, d);
+                    if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
+                    right.normalize();
+                    const vUp = new THREE.Vector3().crossVectors(d, right).normalize();
+                    const halfW = Math.abs(half.x * right.x) + Math.abs(half.y * right.y) + Math.abs(half.z * right.z);
+                    const halfH = Math.abs(half.x * vUp.x) + Math.abs(half.y * vUp.y) + Math.abs(half.z * vUp.z);
+                    const aspect = (gl.domElement.width && gl.domElement.height) ? gl.domElement.width / gl.domElement.height : 1.5;
+                    const t = Math.tan(fov / 2);
+                    const dist = Math.max(halfH / t, halfW / (t * aspect)) * 1.12;
+                    camera.position.copy(center).add(d.multiplyScalar(dist));
                     camera.lookAt(center);
                     camera.updateProjectionMatrix();
                     gl.render(scene, camera);
@@ -601,18 +613,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               }
 
               if (engineeringNotes) {
-                  if (lowerTitle.includes("bracket")) {
-                      newStepQuantities[step.id] = engineeringNotes.qtyBrackets !== undefined ? engineeringNotes.qtyBrackets : 0;
-                  }
-                  if (lowerTitle.includes("ring")) {
-                      newStepQuantities[step.id] = engineeringNotes.recRings !== undefined ? engineeringNotes.recRings : 0;
-                  }
-                  if (lowerTitle.includes("finial") || lowerTitle.includes("endcap")) {
-                      newStepQuantities[step.id] = engineeringNotes.qtyFinials !== undefined ? engineeringNotes.qtyFinials : 0;
-                  }
-                  if (lowerTitle.includes("splice") || lowerTitle.includes("connector")) {
-                      newStepQuantities[step.id] = engineeringNotes.qtySplices !== undefined ? engineeringNotes.qtySplices : 0;
-                  }
+                  // Quantities default to 0 on a Vision resume. Auto-filling per-position bracket /
+                  // center counts was error-prone (end vs center), so operators enter them manually
+                  // using the Engineering Specs note — which still shows the recommended counts.
+                  newStepQuantities[step.id] = 0;
 
                   if (step.calculatorTemplate) {
                       newDimensionInputs[step.id] = {
@@ -657,11 +661,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       const subMatch = step.subOptions.find(o => idMatchesVision(o.partId));
                       if (subMatch) translatedParams[`${step.id}__sub`] = subMatch.optId;
                   }
-                  // A "clone along pole" step shows the CENTER count, not the total bracket count.
-                  if (step.isCenterClone && engineeringNotes) {
-                      const center = engineeringNotes.qtyCenterBrackets;
-                      newStepQuantities[step.id] = (center !== undefined && center !== null) ? center : Math.max(0, (parseInt(engineeringNotes.qtyBrackets) || 0) - 2);
-                  }
+                  // Center count is left at 0 (set above) — the operator enters it from the note.
                   // Tag-driven Mount step: pre-pick the Location from Vision's mount (OPEN→WALL,
                   // CEILING→CEILING, INSIDE→END), using the side this step applies to.
                   if (step.mountSelector && !translatedParams[step.id]) {
