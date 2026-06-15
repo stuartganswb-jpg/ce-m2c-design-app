@@ -33,6 +33,36 @@ const fsSafe = (v) => {
     return undefined;
 };
 
+// Diagnostic companion to fsSafe: returns the path of the first value Firestore would still reject
+// (or null). Lets us confirm a deploy is live and pinpoint any fsSafe gap from the browser console.
+const findFsViolation = (v, path) => {
+    if (v === null) return null;
+    const t = typeof v;
+    if (t === 'number') return Number.isFinite(v) ? null : `${path} = ${v}`;
+    if (t === 'string' || t === 'boolean') return null;
+    if (t === 'undefined') return `${path} = undefined`;
+    if (t === 'function' || t === 'symbol' || t === 'bigint') return `${path} is ${t}`;
+    if (v instanceof Date) return null;
+    if (Array.isArray(v)) {
+        for (let i = 0; i < v.length; i++) {
+            if (Array.isArray(v[i])) return `${path}[${i}] is a nested array`;
+            const r = findFsViolation(v[i], `${path}[${i}]`);
+            if (r) return r;
+        }
+        return null;
+    }
+    if (t === 'object') {
+        const proto = Object.getPrototypeOf(v);
+        if (proto !== Object.prototype && proto !== null) return `${path} is a ${v.constructor ? v.constructor.name : 'non-plain'} instance`;
+        for (const k of Object.keys(v)) {
+            const r = findFsViolation(v[k], `${path}.${k}`);
+            if (r) return r;
+        }
+        return null;
+    }
+    return `${path} is ${t}`;
+};
+
 const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, style }) => {
     const [search, setSearch] = useState('');
     const [isOpen, setIsOpen] = useState(false);
@@ -1221,7 +1251,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, sewing: false, packing: false },
           dateSaved: new Date().toISOString().split('T')[0], author: currentUser, createdAt: serverTimestamp()
       };
-      
+
+      // DIAGNOSTIC (build-D): proves this build is live + names any value Firestore still rejects.
+      const _viol = findFsViolation(payload.cpqData, 'cpqData') || findFsViolation(payload.engineeringNotes, 'engineeringNotes');
+      console.log('%c[CPQ finalize build-D]', 'color:#b80;font-weight:bold', _viol ? ('REMAINING VIOLATION -> ' + _viol) : 'payload clean (fsSafe active)');
+
       try {
           await setDoc(doc(db, "jobs", targetJobId), payload, { merge: true });
           
