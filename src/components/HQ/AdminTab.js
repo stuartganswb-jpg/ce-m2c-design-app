@@ -657,7 +657,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
           await setDoc(doc(db, "cpq_flows", flow.id), stripUndefined({ ...flow, steps: updatedSteps }));
           setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
-      } catch (err) { console.error("Error saving step:", err); alert("Database Error."); }
+      } catch (err) { console.error("Error saving step:", err); alert("Save failed: " + (err?.message || err)); }
   };
 
   const handleDeleteStep = async (flow, stepId) => {
@@ -1455,12 +1455,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                             ) : (
                                                 <div>
                                                     {linkedBomPins.map((pin, pinIdx) => {
-                                                        // A part can repeat at several positions (Left/Center/Right). Each pin
-                                                        // is its own instance, so identify options by clusterId/targetNode —
-                                                        // NOT partId, which collapses repeats into one all-or-nothing checkbox.
-                                                        const optId = pin.targetNode || pin.clusterId || pin.partId;
-                                                        // The cluster name carries the Auto-Group position label; use it to tell
-                                                        // the three instances apart in the builder.
+                                                        // A part can repeat at several positions (Left/Center/Right). Each pin is
+                                                        // its own instance; identify options by a SHORT, safe id (clusterId / matched
+                                                        // cluster id) — NEVER the raw mesh list (its commas/periods make a bad,
+                                                        // oversized Firestore map key) and not partId (which collapses repeats). optId
+                                                        // is set below, after the cluster is resolved.
                                                         // Resolve the pin's cluster by id OR by mesh overlap (many pins predate clusterId),
                                                         // so the Location/Position tags surface regardless of how the pin was bound.
                                                         const _norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -1469,6 +1468,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                                         const cluster = _matches.find(c => c.location || c.position) || _matches[0]; // prefer a tagged match over an untagged duplicate
                                                         const posLabel = [cluster?.location, cluster?.position].filter(Boolean).join(' · ');
                                                         const locLabel = posLabel || (cluster?.name || pin.partName || '').replace(/_/g, ' ');
+                                                        const optId = pin.clusterId || cluster?.id || pin.partId; // short + unique per placement
                                                         const matches = (o) => (o.optId ? o.optId === optId : o.partId === pin.partId);
                                                         const sel = (newStep.styleOptions || []).find(matches);
                                                         const part = allApprovedDesigns.find(d => d.id === pin.partId || d.legacyErpId === pin.partId || d.itemId === pin.partId);
