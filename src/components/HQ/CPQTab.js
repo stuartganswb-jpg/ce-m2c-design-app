@@ -198,7 +198,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
                             clonedScene.traverse(c => { if (c.isMesh && !isFastener(c)) { const k = sani(c.name); if (railWanted.some(w => k === w || k.startsWith(w))) { railBox.expandByObject(c); railFound = true; } } });
                             if (railFound) { lo = railBox.min[axis]; hi = railBox.max[axis]; }
                         }
-                        try { console.log('[centerClone]', spec.stepId, { axis, modelBox: [+defLo.toFixed(2), +defHi.toFixed(2)], rail: [+lo.toFixed(2), +hi.toFixed(2)], railNames: spec.railNames, anchorNames: spec.anchorNames, srcCount: src.length, anchorCount: anchorSrc.length, srcAlong: +srcAlong.toFixed(2), n }); } catch (e) {}
+                        try { console.log('[centerClone] ' + JSON.stringify({ axis, modelBox: [+defLo.toFixed(2), +defHi.toFixed(2)], rail: [+lo.toFixed(2), +hi.toFixed(2)], railNames: spec.railNames, anchorNames: spec.anchorNames, srcCount: src.length, anchorCount: anchorSrc.length, srcAlong: +srcAlong.toFixed(2), n })); } catch (e) {}
                         src.forEach(m => { m.visible = false; }); // hide the single middle original; clones replace it
                         for (let i = 1; i <= n; i++) {
                             const targetAlong = lo + (hi - lo) * (i / (n + 1));
