@@ -1412,8 +1412,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const highlightOverrides = useMemo(() => {
       if (!debugHighlight || !currentStep) return null;
       const selId = dynamicConfigParams[currentStep.id];
-      const csv = (currentStep.geometryMap && selId) ? (currentStep.geometryMap[selId] || '') : '';
-      return String(csv).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      const selSub = dynamicConfigParams[`${currentStep.id}__sub`];
+      const main = (currentStep.geometryMap && selId) ? (currentStep.geometryMap[selId] || '') : '';
+      const sub = (currentStep.subGeometryMap && selSub) ? (currentStep.subGeometryMap[selSub] || '') : '';
+      // Glow the step's selected MAIN geometry plus its selected sub (e.g. arm + chosen backplate),
+      // so the backplate's match precision can be eyeballed the same way as the arm's.
+      return [main, sub].filter(Boolean).join(',').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
   }, [debugHighlight, currentStep, dynamicConfigParams]);
 
   return (
