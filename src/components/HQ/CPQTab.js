@@ -1228,7 +1228,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // Location matches the customer's pick stay allowed (AND-combined like any other step).
           if (step.mountSelector) {
               const selectedLoc = dynamicConfigParams[step.id];
-              if (!selectedLoc) return; // nothing picked yet → hide nothing
               const pos = step.mountPosition; // 'LEFT' | 'RIGHT' | '' (all positions)
               const controlled = new Set(); const inSelected = new Set();
               (activeAssembly?.nodeClusters || []).forEach(cl => {
@@ -1240,7 +1239,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           }
           if (!step.geometryMap || Object.keys(step.geometryMap).length === 0) return;
           const selectedOptId = dynamicConfigParams[step.id];
-          if (!selectedOptId) return; // step not chosen yet (or skipped, e.g. optional End Treatment) → don't hide its geometry
           const controlled = new Set();
           const inSelected = new Set();
           Object.entries(step.geometryMap).forEach(([optId, csv]) => {

@@ -68,7 +68,7 @@
         "RETURN_BEND": "PLACEHOLDER-bend-end-meshes",
         "FLUSH": ""
       },
-      "_note": "OPTIONAL (required=false) — it's the ALTERNATIVE to an end-arm bracket: a job either has an end arm (the End Bracket step) OR the rod is mitered/bent (a fab FEE, set as the option's price). Skip this whole step when an end arm is used. FINIAL = a physical end cap (real pin); RETURN_MITER / RETURN_BEND = fee options (no part, put the charge in price); FLUSH = nothing. optIds match Vision's endStyle so Push pre-fills it. Because it's optional, skipping it hides none of its geometry — so the miter/bend/finial parts should be default-hidden in the .glb (or pick FLUSH) when an end arm is chosen instead."
+      "_note": "OPTIONAL (required=false) — the ALTERNATIVE to an end-arm bracket: a job has either an end arm (the End Bracket step) OR a mitered/bent rod (a fab FEE, set as the option's price). Skip this whole step for the end-arm path — since unchosen geometry is hidden, the finial/miter/bend parts simply won't show. FINIAL = a physical end cap (real pin); RETURN_MITER / RETURN_BEND = fee options (no part, put the charge in price); FLUSH = nothing. optIds match Vision's endStyle so Push pre-fills it."
     },
     {
       "id": "STEP-BKT-L",
