@@ -62,13 +62,14 @@ const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, sty
     );
 };
 
-const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs }) => {
+const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
     const textureOverridesString = JSON.stringify(textureOverrides);
     const visibilityOverridesString = JSON.stringify(visibilityOverrides);
     const cloneSpecsString = JSON.stringify(cloneSpecs);
+    const highlightOverridesString = JSON.stringify(highlightOverrides);
 
     useEffect(() => {
         clonedScene.traverse((child) => {
@@ -93,13 +94,19 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs }
         const applyAllOverrides = () => {
             clonedScene.traverse((child) => {
                 if (child.isMesh && child.userData.originalMaterial) {
-                    const meshName = child.name.toLowerCase();
-                    // Format-agnostic key: strip non-alphanumerics so a sanitized cluster/pin
-                    // node ("body1048", "ficpba_v71") matches a raw model mesh ("Body1.048",
-                    // "FICPBA v7:1") and vice-versa. Without this, a sanitized-vs-raw export
-                    // mismatch makes every hide/geometry-swap silently no-op.
-                    const meshKey = meshName.replace(/[^a-z0-9]/g, '');
-                    const hitTarget = (t) => meshName === t || meshName.startsWith(t + '_') || meshName.startsWith(t + '.') || (t && meshKey === t.replace(/[^a-z0-9]/g, ''));
+                    // Match a target string against ONE node name: exact, dotted/underscored
+                    // prefix, or format-agnostic (strip non-alphanumerics so a sanitized cluster
+                    // node "body1048" matches a raw mesh "Body1.048"). Without the sanitized key a
+                    // sanitized-vs-raw export mismatch makes every hide/geometry-swap silently no-op.
+                    const nameHit = (nm, t) => {
+                        const m = nm.toLowerCase();
+                        const k = m.replace(/[^a-z0-9]/g, '');
+                        return m === t || m.startsWith(t + '_') || m.startsWith(t + '.') || (t && k === t.replace(/[^a-z0-9]/g, ''));
+                    };
+                    // Walk the mesh AND its ancestors, so a cluster node that names a GROUP /
+                    // sub-assembly (not the leaf mesh) still matches every mesh under it — the same
+                    // ancestry rule Node Grouping highlights with, so render == what you grouped.
+                    const hitTarget = (t) => { let n = child; while (n) { if (n.name && nameHit(n.name, t)) return true; n = n.parent; } return false; };
 
                     let isVis = child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
@@ -131,6 +138,18 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs }
                         child.material = newMat;
                     } else {
                         child.material = child.userData.originalMaterial;
+                    }
+
+                    // Debug option-highlight (Stage 0): glow the meshes the current step's
+                    // selection controls, using the SAME ancestry matcher as render — so what
+                    // glows is exactly what would show. Lets you confirm an option owns the
+                    // right geometry. Targets are pre-lowercased by the caller.
+                    if (highlightOverrides && highlightOverrides.length && highlightOverrides.some(hitTarget)) {
+                        const hl = child.material.clone();
+                        if (hl.emissive) { hl.emissive = new THREE.Color(0xb08d57); hl.emissiveIntensity = 0.9; }
+                        else { hl.color = new THREE.Color(0xb08d57); }
+                        hl.needsUpdate = true;
+                        child.material = hl;
                     }
                 }
             });
@@ -213,7 +232,7 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs }
                 );
             }
         });
-    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString]);
+    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString, highlightOverridesString]);
 
     return <primitive object={clonedScene} />;
 };
@@ -272,6 +291,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // TEMP (Stage 1 debug): when on, bypass hidden-until-chosen so the full glb renders.
   // Used to tell a glb-load problem apart from a visibility problem. Remove before merge.
   const [debugShowAll, setDebugShowAll] = useState(false);
+  // TEMP (Stage 0 debug): when on, glow the meshes the current step's selection controls.
+  const [debugHighlight, setDebugHighlight] = useState(false);
 
   useEffect(() => {
       const sessionStr = localStorage.getItem('hq_active_quote_session');
@@ -1325,6 +1346,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       return out;
   }, [activeFlow, dynamicConfigParams, stepQuantities]);
 
+  // Stage 0 debug: meshes the CURRENT step's current selection controls, fed to the 3D
+  // option-highlight. Lowercased node names; matched with the same matcher CPQ renders with,
+  // so what glows is exactly what would show. Null unless the Highlight toggle is on.
+  const highlightOverrides = useMemo(() => {
+      if (!debugHighlight || !currentStep) return null;
+      const selId = dynamicConfigParams[currentStep.id];
+      const csv = (currentStep.geometryMap && selId) ? (currentStep.geometryMap[selId] || '') : '';
+      return String(csv).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  }, [debugHighlight, currentStep, dynamicConfigParams]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
@@ -1638,11 +1669,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                       {viewMode === '3D' && activeAssembly?.manufacturingSpecs?.cadUrl && (
-                          /* TEMP (Stage 1 debug): show every mesh regardless of selection. Remove before merge. */
+                          /* TEMP (Stage 0/1 debug): visibility bypass + option-highlight. Remove before merge. */
+                          <>
                           <label title="Debug: render the full glb, ignoring hidden-until-chosen" style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: debugShowAll ? 'var(--brass)' : 'var(--ink-soft)' }}>
                               <input type="checkbox" checked={debugShowAll} onChange={e => setDebugShowAll(e.target.checked)} style={{ cursor: 'pointer' }} />
                               Show all
                           </label>
+                          <label title="Debug: glow the meshes this step's selected option controls" style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: debugHighlight ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                              <input type="checkbox" checked={debugHighlight} onChange={e => setDebugHighlight(e.target.checked)} style={{ cursor: 'pointer' }} />
+                              Highlight
+                          </label>
+                          </>
                       )}
                       <div style={{ display: 'flex', border: '1px solid var(--line)', borderRadius: '2px', overflow: 'hidden', background: '#fff' }}>
                           <button onClick={() => setViewMode('2D')} style={{ padding: '8px 16px', background: viewMode === '2D' ? 'var(--ink)' : 'transparent', color: viewMode === '2D' ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', transition: 'all 0.2s' }}>2D</button>
@@ -1671,6 +1708,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                       textureOverrides={textureOverrides}
                                       visibilityOverrides={debugShowAll ? {} : visibilityOverrides}
                                       cloneSpecs={cloneSpecs}
+                                      highlightOverrides={highlightOverrides}
                                   />
                               </Bounds>
                           </Canvas>

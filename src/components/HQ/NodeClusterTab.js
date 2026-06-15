@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, where, doc, updateDoc, getDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, updateDoc, getDoc, getDocs } from "firebase/firestore";
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds } from '@react-three/drei';
@@ -353,6 +353,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [hiddenNodes, setHiddenNodes] = useState([]);
     const [highlightUnassigned, setHighlightUnassigned] = useState(false);
     const [locatingClusterId, setLocatingClusterId] = useState(null); // visual confirm: isolate a saved cluster in 3D
+    const [hoveredClusterId, setHoveredClusterId] = useState(null); // hover a saved cluster row -> glow its meshes
 
     // --- AUTO-GROUP STATE ---
     const [cadComponents, setCadComponents] = useState([]); // raw top-level subassemblies from the model
@@ -497,6 +498,28 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     };
     const handleSetClusterLocation = (clusterId, location) => setClusterField(clusterId, { location });
     const handleSetClusterPosition = (clusterId, position) => setClusterField(clusterId, { position });
+    const handleSetClusterCategory = (clusterId, category) => setClusterField(clusterId, { category });
+
+    // Stage 0a — empty ALL clusters on this assembly to re-group from scratch. Double-confirmed
+    // and warns if generated CPQ flows depend on it; never auto-runs.
+    const handleClearAllClusters = async () => {
+        if (!activeAssembly) return;
+        const count = existingClusters.length;
+        if (!count) return alert("No clusters to clear.");
+        let flowWarn = '';
+        try {
+            const fsnap = await getDocs(query(collection(db, "cpq_flows"), where("linkedAssemblyId", "==", activeAssembly.id)));
+            if (!fsnap.empty) flowWarn = `\n\n⚠ ${fsnap.size} generated CPQ flow(s) link to this assembly and will stop rendering until you re-group + regenerate.`;
+        } catch (e) { /* non-fatal: still confirm below */ }
+        if (!window.confirm(`Clear ALL ${count} clusters on "${activeAssembly.itemName}"?${flowWarn}\n\nThis empties nodeClusters and cannot be undone. Do NOT do this if a live customer quote/draft points at this assembly.`)) return;
+        if (!window.confirm(`Last chance — permanently clear all ${count} clusters?`)) return;
+        try {
+            await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: [] });
+            setLocatingClusterId(null);
+            setHoveredClusterId(null);
+            setSelectedNodes([]);
+        } catch (err) { console.error(err); alert("Failed to clear clusters."); }
+    };
 
     const handleDeleteCluster = async (clusterId) => {
         if (!window.confirm("Delete this grouping? The meshes will return to being unassigned.")) return;
@@ -510,6 +533,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
 
     const existingClusters = activeAssembly?.nodeClusters || [];
     const locatingNodes = existingClusters.find(c => c.id === locatingClusterId)?.nodes || [];
+    const hoveredClusterNodes = existingClusters.find(c => c.id === hoveredClusterId)?.nodes || [];
 
     // Normalized lookup of library components for fast name / ERP matching.
     const libraryIndex = useMemo(() => libraryParts.map(part => {
@@ -920,7 +944,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         onMeshClick={handleMeshClick}
                                         onLoaded={setSceneGraph}
                                         onComponents={setCadComponents}
-                                        locatingNodes={(showAutoPanel && glowNodes.length) ? glowNodes : locatingNodes}
+                                        locatingNodes={(showAutoPanel && glowNodes.length) ? glowNodes : (hoveredClusterNodes.length ? hoveredClusterNodes : locatingNodes)}
                                         colorGroups={showAutoPanel && showGroupColors && !glowNodes.length ? colorGroups : []}
                                         onHoverMesh={showAutoPanel ? handleAutoMeshHover : undefined}
                                     />
@@ -970,17 +994,22 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                             </div>
 
                             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', flex: 1, overflowY: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                                <h3 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Saved BOM Bindings ({existingClusters.length})</h3>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                    <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Saved BOM Bindings ({existingClusters.length})</h3>
+                                    {existingClusters.length > 0 && (
+                                        <button onClick={handleClearAllClusters} title="Empty ALL clusters on this assembly and start grouping from scratch" style={{ background: '#fff', color: '#d9534f', border: '1px solid #d9534f', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer' }}>Clear all</button>
+                                    )}
+                                </div>
                                 {existingClusters.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', fontFamily: 'var(--serif)' }}>No meshes bound to BOM components yet.</div>}
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                     {existingClusters.map(cl => {
                                         const isLocating = locatingClusterId === cl.id;
                                         return (
-                                        <div key={cl.id} style={{ border: `1px solid ${isLocating ? 'var(--brass)' : 'var(--line)'}`, padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: isLocating ? 'var(--paper-2)' : 'var(--paper)', borderLeft: '2px solid var(--brass)' }}>
+                                        <div key={cl.id} onMouseEnter={() => setHoveredClusterId(cl.id)} onMouseLeave={() => setHoveredClusterId(prev => prev === cl.id ? null : prev)} style={{ border: `1px solid ${(isLocating || hoveredClusterId === cl.id) ? 'var(--brass)' : 'var(--line)'}`, padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: isLocating ? 'var(--paper-2)' : 'var(--paper)', borderLeft: '2px solid var(--brass)' }}>
                                             <div style={{ minWidth: 0 }}>
                                                 <div style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '1rem' }}>{cl.name}</div>
                                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginTop: '6px' }}>
-                                                    {(cl.location || cl.position) && <span style={{ color: 'var(--brass)', marginRight: '8px' }}>{regionLabel(cl)}</span>}{cl.nodes?.length || 0} Nodes
+                                                    {cl.category && <span style={{ color: 'var(--ink)', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '1px 5px', marginRight: '8px' }}>{cl.category}</span>}{(cl.location || cl.position) && <span style={{ color: 'var(--brass)', marginRight: '8px' }}>{regionLabel(cl)}</span>}{cl.nodes?.length || 0} Nodes
                                                 </div>
                                                 {/* Re-tag region location + position without re-running Auto-Group */}
                                                 <div style={{ display: 'flex', gap: '5px', marginTop: '8px' }}>
@@ -993,6 +1022,18 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                                         <button key={P} onClick={() => handleSetClusterPosition(cl.id, cl.position === P ? '' : P)} style={{ padding: '3px 8px', background: cl.position === P ? 'var(--brass)' : '#fff', color: cl.position === P ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{P}</button>
                                                     ))}
                                                 </div>
+                                                {/* Re-tag category (was write-once from Auto-Group) */}
+                                                <div style={{ display: 'flex', gap: '5px', marginTop: '5px', flexWrap: 'wrap' }}>
+                                                    {CATEGORIES.map(C => (
+                                                        <button key={C} onClick={() => handleSetClusterCategory(cl.id, cl.category === C ? '' : C)} style={{ padding: '3px 8px', background: cl.category === C ? 'var(--ink)' : '#fff', color: cl.category === C ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{C}</button>
+                                                    ))}
+                                                </div>
+                                                {/* Node names — shown while Locating so the 3D isolate is paired with the exact mesh list */}
+                                                {isLocating && (
+                                                    <div style={{ marginTop: '8px', maxHeight: '90px', overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', padding: '6px 8px', fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', lineHeight: 1.6, wordBreak: 'break-all' }}>
+                                                        {(cl.nodes || []).join(', ') || '(no nodes)'}
+                                                    </div>
+                                                )}
                                             </div>
                                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
                                                 <button onClick={() => setLocatingClusterId(isLocating ? null : cl.id)} title="Highlight this group in the 3D view" style={{ background: isLocating ? 'var(--brass)' : '#fff', color: isLocating ? '#fff' : 'var(--ink)', border: '1px solid var(--brass)', padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer' }}>{isLocating ? '◉ Locating' : 'Locate'}</button>
