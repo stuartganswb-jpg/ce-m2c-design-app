@@ -94,18 +94,12 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
         const applyAllOverrides = () => {
             clonedScene.traverse((child) => {
                 if (child.isMesh && child.userData.originalMaterial && typeof child.userData.originalMaterial.clone === 'function') {
-                    // Match a target string against ONE node name: exact, dotted/underscored
-                    // prefix, or format-agnostic (strip non-alphanumerics so a sanitized cluster
-                    // node "body1048" matches a raw mesh "Body1.048"). Without the sanitized key a
-                    // sanitized-vs-raw export mismatch makes every hide/geometry-swap silently no-op.
-                    const nameHit = (nm, t) => {
-                        const m = nm.toLowerCase();
-                        const k = m.replace(/[^a-z0-9]/g, '');
-                        return m === t || m.startsWith(t + '_') || m.startsWith(t + '.') || (t && k === t.replace(/[^a-z0-9]/g, ''));
-                    };
-                    // Walk the mesh AND its ancestors, so a cluster node that names a GROUP /
-                    // sub-assembly (not the leaf mesh) still matches every mesh under it — the same
-                    // ancestry rule Node Grouping highlights with, so render == what you grouped.
+                    // Match a node name EXACTLY (case-insensitive), then walk the mesh's ancestors —
+                    // identical to Node Grouping's matcher (isDescendantOf). The earlier
+                    // prefix/sanitized fallbacks were too loose: one cluster node would match its
+                    // name-cousins, so picking one backplate lit up (and showed) every backplate.
+                    // Exact + ancestry keeps render == exactly what you grouped.
+                    const nameHit = (nm, t) => nm.toLowerCase() === t;
                     const hitTarget = (t) => { let n = child; while (n) { if (n.name && nameHit(n.name, t)) return true; n = n.parent; } return false; };
 
                     let isVis = child.userData.originalVisible;
