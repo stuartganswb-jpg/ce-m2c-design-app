@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where } from "firebase/firestore";
 import * as THREE from 'three';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
 
 const globalTextureCache = {};
@@ -274,6 +274,50 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
     return <primitive object={clonedScene} />;
 };
 
+// Captures Front + Back images of the configured model for the production packet. Lives inside the
+// Canvas so it can drive gl/scene/camera; auto-orients off the model's bounding box (longest axis =
+// pole, shortest = depth/front), snaps two angles, then restores the user's view. Downscales to a
+// white-background JPEG so the data stays small enough to store. Needs Canvas gl.preserveDrawingBuffer.
+const ViewCapturer = ({ onReady }) => {
+    const { gl, scene, camera } = useThree();
+    useEffect(() => {
+        onReady(() => {
+            try {
+                const box = new THREE.Box3().setFromObject(scene);
+                if (box.isEmpty()) return null;
+                const size = box.getSize(new THREE.Vector3());
+                const center = box.getCenter(new THREE.Vector3());
+                const R = box.getBoundingSphere(new THREE.Sphere()).radius || 1;
+                const ranked = [['x', size.x], ['y', size.y], ['z', size.z]].sort((a, b) => a[1] - b[1]);
+                const depthAxis = ranked[0][0], vertAxis = ranked[1][0], longAxis = ranked[2][0];
+                const dirFrom = (d, v, l) => { const o = new THREE.Vector3(); o[depthAxis] = d; o[vertAxis] = v; o[longAxis] = l; return o.normalize(); };
+                const fov = (camera.fov || 50) * Math.PI / 180;
+                const dist = (R / Math.sin(fov / 2)) * 1.1;
+                const savePos = camera.position.clone(), saveUp = camera.up.clone(), saveQuat = camera.quaternion.clone();
+                const shoot = (dir) => {
+                    camera.up.set(0, 1, 0);
+                    camera.position.copy(center).add(dir.clone().multiplyScalar(dist));
+                    camera.lookAt(center);
+                    camera.updateProjectionMatrix();
+                    gl.render(scene, camera);
+                    const src = gl.domElement;
+                    const scale = Math.min(1, 900 / src.width);
+                    const w = Math.max(1, Math.round(src.width * scale)), h = Math.max(1, Math.round(src.height * scale));
+                    const oc = document.createElement('canvas'); oc.width = w; oc.height = h;
+                    const ctx = oc.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); ctx.drawImage(src, 0, 0, w, h);
+                    return oc.toDataURL('image/jpeg', 0.85);
+                };
+                const front = shoot(dirFrom(1, 0.35, 0.25));   // 3/4 off straight elevation, slightly above
+                const back = shoot(dirFrom(-0.7, 0.9, 0.2));    // behind + above (shows mounting detail)
+                camera.position.copy(savePos); camera.up.copy(saveUp); camera.quaternion.copy(saveQuat); camera.updateProjectionMatrix();
+                gl.render(scene, camera);
+                return { front, back };
+            } catch (e) { console.warn('view capture failed', e); return null; }
+        });
+    }, [gl, scene, camera, onReady]);
+    return null;
+};
+
 const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [liveAssemblies, setLiveAssemblies] = useState([]);
   const [liveCustomers, setLiveCustomers] = useState([]); 
@@ -330,6 +374,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [debugShowAll, setDebugShowAll] = useState(false);
   // TEMP (Stage 0 debug): when on, glow the meshes the current step's selection controls.
   const [debugHighlight, setDebugHighlight] = useState(false);
+  // Production packet — captured Front/Back images of the configured model. captureFnRef is filled by
+  // the in-Canvas <ViewCapturer/>; registerCapture is stable so its effect doesn't re-fire each render.
+  const [capturedViews, setCapturedViews] = useState(null);
+  const captureFnRef = useRef(null);
+  const registerCapture = useRef((fn) => { captureFnRef.current = fn; }).current;
 
   useEffect(() => {
       const sessionStr = localStorage.getItem('hq_active_quote_session');
@@ -912,7 +961,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           stepQuantities: { ...stepQuantities },
           dimensionInputs: { ...dimensionInputs },
           engineeringNotes: activeDraft ? activeDraft.specs?.engineeringNotes : null,
-          draftSvg: activeDraftSvg
+          draftSvg: activeDraftSvg,
+          capturedViews: capturedViews || null
       };
       setCart([...cart, item]);
       
@@ -1792,6 +1842,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               <input type="checkbox" checked={debugHighlight} onChange={e => setDebugHighlight(e.target.checked)} style={{ cursor: 'pointer' }} />
                               Highlight
                           </label>
+                          <button onClick={() => { const v = captureFnRef.current && captureFnRef.current(); if (v) setCapturedViews(v); else alert('Capture not ready — give the model a moment to load, then try again.'); }} title="Capture Front + Back images of this configuration for the production packet" style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: capturedViews ? 'var(--brass)' : 'var(--ink)', background: 'transparent', border: '1px solid var(--line)', padding: '5px 10px' }}>📷 Capture Views</button>
                           </>
                       )}
                       <div style={{ display: 'flex', border: '1px solid var(--line)', borderRadius: '2px', overflow: 'hidden', background: '#fff' }}>
@@ -1809,10 +1860,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               <p style={{ fontSize: '0.9rem', maxWidth: '300px', margin: '12px auto' }}>Select a flow and assembly to begin configuration.</p>
                           </div>
                       ) : viewMode === '3D' ? (
-                         <Canvas camera={{ position: [5, 5, 5], fov: 50 }} style={{ width: '100%', height: '100%' }}>
-                              <ambientLight intensity={0.9} /> 
+                         <>
+                         <Canvas camera={{ position: [5, 5, 5], fov: 50 }} gl={{ preserveDrawingBuffer: true }} style={{ width: '100%', height: '100%' }}>
+                              <ViewCapturer onReady={registerCapture} />
+                              <ambientLight intensity={0.9} />
                               <directionalLight position={[5, 10, 5]} intensity={0.7} />
-                              <Environment preset="warehouse" /> 
+                              <Environment preset="warehouse" />
                               <ContactShadows position={[0, -0.5, 0]} opacity={0.5} scale={10} blur={2} far={4} />
                               <OrbitControls makeDefault />
                               <Bounds fit clip margin={1.2}>
@@ -1825,6 +1878,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   />
                               </Bounds>
                           </Canvas>
+                          {capturedViews && (
+                              <div style={{ position: 'absolute', bottom: '12px', right: '12px', display: 'flex', gap: '8px', background: 'rgba(255,255,255,0.92)', border: '1px solid var(--line)', borderRadius: '2px', padding: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.08)', zIndex: 50 }}>
+                                  {['front', 'back'].map(k => (
+                                      <div key={k} style={{ textAlign: 'center' }}>
+                                          <img src={capturedViews[k]} alt={`${k} view`} style={{ width: '120px', height: '80px', objectFit: 'contain', border: '1px solid var(--line)', background: '#fff' }} />
+                                          <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginTop: '2px', letterSpacing: '.05em' }}>{k}</div>
+                                      </div>
+                                  ))}
+                                  <button onClick={() => setCapturedViews(null)} title="Clear captured views" style={{ background: 'transparent', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '14px', alignSelf: 'flex-start' }}>×</button>
+                              </div>
+                          )}
+                          </>
                       ) : (
                           <div style={{ position: 'absolute', inset: '30px' }}>
                               {get2DRenderLayers().map((layer, idx) => (
