@@ -173,7 +173,16 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
                     const modelBox = new THREE.Box3().setFromObject(clonedScene);
                     const size = modelBox.getSize(new THREE.Vector3());
                     const axis = size.x >= size.y && size.x >= size.z ? 'x' : (size.y >= size.z ? 'y' : 'z');
-                    const lo = modelBox.min[axis], hi = modelBox.max[axis];
+                    // Space along the RAIL (the pole = the longest single mesh on the axis), not the
+                    // whole-model box — otherwise an off-center part (e.g. the un-cloned center
+                    // source, which the glb models off to one side) skews where "centered" lands.
+                    let lo = modelBox.min[axis], hi = modelBox.max[axis], bestSpan = -1;
+                    clonedScene.traverse(c => {
+                        if (!c.isMesh || isFastener(c)) return;
+                        const b = new THREE.Box3().setFromObject(c);
+                        const span = b.max[axis] - b.min[axis];
+                        if (span > bestSpan) { bestSpan = span; lo = b.min[axis]; hi = b.max[axis]; }
+                    });
                     const invRoot = new THREE.Matrix4().copy(clonedScene.matrixWorld).invert();
                     const group = new THREE.Group(); group.name = '__centerClones';
                     specs.forEach(spec => {
