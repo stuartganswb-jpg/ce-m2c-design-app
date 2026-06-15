@@ -79,6 +79,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   });
 
   const [newFlowName, setNewFlowName] = useState("");
+  const [generateAsmId, setGenerateAsmId] = useState(""); // assembly the "Generate Flow from Tags" button reads
   const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
   const [zoomImg, setZoomImg] = useState(null);   // {url,label} for the cluster-image lightbox
@@ -423,16 +424,20 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   // Category + part (unioning each part's placement nodes into one option), then stamps out the
   // standard hardware steps fully wired — no hand-picking pins. Creates a NEW flow; touches nothing.
   const handleGenerateHardwareFlow = async () => {
-      if (!flowSettings.linkedAssemblyId || !linkedAsm) return alert("Link a Master Assembly first (the dropdown above), then Generate.");
+      const asmId = generateAsmId || flowSettings.linkedAssemblyId;
+      const asm = masterAssemblies.find(a => a.id === asmId) || allApprovedDesigns.find(a => a.id === asmId || a.itemId === asmId);
+      if (!asm) return alert("Pick a Master Assembly from the dropdown next to Generate, then click Generate.");
+      let pins = [];
+      try { const snap = await getDocs(query(collection(db, "assembly_pins"), where("assemblyId", "==", asm.itemId))); pins = snap.docs.map(d => d.data()); } catch (e) { console.warn("pin load failed", e); }
       const pinByCluster = {};
-      (linkedBomPins || []).forEach(p => { if (p.clusterId) pinByCluster[p.clusterId] = p; });
+      pins.forEach(p => { if (p.clusterId) pinByCluster[p.clusterId] = p; });
       const partsById = {};
       allApprovedDesigns.forEach(p => { partsById[p.id] = p; if (p.itemId) partsById[p.itemId] = p; if (p.legacyErpId) partsById[p.legacyErpId] = p; });
       const classifyCat = (pt) => { const t = String(pt || '').toUpperCase(); if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE'; if (t.includes('BRACKET')) return 'BRACKET'; if (t.includes('FINIAL')) return 'FINIAL'; if (t.includes('POLE') || t.includes('ROD')) return 'POLE'; return ''; };
       // Category from the cluster tag, falling back to the pin's part product type (so clusters
       // tagged only with Location/Position still classify).
       const catOf = (cl) => { if (cl.category) return String(cl.category).toUpperCase(); const pin = pinByCluster[cl.id]; const part = pin && partsById[pin.partId]; return classifyCat(part?.manufacturingSpecs?.productType || part?.productType); };
-      const clusters = (linkedAsm.nodeClusters || []).filter(c => catOf(c));
+      const clusters = (asm.nodeClusters || []).filter(c => catOf(c));
       if (!clusters.length) return alert("No usable clusters — none have a Category tag or a classifiable part. Tag them in Node Grouping first (or set the parts' Product Type).");
       // Group a category's clusters by part; union each part's placement nodes into one option.
       const groupByPart = (cat, filterFn) => {
@@ -473,12 +478,12 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const flowId = `FLOW-${ts}`;
       try {
           await setDoc(doc(db, "cpq_flows", flowId), stripUndefined({
-              id: flowId, brandId: activeBrand, name: `${String(linkedAsm.itemName || 'HARDWARE').toUpperCase()} — GENERATED`,
-              legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: flowSettings.linkedAssemblyId,
+              id: flowId, brandId: activeBrand, name: `${String(asm.itemName || 'HARDWARE').toUpperCase()} — GENERATED`,
+              legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id,
               fabShape: 'STRAIGHT', fabEndStyle: '', fabProjection: '', defaultFinishOptions: [], hiddenClusters: [], steps
           }));
           setActiveFlowId(flowId);
-          alert(`Generated "${String(linkedAsm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Pole materials: ${pole.length}\n• End brackets: ${bktEnd.length}\n• Backplates: ${backplate.length}\n• Center brackets: ${bktCenter.length}\n• Finials: ${finial.length}\n\nReview the steps + set prices, then test. Nothing was deleted. Mount/center/backplate are wired from the tags; finial miter/bend are fee placeholders.`);
+          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Pole materials: ${pole.length}\n• End brackets: ${bktEnd.length}\n• Backplates: ${backplate.length}\n• Center brackets: ${bktCenter.length}\n• Finials: ${finial.length}\n\nReview the steps + set prices, then test. Nothing was deleted. Mount/center/backplate are wired from the tags; finial miter/bend are fee placeholders.`);
       } catch (err) { console.error("Generate failed:", err); alert("Generate failed: " + (err?.message || err)); }
   };
 
@@ -1006,7 +1011,13 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                         <button onClick={handleExportFlow} title="Download the selected flow as JSON (back up / copy to another collection)" style={{ flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Export Flow</button>
                         <label title="Create a fresh flow from a JSON file (for review before use)" style={{ flex: 1, textAlign: 'center', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Import Flow<input type="file" accept="application/json,.json" onChange={handleImportFlow} style={{ display: 'none' }} /></label>
                     </div>
-                    <button onClick={handleGenerateHardwareFlow} title="Build a complete hardware flow automatically from the linked assembly's Node-Grouping tags — no hand-picking pins" style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⚙ Generate Flow from Tags</button>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <select value={generateAsmId} onChange={e => setGenerateAsmId(e.target.value)} title="Master Assembly to build the flow from" style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.82rem', outline: 'none', background: '#fff' }}>
+                            <option value="">— assembly to generate from —</option>
+                            {masterAssemblies.map(a => <option key={a.id} value={a.id}>{a.itemName}{a.legacyErpId ? ` [${a.legacyErpId}]` : ''}</option>)}
+                        </select>
+                        <button onClick={handleGenerateHardwareFlow} title="Build a complete hardware flow automatically from the picked assembly's Node-Grouping tags — no hand-picking pins" style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⚙ Generate Flow from Tags</button>
+                    </div>
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', flex: 1 }}>
                         {cpqFlows.filter(f => f.brandId === activeBrand).length === 0 && <div style={{color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem'}}>No flows exist. Create one above!</div>}
