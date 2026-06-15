@@ -68,12 +68,12 @@ const guessLocation = (s) => {
     if (/\bFIIM|\bEND\b|INSIDE\s*MOUNT/.test(t)) return 'END';
     return '';
 };
-const LOCATIONS = ['WALL', 'CEILING', 'END'];
-const POSITIONS = ['LEFT', 'CENTER', 'RIGHT'];
-// Library-driven categorization. The Auto-Group tool matches each node to a library
-// component (by name / ERP id), then reads its productType + bracket mount to pre-fill
-// the group's Category (Bracket / Pole / Finial) and — for brackets — its Location.
-const CATEGORIES = ['BRACKET', 'POLE', 'FINIAL', 'BACKPLATE'];
+// Default tag vocabularies — the fallback when the dynamic dictionary (system/master_lists →
+// nodeLocations / nodePositions / nodeCategories, edited in Mass Update) hasn't been set. Editing
+// the dictionary overrides these live; keeping them guarantees no regression if it's never touched.
+const DEFAULT_LOCATIONS = ['WALL', 'CEILING', 'END'];
+const DEFAULT_POSITIONS = ['LEFT', 'CENTER', 'RIGHT'];
+const DEFAULT_CATEGORIES = ['BRACKET', 'POLE', 'FINIAL', 'BACKPLATE', 'RING'];
 // Normalize any name / id to a comparable key (drop case, spaces, punctuation).
 const normKey = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 // Bucket a library productType string into one of our categories.
@@ -82,6 +82,7 @@ const classifyCategory = (pt) => {
     if (t.includes('BACKPLATE') || t.includes('BACK PLATE') || t.includes('BACK-PLATE')) return 'BACKPLATE';
     if (t.includes('BRACKET')) return 'BRACKET';
     if (t.includes('FINIAL')) return 'FINIAL';
+    if (t.includes('RING')) return 'RING';
     if (t.includes('POLE') || t.includes('ROD')) return 'POLE';
     return '';
 };
@@ -368,6 +369,18 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [previewProposalId, setPreviewProposalId] = useState(null); // click a part / row -> isolate that group
     const [activeProposalId, setActiveProposalId] = useState(null);   // group being edited: 3D clicks add/remove parts
     const [proposalNodeOverrides, setProposalNodeOverrides] = useState({}); // proposalId -> edited node list
+
+    // Tag vocabularies, live from the Mass Update data dictionary (system/master_lists) with the
+    // built-in DEFAULT_* as fallback — add a tag there and it appears here immediately (and the
+    // tag VALUE flows onward to the flow generator / CPQ / packaging, which read it off the cluster).
+    const [sysTags, setSysTags] = useState({});
+    useEffect(() => {
+        const unsub = onSnapshot(doc(db, "system", "master_lists"), (snap) => { if (snap.exists()) setSysTags(snap.data() || {}); });
+        return () => unsub();
+    }, []);
+    const LOCATIONS = (sysTags.nodeLocations && sysTags.nodeLocations.length) ? sysTags.nodeLocations : DEFAULT_LOCATIONS;
+    const POSITIONS = (sysTags.nodePositions && sysTags.nodePositions.length) ? sysTags.nodePositions : DEFAULT_POSITIONS;
+    const CATEGORIES = (sysTags.nodeCategories && sysTags.nodeCategories.length) ? sysTags.nodeCategories : DEFAULT_CATEGORIES;
 
     useEffect(() => {
         if (!activeBrand) return;

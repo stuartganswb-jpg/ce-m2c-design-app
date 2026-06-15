@@ -38,6 +38,48 @@ const WINDOW_LABELS = {
     outsourceFinishes: 'OUTSOURCED FINISHES'
 };
 
+// Editable tag vocabularies for Node Grouping. Stored as named lists on system/master_lists so they
+// flow live into the Node Grouping tab (and the tag VALUES carry on to the CPQ flow + packaging).
+// Defaults seed the view until edited; the keys must match NodeClusterTab's reads.
+const NODE_TAG_GROUPS = [
+    { key: 'nodeCategories', label: 'Categories', def: ['BRACKET', 'POLE', 'FINIAL', 'BACKPLATE', 'RING'] },
+    { key: 'nodeLocations', label: 'Locations (Mount)', def: ['WALL', 'CEILING', 'END'] },
+    { key: 'nodePositions', label: 'Positions', def: ['LEFT', 'CENTER', 'RIGHT'] },
+];
+const NodeTagsPanel = ({ lists }) => {
+    const [drafts, setDrafts] = useState({});
+    const save = async (key, arr) => { try { await setDoc(doc(db, "system", "master_lists"), { [key]: arr }, { merge: true }); } catch (e) { console.error(e); alert('Save failed: ' + (e?.message || e)); } };
+    const itemsFor = (g) => (lists[g.key] && lists[g.key].length) ? lists[g.key] : g.def;
+    const add = (g) => { const v = (drafts[g.key] || '').trim().toUpperCase(); if (!v) return; const cur = itemsFor(g); if (cur.includes(v)) { setDrafts(d => ({ ...d, [g.key]: '' })); return; } save(g.key, [...cur, v]); setDrafts(d => ({ ...d, [g.key]: '' })); };
+    const remove = (g, v) => save(g.key, itemsFor(g).filter(x => x !== v));
+    return (
+        <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+            <h3 style={{ margin: '0 0 4px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Node Grouping Tags</h3>
+            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Add a tag and it appears immediately as a button in Node Grouping; the tag value then flows to the CPQ flow + packaging wherever it's read. (A new Category becomes taggable and its meshes render, but its CPQ step behavior may still need wiring.)</span>
+            <div style={{ display: 'flex', gap: '24px', marginTop: '20px', flexWrap: 'wrap' }}>
+                {NODE_TAG_GROUPS.map(g => {
+                    const items = itemsFor(g);
+                    const isDefault = !(lists[g.key] && lists[g.key].length);
+                    return (
+                        <div key={g.key} style={{ flex: '1 1 220px', minWidth: '220px', border: '1px solid var(--line)', padding: '16px', background: 'var(--paper)' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', marginBottom: '12px', display: 'flex', justifyContent: 'space-between' }}><span>{g.label}</span>{isDefault && <span style={{ color: 'var(--ink-soft)' }} title="Showing built-in defaults until you edit">default</span>}</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
+                                {items.map(v => (
+                                    <span key={v} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#fff', border: '1px solid var(--line)', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }}>{v}<button onClick={() => remove(g, v)} title="Remove" style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '12px', lineHeight: 1, padding: 0 }}>×</button></span>
+                                ))}
+                            </div>
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                                <input value={drafts[g.key] || ''} onChange={e => setDrafts(d => ({ ...d, [g.key]: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') add(g); }} placeholder="Add tag…" style={{ flex: 1, padding: '8px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem', textTransform: 'uppercase' }} />
+                                <button onClick={() => add(g)} style={{ padding: '8px 12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add</button>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
 const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     // --- MASS UPDATE STATE ---
     const [inventory, setInventory] = useState([]);
@@ -872,6 +914,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     </button>
                 </div>
             </div>
+
+            <NodeTagsPanel lists={globalLists} />
 
             <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
                 
