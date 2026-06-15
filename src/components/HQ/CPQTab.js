@@ -203,13 +203,11 @@ const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, 
                             clonedScene.traverse(c => { if (c.isMesh && !isFastener(c) && railHit(c)) { railBox.expandByObject(c); railFound = true; } });
                             if (railFound) { lo = railBox.min[axis]; hi = railBox.max[axis]; }
                         }
-                        try { console.log('[centerClone] ' + JSON.stringify({ axis, modelBox: [+defLo.toFixed(2), +defHi.toFixed(2)], rail: [+lo.toFixed(2), +hi.toFixed(2)], railNames: spec.railNames, anchorNames: spec.anchorNames, srcCount: src.length, anchorCount: anchorSrc.length, srcAlong: +srcAlong.toFixed(2), n })); } catch (e) {}
                         src.forEach(m => { m.visible = false; }); // hide the single middle original; clones replace it
                         for (let i = 1; i <= n; i++) {
                             const targetAlong = lo + (hi - lo) * (i / (n + 1));
                             const delta = targetAlong - srcAlong;
                             const offset = new THREE.Matrix4().makeTranslation(axis === 'x' ? delta : 0, axis === 'y' ? delta : 0, axis === 'z' ? delta : 0);
-                            try { const _ai = axis === 'x' ? 0 : axis === 'y' ? 1 : 2; const _wp = new THREE.Vector3().setFromMatrixPosition(offset.clone().multiply(src[0].matrixWorld)); console.log('[clonePos] ' + JSON.stringify({ i, targetAlong: +targetAlong.toFixed(3), delta: +delta.toFixed(3), src0World: +src[0].matrixWorld.elements[12 + _ai].toFixed(3), cloneWorld: +_wp.getComponent(_ai).toFixed(3), src0Visible: src[0].visible })); } catch (e) {}
                             src.forEach(m => {
                                 const c = m.clone();
                                 c.visible = true;
