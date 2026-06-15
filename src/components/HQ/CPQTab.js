@@ -1063,18 +1063,28 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           stepQuantities: { ...stepQuantities },
           dimensionInputs: { ...dimensionInputs },
           engineeringNotes: activeDraft ? activeDraft.specs?.engineeringNotes : null,
-          spatialData: activeDraft?.spatialData || null,
+          // Only the flat Vision part-pick ids the viewer needs — the full spatialData blob carries
+          // canvas structures (nested arrays) that Firestore rejects as "invalid nested entity".
+          visionPicks: activeDraft?.spatialData ? {
+              bracketId: activeDraft.spatialData.bracketId || null,
+              bracketIdRight: activeDraft.spatialData.bracketIdRight || null,
+              bracketIdCenter: activeDraft.spatialData.bracketIdCenter || null,
+              backplateIdLeft: activeDraft.spatialData.backplateIdLeft || null,
+              backplateIdRight: activeDraft.spatialData.backplateIdRight || null,
+              backplateIdCenter: activeDraft.spatialData.backplateIdCenter || null
+          } : null,
           draftSvg: activeDraftSvg,
           capturedViews: capturedViews || null,
           // Snapshot the resolved render so this exact configuration re-renders later (shop/finishing
-          // floor viewer + HQ) even if the flow or assembly is edited afterward. cadUrl + the three
-          // plain override maps fully drive DynamicModel — no live recompute, frozen as ordered.
-          renderState: activeAssembly?.manufacturingSpecs?.cadUrl ? {
+          // floor viewer + HQ) even if the flow or assembly is edited afterward. cadUrl + the plain
+          // override maps fully drive DynamicModel — no live recompute, frozen as ordered. The JSON
+          // round-trip strips any undefined values (e.g. a finish with no texture) Firestore rejects.
+          renderState: activeAssembly?.manufacturingSpecs?.cadUrl ? JSON.parse(JSON.stringify({
               cadUrl: activeAssembly.manufacturingSpecs.cadUrl,
-              textureOverrides: { ...textureOverrides },
-              visibilityOverrides: { ...visibilityOverrides },
-              cloneSpecs: JSON.parse(JSON.stringify(cloneSpecs || []))
-          } : null
+              textureOverrides: textureOverrides || {},
+              visibilityOverrides: visibilityOverrides || {},
+              cloneSpecs: cloneSpecs || []
+          })) : null
       };
       setCart([...cart, item]);
       

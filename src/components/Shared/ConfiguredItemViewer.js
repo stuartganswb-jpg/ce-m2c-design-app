@@ -51,8 +51,9 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
     const pseudoDraft = job ? {
         jobName: job.jobName,
         sidemark: item?.sidemark || job.sidemark,
-        // The spec strip reads picks from draft.spatialData; merge every place the ids might live.
-        spatialData: { ...(item?.engineeringNotes || {}), ...(item?.spatialData || {}), ...(job.spatialData || {}) }
+        // The spec strip reads picks from draft.spatialData; merge every place the ids might live
+        // (visionPicks is the flat snapshot saved at checkout).
+        spatialData: { ...(item?.engineeringNotes || {}), ...(job.spatialData || {}), ...(item?.visionPicks || {}) }
     } : null;
 
     return (
