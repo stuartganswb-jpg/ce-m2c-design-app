@@ -12,7 +12,7 @@ import ShopEngineering from './ShopEngineering';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
-import { mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
+import { mirrorCustomStatusToSibling, releaseSiblingToPickPack } from '../Shared/workOrderContract';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
@@ -812,6 +812,9 @@ const ShopFloor = () => {
                 await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process' });
                 // §5: mirror onto the sibling fin WO so the Setup Queue flips to "In Process".
                 await mirrorCustomStatusToSibling(order, 'In Process');
+                // §A1: starting the custom job is the trigger that releases the sibling small
+                // parts into the Pick/Pack queue (so picking runs in parallel with fabrication).
+                await releaseSiblingToPickPack(order);
                 await addDoc(collection(db, "global_messages"), {
                     sender: 'System', sourceApp: 'SHOP', target: 'FINISHING',
                     msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true

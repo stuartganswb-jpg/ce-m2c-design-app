@@ -5,7 +5,7 @@ import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
-import { stagingScanMatches } from '../Shared/workOrderContract';
+import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -32,7 +32,9 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [activePickJob, setActivePickJob] = useState(null);
     const [currentPickLine, setCurrentPickLine] = useState(0);
     const [validation, setValidation] = useState({ bin: '', qty: '' });
-    const [stagingScan, setStagingScan] = useState('');
+    // §A2: the staging handshake is a two-label verify — small-parts label + custom (shop) label.
+    const [stagingSmallScan, setStagingSmallScan] = useState('');
+    const [stagingCustomScan, setStagingCustomScan] = useState('');
     const [showNacho, setShowNacho] = useState(false);
 
     // Counting State
@@ -259,21 +261,48 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
     const handleStagingMatch = async (e) => {
         e.preventDefault();
-        // §8: re-pair on the shared orderKey the shop label encodes (falls back to soNum/id).
-        const matchedJob = jobs.find(j => stagingScanMatches(j, stagingScan));
-        
-        if (!matchedJob) return alert("❌ No matching Picked order found for this Shop Label.");
-        if (matchedJob.pickStatus !== 'Picked_Awaiting_Staging') return alert("❌ Small parts are not yet picked for this order.");
+        // §A2: two-label staging handshake. Both halves of an order carry the same orderKey —
+        // the small-parts label (printed at pick) and the shop custom label (barcode = orderKey).
+        // We resolve the small-parts WO by EXACT key, then for orders that have a custom half we
+        // require the second scan to match the SAME key exactly and the shop fab to be Complete.
+        const smallKey = normalizeKey(stagingSmallScan);
+        const custKey = normalizeKey(stagingCustomScan);
 
-       await updateDoc(doc(db, "fin_workorders", matchedJob.id), { pickStatus: 'Staged_Ready_For_Finishing' });
-        writeLog(`Order Staged & Matched: ${matchedJob.id}`, 'wms');
-        alert(`✅ MATCH CONFIRMED: ${matchedJob.id} small parts and custom parts paired in staging!`);
-        setStagingScan('');
+        if (!smallKey) return alert("Scan the SMALL-PARTS staging label first.");
+
+        const job = resolveByExactKey(jobs, smallKey);
+        if (!job) return alert(`❌ No picked small-parts order matches "${smallKey}".`);
+        if (job.pickStatus !== 'Picked_Awaiting_Staging') {
+            return alert(`❌ ${job.id}: small parts are not picked yet (status: ${job.pickStatus || 'Pending'}).`);
+        }
+
+        // Orders with a custom (shop) half must pass the two-label verify; small-only orders skip it.
+        if (job.hasCustomSibling) {
+            if (!custKey) return alert(`📋 ${job.id} has custom shop parts — scan the CUSTOM (shop) label too.`);
+            if (smallKey !== custKey) {
+                return alert(`🛑 DIFFERENT ORDERS — DO NOT MIX.\n\nSmall-parts label: ${smallKey}\nCustom label: ${custKey}\n\nSeparate these before staging.`);
+            }
+            if (job.customFabStatus !== 'Complete') {
+                return alert(`❌ ${job.id}: custom parts not yet complete in the shop (status: ${job.customFabStatus || 'Pending'}). Wait for the shop to finish + label them.`);
+            }
+        }
+
+        await updateDoc(doc(db, "fin_workorders", job.id), {
+            pickStatus: 'Staged_Ready_For_Finishing',
+            stagingStatus: 'MATCHED',
+            stagedAt: serverTimestamp()
+        });
+        writeLog(`Order Staged & Matched: ${job.id}`, 'wms');
+        alert(`✅ MATCH CONFIRMED: ${job.id} is staged and ready for the Finishing floor.`);
+        setStagingSmallScan('');
+        setStagingCustomScan('');
         setOperator(null);
     };
 
     const printZebraLabel = (job, type) => {
-        console.log(`Spooled ZPL for ${type} - ${job.id}`);
+        // Real ZPL printing is Phase 2. The staging handshake matches on orderKey, so for now
+        // surface it (operators can hand-key it into the staging scans during floor testing).
+        console.log(`[label:${type}] orderKey=${job.orderKey || job.id}`);
     };
 
     // Filter Logic for cycle counting
@@ -427,19 +456,31 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                         <div style={{ width: '400px', background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ padding: '20px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem' }}>Staging Handshake</div>
                             <div style={{ padding: '20px' }}>
-                                <p style={{ color: theme.inkSoft, fontFamily: theme.sans, fontSize: '0.9rem', marginBottom: '20px' }}>Scan Shop Floor Custom Label to match with picked small parts.</p>
+                                <p style={{ color: theme.inkSoft, fontFamily: theme.sans, fontSize: '0.9rem', marginBottom: '20px' }}>Scan both labels. They must resolve to the <strong>same</strong> order — small-only orders need only the first scan.</p>
                                 <form onSubmit={handleStagingMatch}>
-                                    <input autoFocus placeholder="SCAN SHOP LABEL..." value={stagingScan} onChange={e => setStagingScan(e.target.value)} style={{ width: '100%', padding: '15px', fontSize: '1rem', fontFamily: theme.mono, border: `1px solid ${theme.line}`, boxSizing: 'border-box', outline: 'none' }} />
-                                    <button type="submit" style={{ width: '100%', padding: '15px', background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', marginTop: '10px', border: 'none', cursor: 'pointer' }}>MATCH ORDER</button>
+                                    <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, display: 'block', marginBottom: '8px', textTransform: 'uppercase' }}>1. Small-Parts Label</label>
+                                    <input autoFocus placeholder="SCAN SMALL-PARTS LABEL..." value={stagingSmallScan} onChange={e => setStagingSmallScan(e.target.value)} style={{ width: '100%', padding: '15px', fontSize: '1rem', fontFamily: theme.mono, border: `1px solid ${theme.line}`, boxSizing: 'border-box', outline: 'none', marginBottom: '16px' }} />
+                                    <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, display: 'block', marginBottom: '8px', textTransform: 'uppercase' }}>2. Custom Shop Label <span style={{ textTransform: 'none', letterSpacing: 0 }}>(if any)</span></label>
+                                    <input placeholder="SCAN CUSTOM SHOP LABEL..." value={stagingCustomScan} onChange={e => setStagingCustomScan(e.target.value)} style={{ width: '100%', padding: '15px', fontSize: '1rem', fontFamily: theme.mono, border: `1px solid ${theme.line}`, boxSizing: 'border-box', outline: 'none' }} />
+                                    <button type="submit" style={{ width: '100%', padding: '15px', background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', marginTop: '16px', border: 'none', cursor: 'pointer' }}>VERIFY & STAGE</button>
                                 </form>
 
                                 <div style={{ marginTop: '30px', borderTop: `1px solid ${theme.line}`, paddingTop: '20px' }}>
-                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: '15px' }}>AWAITING SHOP MATCH:</div>
-                                    {jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging').map(job => (
-                                        <div key={job.id} style={{ background: theme.paper, border: `1px solid ${theme.line}`, padding: '12px', marginBottom: '8px', fontSize: '0.9rem', fontFamily: theme.mono, color: theme.ink }}>
-                                            {job.id} <span style={{ color: theme.inkSoft, fontSize: '0.8rem' }}>(Picked)</span>
-                                        </div>
-                                    ))}
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: '15px' }}>PICKED — AWAITING STAGING:</div>
+                                    {jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging').map(job => {
+                                        const custReady = !job.hasCustomSibling || job.customFabStatus === 'Complete';
+                                        return (
+                                            <div key={job.id} style={{ background: theme.paper, border: `1px solid ${theme.line}`, padding: '12px', marginBottom: '8px', fontSize: '0.9rem', fontFamily: theme.mono, color: theme.ink, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <span>{job.id}</span>
+                                                <span style={{ fontSize: '0.72rem', color: custReady ? '#3a7d44' : theme.brass }}>
+                                                    {!job.hasCustomSibling ? '● small-only' : (custReady ? '● custom ready' : '○ awaiting shop')}
+                                                </span>
+                                            </div>
+                                        );
+                                    })}
+                                    {jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging').length === 0 && (
+                                        <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif, fontSize: '0.95rem' }}>Nothing picked and awaiting staging.</div>
+                                    )}
                                 </div>
                             </div>
                         </div>

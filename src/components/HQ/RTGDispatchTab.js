@@ -380,7 +380,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     currentPhase: "Setup", stepStatus: 'Pending', currentStepIndex: 0,
                     tasks: makeFullTasks(),
                     machineAssigned: null, redlineAlert: false,
-                    sentToPickPack: false, pickStatus: 'Pending',
+                    // §A1: a small-only order (no custom sibling) has no shop-start event to
+                    // trigger its release, so send it to Pick/Pack now. Orders paired with a
+                    // custom sibling wait until the shop operator STARTS the custom job.
+                    sentToPickPack: !hasCustom, pickStatus: 'Pending',
                     shopSiblingId: hasCustom ? shopId : null, hasCustomSibling: hasCustom,
                     customFabStatus: 'Pending',
                     createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser

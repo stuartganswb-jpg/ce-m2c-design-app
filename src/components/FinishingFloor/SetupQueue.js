@@ -5,7 +5,14 @@ import { btnStyle, inputStyle, labelStyle, sectionHeaderStyle, cardStyle } from 
 import { makeFullTasks } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 
-const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
+const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} }) => {
+  // §A4: the Active Floor only ever holds about a day's work. Cap admission by piece count
+  // (configurable in fin_config/settings -> activeFloorDailyCapacity); the rest stay "ready"
+  // here in the queue. Current load = pieces already on the floor (currentPhase 'Painting').
+  const ACTIVE_CAP = Number(sysConfig?.activeFloorDailyCapacity) || 200;
+  const activeFloorLoad = workOrders
+    .filter(w => w.currentPhase === 'Painting')
+    .reduce((sum, w) => sum + (Number(w.totalParts) || 0), 0);
   const getThreeWeeksOut = () => {
       const d = new Date();
       d.setDate(d.getDate() + 21);
@@ -128,9 +135,15 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
   };
 
   const stageToFloor = async (wo) => {
+    // §A4: respect the daily Active Floor capacity (pieces). If this order would push the
+    // floor over its cap, keep it ready here instead of admitting it.
+    const pieces = Number(wo.totalParts) || 0;
+    if (activeFloorLoad + pieces > ACTIVE_CAP) {
+        return alert(`🚧 Active Floor is at capacity.\n\nOn the floor now: ${activeFloorLoad} pcs\nThis order: ${pieces} pcs\nDaily cap: ${ACTIVE_CAP} pcs\n\n"${wo.displayId || wo.id}" stays ready here until floor work clears.`);
+    }
     try {
         await updateDoc(doc(db, "fin_workorders", wo.id), { stepStatus: "Staged", currentPhase: "Painting", currentStepIndex: 0 });
-        if (writeLog) writeLog(`Staged ${wo.displayId || wo.id} to Floor`, 'production');
+        if (writeLog) writeLog(`Staged ${wo.displayId || wo.id} to Floor (${pieces} pcs; floor now ~${activeFloorLoad + pieces}/${ACTIVE_CAP})`, 'production');
     } catch (err) {
         console.error("Stage to Floor Error:", err);
         alert(`FIREBASE BLOCKED STAGE for ID [${wo.id}]. Reason: ${err.message}`);
@@ -197,7 +210,17 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
       </div>
 
       <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', borderRadius: '2px' }}>
-        <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Work Order Queue</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Work Order Queue</h2>
+            {(() => {
+                const over = activeFloorLoad >= ACTIVE_CAP;
+                return (
+                    <span title="Active Floor daily capacity (pieces). Set via fin_config/settings → activeFloorDailyCapacity." style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: '2px', color: over ? '#d9534f' : 'var(--ink-soft)', background: over ? '#fdf2f2' : '#fff' }}>
+                        Active Floor: {activeFloorLoad}/{ACTIVE_CAP} pcs{over ? ' • FULL' : ''}
+                    </span>
+                );
+            })()}
+        </div>
         <div style={{ display: 'flex', gap: '12px' }}>
             <button onClick={nukeQueue} style={{ padding: '12px 24px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Nuke Queue</button>
             <button onClick={() => setAiOptimized(!aiOptimized)} style={{ padding: '12px 24px', background: aiOptimized ? 'var(--ink)' : '#fff', color: aiOptimized ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
@@ -210,8 +233,10 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
         {pendingOrders.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', gridColumn: '1/-1', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>Queue is empty.</div>
         ) : (
-          pendingOrders.map(wo => (
-            <div key={wo.id} style={{...cardStyle, borderLeft: aiOptimized ? '4px solid var(--brass)' : '4px solid var(--ink)'}}>
+          pendingOrders.map(wo => {
+            const isMatched = wo.stagingStatus === 'MATCHED';
+            return (
+            <div key={wo.id} style={{...cardStyle, background: isMatched ? '#f6fbf7' : (cardStyle.background || '#fff'), borderLeft: isMatched ? '4px solid #3a7d44' : (aiOptimized ? '4px solid var(--brass)' : '4px solid var(--ink)')}}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
                     <strong style={{ fontSize: '1.1rem', color: 'var(--ink)', fontWeight: 500 }}>
                         WO: {wo.woNum || wo.displayId || wo.id}
@@ -247,17 +272,25 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog }) => {
                     );
                 })()}
                 
+                {isMatched && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '14px', padding: '10px 12px', background: '#eaf5ec', border: '1px solid #3a7d44', borderRadius: '2px' }}>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600, color: '#3a7d44' }}>✓ Staged & Matched — ready for the floor</span>
+                    </div>
+                )}
+
                 <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
                     <button onClick={() => setActiveSpecs(wo)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>Specs</button>
                     {wo.quoteId && <button onClick={() => setCfgQuote(wo.quoteId)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>🔍 View Item</button>}
-                    {wo.stepStatus === "Pending" ? (
+                    {isMatched ? (
+                        <button onClick={() => stageToFloor(wo)} style={{ ...btnStyle, flex: 2, background: '#3a7d44', color: '#fff', border: 'none' }}>✓ Push to Active Floor</button>
+                    ) : wo.stepStatus === "Pending" ? (
                         <button onClick={() => startSetup(wo)} style={{ ...btnStyle, flex: 2, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup</button>
                     ) : (
                         <button onClick={() => stageToFloor(wo)} style={{ ...btnStyle, flex: 2, background: 'var(--ink)', color: '#fff' }}>Stage to Floor</button>
                     )}
                 </div>
             </div>
-          ))
+          );})
         )}
       </div>
 

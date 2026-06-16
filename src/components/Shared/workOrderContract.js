@@ -27,6 +27,20 @@ export const mirrorCustomStatusToSibling = async (shopOrder, customFabStatus) =>
     }
 };
 
+// §A1: the Pick/Pack trigger. PickPack only shows jobs with sentToPickPack === true,
+// and nothing flipped it before — so the pick queue was always empty. The intended
+// trigger is the shop operator STARTING the custom job: that's the moment the small
+// parts should be released to pick (they meet the poles again at staging). No-op when
+// the shop order has no small-parts sibling (custom-only / legacy orders).
+export const releaseSiblingToPickPack = async (shopOrder) => {
+    if (!shopOrder || !shopOrder.finSiblingId) return;
+    try {
+        await updateDoc(doc(db, "fin_workorders", shopOrder.finSiblingId), { sentToPickPack: true });
+    } catch (e) {
+        console.error("releaseSiblingToPickPack failed:", e);
+    }
+};
+
 // §8: the staging key both halves share. The shop label encodes this; Pick/Pack
 // scans it to re-pair. Normalize for tolerant matching.
 export const normalizeKey = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -37,4 +51,16 @@ export const stagingScanMatches = (finWO, scan) => {
     if (!s) return false;
     const candidates = [finWO.orderKey, finWO.salesOrderId, finWO.soNum].map(normalizeKey).filter(Boolean);
     return candidates.some(k => k === s || k.includes(s) || s.includes(k));
+};
+
+// §A2: the staging handshake resolves a scanned label to a fin WO by EXACT shared-key
+// match (no substring — that's how we refuse to pair two different orders). Both the
+// small-parts label and the shop custom label encode orderKey, so an exact compare on
+// the normalized key is the verification. Returns the matching fin WO, or null.
+export const resolveByExactKey = (finWOs = [], scan) => {
+    const s = normalizeKey(scan);
+    if (!s) return null;
+    return finWOs.find(w =>
+        [w.orderKey, w.salesOrderId, w.soNum].map(normalizeKey).filter(Boolean).includes(s)
+    ) || null;
 };
