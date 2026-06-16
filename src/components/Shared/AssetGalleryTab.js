@@ -24,7 +24,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [uploadProgress, setUploadProgress] = useState(0);
 
     const [metaForm, setMetaForm] = useState({ name: '', collection: '', productType: '', patternId: '', finishId: '', customerId: '', clientSku: '', notes: '', associatedParts: [], associatedFinishes: [] });
-    const [uploadFile, setUploadFile] = useState(null);
+    const [uploadFiles, setUploadFiles] = useState([]); // one OR many views, all linked to the same item
     const fileInputRef = useRef(null);
 
     const [downloadSku, setDownloadSku] = useState("");
@@ -240,7 +240,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     };
 
     const handleUpload = async () => {
-        if (!uploadFile) return alert("Please select a high-resolution image.");
+        if (!uploadFiles || uploadFiles.length === 0) return alert("Please select one or more images.");
         if (!metaForm.patternId) return alert("Please provide a Pattern/Item ID.");
 
         setIsUploading(true);
@@ -249,65 +249,66 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             const safeFinish = String(metaForm.finishId).toUpperCase().replace(/[^A-Z0-9-]/g, '');
             const displayId = safeFinish ? `${safePattern}/${safeFinish}` : safePattern;
             const safeUrlId = safeFinish ? `${safePattern}_${safeFinish}` : safePattern;
-            
             const brandFolder = activeBrand ? String(activeBrand) : 'global';
-            
-            setUploadProgress(10);
-            const { hiResBlob, thumbBlob } = await generateWatermarkedImages(uploadFile, displayId);
-            setUploadProgress(30);
 
-            const uniqueTimestamp = Date.now();
-            const uniqueSuffix = Math.floor(Math.random() * 10000);
-            const hiResRef = ref(storage, `global_assets/hires/${brandFolder}/${safeUrlId}_${uniqueTimestamp}_${uniqueSuffix}_original.png`);
-            
-            let hiResUrl = null;
-            let thumbUrl = null;
+            // Upload every selected view; they share the same metadata + part link, so a part
+            // with front/side/angle shots ends up with that many linked gallery assets.
+            for (let idx = 0; idx < uploadFiles.length; idx++) {
+                const file = uploadFiles[idx];
+                setUploadProgress(Math.round((idx / uploadFiles.length) * 90) + 5);
 
-            if (hiResBlob && thumbBlob) {
-                const thumbRef = ref(storage, `global_assets/thumbs/${brandFolder}/${safeUrlId}_${uniqueTimestamp}_${uniqueSuffix}_thumb.png`);
-                const [hiUpload, thUpload] = await Promise.all([
-                    uploadBytes(hiResRef, hiResBlob),
-                    uploadBytes(thumbRef, thumbBlob)
-                ]);
-                setUploadProgress(80);
-                const urls = await Promise.all([ getDownloadURL(hiUpload.ref), getDownloadURL(thUpload.ref) ]);
-                hiResUrl = urls[0];
-                thumbUrl = urls[1];
-            } else {
-                const fallbackUpload = await uploadBytes(hiResRef, uploadFile);
-                hiResUrl = await getDownloadURL(fallbackUpload.ref);
-                thumbUrl = hiResUrl;
+                const { hiResBlob, thumbBlob } = await generateWatermarkedImages(file, displayId);
+
+                const uniqueTimestamp = Date.now();
+                const uniqueSuffix = Math.floor(Math.random() * 1000000);
+                const hiResRef = ref(storage, `global_assets/hires/${brandFolder}/${safeUrlId}_${uniqueTimestamp}_${uniqueSuffix}_original.png`);
+
+                let hiResUrl = null;
+                let thumbUrl = null;
+                if (hiResBlob && thumbBlob) {
+                    const thumbRef = ref(storage, `global_assets/thumbs/${brandFolder}/${safeUrlId}_${uniqueTimestamp}_${uniqueSuffix}_thumb.png`);
+                    const [hiUpload, thUpload] = await Promise.all([
+                        uploadBytes(hiResRef, hiResBlob),
+                        uploadBytes(thumbRef, thumbBlob)
+                    ]);
+                    const urls = await Promise.all([ getDownloadURL(hiUpload.ref), getDownloadURL(thUpload.ref) ]);
+                    hiResUrl = urls[0];
+                    thumbUrl = urls[1];
+                } else {
+                    const fallbackUpload = await uploadBytes(hiResRef, file);
+                    hiResUrl = await getDownloadURL(fallbackUpload.ref);
+                    thumbUrl = hiResUrl;
+                }
+
+                const assetDocId = `ASSET-${brandFolder}-${safeUrlId}-${uniqueTimestamp}-${uniqueSuffix}`;
+                await setDoc(doc(db, "global_assets", assetDocId), {
+                    id: assetDocId,
+                    name: String(metaForm.name).toUpperCase(),
+                    collection: metaForm.collection,
+                    productType: metaForm.productType,
+                    patternId: String(metaForm.patternId).toUpperCase(),
+                    finishId: String(metaForm.finishId).toUpperCase(),
+                    customerId: metaForm.customerId || '',
+                    clientSku: String(metaForm.clientSku).toUpperCase(),
+                    notes: metaForm.notes,
+                    associatedParts: Array.isArray(metaForm.associatedParts) ? metaForm.associatedParts : [],
+                    associatedFinishes: Array.isArray(metaForm.associatedFinishes) ? metaForm.associatedFinishes : [],
+                    originalUrl: hiResUrl,
+                    thumbnailUrl: thumbUrl,
+                    url: thumbUrl,
+                    brandId: activeBrand || 'ALL',
+                    uploadedBy: currentUser || 'Unknown',
+                    createdAt: serverTimestamp()
+                }, { merge: true });
             }
-
-            const assetDocId = `ASSET-${brandFolder}-${safeUrlId}-${uniqueTimestamp}-${uniqueSuffix}`;
-            
-            await setDoc(doc(db, "global_assets", assetDocId), {
-                id: assetDocId,
-                name: String(metaForm.name).toUpperCase(),
-                collection: metaForm.collection,
-                productType: metaForm.productType,
-                patternId: String(metaForm.patternId).toUpperCase(),
-                finishId: String(metaForm.finishId).toUpperCase(),
-                customerId: metaForm.customerId || '',
-                clientSku: String(metaForm.clientSku).toUpperCase(),
-                notes: metaForm.notes,
-                associatedParts: Array.isArray(metaForm.associatedParts) ? metaForm.associatedParts : [],
-                associatedFinishes: Array.isArray(metaForm.associatedFinishes) ? metaForm.associatedFinishes : [],
-                originalUrl: hiResUrl, 
-                thumbnailUrl: thumbUrl, 
-                url: thumbUrl, 
-                brandId: activeBrand || 'ALL',
-                uploadedBy: currentUser || 'Unknown',
-                createdAt: serverTimestamp()
-            }, { merge: true });
 
             setUploadProgress(100);
             setMetaForm({ name: '', collection: collectionsData[0]?.name||'', productType: globalLists.prodTypes[0]||'', patternId: '', finishId: '', customerId: '', clientSku: '', notes: '', associatedParts: [], associatedFinishes: [] });
-            setUploadFile(null);
+            setUploadFiles([]);
             if (fileInputRef.current) fileInputRef.current.value = '';
             setTimeout(() => { setIsUploading(false); setUploadProgress(0); }, 500);
 
-        } catch (error) { console.error(error); setIsUploading(false); setUploadProgress(0); }
+        } catch (error) { console.error(error); setIsUploading(false); setUploadProgress(0); alert("Upload failed: " + (error?.message || error)); }
     };
 
     const handleUpdateMetadata = async () => {
@@ -389,7 +390,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 <div style={{ width: '350px', background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', display: 'flex', flexDirection: 'column', gap: '15px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                     <div style={{ fontFamily: theme.serif, fontWeight: 500, fontSize: '1.4rem', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>Upload New Asset</div>
                     
-                    <input type="file" accept="image/png, image/jpeg" ref={fileInputRef} onChange={e => setUploadFile(e.target.files[0])} style={{ padding: '10px', border: `1px dashed ${theme.brass}`, background: theme.paper, cursor: 'pointer', width: '100%', boxSizing: 'border-box', fontFamily: theme.sans, fontSize: '0.85rem' }} />
+                    <input type="file" accept="image/png, image/jpeg" multiple ref={fileInputRef} onChange={e => setUploadFiles(Array.from(e.target.files || []))} style={{ padding: '10px', border: `1px dashed ${theme.brass}`, background: theme.paper, cursor: 'pointer', width: '100%', boxSizing: 'border-box', fontFamily: theme.sans, fontSize: '0.85rem' }} />
+                    {uploadFiles.length > 0 && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.brass, letterSpacing: '.05em' }}>{uploadFiles.length} view{uploadFiles.length > 1 ? 's' : ''} selected — all upload under this pattern/item & part link</div>}
                     <input type="text" placeholder="Friendly Name (Optional)" value={metaForm.name} onChange={e => setMetaForm({...metaForm, name: e.target.value})} style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans }} />
                     
                     <div style={{ display: 'flex', gap: '10px' }}>

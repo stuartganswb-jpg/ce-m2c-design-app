@@ -5,6 +5,36 @@ import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, 
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
 
+// Parse "PATTERN/FINISH" out of a legacyErpId and normalize the finish (mirrors the thumbnail-sync matcher).
+const normFinishCode = (s) => String(s || '').toUpperCase().trim().replace(/^([A-Z]+)0*(\d+)$/, '$1$2');
+const splitErpCode = (erp) => {
+  const i = String(erp || '').indexOf('/');
+  return i < 0 ? null : { pattern: erp.slice(0, i).toUpperCase().trim(), finish: normFinishCode(erp.slice(i + 1)) };
+};
+
+// On-card image carousel: flips through every view linked to an inventory item (front/side/angle…).
+const PartCardImage = ({ images, cadUrl }) => {
+  const [i, setI] = useState(0);
+  if (!images || images.length === 0) {
+    return <span style={{ color: 'var(--ink-soft)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>{cadUrl ? '🧊 3D CAD' : 'No Image'}</span>;
+  }
+  const idx = ((i % images.length) + images.length) % images.length;
+  const nav = (e, d) => { e.stopPropagation(); setI(idx + d); };
+  const arrow = (side) => ({ position: 'absolute', top: '50%', [side]: '6px', transform: 'translateY(-50%)', width: '26px', height: '26px', borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,0.85)', color: 'var(--ink)', cursor: 'pointer', fontSize: '15px', lineHeight: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.2)', padding: 0 });
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <img src={images[idx]} alt="Part view" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+      {images.length > 1 && (
+        <>
+          <button onClick={e => nav(e, -1)} style={arrow('left')} title="Previous view">‹</button>
+          <button onClick={e => nav(e, 1)} style={arrow('right')} title="Next view">›</button>
+          <div style={{ position: 'absolute', top: '8px', right: '8px', background: 'rgba(28,26,22,0.8)', color: '#fff', fontFamily: 'var(--mono)', fontSize: '9px', padding: '2px 6px', borderRadius: '2px', letterSpacing: '.05em', pointerEvents: 'none' }}>📷 {idx + 1}/{images.length}</div>
+        </>
+      )}
+    </div>
+  );
+};
+
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -44,6 +74,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
   const [activePart, setActivePart] = useState(null);
   const [printMap, setPrintMap] = useState(new Map()); // program name -> program-print doc
+  const [assetsByPF, setAssetsByPF] = useState(new Map());   // "PATTERN|FINISH" -> [image urls]
+  const [assetsById, setAssetsById] = useState(new Map());   // part id -> [image urls] (explicit links)
   const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, clientPricing: [], collections: [], bomRevision: "" }); 
   const [isSaving, setIsSaving] = useState(false);
   
@@ -111,7 +143,29 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
     const unsubPrints = subscribeProgramPrints(db, setPrintMap);
 
-    return () => { unsubSchema(); unsubAssets(); unsubCollections(); unsubLists(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); unsubPrints(); };
+    // All gallery images, indexed two ways so a card can show every view of an item:
+    // by pattern/finish (how finalImageUrl is matched) and by explicit associatedParts link.
+    const unsubGalleryImgs = onSnapshot(collection(db, "global_assets"), snap => {
+      const byPF = new Map(), byId = new Map();
+      snap.docs.forEach(d => {
+        const a = d.data() || {};
+        if (a.category === 'PROGRAM_PRINT') return; // prints aren't part photos
+        const url = a.thumbnailUrl || a.url || a.originalUrl;
+        if (!url) return;
+        if (a.patternId) {
+          const key = `${String(a.patternId).toUpperCase().trim()}|${normFinishCode(a.finishId)}`;
+          if (!byPF.has(key)) byPF.set(key, []);
+          if (!byPF.get(key).includes(url)) byPF.get(key).push(url);
+        }
+        if (Array.isArray(a.associatedParts)) a.associatedParts.forEach(pid => {
+          if (!byId.has(pid)) byId.set(pid, []);
+          if (!byId.get(pid).includes(url)) byId.get(pid).push(url);
+        });
+      });
+      setAssetsByPF(byPF); setAssetsById(byId);
+    }, e => { /* gallery unavailable -> cards fall back to finalImageUrl */ });
+
+    return () => { unsubSchema(); unsubAssets(); unsubCollections(); unsubLists(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); unsubPrints(); unsubGalleryImgs(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -644,7 +698,18 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
             let classColor = 'var(--ink-soft)'; 
             if (part.partClass === 'Assembly') classColor = 'var(--ink)'; 
-            if (part.partClass === 'Master Assembly') classColor = 'var(--brass)'; 
+            if (part.partClass === 'Master Assembly') classColor = 'var(--brass)';
+
+            // Every view of this item: cover (finalImageUrl) + pattern/finish matches + explicit links, deduped.
+            const partImages = (() => {
+              const out = [], seen = new Set();
+              const add = u => { if (u && !seen.has(u)) { seen.add(u); out.push(u); } };
+              add(part.finalImageUrl);
+              const k = splitErpCode(part.legacyErpId);
+              if (k) (assetsByPF.get(`${k.pattern}|${k.finish}`) || []).forEach(add);
+              (assetsById.get(part.id) || []).forEach(add);
+              return out;
+            })();
 
             return (
               <div key={part.id} onClick={() => openPartDetails(part)} style={{ background: '#fff', border: activePart?.id === part.id ? `1px solid ${classColor}` : '1px solid var(--line)', cursor: 'pointer', position: 'relative', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', boxShadow: activePart?.id === part.id ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}>
@@ -652,7 +717,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                 {isSharedIn && <div style={{ position: 'absolute', top: '10px', left: '10px', background: 'var(--paper-2)', color: 'var(--ink)', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', zIndex: 2 }}>Shared from {part.brandId.toUpperCase()}</div>}
 
                 <div style={{ height: '180px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                  {part.finalImageUrl ? <img src={part.finalImageUrl} alt="Part" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <span style={{ color: 'var(--ink-soft)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>{part.manufacturingSpecs?.cadUrl ? '🧊 3D CAD' : 'No Image'}</span>}
+                  <PartCardImage images={partImages} cadUrl={part.manufacturingSpecs?.cadUrl} />
                 </div>
 
                 <div style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column' }}>
