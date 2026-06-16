@@ -404,7 +404,7 @@ const ViewCapturer = ({ onReady }) => {
 // Engineering Specs strip — the Vision "post-it" laid out HORIZONTALLY, shown in the pricing row
 // (between the unit price and the breakdown) so the full spec list never gets clipped by the 3D
 // viewport height (the old vertical overlay cut off the center-bracket specs at the bottom).
-export const EngineeringSpecsStrip = ({ draft, notes, parts }) => {
+export const EngineeringSpecsStrip = ({ draft, notes, parts, hideHangers }) => {
     const nm = (id) => { if (!id) return null; const p = parts.find(x => x.id === id || x.itemId === id || x.legacyErpId === id); return p ? p.itemName : id; };
     const sd = draft.spatialData || {};
     const picks = [
@@ -453,7 +453,7 @@ export const EngineeringSpecsStrip = ({ draft, notes, parts }) => {
                         {notes.qtyMiterReturns > 0 && <Row k="Miter Return" v={`×${notes.qtyMiterReturns}`} />}
                     </div>
                 )}
-                {hangers.length > 0 && (
+                {!hideHangers && hangers.length > 0 && (
                     <div style={sec}>
                         <Hdr>Hanger Placement · drill points</Hdr>
                         {hangers.map((h, i) => <div key={i} style={{ marginBottom: '3px', lineHeight: 1.3 }}>• <strong style={{ fontWeight: 500 }}>{h.anchor}</strong> — {h.position}{h.note ? <span style={{ color: 'var(--ink-soft)' }}> · {h.note}</span> : null}</div>)}
@@ -1130,6 +1130,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               backplateIdRight: activeDraft.spatialData.backplateIdRight || null,
               backplateIdCenter: activeDraft.spatialData.backplateIdCenter || null
           } : null,
+          // Free-floating general note boxes placed on the Vision canvas (shopNotes) — flat text, safe.
+          generalNotes: (activeDraft?.spatialData?.shopNotes || []).map(n => (n && typeof n.text === 'string') ? n.text.trim() : '').filter(Boolean),
           draftSvg: activeDraftSvg,
           capturedViews: capturedViews || null,
           // Snapshot the resolved render so this exact configuration re-renders later (shop/finishing

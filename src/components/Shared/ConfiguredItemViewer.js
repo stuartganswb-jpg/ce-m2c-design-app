@@ -57,6 +57,8 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
     const notes = item?.engineeringNotes || job?.engineeringNotes || null;
     const breakdown = (item?.pricingBreakdown || []).filter(l => l && !l.isHeader);
     const svg = item?.draftSvg || null;
+    const hangers = (notes && Array.isArray(notes.hangerLocations)) ? notes.hangerLocations : [];
+    const general = Array.isArray(item?.generalNotes) ? item.generalNotes : [];
     const pseudoDraft = job ? {
         jobName: job.jobName,
         sidemark: item?.sidemark || job.sidemark,
@@ -124,7 +126,7 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                             {/* Engineering specs roll-up */}
                             <div style={{ flex: '1 1 360px', minWidth: '300px', display: 'flex' }}>
                                 {notes
-                                    ? <EngineeringSpecsStrip draft={pseudoDraft} notes={notes} parts={parts} />
+                                    ? <EngineeringSpecsStrip draft={pseudoDraft} notes={notes} parts={parts} hideHangers />
                                     : <div style={{ flex: 1, color: 'var(--ink-soft)', padding: '20px' }}>No engineering specs recorded on this order.</div>}
                             </div>
 
@@ -143,6 +145,25 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                                         </div>
                                     ))}
                             </div>
+
+                            {/* Bracket locations + general note boxes from the Vision canvas */}
+                            {(hangers.length > 0 || general.length > 0) && (
+                                <div style={{ flex: '1 1 360px', minWidth: '300px', maxHeight: '320px', overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', padding: '14px 16px' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>Bracket Locations &amp; Notes</span>
+                                    {hangers.map((h, i) => (
+                                        <div key={i} style={{ padding: '6px 0', borderBottom: '1px dashed var(--line)' }}>
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--ink)' }}><strong style={{ fontWeight: 500 }}>{h.anchor}</strong>{h.position ? <span style={{ color: 'var(--ink-soft)' }}> · {h.position}</span> : null}</div>
+                                            {h.note && <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: '2px' }}>“{h.note}”</div>}
+                                        </div>
+                                    ))}
+                                    {general.length > 0 && (
+                                        <div style={{ marginTop: hangers.length ? '12px' : 0 }}>
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginBottom: '4px' }}>General Notes</div>
+                                            {general.map((t, i) => <div key={i} style={{ fontSize: '0.8rem', color: 'var(--ink)', padding: '4px 0', borderBottom: '1px dashed var(--line)' }}>• {t}</div>)}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
                             {/* Vision shop drawing (cut lengths / miter angles / O2O-C2C) */}
                             {svg && (
