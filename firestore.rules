@@ -46,6 +46,7 @@ service cloud.firestore {
     // ---- Shared assets, finishes, collections ----
     match /global_assets/{document=**}          { allow read, write: if isAuth(); }
     match /program_prints/{document=**}         { allow read, write: if isAuth(); }
+    match /combo_images/{document=**}           { allow read, write: if isAuth(); }
     match /global_messages/{document=**}        { allow read, write: if isAuth(); }
     match /hq_collections/{document=**}         { allow read, write: if isAuth(); }
     match /hq_dynamic_data/{document=**}        { allow read, write: if isAuth(); }

@@ -57,6 +57,7 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
     const notes = item?.engineeringNotes || job?.engineeringNotes || null;
     const breakdown = (item?.pricingBreakdown || []).filter(l => l && !l.isHeader);
     const svg = item?.draftSvg || null;
+    const photos = Array.isArray(item?.productPhotography) ? item.productPhotography : [];
     const rawHangers = (notes && Array.isArray(notes.hangerLocations)) ? notes.hangerLocations : [];
     const bracketNotes = Array.isArray(item?.bracketNotes) ? item.bracketNotes : [];
     // Prefer hangerLocations (nicer edge-relative positions); else fall back to the raw note boxes.
@@ -180,6 +181,23 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                                 <div style={{ flex: '1 1 100%', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', padding: '14px 16px' }}>
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '10px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>Shop Drawing · Vision Canvas</span>
                                     <div style={{ width: '100%', maxHeight: '380px', overflow: 'auto', background: 'var(--paper-2)', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '10px', boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: svg }} />
+                                </div>
+                            )}
+
+                            {/* Combined product photography — matched at checkout from combo_images. Last page of the roll-up. */}
+                            {photos.length > 0 && (
+                                <div style={{ flex: '1 1 100%', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', padding: '14px 16px', pageBreakBefore: 'always' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '10px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>Product Photography</span>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '14px' }}>
+                                        {photos.map((p, i) => (
+                                            <div key={i} style={{ border: '1px solid var(--line)', background: 'var(--paper-2)', display: 'flex', flexDirection: 'column' }}>
+                                                <div style={{ width: '100%', height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', background: '#fff' }}>
+                                                    <img src={p.url} alt={p.label || 'Combined view'} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                                                </div>
+                                                {p.label && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', padding: '8px 10px', letterSpacing: '.03em', textAlign: 'center' }}>{p.label}</div>}
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             )}
                         </>

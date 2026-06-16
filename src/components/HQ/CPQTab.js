@@ -4,6 +4,7 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query,
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
+import { subscribeComboImages, matchCombosForPieces } from '../Shared/comboImages';
 
 const globalTextureCache = {};
 
@@ -491,6 +492,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
+  const [comboMap, setComboMap] = useState(new Map()); // canonical combo key -> combined-photo doc
 
   const [productType, setProductType] = useState(''); 
   const [activeFlowId, setActiveFlowId] = useState("");
@@ -562,6 +564,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (snap) => { if(snap.exists() && snap.data().finishes) setGlobalFinishes(snap.data().finishes); });
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+      const unsubCombos = subscribeComboImages(db, setComboMap);
 
       const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
           // Brand isolation: only this brand's (subsidiary's) customers, matching ClientVisionTab.
@@ -572,7 +575,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           setLiveCustomers(customers);
       });
 
-      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); };
+      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); unsubCombos(); };
   }, [activeBrand]);
 
   // Brand isolation: the CPQ customer dropdown is ONLY this brand's crm_records
@@ -1106,6 +1109,37 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
   const handleAddToCart = async () => {
       const activeDraft = previousDrafts.find(d => d.id === activeDraftId);
+
+      // Match combined-product photos (combo_images) for the configured pieces so the doc roll-up
+      // can show them as a final page. Resolve each step's bracket (main) + its wallplate/backplate
+      // (__sub) to PATTERN + the step's finish code, then pull combos whose two pieces are both present.
+      const configuredPieces = (() => {
+          const finishesAll = [...(globalFinishes || []), ...(outsourceFinishes || []), ...(dynamicAssets || [])];
+          const partsAll = [...(libraryParts || []), ...(liveAssemblies || [])];
+          const basePattern = (erp) => String(erp || '').split('/')[0].trim();
+          const pieces = [];
+          (activeFlow?.steps || []).forEach(step => {
+              const finishCode = finishesAll.find(f => f.id === dynamicConfigParams[`${step.id}__finish`])?.code || '';
+              if (!finishCode) return;
+              const resolve = (selId, optList) => {
+                  if (!selId) return;
+                  const opt = (optList || []).find(o => (o.optId || o.partId) === selId);
+                  const part = partsAll.find(p => p.id === (opt?.partId || selId));
+                  const pattern = basePattern(part?.legacyErpId || part?.itemId);
+                  if (pattern) pieces.push({ pattern, finish: finishCode });
+              };
+              resolve(dynamicConfigParams[step.id], step.styleOptions);
+              resolve(dynamicConfigParams[`${step.id}__sub`], step.subOptions);
+          });
+          return pieces;
+      })();
+      const productPhotography = matchCombosForPieces(comboMap, configuredPieces).map(c => ({
+          url: c.originalUrl,
+          key: c.key,
+          pieces: c.pieces || [],
+          label: (c.pieces || []).map(p => `${p.pattern}/${p.finish}`).join(' + ')
+      }));
+
       const item = {
           id: Date.now().toString(),
           masterQuoteId: activeMasterQuoteId,
@@ -1152,7 +1186,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               textureEntries: Object.entries(textureOverrides || {}).map(([target, url]) => ({ target, url })),
               visibilityEntries: Object.entries(visibilityOverrides || {}).map(([target, visible]) => ({ target, visible })),
               cloneSpecs: cloneSpecs || []
-          })) : null
+          })) : null,
+          productPhotography
       };
       setCart([...cart, item]);
       
