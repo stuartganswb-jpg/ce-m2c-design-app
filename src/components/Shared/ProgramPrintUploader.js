@@ -29,8 +29,18 @@ const ProgramPrintUploader = ({ currentUser, activeBrand }) => {
     const [phase, setPhase] = useState('idle');      // idle | parsing | review | saving | done
     const [parseMsg, setParseMsg] = useState('');
     const [sourceName, setSourceName] = useState('');
+    const [dragActive, setDragActive] = useState(false);
     const pdfDocRef = useRef(null);
     const fileInputRef = useRef(null);
+
+    // While this uploader is open, swallow page-level drag/drop so a PDF dropped
+    // ANYWHERE never makes the browser navigate to its built-in PDF viewer.
+    useEffect(() => {
+        const swallow = (e) => e.preventDefault();
+        window.addEventListener('dragover', swallow);
+        window.addEventListener('drop', swallow);
+        return () => { window.removeEventListener('dragover', swallow); window.removeEventListener('drop', swallow); };
+    }, []);
 
     const reset = () => {
         try { pages.forEach(p => p.previewUrl && p.previewUrl.startsWith('blob:') && URL.revokeObjectURL(p.previewUrl)); } catch (e) {}
@@ -191,9 +201,15 @@ const ProgramPrintUploader = ({ currentUser, activeBrand }) => {
             </div>
 
             {phase === 'idle' && (
-                <label style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', background: '#fff', border: `1px dashed ${theme.brass}`, color: theme.inkSoft, padding: '60px', cursor: 'pointer', textAlign: 'center' }}>
+                <label
+                    onDragEnter={e => { e.preventDefault(); setDragActive(true); }}
+                    onDragOver={e => { e.preventDefault(); if (!dragActive) setDragActive(true); }}
+                    onDragLeave={e => { e.preventDefault(); setDragActive(false); }}
+                    onDrop={e => { e.preventDefault(); setDragActive(false); const f = e.dataTransfer?.files?.[0]; if (f) handleFile(f); }}
+                    style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', background: dragActive ? theme.paper2 : '#fff', border: `1px dashed ${dragActive ? theme.ink : theme.brass}`, color: theme.inkSoft, padding: '60px', cursor: 'pointer', textAlign: 'center' }}
+                >
                     <span style={{ fontSize: '2.5rem' }}>📄</span>
-                    <span style={{ fontFamily: theme.serif, fontSize: '1.4rem', color: theme.ink }}>Drop a PDF (or image) to begin</span>
+                    <span style={{ fontFamily: theme.serif, fontSize: '1.4rem', color: theme.ink }}>{dragActive ? 'Drop to upload' : 'Drop a PDF (or image) — or click to browse'}</span>
                     <span style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.05em' }}>A multi-page PDF is split into one print per page. Each page's label is read automatically — you confirm or fix the name before it saves.</span>
                     <input ref={fileInputRef} type="file" accept="application/pdf,image/*" onChange={e => handleFile(e.target.files[0])} style={{ display: 'none' }} />
                 </label>
