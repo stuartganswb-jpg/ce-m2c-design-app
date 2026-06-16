@@ -513,6 +513,16 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const handleSetClusterPosition = (clusterId, position) => setClusterField(clusterId, { position });
     const handleSetClusterCategory = (clusterId, category) => setClusterField(clusterId, { category });
 
+    // Fix 1B — per-assembly LEFT/RIGHT flip (safety net for mirrored models). Persists on the
+    // Approved_Designs doc; autoProposals re-runs (it's in the dep array) so labels update live.
+    const handleToggleOrientationFlip = async () => {
+        if (!activeAssembly) return;
+        const next = !activeAssembly.nodeOrientationFlip;
+        setActiveAssembly(a => (a ? { ...a, nodeOrientationFlip: next } : a));
+        try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeOrientationFlip: next }); }
+        catch (err) { console.error(err); }
+    };
+
     // Stage 0a — empty ALL clusters on this assembly to re-group from scratch. Double-confirmed
     // and warns if generated CPQ flows depend on it; never auto-runs.
     const handleClearAllClusters = async () => {
@@ -584,9 +594,22 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
             (byBase[base] = byBase[base] || []).push(c);
         });
 
+        // Order LEFT→RIGHT by SCREEN direction, not the model's longest world axis: the viewer camera
+        // is fixed (Canvas position [5,5,5] looking at origin), so "screen-right" is a constant world
+        // vector = normalize(cross(up,(5,5,5))) = (1,0,-1)/√2. Projecting each part onto it makes
+        // "left on screen = LEFT" for every assembly, even mirrored/rotated ones (e.g. BRIMAR).
+        const _cam = [5, 5, 5]; // must match the <Canvas camera position> below
+        const _srRaw = { x: _cam[2], y: 0, z: -_cam[0] };
+        const _srMag = Math.hypot(_srRaw.x, _srRaw.y, _srRaw.z) || 1;
+        const screenRight = { x: _srRaw.x / _srMag, y: _srRaw.y / _srMag, z: _srRaw.z / _srMag };
+        const projRight = (ctr) => ctr.x * screenRight.x + ctr.y * screenRight.y + ctr.z * screenRight.z;
+        // Per-assembly safety net: flip which side is LEFT vs RIGHT for an oddball model.
+        const orientationFlip = !!activeAssembly?.nodeOrientationFlip;
+
         const positionLabel = (group, c) => {
             if (group.length < 2) return '';
-            const sorted = [...group].sort((a, b) => a.center[axis] - b.center[axis]);
+            const sorted = [...group].sort((a, b) => projRight(a.center) - projRight(b.center));
+            if (orientationFlip) sorted.reverse();
             const idx = sorted.indexOf(c);
             if (group.length === 2) return idx === 0 ? 'LEFT' : 'RIGHT';
             if (group.length === 3) return ['LEFT', 'CENTER', 'RIGHT'][idx];
@@ -677,7 +700,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
             });
         }
         return proposals;
-    }, [cadComponents, splitByPosition, existingClusters, libraryIndex]);
+    }, [cadComponents, splitByPosition, existingClusters, libraryIndex, activeAssembly?.nodeOrientationFlip]);
 
     // Initialise checkboxes + editable names whenever the proposal set changes.
     useEffect(() => {
@@ -882,8 +905,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                 {activeAssembly && activeAssembly.manufacturingSpecs?.cadUrl ? (
                     <div style={{ flex: 1, display: 'flex', gap: '24px', minHeight: '600px' }}>
                         
-                        {/* 3D VIEWER */}
-                        <div style={{ flex: 1.8, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'relative', borderRadius: '2px', overflow: 'hidden' }}>
+                        {/* 3D VIEWER — pinned so it stays visible/draggable no matter how long the BOM list */}
+                        <div style={{ flex: 1.8, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'sticky', top: '16px', alignSelf: 'flex-start', height: 'calc(100vh - 32px)', borderRadius: '2px', overflow: 'hidden' }}>
                             <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '16px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
                                 {showAutoPanel ? (
                                     <>
@@ -965,7 +988,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                             </Canvas>
                         </div>
 
-                        <div style={{ flex: 1.2, display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                        <div style={{ flex: 1.2, display: 'flex', flexDirection: 'column', gap: '24px', alignSelf: 'flex-start', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto' }}>
                             
                             <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', height: '400px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                                 <div style={{ padding: '20px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
@@ -1006,7 +1029,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                 </div>
                             </div>
 
-                            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', flex: 1, overflowY: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                                     <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Saved BOM Bindings ({existingClusters.length})</h3>
                                     {existingClusters.length > 0 && (
@@ -1085,6 +1108,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                 <button onClick={() => setSplitByPosition(true)} style={{ padding: '7px 12px', background: splitByPosition ? 'var(--ink)' : 'transparent', color: splitByPosition ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Split by Position</button>
                                 <button onClick={() => setSplitByPosition(false)} style={{ padding: '7px 12px', background: !splitByPosition ? 'var(--ink)' : 'transparent', color: !splitByPosition ? '#fff' : 'var(--ink)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Merge Instances</button>
                             </div>
+                            <button onClick={handleToggleOrientationFlip} title="Flip which side is LEFT vs RIGHT — use if a mirrored/rotated model (e.g. BRIMAR) labels the wrong side" style={{ padding: '7px 12px', background: activeAssembly?.nodeOrientationFlip ? 'var(--brass)' : '#fff', color: activeAssembly?.nodeOrientationFlip ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>⇄ Flip L/R{activeAssembly?.nodeOrientationFlip ? ' ✓' : ''}</button>
                             <div style={{ display: 'flex', gap: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
                                 <button onClick={() => setAutoChecked(Object.fromEntries(autoProposals.map(p => [p.id, true])))} style={{ background: 'none', border: 'none', color: 'var(--brass)', cursor: 'pointer' }}>Select all</button>
                                 <span style={{ color: 'var(--line)' }}>|</span>
