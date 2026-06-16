@@ -1132,6 +1132,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           } : null,
           // Free-floating general note boxes placed on the Vision canvas (shopNotes) — flat text, safe.
           generalNotes: (activeDraft?.spatialData?.shopNotes || []).map(n => (n && typeof n.text === 'string') ? n.text.trim() : '').filter(Boolean),
+          // Per-pin bracket/splice note boxes (att.note) captured straight from attachments, so they
+          // survive even if engineeringNotes.hangerLocations was empty on the draft.
+          bracketNotes: (activeDraft?.spatialData?.attachments || []).map(a => ({
+              type: a.type === 'splice' ? 'splice' : 'bracket',
+              dist: (a.distInches !== undefined && a.distInches !== null) ? a.distInches : null,
+              ref: a.ref || '',
+              note: (a.note && typeof a.note === 'string') ? a.note.trim() : ''
+          })),
           draftSvg: activeDraftSvg,
           capturedViews: capturedViews || null,
           // Snapshot the resolved render so this exact configuration re-renders later (shop/finishing

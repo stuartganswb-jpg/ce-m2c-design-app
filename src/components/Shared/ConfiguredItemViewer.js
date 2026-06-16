@@ -28,6 +28,8 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                 if (!alive) return;
                 if (!snap.exists()) { setError(`No saved job found for "${quoteId}".`); setLoading(false); return; }
                 setJob({ id: snap.id, ...snap.data() });
+                const _ci = (snap.data().cpqData?.cartItems || [])[0] || {};
+                console.log('[Viewer diag]', quoteId, '| hangerLocations:', _ci.engineeringNotes?.hangerLocations, '| bracketNotes:', _ci.bracketNotes, '| generalNotes:', _ci.generalNotes);
                 // Parts let the spec strip resolve Vision-pick ids -> names; non-fatal if it fails.
                 try {
                     const ps = await getDocs(collection(db, 'Approved_Designs'));
@@ -57,7 +59,16 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
     const notes = item?.engineeringNotes || job?.engineeringNotes || null;
     const breakdown = (item?.pricingBreakdown || []).filter(l => l && !l.isHeader);
     const svg = item?.draftSvg || null;
-    const hangers = (notes && Array.isArray(notes.hangerLocations)) ? notes.hangerLocations : [];
+    const rawHangers = (notes && Array.isArray(notes.hangerLocations)) ? notes.hangerLocations : [];
+    const bracketNotes = Array.isArray(item?.bracketNotes) ? item.bracketNotes : [];
+    // Prefer hangerLocations (nicer edge-relative positions); else fall back to the raw note boxes.
+    const hangers = rawHangers.length
+        ? rawHangers
+        : bracketNotes.map((b, i) => ({
+            anchor: `${b.type === 'splice' ? 'Splice' : 'Bracket'} ${i + 1}`,
+            position: (b.dist != null) ? `${b.dist}" from ${b.ref === 'END' ? 'end' : 'start'}` : '',
+            note: b.note || ''
+        }));
     const general = Array.isArray(item?.generalNotes) ? item.generalNotes : [];
     const pseudoDraft = job ? {
         jobName: job.jobName,
