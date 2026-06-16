@@ -13,6 +13,7 @@ import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 import { mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
+import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
 
@@ -49,6 +50,7 @@ const ShopFloor = () => {
     const [categoryTypeMap, setCategoryTypeMap] = useState({});
     const [programsMap, setProgramsMap] = useState({});
     const [routingsMap, setRoutingsMap] = useState({});
+    const [printMap, setPrintMap] = useState(new Map()); // program name -> program-print asset
 
     // FORMS
     const [millForm, setMillForm] = useState({ partNum: '', woNum: '', soNum: '', item: '', qty: '', reqDate: '', phosphate: 'No', file: null, _sourceCustomOrderId: null });
@@ -114,9 +116,10 @@ const ShopFloor = () => {
             onSnapshot(query(shopDb.collection("material_history"), orderBy("t", "desc"), limit(50)), s => setMatHistory(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(query(shopDb.collection("shop_failures"), orderBy("timestamp", "desc")), s => setFailures(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("livio"), s => setLivio(s.docs.map(d=>({id: d.id, ...d.data()})))),
-            onSnapshot(collection(db, "hq_users"), s => setUsers(s.docs.map(d=>({id: d.id, ...d.data()}))))
+            onSnapshot(collection(db, "hq_users"), s => setUsers(s.docs.map(d=>({id: d.id, ...d.data()})))),
+            subscribeProgramPrints(db, setPrintMap)
         ];
-        return () => unsubs.forEach(u => u()); 
+        return () => unsubs.forEach(u => u());
     }, [user]);
 
     const writeLog = async (msg, cat) => { 
@@ -389,6 +392,12 @@ const ShopFloor = () => {
                                 <strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Instructions</strong>
                                 {modalData.prog.steps || 'None provided'}
                             </div>
+                            {(() => {
+                                const url = resolvePrintUrl(printMap, modalData.prog?.name, modalData.prog?.drawingUrl);
+                                return url
+                                    ? <button onClick={() => window.open(url, '_blank')} style={{ width: '100%', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', marginBottom: '20px' }}>🖨 View Program Print</button>
+                                    : <div style={{ width: '100%', textAlign: 'center', padding: '12px', marginBottom: '20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', border: '1px dashed var(--line)', boxSizing: 'border-box' }}>No print on file</div>;
+                            })()}
                             <div style={{ display: 'flex', gap: '16px' }}>
                                 <button onClick={() => { updateJobStatus(modalData.taskId, 'Running'); setActiveModal(null); }} style={{ flex: 1, background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Verified (Start Run)</button>
                                 <button onClick={() => setActiveModal(null)} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Cancel</button>
@@ -454,6 +463,11 @@ const ShopFloor = () => {
                                                 <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{j.woNum}</strong> - <span style={{ color: j.status === 'Setup' ? 'var(--brass)' : 'var(--ink-soft)' }}>{j.status}</span><br/>
                                                 <span style={{ fontSize: '0.85rem', color: 'var(--ink)', display: 'block', marginTop: '4px' }}>OP {j.currentOpIndex+1}/{routingsMap[j.routingId]?.ops?.length||1}: {programsMap[j.prog]?.name || j.prog}</span>
                                                 <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '4px' }}>Part: {routingsMap[j.routingId]?.displayName || j.routingId} | Op: {j.op}</span>
+                                                {(() => {
+                                                    const prog = programsMap[j.prog];
+                                                    const url = prog && resolvePrintUrl(printMap, prog.name, prog.drawingUrl);
+                                                    return url ? <button onClick={(e) => { e.stopPropagation(); window.open(url, '_blank'); }} style={{ marginTop: '8px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 Print</button> : null;
+                                                })()}
                                             </div>
                                         ))}
                                     </div>
@@ -526,6 +540,11 @@ const ShopFloor = () => {
                                     <td style={{ padding: '16px' }}>
                                         <div style={{ fontWeight: 500, color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>{routingsMap[t.routingId]?.displayName || t.routingId} {t.phosphate && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px' }}>Phos</span>}</div>
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px' }}>OP {t.currentOpIndex+1}/{routingsMap[t.routingId]?.ops?.length||1}: {programsMap[t.prog]?.name || t.prog}</div>
+                                        {(() => {
+                                            const prog = programsMap[t.prog];
+                                            const url = prog && resolvePrintUrl(printMap, prog.name, prog.drawingUrl);
+                                            return url ? <button onClick={() => window.open(url, '_blank')} style={{ marginTop: '6px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '3px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 Print</button> : null;
+                                        })()}
                                     </td>
                                     <td style={{ padding: '16px', color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500 }}>{t.woNum}</td>
                                     <td style={{ padding: '16px', color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>{t.mach}</td>
@@ -969,7 +988,8 @@ const ShopFloor = () => {
                         <ShopEngineering 
                             activeTab={activeTab} user={user} hqParts={hqParts} routings={routings} programs={programs} 
                             programsMap={programsMap} machines={machines} categories={categories} setupCodes={setupCodes} 
-                            tooling={tooling} materials={materials} writeLog={writeLog} handleDelete={handleDelete} safeUserRole={safeUserRole} 
+                            tooling={tooling} materials={materials} writeLog={writeLog} handleDelete={handleDelete} safeUserRole={safeUserRole}
+                            printMap={printMap}
                         />
                     ) : (
                         <>

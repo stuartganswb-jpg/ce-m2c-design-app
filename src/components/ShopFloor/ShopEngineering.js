@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, doc, setDoc, updateDoc, writeBatch, increment } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, writeBatch, increment, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { printDocId, printKey, resolvePrintUrl, PRINT_CATEGORY } from '../Shared/programPrints';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection as oldCol, getDocs as oldGetDocs } from 'firebase/firestore';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
 const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
 
-const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, programsMap, machines, categories, setupCodes, tooling, materials, writeLog, handleDelete, safeUserRole }) => {
+const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, programsMap, machines, categories, setupCodes, tooling, materials, writeLog, handleDelete, safeUserRole, printMap = new Map() }) => {
     
     const [routingForm, setRoutingForm] = useState({ id: null, partId: '', isRawMat: false, matProfile: '', matLength: '', ops: [] });
     const [progForm, setProgForm] = useState({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} });
@@ -127,7 +128,17 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
         let drawingUrl = null;
         if(progForm.file) { const fRef = ref(storage, `drawings/${progForm.name}.pdf`); await uploadBytesResumable(fRef, progForm.file); drawingUrl = await getDownloadURL(fRef); }
         const payload = { name: progForm.name, machines: progForm.machines, timePerPiece: parseFloat(progForm.timePerPiece)||0, setupTime: parseFloat(progForm.setupTime)||0, setupCode: progForm.setupCode, steps: progForm.steps, toolTimes: progForm.toolTimes };
-        if(drawingUrl) payload.drawingUrl = drawingUrl;
+        if(drawingUrl) {
+            payload.drawingUrl = drawingUrl;
+            // Also register centrally so the "Print" button resolves it everywhere (keyed by program name).
+            try {
+                await setDoc(doc(db, "global_assets", printDocId(progForm.name)), {
+                    id: printDocId(progForm.name), category: PRINT_CATEGORY, name: printKey(progForm.name),
+                    originalUrl: drawingUrl, fileType: 'pdf', uploadedBy: user?.name || 'Shop',
+                    createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+                }, { merge: true });
+            } catch (e) { console.warn("Central print registration failed (drawingUrl still saved):", e); }
+        }
         await setDoc(doc(shopDb.collection("programs"), progForm.id || cleanId(progForm.name, "")), payload, {merge:true});
         writeLog(`Saved Operation Program: ${progForm.name}`, 'engineering');
         setProgForm({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} });
@@ -391,9 +402,15 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                                                     <span><span style={{ fontWeight: 500 }}>{op.name}</span></span>
                                                 </div>
                                                 {opProg && (
-                                                    <div style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>
-                                                        {opProg.setupTime}m SU<br/>
-                                                        {opProg.timePerPiece}m /pc
+                                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+                                                        <div style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>
+                                                            {opProg.setupTime}m SU<br/>
+                                                            {opProg.timePerPiece}m /pc
+                                                        </div>
+                                                        {(() => {
+                                                            const url = resolvePrintUrl(printMap, opProg.name, opProg.drawingUrl);
+                                                            return url ? <button onClick={() => window.open(url, '_blank')} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '3px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 Print</button> : null;
+                                                        })()}
                                                     </div>
                                                 )}
                                             </div>
@@ -496,7 +513,12 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '20px' }}>
                                 Cycle: {p.timePerPiece}m | Setup: {p.setupTime}m
                             </div>
-                            {p.drawingUrl && <button onClick={() => window.open(p.drawingUrl)} style={{ width: '100%', ...btnStyle, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>View Drawing</button>}
+                            {(() => {
+                                const url = resolvePrintUrl(printMap, p.name, p.drawingUrl);
+                                return url
+                                    ? <button onClick={() => window.open(url, '_blank')} style={{ width: '100%', ...btnStyle, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>🖨 Print</button>
+                                    : <div style={{ width: '100%', textAlign: 'center', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', border: '1px dashed var(--line)', boxSizing: 'border-box' }}>No print on file</div>;
+                            })()}
                         </div>
                     ))}
                 </div>
