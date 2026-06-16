@@ -55,6 +55,8 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
         (rs.visibilityEntries || []).forEach(e => { if (e && e.target != null) visMap[e.target] = e.visible; });
     }
     const notes = item?.engineeringNotes || job?.engineeringNotes || null;
+    const breakdown = (item?.pricingBreakdown || []).filter(l => l && !l.isHeader);
+    const svg = item?.draftSvg || null;
     const pseudoDraft = job ? {
         jobName: job.jobName,
         sidemark: item?.sidemark || job.sidemark,
@@ -125,6 +127,30 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                                     ? <EngineeringSpecsStrip draft={pseudoDraft} notes={notes} parts={parts} />
                                     : <div style={{ flex: 1, color: 'var(--ink-soft)', padding: '20px' }}>No engineering specs recorded on this order.</div>}
                             </div>
+
+                            {/* Bill of Materials / factory router */}
+                            <div style={{ flex: '1 1 360px', minWidth: '300px', maxHeight: '320px', overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', padding: '14px 16px' }}>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>Bill of Materials · Router</span>
+                                {breakdown.length === 0
+                                    ? <div style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>No line items recorded.</div>
+                                    : breakdown.map((l, i) => (
+                                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '5px 0', borderBottom: '1px dashed var(--line)' }}>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{ color: 'var(--ink)', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name}</div>
+                                                {(l.partHandling || l.cutLength) && <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginTop: '2px' }}>{l.partHandling ? `→ ${l.partHandling}` : ''}{l.cutLength ? ` · cut ${l.cutLength}"` : ''}</div>}
+                                            </div>
+                                            <div style={{ color: 'var(--ink-soft)', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>×{l.qty}</div>
+                                        </div>
+                                    ))}
+                            </div>
+
+                            {/* Vision shop drawing (cut lengths / miter angles / O2O-C2C) */}
+                            {svg && (
+                                <div style={{ flex: '1 1 100%', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', padding: '14px 16px' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '10px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>Shop Drawing · Vision Canvas</span>
+                                    <div style={{ width: '100%', maxHeight: '380px', overflow: 'auto', background: 'var(--paper-2)', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '10px', boxSizing: 'border-box' }} dangerouslySetInnerHTML={{ __html: svg }} />
+                                </div>
+                            )}
                         </>
                     )}
                 </div>

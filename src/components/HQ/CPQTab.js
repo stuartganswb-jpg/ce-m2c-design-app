@@ -1254,9 +1254,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           dateSaved: new Date().toISOString().split('T')[0], author: currentUser, createdAt: serverTimestamp()
       };
 
-      // DIAGNOSTIC (build-D): proves this build is live + names any value Firestore still rejects.
+      // Silent safety net: warn only if a Firestore-unsafe value ever slips past fsSafe (no console spam).
       const _viol = findFsViolation(payload.cpqData, 'cpqData') || findFsViolation(payload.engineeringNotes, 'engineeringNotes');
-      console.log('%c[CPQ finalize build-E]', 'color:#b80;font-weight:bold', _viol ? ('REMAINING VIOLATION -> ' + _viol) : 'payload clean (fsSafe active)');
+      if (_viol) console.warn('[CPQ finalize] Firestore-unsafe value slipped past fsSafe:', _viol);
 
       try {
           await setDoc(doc(db, "jobs", targetJobId), payload, { merge: true });
