@@ -28,9 +28,6 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                 if (!alive) return;
                 if (!snap.exists()) { setError(`No saved job found for "${quoteId}".`); setLoading(false); return; }
                 setJob({ id: snap.id, ...snap.data() });
-                const _ci = (snap.data().cpqData?.cartItems || [])[0] || {};
-                const _h = _ci.engineeringNotes?.hangerLocations || [];
-                console.log('[Viewer diag]', quoteId, '| hanger notes →', (_h.map(x => `${x.anchor || '?'}@${x.position || '?'}="${x.note || ''}"`).join('  |  ') || '(none)'), '| bracketNotes:', JSON.stringify(_ci.bracketNotes), '| general:', JSON.stringify(_ci.generalNotes));
                 // Parts let the spec strip resolve Vision-pick ids -> names; non-fatal if it fails.
                 try {
                     const ps = await getDocs(collection(db, 'Approved_Designs'));
@@ -135,6 +132,26 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                                 <div style={{ position: 'absolute', bottom: '10px', left: '12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', background: 'rgba(255,255,255,0.8)', padding: '3px 8px', borderRadius: '2px' }}>Drag to rotate · scroll to zoom</div>
                             </div>
 
+                            {/* Bracket locations + general notes — right after the model so the drill
+                                points aren't buried below the fold (brass border to stand out) */}
+                            {(hangers.length > 0 || general.length > 0) && (
+                                <div style={{ flex: '1 1 360px', minWidth: '300px', maxHeight: '440px', overflowY: 'auto', background: '#fff', border: '1px solid var(--brass)', borderRadius: '2px', padding: '14px 16px' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>Bracket Locations &amp; Notes</span>
+                                    {hangers.map((h, i) => (
+                                        <div key={i} style={{ padding: '6px 0', borderBottom: '1px dashed var(--line)' }}>
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--ink)' }}><strong style={{ fontWeight: 500 }}>{h.anchor}</strong>{h.position ? <span style={{ color: 'var(--ink-soft)' }}> · {h.position}</span> : null}</div>
+                                            {h.note && <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: '2px' }}>“{h.note}”</div>}
+                                        </div>
+                                    ))}
+                                    {general.length > 0 && (
+                                        <div style={{ marginTop: hangers.length ? '12px' : 0 }}>
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginBottom: '4px' }}>General Notes</div>
+                                            {general.map((t, i) => <div key={i} style={{ fontSize: '0.8rem', color: 'var(--ink)', padding: '4px 0', borderBottom: '1px dashed var(--line)' }}>• {t}</div>)}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
                             {/* Engineering specs roll-up */}
                             <div style={{ flex: '1 1 360px', minWidth: '300px', display: 'flex' }}>
                                 {notes
@@ -157,25 +174,6 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                                         </div>
                                     ))}
                             </div>
-
-                            {/* Bracket locations + general note boxes from the Vision canvas */}
-                            {(hangers.length > 0 || general.length > 0) && (
-                                <div style={{ flex: '1 1 360px', minWidth: '300px', maxHeight: '320px', overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', padding: '14px 16px' }}>
-                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>Bracket Locations &amp; Notes</span>
-                                    {hangers.map((h, i) => (
-                                        <div key={i} style={{ padding: '6px 0', borderBottom: '1px dashed var(--line)' }}>
-                                            <div style={{ fontSize: '0.8rem', color: 'var(--ink)' }}><strong style={{ fontWeight: 500 }}>{h.anchor}</strong>{h.position ? <span style={{ color: 'var(--ink-soft)' }}> · {h.position}</span> : null}</div>
-                                            {h.note && <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: '2px' }}>“{h.note}”</div>}
-                                        </div>
-                                    ))}
-                                    {general.length > 0 && (
-                                        <div style={{ marginTop: hangers.length ? '12px' : 0 }}>
-                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginBottom: '4px' }}>General Notes</div>
-                                            {general.map((t, i) => <div key={i} style={{ fontSize: '0.8rem', color: 'var(--ink)', padding: '4px 0', borderBottom: '1px dashed var(--line)' }}>• {t}</div>)}
-                                        </div>
-                                    )}
-                                </div>
-                            )}
 
                             {/* Vision shop drawing (cut lengths / miter angles / O2O-C2C) */}
                             {svg && (
