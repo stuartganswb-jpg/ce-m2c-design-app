@@ -19,9 +19,11 @@ const normPattern = (s) => String(s || "").toUpperCase().trim();
 const normFinish = (s) => String(s || "").toUpperCase().trim().replace(/^EP0+(\d+)$/, "EP$1");
 
 // "H1-138BP-H/EP1" -> { pattern, finish }; null if it isn't a PATTERN/FINISH token.
+// Accepts "/" OR ":" as the pattern|finish separator — macOS Finder stores a typed "/"
+// as ":" in the real filename, so files named H1-138BP-H/EP1 arrive as H1-138BP-H:EP1.
 export const parsePiece = (token) => {
     const t = String(token || "").trim();
-    const i = t.indexOf("/");
+    const i = t.search(/[/:]/);
     if (i < 0) return null;
     const pattern = normPattern(t.slice(0, i));
     const finish = normFinish(t.slice(i + 1));

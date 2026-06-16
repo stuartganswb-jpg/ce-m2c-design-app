@@ -28,7 +28,8 @@ const ComboImageUploader = ({ currentUser }) => {
             id: `${Date.now ? '' : ''}${f.name}-${prev.length + i}-${f.size}`,
             file: f,
             previewUrl: URL.createObjectURL(f),
-            name: String(f.name || '').replace(/\.[^.]+$/, ''),
+            // strip extension; show ":" back as "/" (macOS stores a typed "/" as ":")
+            name: String(f.name || '').replace(/\.[^.]+$/, '').replace(/:/g, '/'),
             status: 'pending',
             error: null,
         }))]);
