@@ -29,7 +29,8 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                 if (!snap.exists()) { setError(`No saved job found for "${quoteId}".`); setLoading(false); return; }
                 setJob({ id: snap.id, ...snap.data() });
                 const _ci = (snap.data().cpqData?.cartItems || [])[0] || {};
-                console.log('[Viewer diag]', quoteId, '| hangerLocations:', _ci.engineeringNotes?.hangerLocations, '| bracketNotes:', _ci.bracketNotes, '| generalNotes:', _ci.generalNotes);
+                const _h = _ci.engineeringNotes?.hangerLocations || [];
+                console.log('[Viewer diag]', quoteId, '| hanger notes →', (_h.map(x => `${x.anchor || '?'}@${x.position || '?'}="${x.note || ''}"`).join('  |  ') || '(none)'), '| bracketNotes:', JSON.stringify(_ci.bracketNotes), '| general:', JSON.stringify(_ci.generalNotes));
                 // Parts let the spec strip resolve Vision-pick ids -> names; non-fatal if it fails.
                 try {
                     const ps = await getDocs(collection(db, 'Approved_Designs'));
