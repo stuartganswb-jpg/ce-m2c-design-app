@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, doc, setDoc, updateDoc, writeBatch, increment, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, writeBatch, increment } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { printDocId, printKey, resolvePrintUrl, PRINT_CATEGORY } from '../Shared/programPrints';
+import { saveProgramPrint, resolvePrintUrl } from '../Shared/programPrints';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection as oldCol, getDocs as oldGetDocs } from 'firebase/firestore';
 
@@ -130,13 +130,9 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
         const payload = { name: progForm.name, machines: progForm.machines, timePerPiece: parseFloat(progForm.timePerPiece)||0, setupTime: parseFloat(progForm.setupTime)||0, setupCode: progForm.setupCode, steps: progForm.steps, toolTimes: progForm.toolTimes };
         if(drawingUrl) {
             payload.drawingUrl = drawingUrl;
-            // Also register centrally so the "Print" button resolves it everywhere (keyed by program name).
+            // Also register centrally (hidden program_prints store) so the Print button resolves it everywhere.
             try {
-                await setDoc(doc(db, "global_assets", printDocId(progForm.name)), {
-                    id: printDocId(progForm.name), category: PRINT_CATEGORY, name: printKey(progForm.name),
-                    originalUrl: drawingUrl, fileType: 'pdf', uploadedBy: user?.name || 'Shop',
-                    createdAt: serverTimestamp(), updatedAt: serverTimestamp()
-                }, { merge: true });
+                await saveProgramPrint(db, { name: progForm.name, url: drawingUrl, fileType: 'pdf', uploadedBy: user?.name || 'Shop' });
             } catch (e) { console.warn("Central print registration failed (drawingUrl still saved):", e); }
         }
         await setDoc(doc(shopDb.collection("programs"), progForm.id || cleanId(progForm.name, "")), payload, {merge:true});

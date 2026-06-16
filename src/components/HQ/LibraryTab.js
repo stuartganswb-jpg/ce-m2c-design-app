@@ -3,6 +3,7 @@ import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
 import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
 
 
 const AVAILABLE_BRANDS = [
@@ -42,6 +43,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [activeBomPins, setActiveBomPins] = useState([]); 
 
   const [activePart, setActivePart] = useState(null);
+  const [printMap, setPrintMap] = useState(new Map()); // program name -> program-print doc
   const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, clientPricing: [], collections: [], bomRevision: "" }); 
   const [isSaving, setIsSaving] = useState(false);
   
@@ -107,7 +109,9 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       setWindowConfig(mergeWindowConfig(docSnap.data()));
     });
 
-    return () => { unsubSchema(); unsubAssets(); unsubCollections(); unsubLists(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); };
+    const unsubPrints = subscribeProgramPrints(db, setPrintMap);
+
+    return () => { unsubSchema(); unsubAssets(); unsubCollections(); unsubLists(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); unsubPrints(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -691,7 +695,15 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                   <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>{activePart.isNew ? `New ${partClassFilter} Setup` : (activePart.legacyErpId !== "PENDING" ? activePart.legacyErpId : activePart.itemId)}</h3>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '4px', display: 'block' }}>{activePart.isNew ? "Define Master Details Below" : activePart.itemName}</span>
               </div>
-              <button onClick={() => setActivePart(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                {!activePart.isNew && (() => {
+                  const url = resolvePrintUrlAny(printMap, [activePart.legacyErpId, activePart.itemName, activePart.itemId, activePart.manufacturingSpecs?.programNum, editSpecs.programNum]);
+                  return url
+                    ? <button onClick={() => window.open(url, '_blank')} style={{ background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', whiteSpace: 'nowrap' }}>🖨 Print</button>
+                    : <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', border: '1px dashed var(--line)', padding: '8px 12px', whiteSpace: 'nowrap' }}>No print on file</span>;
+                })()}
+                <button onClick={() => setActivePart(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+              </div>
             </div>
 
             <div style={{ padding: '30px', display: 'flex', flexDirection: 'column', gap: '30px' }}>

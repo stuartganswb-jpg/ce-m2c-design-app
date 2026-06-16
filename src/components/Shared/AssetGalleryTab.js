@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, query, doc, getDoc, updateDoc, deleteDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
-import { printKey, printDocId, PRINT_CATEGORY } from './programPrints';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -27,10 +26,6 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [metaForm, setMetaForm] = useState({ name: '', collection: '', productType: '', patternId: '', finishId: '', customerId: '', clientSku: '', notes: '', associatedParts: [], associatedFinishes: [] });
     const [uploadFile, setUploadFile] = useState(null);
     const fileInputRef = useRef(null);
-
-    // Program Prints (PDF-capable, keyed by program name) — separate from the image uploader.
-    const [printFile, setPrintFile] = useState(null);
-    const [printName, setPrintName] = useState('');
 
     const [downloadSku, setDownloadSku] = useState("");
 
@@ -138,6 +133,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     };
 
     const filteredAssets = safeAssets.filter(asset => {
+        if (asset?.category === 'PROGRAM_PRINT') return false; // prints live in `program_prints`, never the gallery (hides any legacy test docs)
         if (!searchQuery) return true;
         const q = String(searchQuery).toLowerCase();
         
@@ -312,60 +308,6 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             setTimeout(() => { setIsUploading(false); setUploadProgress(0); }, 500);
 
         } catch (error) { console.error(error); setIsUploading(false); setUploadProgress(0); }
-    };
-
-    // Upload a CNC program print (PDF or image). Raw file straight to Storage —
-    // NO watermark/canvas (a PDF can't load through an <Image>). Deterministic id
-    // means re-uploading the same program name overwrites (warn first).
-    const handleUploadPrint = async () => {
-        if (!printFile) return alert("Select a PDF or image to upload.");
-        const progName = String(printName || '').trim();
-        if (!progName) return alert("Enter the Program / Item name this print belongs to.");
-
-        setIsUploading(true);
-        try {
-            const docId = printDocId(progName);
-            const existing = await getDoc(doc(db, "global_assets", docId));
-            if (existing.exists() && !window.confirm(`A print already exists for "${printKey(progName)}". Replace it?`)) {
-                setIsUploading(false);
-                return;
-            }
-            setUploadProgress(20);
-
-            const brandFolder = activeBrand ? String(activeBrand) : 'global';
-            const safeName = printKey(progName).replace(/[^A-Z0-9]/g, '_');
-            const ext = (printFile.name && printFile.name.includes('.'))
-                ? printFile.name.split('.').pop().toLowerCase()
-                : (printFile.type === 'application/pdf' ? 'pdf' : 'png');
-            const isPdf = ext === 'pdf' || printFile.type === 'application/pdf';
-
-            const fileRef = ref(storage, `global_assets/prints/${brandFolder}/${safeName}.${ext}`);
-            await uploadBytes(fileRef, printFile);
-            setUploadProgress(70);
-            const url = await getDownloadURL(fileRef);
-
-            await setDoc(doc(db, "global_assets", docId), {
-                id: docId,
-                category: PRINT_CATEGORY,
-                name: printKey(progName),
-                originalUrl: url,
-                fileType: isPdf ? 'pdf' : 'image',
-                brandId: activeBrand || 'ALL',
-                uploadedBy: currentUser || 'Unknown',
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp()
-            }, { merge: true });
-
-            setUploadProgress(100);
-            setPrintFile(null);
-            setPrintName('');
-            setTimeout(() => { setIsUploading(false); setUploadProgress(0); }, 500);
-        } catch (error) {
-            console.error(error);
-            alert("Failed to upload print. Check console.");
-            setIsUploading(false);
-            setUploadProgress(0);
-        }
     };
 
     const handleUpdateMetadata = async () => {
@@ -557,34 +499,6 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                             UPLOAD TO DAM
                         </button>
                     )}
-
-                    {/* ───────── PROGRAM PRINTS — PDF/drawing store, keyed by program name ───────── */}
-                    <div style={{ borderTop: `1px solid ${theme.line}`, marginTop: '10px', paddingTop: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        <div style={{ fontFamily: theme.serif, fontWeight: 500, fontSize: '1.2rem', color: theme.ink }}>Program Prints</div>
-                        <div style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>PDF or image · saved by program name · re-upload overwrites</div>
-                        <input
-                            type="file"
-                            accept="application/pdf,image/*"
-                            onChange={e => { const f = e.target.files[0]; setPrintFile(f); if (f && !printName) setPrintName(String(f.name || '').replace(/\.[^.]+$/, '')); }}
-                            style={{ padding: '10px', border: `1px dashed ${theme.brass}`, background: theme.paper, cursor: 'pointer', width: '100%', boxSizing: 'border-box', fontFamily: theme.sans, fontSize: '0.85rem' }}
-                        />
-                        <input
-                            type="text"
-                            placeholder="Program / Item Name (e.g. M2C-1234)"
-                            value={printName}
-                            onChange={e => setPrintName(e.target.value)}
-                            style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, textTransform: 'uppercase' }}
-                        />
-                        <button
-                            onClick={handleUploadPrint}
-                            disabled={isUploading}
-                            style={{ background: isUploading ? theme.paper2 : theme.ink, color: isUploading ? theme.inkSoft : '#fff', border: 'none', padding: '14px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.18em', textTransform: 'uppercase', cursor: isUploading ? 'not-allowed' : 'pointer', transition: 'background 0.2s' }}
-                            onMouseOver={(e) => { if (!isUploading) e.currentTarget.style.background = theme.brass; }}
-                            onMouseOut={(e) => { if (!isUploading) e.currentTarget.style.background = theme.ink; }}
-                        >
-                            {isUploading ? 'UPLOADING…' : 'UPLOAD PRINT'}
-                        </button>
-                    </div>
                 </div>
 
                 {/* THE THUMBNAIL MASONRY GRID */}
@@ -603,16 +517,10 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                             </div>
                         ) : (
                             displayAssets.map(asset => (
-                                <div key={asset.id} onClick={() => asset.category === PRINT_CATEGORY ? window.open(asset.originalUrl || asset.url, '_blank') : openModal(asset)} style={{ border: `1px solid ${theme.line}`, borderRadius: '2px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', background: '#fff' }} onMouseOver={e => { e.currentTarget.style.borderColor = theme.brass; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.05)'; }} onMouseOut={e => { e.currentTarget.style.borderColor = theme.line; e.currentTarget.style.boxShadow = 'none'; }}>
+                                <div key={asset.id} onClick={() => openModal(asset)} style={{ border: `1px solid ${theme.line}`, borderRadius: '2px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', background: '#fff' }} onMouseOver={e => { e.currentTarget.style.borderColor = theme.brass; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.05)'; }} onMouseOut={e => { e.currentTarget.style.borderColor = theme.line; e.currentTarget.style.boxShadow = 'none'; }}>
 
                                     <div style={{ position: 'relative', width: '100%', height: '200px', background: theme.paper, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        {asset.category === PRINT_CATEGORY ? (
-                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '0 12px' }}>
-                                                <span style={{ fontSize: '2.4rem' }}>📄</span>
-                                                <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', color: theme.ink, textAlign: 'center', wordBreak: 'break-word' }}>{String(asset.name || '')}</span>
-                                                <span style={{ fontFamily: theme.mono, fontSize: '8px', letterSpacing: '.1em', color: theme.brass }}>{String(asset.fileType || 'FILE').toUpperCase()} PRINT</span>
-                                            </div>
-                                        ) : (asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'1.5rem', color: theme.inkSoft}}>⚲</span>)}
+                                        {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'1.5rem', color: theme.inkSoft}}>⚲</span>}
                                         
                                         <div style={{ position: 'absolute', bottom: '8px', left: '8px', color: theme.ink, fontFamily: theme.mono, fontSize: '10px', background: 'rgba(255,255,255,0.9)', padding: '4px 8px', border: `1px solid ${theme.line}` }}>
                                             {String(asset.patternId || '')}{asset.finishId ? `/${String(asset.finishId)}` : ''}

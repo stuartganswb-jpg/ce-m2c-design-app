@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, doc, setDoc, serverTimestamp, onSnapshot } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import ProgramPrintUploader from './ProgramPrintUploader';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -31,6 +32,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const [associatedFinishes, setAssociatedFinishes] = useState([]); 
     
     const [imagePreview, setImagePreview] = useState(null);
+    const [mode, setMode] = useState('images'); // 'images' (existing conveyor) | 'prints' (PDF program-print uploader)
     const idInputRef = useRef(null);
 
     useEffect(() => {
@@ -269,7 +271,18 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', backgroundColor: theme.paper, minHeight: '100vh', fontFamily: theme.sans }}>
-            
+
+            {/* MODE TOGGLE: existing image conveyor vs program-print (PDF) uploader */}
+            <div style={{ display: 'flex', border: `1px solid ${theme.line}`, alignSelf: 'flex-start', background: '#fff' }}>
+                {[['images', 'Images'], ['prints', 'Program Prints (PDF)']].map(([m, label]) => (
+                    <button key={m} onClick={() => setMode(m)} style={{ padding: '10px 22px', background: mode === m ? theme.ink : 'transparent', color: mode === m ? '#fff' : theme.inkSoft, border: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', cursor: 'pointer' }}>{label}</button>
+                ))}
+            </div>
+
+            {mode === 'prints' ? (
+                <ProgramPrintUploader currentUser={currentUser} activeBrand={activeBrand} />
+            ) : (
+            <>
             {/* Header Area */}
             <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px 30px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                 <div>
@@ -491,6 +504,8 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
                     </div>
                 </div>
+            )}
+            </>
             )}
         </div>
     );
