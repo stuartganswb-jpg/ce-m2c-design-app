@@ -667,6 +667,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   }, [activeFlow, activeAssembly, activeDraftId]);
 
   const currentStep = activeFlow?.steps?.[currentStepIndex];
+  // True if any step AFTER the current one is still enabled — drives whether we show "Next Step" or
+  // the final "Add to Quote Cart", so disabled trailing steps (e.g. skipped finial/return) don't
+  // strand the operator before checkout.
+  const hasNextActiveStep = !!activeFlow && (activeFlow.steps || []).slice(currentStepIndex + 1).some(s => !engineFlags.disabledSteps.includes(s.title));
   const availableProductTypes = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.productType).filter(Boolean))];
 
   const getOptionsForStep = (step) => {
@@ -894,6 +898,28 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setEngineFlags(newFlags);
   }, [dynamicConfigParams, cpqRules, libraryParts, liveAssemblies, dynamicAssets, globalFinishes, outsourceFinishes]);
 
+  // A step disabled by a rule (e.g. an end-arm bracket that replaces a finial / miter return) must
+  // contribute NOTHING — clear its selection, sub-pick, finish, and qty so it drops out of the price,
+  // BOM, and 3D render (the nav handlers already skip it in the UI). disabledSteps holds step TITLES;
+  // map to ids. Idempotent — re-clearing an already-clear step is a no-op, so it can't loop even
+  // though it reacts (via engineFlags) to the selections it doesn't touch.
+  useEffect(() => {
+      const disabled = engineFlags.disabledSteps || [];
+      if (!disabled.length || !activeFlow) return;
+      const ids = (activeFlow.steps || []).filter(s => disabled.includes(s.title)).map(s => s.id);
+      if (!ids.length) return;
+      setDynamicConfigParams(prev => {
+          let changed = false; const next = { ...prev };
+          ids.forEach(id => [id, `${id}__sub`, `${id}__finish`].forEach(k => { if (next[k] !== undefined) { delete next[k]; changed = true; } }));
+          return changed ? next : prev;
+      });
+      setStepQuantities(prev => {
+          let changed = false; const next = { ...prev };
+          ids.forEach(id => { if (next[id] !== undefined) { delete next[id]; changed = true; } });
+          return changed ? next : prev;
+      });
+  }, [engineFlags, activeFlow]);
+
   const handleDimensionChange = (stepId, key, value, template) => {
       setDimensionInputs(prev => {
           const current = prev[stepId] || { length: '', type: 'O2O', wallA: '', wallB: '', wallC: '' };
@@ -1102,6 +1128,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           nextIndex++;
       }
       if (nextIndex < steps.length) setCurrentStepIndex(nextIndex);
+  };
+
+  // Mirror of handleNextStep so Back also hops over disabled steps (never lands on one).
+  const handleBackStep = () => {
+      if (!activeFlow) return;
+      const steps = activeFlow.steps || [];
+      let prevIndex = currentStepIndex - 1;
+      while (prevIndex > 0 && engineFlags.disabledSteps.includes(steps[prevIndex]?.title)) {
+          prevIndex--;
+      }
+      if (prevIndex >= 0) setCurrentStepIndex(prevIndex);
   };
 
   const handleAddToCart = async () => {
@@ -1982,9 +2019,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       )}
 
                       <div style={{ padding: '24px', display: 'flex', justifyContent: 'space-between', background: '#fff' }}>
-                          <button onClick={() => setCurrentStepIndex(Math.max(0, currentStepIndex - 1))} disabled={currentStepIndex === 0} style={{ padding: '12px 24px', border: '1px solid var(--line)', background: 'transparent', color: currentStepIndex === 0 ? 'var(--line)' : 'var(--ink)', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Back</button>
+                          <button onClick={handleBackStep} disabled={currentStepIndex === 0} style={{ padding: '12px 24px', border: '1px solid var(--line)', background: 'transparent', color: currentStepIndex === 0 ? 'var(--line)' : 'var(--ink)', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Back</button>
                           
-                          {currentStepIndex < activeFlow.steps.length - 1 ? (
+                          {hasNextActiveStep ? (
                               <button onClick={handleNextStep} disabled={currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE'} style={{ padding: '12px 24px', border: 'none', background: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'var(--line)' : 'var(--ink)', color: '#fff', cursor: currentStep.required && !dynamicConfigParams[currentStep.id] && currentStep.type !== 'DIMENSIONS' && currentStep.type !== 'STATIC_FEE' ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>Next Step</button>
                           ) : (
                               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
