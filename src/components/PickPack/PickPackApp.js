@@ -10,7 +10,7 @@ import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
 // TABS updated to include COUNT
-const TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'GALLERY', 'MESSAGING'];
+const TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'GALLERY', 'MESSAGING'];
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
 // NetSuite Mapping Dictionary
@@ -58,6 +58,13 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [convertSrcScan, setConvertSrcScan] = useState("");
     const [convertDestScan, setConvertDestScan] = useState("");
     const [convertMemo, setConvertMemo] = useState("");
+
+    // BIN TRANSFER state (move qty between bins within a location)
+    const [transferBase, setTransferBase] = useState(null);
+    const [transferSrcScan, setTransferSrcScan] = useState("");
+    const [transferQty, setTransferQty] = useState("");
+    const [transferDestScan, setTransferDestScan] = useState("");
+    const [transferMemo, setTransferMemo] = useState("");
     
     // Counting Filter State
     const [searchQuery, setSearchQuery] = useState("");
@@ -360,6 +367,64 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         }
     };
 
+    // --- NETSUITE BIN TRANSFER (move qty between bins within a location; total on-hand unchanged) ---
+    const pushBinTransfer = async () => {
+        const item = transferBase;
+        const qty = parseInt(transferQty) || 0;
+        const fromBin = (transferSrcScan || '').trim();
+        const toBin = (transferDestScan || '').trim();
+        if (!item || qty <= 0 || !fromBin || !toBin) return;
+        if (!item.netSuiteInternalId) return alert(`${item.erpId} has no NetSuite Internal ID — map it first (HQ → ERP Mapping Audit / Mass Update).`);
+        if (fromBin.toUpperCase() === toBin.toUpperCase()) return alert("Source and destination bins are the same.");
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+        const memoText = `Bin transfer by ${operator?.name || 'Unknown'}${transferMemo.trim() ? ` — ${transferMemo.trim()}` : ''}`;
+
+        try {
+            setIsSyncing(true);
+            // Make sure the destination bin exists (idempotent — an existing bin is fine).
+            await ensureBinExists(toBin, nsConfig.location);
+            const payload = {
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/bintransfer`,
+                method: 'POST',
+                payload: {
+                    location: { id: nsConfig.location },
+                    memo: memoText,
+                    inventory: {
+                        items: [{
+                            item: { id: item.netSuiteInternalId },
+                            // move qty from the source bin to the destination bin (same item, same location)
+                            inventoryDetail: {
+                                quantity: qty,
+                                inventoryAssignment: {
+                                    items: [{ binNumber: { refName: fromBin }, toBinNumber: { refName: toBin }, quantity: qty }]
+                                }
+                            }
+                        }]
+                    }
+                }
+            };
+
+            const response = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
+
+            alert(`✅ Bin transfer posted: ${qty} × ${item.erpId} moved ${fromBin} → ${toBin}.`);
+            writeLog(`Bin Transfer: ${qty} ${item.erpId} ${fromBin} -> ${toBin}.${transferMemo.trim() ? ` Memo: ${transferMemo.trim()}` : ''}`, 'wms');
+            setTransferBase(null); setTransferSrcScan(""); setTransferQty(""); setTransferDestScan(""); setTransferMemo("");
+            pullNetSuiteStock();
+        } catch (e) {
+            console.error("Bin transfer push failed:", e);
+            alert("❌ NetSuite rejected the bin transfer:\n\n" + (e.message || e) + "\n\nThis is the first bin transfer we've posted — if it names a field (toBinNumber / inventoryAssignment / binNumber / inventory), paste it and I'll correct the REST shape.");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
     const handlePickValidation = async (e) => {
         e.preventDefault();
         const lineItem = activePickJob.partsList[currentPickLine];
@@ -483,6 +548,13 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const convTargetMatches = convertTargetSearch.trim().length >= 2
         ? hqParts.filter(p => p.id !== convertBase?.id && (erpOf(p).includes(convertTargetSearch.trim().toUpperCase()) || (p.itemName || '').toLowerCase().includes(convertTargetSearch.trim().toLowerCase()))).slice(0, 8)
         : [];
+
+    // BIN TRANSFER derived: readiness gates
+    const xferQtyNum = parseInt(transferQty) || 0;
+    const xferFrom = (transferSrcScan || '').trim();
+    const xferTo = (transferDestScan || '').trim();
+    const xferSrcKnown = !!transferBase && binOf(transferBase) !== 'UNASSIGNED' && xferFrom.toUpperCase() === binOf(transferBase).toUpperCase();
+    const xferReady = !!transferBase && !!transferBase.netSuiteInternalId && xferQtyNum > 0 && xferQtyNum <= transferBase.onHand && xferFrom !== '' && xferTo !== '' && xferFrom.toUpperCase() !== xferTo.toUpperCase();
 
     const safeUserRole = operator?.role ? operator.role.toLowerCase() : 'operator';
     const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
@@ -920,6 +992,113 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
                                                 <button onClick={() => { setConvertBase(item); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Convert →</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {baseFilteredItems.length === 0 && (
+                                        <tr>
+                                            <td colSpan="4" style={{ padding: '40px', textAlign: 'center', color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No inventory items matched your filter.</td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
+
+                {/* ⇄ TAB: BIN TRANSFER (move qty between bins within a location) */}
+                {activeTab === 'TRANSFER' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
+
+                        {/* TRANSFER MODAL */}
+                        {transferBase && (
+                            <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <div style={{ background: '#fff', padding: '40px', width: '680px', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
+                                    <h2 style={{ margin: '0 0 6px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>Bin Transfer</h2>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '24px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
+                                        Moves stock between bins · Location {BRAND_NETSUITE_MAP[activeBrand]?.location} · total on hand unchanged
+                                    </div>
+
+                                    {/* ITEM */}
+                                    <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: theme.paper, marginBottom: '24px' }}>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{transferBase.erpId}</div>
+                                        <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{transferBase.itemName}</div>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '6px' }}>home bin {binOf(transferBase)} · {transferBase.onHand} on hand (location)</div>
+                                    </div>
+
+                                    {/* FROM / QTY / TO */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                                        <div>
+                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan source bin</label>
+                                            <input value={transferSrcScan} onChange={e => setTransferSrcScan(e.target.value)} placeholder={binOf(transferBase)} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${xferSrcKnown ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: xferSrcKnown ? '#7dbb81' : theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>{xferSrcKnown ? '✓ home bin' : `home: ${binOf(transferBase)}`}</div>
+                                        </div>
+                                        <div>
+                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Quantity</label>
+                                            <input type="number" min="1" max={transferBase.onHand} value={transferQty} onChange={e => setTransferQty(e.target.value)} placeholder="0" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `2px solid ${xferQtyNum > 0 && xferQtyNum <= transferBase.onHand ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                        </div>
+                                        <div>
+                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan / enter dest bin</label>
+                                            <input value={transferDestScan} onChange={e => setTransferDestScan(e.target.value)} placeholder="new or existing bin" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${xferTo !== '' && xferTo.toUpperCase() !== xferFrom.toUpperCase() ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>created if new</div>
+                                        </div>
+                                    </div>
+
+                                    {/* MEMO */}
+                                    <div style={{ marginBottom: '24px' }}>
+                                        <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Transfer memo{operator?.name ? ` — recorded as ${operator.name}` : ''}</label>
+                                        <textarea value={transferMemo} onChange={e => setTransferMemo(e.target.value)} placeholder="Optional note. Pushed to the NetSuite transfer memo with your name." rows={2} style={{ width: '100%', padding: '12px', fontFamily: theme.sans, fontSize: '0.9rem', color: theme.ink, border: `1px solid ${theme.line}`, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
+                                    </div>
+
+                                    <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
+                                        <button onClick={() => { setTransferBase(null); setTransferSrcScan(""); setTransferQty(""); setTransferDestScan(""); setTransferMemo(""); }} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
+                                        <button onClick={pushBinTransfer} disabled={!xferReady || isSyncing} style={{ padding: '15px 30px', background: xferReady && !isSyncing ? theme.brass : theme.paper2, color: xferReady && !isSyncing ? '#fff' : theme.inkSoft, border: 'none', cursor: xferReady && !isSyncing ? 'pointer' : 'not-allowed', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
+                                            {isSyncing ? 'Posting transfer…' : 'Post Bin Transfer'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* HEADER FILTERS */}
+                        <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px', display: 'flex', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', background: theme.paper2, minWidth: '150px' }}>
+                                <option value="">All Categories</option>
+                                {dynamicProdTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                            </select>
+                            <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', background: theme.paper2, minWidth: '150px' }}>
+                                <option value="">All Collections</option>
+                                {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                            <input placeholder="Search an item to move…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', flex: 1, minWidth: '180px' }} />
+                            {(typeFilter || collectionFilter || searchQuery) && <button onClick={() => { setTypeFilter(''); setCollectionFilter(''); setSearchQuery(''); }} style={{ padding: '12px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>}
+                            <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '12px 20px', background: isSyncing ? theme.paper : theme.ink, color: isSyncing ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>
+                                {isSyncing ? 'Syncing...' : 'Pull Live Stock'}
+                            </button>
+                        </div>
+
+                        {/* INVENTORY TABLE */}
+                        <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, overflowY: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                <thead style={{ background: theme.paper2, position: 'sticky', top: 0, zIndex: 10 }}>
+                                    <tr>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>ERP ID / Item</th>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Home Bin</th>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>On Hand</th>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Move</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {baseFilteredItems.map(item => (
+                                        <tr key={item.id} style={{ borderBottom: `1px solid ${theme.line}` }}>
+                                            <td style={{ padding: '16px' }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{item.erpId}</div>
+                                                <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{item.itemName}</div>
+                                            </td>
+                                            <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{item.binLocation}</td>
+                                            <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
+                                            <td style={{ padding: '16px', textAlign: 'center' }}>
+                                                <button onClick={() => { setTransferBase(item); setTransferSrcScan(""); setTransferQty(""); setTransferDestScan(""); setTransferMemo(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Transfer →</button>
                                             </td>
                                         </tr>
                                     ))}
