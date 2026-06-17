@@ -358,6 +358,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                 method: 'POST',
                 payload: {
                     item: { id: assemblyId }, // the assembly being built
+                    subsidiary: { id: nsConfig.subsidiary },
                     quantity: qty,
                     location: { id: nsConfig.location },
                     memo: memoText
