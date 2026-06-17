@@ -58,6 +58,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [convertSrcScan, setConvertSrcScan] = useState("");
     const [convertDestScan, setConvertDestScan] = useState("");
     const [convertMemo, setConvertMemo] = useState("");
+    const [convertLot, setConvertLot] = useState(""); // lot/serial # for the finished assembly (lot-tracked assemblies require it)
 
     // BIN TRANSFER state (move qty between bins within a location)
     const [transferBase, setTransferBase] = useState(null);
@@ -361,9 +362,16 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                     subsidiary: { id: nsConfig.subsidiary },
                     quantity: qty,
                     location: { id: nsConfig.location },
-                    memo: memoText
-                    // No inventoryDetail: this /P assembly isn't bin-managed in NetSuite, which rejects a bin
-                    // assignment for it. Components auto-consume from the BOM (base pulls from its default bin).
+                    memo: memoText,
+                    // Lot/serial-numbered assemblies need an inventory number on the built units → send it via
+                    // receiptInventoryNumber when a lot # is entered. Plain (untracked) assemblies omit this, and
+                    // this /P assembly isn't bin-managed so no bin. Components auto-consume from the BOM.
+                    ...(convertLot.trim() ? {
+                        inventoryDetail: {
+                            quantity: qty,
+                            inventoryAssignment: { items: [{ receiptInventoryNumber: convertLot.trim(), quantity: qty }] }
+                        }
+                    } : {})
                 }
             };
 
@@ -377,7 +385,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
             alert(`✅ Assembly build posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${srcBin}).\n\nPlace the finished stock in bin ${destBin}. (This assembly isn't bin-tracked in NetSuite, so the bin is for your reference.)`);
             writeLog(`Assembly Build (phosphate): +${qty} ${erpOf(target)} / -${qty} ${base.erpId}.${convertMemo.trim() ? ` Memo: ${convertMemo.trim()}` : ''}`, 'wms');
-            setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo("");
+            setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot("");
             pullNetSuiteStock();
         } catch (e) {
             console.error("Assembly build push failed:", e);
@@ -957,6 +965,12 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                         </div>
                                     </div>
 
+                                    {/* LOT / SERIAL # (finished assembly) */}
+                                    <div style={{ marginBottom: '24px' }}>
+                                        <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Lot / serial # (finished)</label>
+                                        <input value={convertLot} onChange={e => setConvertLot(e.target.value)} placeholder="Required if this assembly is lot/serial-tracked in NetSuite" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', color: theme.ink, border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                    </div>
+
                                     {/* MEMO */}
                                     <div style={{ marginBottom: '24px' }}>
                                         <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Build memo{operator?.name ? ` — recorded as ${operator.name}` : ''}</label>
@@ -964,7 +978,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                     </div>
 
                                     <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
-                                        <button onClick={() => { setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); }} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
+                                        <button onClick={() => { setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(""); }} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
                                         <button onClick={pushAssemblyBuild} disabled={!convReady || isSyncing} style={{ padding: '15px 30px', background: convReady && !isSyncing ? theme.brass : theme.paper2, color: convReady && !isSyncing ? '#fff' : theme.inkSoft, border: 'none', cursor: convReady && !isSyncing ? 'pointer' : 'not-allowed', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
                                             {isSyncing ? 'Posting build…' : 'Build & Post to NetSuite'}
                                         </button>
@@ -1011,7 +1025,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{item.binLocation}</td>
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
-                                                <button onClick={() => { setConvertBase(item); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Convert →</button>
+                                                <button onClick={() => { setConvertBase(item); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Convert →</button>
                                             </td>
                                         </tr>
                                     ))}
