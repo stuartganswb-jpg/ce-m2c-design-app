@@ -23,6 +23,7 @@ const AdminTab = lazy(() => import('./AdminTab'));
 const NetSuiteSyncTab = lazy(() => import('./NetSuiteSyncTab')); 
 const ERPPushPullTab = lazy(() => import('./ERPPushPullTab'));
 const StockViewTab = lazy(() => import('./StockViewTab'));
+const ErpMappingAudit = lazy(() => import('./ErpMappingAudit'));
 const RTGDispatchTab = lazy(() => import('./RTGDispatchTab'));
 
 const AssetGalleryTab = lazy(() => import('../Shared/AssetGalleryTab'));
@@ -40,7 +41,7 @@ const BRANDS = [
 const TABS = [
   '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update',
   '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
-  '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '11.1 NetSuite Sync', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
+  '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '11.1 NetSuite Sync', '11.2 ERP Mapping Audit', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', 'ERP_WRITE_BACK'
 ];
 
@@ -335,6 +336,7 @@ function HQ() {
             {activeTab === '10.7 OS Comms' && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={logHqAction} />}
             {activeTab === '11. System Admin' && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} writeLog={logHqAction} />}
             {activeTab === '11.1 NetSuite Sync' && <NetSuiteSyncTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '11.2 ERP Mapping Audit' && <ErpMappingAudit currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '12. ERP Push / Pull' && <ERPPushPullTab currentUser={user.name} activeBrand={activeBrand.id} />}
             
             {/* 🚀 Wired up onNavigateToLibrary to set the focus ID and switch tabs */}
