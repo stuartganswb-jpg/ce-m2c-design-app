@@ -201,14 +201,19 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                 payload: {
                     account: { id: "254" }, // NetSuite Inventory Adjustment Account internal id
                     subsidiary: { id: nsConfig.subsidiary },
-                    location: { id: nsConfig.location },
-                    inventoryList: {
+                    // REST sublist for adjustment lines is `inventory` (NOT `inventoryList` — that's the
+                    // legacy SOAP name; REST ignores it and reports "must enter at least one line item").
+                    inventory: {
                         items: adjustments.map(adj => ({
-                            item: { id: adj.internalId }, 
+                            item: { id: adj.internalId },
+                            location: { id: nsConfig.location }, // location is a LINE field on REST adjustments
                             adjustQtyBy: adj.adjustQtyBy,
+                            // Bin-tracked item: the detail qty and the bin assignment must reconcile to the
+                            // line's signed adjustQtyBy. Bin referenced by refName (its bin number string).
                             inventoryDetail: {
+                                quantity: adj.adjustQtyBy,
                                 inventoryAssignment: {
-                                    items: [{ receiptInventoryNumber: adj.binNumber, quantity: Math.abs(adj.adjustQtyBy) }]
+                                    items: [{ binNumber: { refName: adj.binNumber }, quantity: adj.adjustQtyBy }]
                                 }
                             }
                         }))
@@ -231,7 +236,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             pullNetSuiteStock();
         } catch (e) {
             console.error("Inventory adjustment push failed:", e);
-            alert("❌ NetSuite rejected the adjustment:\n\n" + (e.message || e) + "\n\nIf it mentions inventoryDetail / inventory number, the item likely isn't bin/lot-tracked in NetSuite — tell me and I'll drop the bin detail for those.");
+            alert("❌ NetSuite rejected the adjustment:\n\n" + (e.message || e) + "\n\nIf it mentions the bin / inventory number not being found, NetSuite couldn't match the bin by its name — tell me and I'll switch to the bin's internal id. If it mentions inventoryDetail on an item that isn't bin/lot-tracked, I'll drop the bin detail for those.");
         } finally {
             setIsSyncing(false);
         }
