@@ -199,7 +199,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
                 method: 'POST',
                 payload: {
-                    account: { id: "123" }, // IMPORTANT: Update '123' to your specific NetSuite Inventory Adjustment Account Internal ID
+                    account: { id: "254" }, // NetSuite Inventory Adjustment Account internal id
                     subsidiary: { id: nsConfig.subsidiary },
                     location: { id: nsConfig.location },
                     inventoryList: {
@@ -231,7 +231,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             pullNetSuiteStock();
         } catch (e) {
             console.error("Inventory adjustment push failed:", e);
-            alert("❌ NetSuite rejected the adjustment:\n\n" + (e.message || e) + "\n\nNote: the adjustment Account is still the placeholder id \"123\" — it needs your real NetSuite Inventory Adjustment Account internal id.");
+            alert("❌ NetSuite rejected the adjustment:\n\n" + (e.message || e) + "\n\nIf it mentions inventoryDetail / inventory number, the item likely isn't bin/lot-tracked in NetSuite — tell me and I'll drop the bin detail for those.");
         } finally {
             setIsSyncing(false);
         }
