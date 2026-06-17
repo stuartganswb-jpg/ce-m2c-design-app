@@ -539,6 +539,69 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
+    // --- APP → NETSUITE WRITE-BACK (v1: App is master for the core curated fields) ---
+    const restPatch = async (recordType, nsId, payload) => {
+        const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${recordType}/${nsId}`;
+        const response = await fetch(FIREBASE_FUNCTION_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targetUrl, method: 'PATCH', payload })
+        });
+        const result = await response.json().catch(() => ({}));
+        return { ok: response.ok, result };
+    };
+
+    const handlePushItemsToNetSuite = async () => {
+        if (!window.confirm(`Push ${String(activeBrand || '').toUpperCase()} item updates (SKU, Name, Base Price, Weight) FROM the App TO NetSuite?\n\nThis overwrites those fields on the matched NetSuite items. Tags/flags are not sent (App-only). Tip: test ONE item via the Library's per-item push first.`)) return;
+        setIsSyncing(true);
+        addLog(`Initiating App → NetSuite write-back for ${String(activeBrand || '').toUpperCase()}...`, 'info');
+        try {
+            const snap = await getDocs(collection(db, "Approved_Designs"));
+            const items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(p => (p.brandId === activeBrand || (p.sharedBrands || []).includes(activeBrand)) && p.netSuiteInternalId);
+            if (items.length === 0) { addLog("No mapped items (with a NetSuite Internal ID) for this brand. Sync from ERP / set the ID first.", 'warn'); setIsSyncing(false); return; }
+            addLog(`Found ${items.length} mapped item(s). Writing back...`, 'info');
+
+            let updated = 0, coreOnly = 0, failed = 0;
+            for (const p of items) {
+                const specs = p.manufacturingSpecs || {};
+                const full = {};
+                if (p.legacyErpId && p.legacyErpId !== 'PENDING') full.itemid = p.legacyErpId;
+                if (p.itemName) full.displayname = p.itemName;
+                const bpv = parseFloat(specs.basePrice); if (specs.basePrice !== undefined && specs.basePrice !== '' && !isNaN(bpv)) full.custitem9 = bpv;
+                const wv = parseFloat(specs.weight); if (specs.weight !== undefined && specs.weight !== '' && !isNaN(wv)) full.weight = wv;
+                if (Object.keys(full).length === 0) continue;
+
+                let recordType = p.netSuiteRecordType || (p.partClass === 'Inventory' ? 'inventoryitem' : 'assemblyitem');
+                let { ok, result } = await restPatch(recordType, p.netSuiteInternalId, full);
+                // record-type mismatch → NetSuite names the real type; retry with it
+                if (!ok) {
+                    const actual = JSON.stringify(result || '').match(/different type:\s*([a-z]+)/i)?.[1];
+                    if (actual && actual.toLowerCase() !== recordType) { recordType = actual.toLowerCase(); ({ ok, result } = await restPatch(recordType, p.netSuiteInternalId, full)); }
+                }
+                // tolerance: retry with just the core (itemid + displayname) so an odd price/weight can't fail the row
+                let droppedToCore = false;
+                if (!ok) {
+                    const core = {};
+                    if (full.itemid) core.itemid = full.itemid;
+                    if (full.displayname) core.displayname = full.displayname;
+                    if (Object.keys(core).length && Object.keys(core).length < Object.keys(full).length) {
+                        ({ ok, result } = await restPatch(recordType, p.netSuiteInternalId, core));
+                        droppedToCore = ok;
+                    }
+                }
+                if (ok) {
+                    updated++; if (droppedToCore) coreOnly++;
+                    if (p.netSuiteRecordType !== recordType) { try { await setDoc(doc(db, "Approved_Designs", p.id), { netSuiteRecordType: recordType }, { merge: true }); } catch (_) { /* non-fatal */ } }
+                } else {
+                    failed++;
+                    addLog(`  ✗ ${p.legacyErpId || p.itemId || p.id}: ${JSON.stringify(result).slice(0, 180)}`, 'error');
+                }
+            }
+            addLog(`✅ Write-back done: ${updated} updated${coreOnly ? ` (${coreOnly} core-only after a field was dropped)` : ''}, ${failed} failed.`, failed ? 'warn' : 'success');
+        } catch (e) { console.error(e); addLog(`❌ Write-back failed: ${e.message}`, 'error'); }
+        setIsSyncing(false);
+    };
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
@@ -568,6 +631,8 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         <SyncButton onClick={handleSyncAddresses} disabled={isSyncing} label="Sync Customer Address Books" sub="SuiteQL: Pulls address books and maps IDs." />
                         <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors" sub="SuiteQL: Pulls all active external vendors/co-ops." />
                         <SyncButton onClick={handleSyncItems} disabled={isSyncing} label="Sync Master Library (Items, Kits & BOMs)" sub="SuiteQL: Single-pass sync. Pulls all Inventory, Assemblies, active BOM Revisions, and component mappings." />
+                        <div style={{ borderTop: '1px dashed var(--line)', margin: '6px 0', paddingTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)' }}>App → NetSuite (write-back)</div>
+                        <SyncButton onClick={handlePushItemsToNetSuite} disabled={isSyncing} label="⬆ Push Items → NetSuite (App is master)" sub="REST PATCH: writes the App's SKU, Name, Base Price & Weight onto matched NetSuite items (by Internal ID). Tolerant — record-type + field-drop retries; one row can't halt the run. Tags not sent." />
                     </div>
                 </div>
 
