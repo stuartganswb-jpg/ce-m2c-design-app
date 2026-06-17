@@ -916,7 +916,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       });
 
       if (typeof window !== 'undefined' && window.localStorage && window.localStorage.getItem('cpqRuleDebug') === '1') {
-          console.log('[cpqRuleDebug] selected →', selectedParts.map(p => ({ id: p.id, name: p.itemName || p.name, isReturnBracket: (p.manufacturingSpecs || p)?.customData?.isReturnBracket })), '| disabledSteps →', newFlags.disabledSteps);
+          console.log('[cpqRuleDebug]', JSON.stringify({
+              rules: (cpqRules || []).map(r => ({ f: r.conditionField, op: r.conditionOp, v: r.conditionVal, eff: r.effectVal })),
+              irbParts: selectedParts.filter(p => (p.manufacturingSpecs || p)?.customData?.isReturnBracket).map(p => p.itemName || p.name || p.id),
+              sel: selectedParts.map(p => ({ n: p.itemName || p.name || p.id, irb: (p.manufacturingSpecs || p)?.customData?.isReturnBracket })),
+              disabled: newFlags.disabledSteps
+          }));
       }
 
       setEngineFlags(newFlags);
