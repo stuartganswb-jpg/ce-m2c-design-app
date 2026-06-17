@@ -47,6 +47,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     // Counting Filter State
     const [searchQuery, setSearchQuery] = useState("");
     const [typeFilter, setTypeFilter] = useState("");
+    const [collectionFilter, setCollectionFilter] = useState("");
     const [globalLists, setGlobalLists] = useState({});
 
     // Fetch Global Lists & HQ Parts for cycle counting
@@ -169,19 +170,25 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
     // --- NETSUITE INVENTORY ADJUSTMENT (PUSH) ---
     const pushInventoryAdjustment = async () => {
+        const skipped = [];
         const adjustments = baseFilteredItems.map(item => {
             if (physicalCounts[item.id] === undefined) return null;
             const delta = physicalCounts[item.id] - item.onHand;
             if (delta === 0) return null;
-            
+            // Don't send a Firestore doc id as a NetSuite item ref — skip unmapped items (they'd 400).
+            if (!item.netSuiteInternalId) { skipped.push(item.itemName || item.erpId || item.id); return null; }
             return {
-                internalId: item.netSuiteInternalId, 
+                internalId: item.netSuiteInternalId,
                 binNumber: item.binLocation,
                 adjustQtyBy: delta
             };
         }).filter(Boolean);
 
-        if (adjustments.length === 0) return alert("No variances found to adjust.");
+        if (adjustments.length === 0) {
+            return alert(skipped.length
+                ? `No pushable adjustments — ${skipped.length} counted item(s) have no NetSuite Internal ID. Map them first (HQ → ERP Mapping Audit / Mass Update):\n\n${skipped.slice(0, 12).join('\n')}${skipped.length > 12 ? `\n…+${skipped.length - 12} more` : ''}`
+                : "No variances found to adjust.");
+        }
 
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
@@ -214,17 +221,17 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
 
-            if (!response.ok) throw new Error("Failed to post adjustment");
-
-            alert("✅ Inventory successfully adjusted in NetSuite.");
+            alert(`✅ Inventory adjusted in NetSuite (${adjustments.length} line${adjustments.length === 1 ? '' : 's'}).${skipped.length ? `\n\n⚠️ Skipped ${skipped.length} counted item(s) with no NetSuite Internal ID.` : ''}`);
             writeLog(`Pushed Inventory Adjustment for ${adjustments.length} lines.`, 'wms');
             setPhysicalCounts({});
             setShowSynapsis(false);
-            pullNetSuiteStock(); 
+            pullNetSuiteStock();
         } catch (e) {
-            console.error(e);
-            alert("❌ Failed to push adjustment to NetSuite.");
+            console.error("Inventory adjustment push failed:", e);
+            alert("❌ NetSuite rejected the adjustment:\n\n" + (e.message || e) + "\n\nNote: the adjustment Account is still the placeholder id \"123\" — it needs your real NetSuite Inventory Adjustment Account internal id.");
         } finally {
             setIsSyncing(false);
         }
@@ -305,29 +312,38 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         console.log(`[label:${type}] orderKey=${job.orderKey || job.id}`);
     };
 
-    // Filter Logic for cycle counting
+    // Filter Logic for cycle counting (robust search header, mirrors HQ Master Library)
     const dynamicProdTypes = Array.from(new Set([
-        ...(globalLists.prodTypes || []), 
+        ...(globalLists.prodTypes || []),
         ...hqParts.map(p => p.manufacturingSpecs?.productType || "").filter(Boolean)
     ])).sort();
+
+    const collectionsOf = (specs) => (Array.isArray(specs.collections) ? specs.collections : (specs.customData?.collection && specs.customData.collection !== 'N/A' ? [specs.customData.collection] : [])).map(c => String(c).toUpperCase());
+    const dynamicCollections = Array.from(new Set(hqParts.flatMap(p => collectionsOf(p.manufacturingSpecs || {})).filter(Boolean))).sort();
 
     const baseFilteredItems = hqParts.filter(part => {
         const term = searchQuery.toLowerCase();
         const specs = part.manufacturingSpecs || {};
-        const erpId = (part.legacyErpId || part.itemId).toUpperCase();
+        const erpId = (part.legacyErpId || part.itemId || "").toUpperCase();
 
-        const matchesSearch = part.itemName?.toLowerCase().includes(term) || erpId.toLowerCase().includes(term);
+        const matchesSearch = !term
+            || part.itemName?.toLowerCase().includes(term)
+            || erpId.toLowerCase().includes(term)
+            || (part.itemId || "").toLowerCase().includes(term)
+            || (specs.binLocation || "").toLowerCase().includes(term);
         const matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase();
-        
+        const matchesCollection = collectionFilter === "" || collectionsOf(specs).includes(collectionFilter.toUpperCase());
+
         const isInventory = part.partClass === "Inventory" && specs.isInHouse !== false;
-        
-        return matchesSearch && matchesType && isInventory;
+
+        return matchesSearch && matchesType && matchesCollection && isInventory;
     }).map(part => {
-        const erpId = (part.legacyErpId || part.itemId).toUpperCase();
+        const erpId = (part.legacyErpId || part.itemId || "").toUpperCase();
         return {
             ...part,
             erpId: erpId,
-            netSuiteInternalId: part.netSuiteInternalId || part.id,
+            // Real NetSuite id only — never the Firestore doc id (a doc id sent as item.id 400s the adjustment).
+            netSuiteInternalId: part.netSuiteInternalId || null,
             onHand: nsStock[erpId]?.onHand || 0,
             binLocation: part.manufacturingSpecs?.binLocation || 'UNASSIGNED'
         };
@@ -559,7 +575,12 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                 <option value="">All Categories</option>
                                 {dynamicProdTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
                             </select>
-                            <input placeholder="Search Items..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', flex: 1 }} />
+                            <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', background: theme.paper2, minWidth: '150px' }}>
+                                <option value="">All Collections</option>
+                                {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                            <input placeholder="Search name, SKU, item id, or bin…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', flex: 1, minWidth: '180px' }} />
+                            {(typeFilter || collectionFilter || searchQuery) && <button onClick={() => { setTypeFilter(''); setCollectionFilter(''); setSearchQuery(''); }} style={{ padding: '12px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>}
                             <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '12px 20px', background: isSyncing ? theme.paper : theme.ink, color: isSyncing ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>
                                 {isSyncing ? 'Syncing...' : 'Pull Live Stock'}
                             </button>
