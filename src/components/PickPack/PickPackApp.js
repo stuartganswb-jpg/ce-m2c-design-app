@@ -191,6 +191,24 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     };
 
     // Ensure a bin exists in NetSuite so transactions can reference it by name (idempotent — an already-existing bin is fine).
+    // Resolve a NetSuite item's INTERNAL id from its item number. The stored netSuiteInternalId can be stale or
+    // hold the item number itself, which NetSuite rejects as INVALID_VALUE — so look it up authoritatively.
+    const resolveItemId = async (itemNumber) => {
+        const name = (itemNumber || '').trim();
+        if (!name) return null;
+        const r = await fetch(FIREBASE_FUNCTION_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                method: 'POST',
+                payload: { q: `SELECT id FROM item WHERE UPPER(itemid) = '${name.toUpperCase().replace(/'/g, "''")}'` }
+            })
+        });
+        const b = await r.json().catch(() => ({}));
+        return (r.ok && b.items && b.items.length) ? String(b.items[0].id) : null;
+    };
+
     const ensureBinExists = async (binNumber, locationId) => {
         const response = await fetch(FIREBASE_FUNCTION_URL, {
             method: 'POST',
@@ -321,11 +339,16 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
         try {
             setIsSyncing(true);
+            // Resolve authoritative NetSuite internal ids from item numbers (stored id can be stale / hold the
+            // item number → INVALID_VALUE). Assembly must resolve; component falls back to its proven stored id.
+            const assemblyId = await resolveItemId(erpOf(target));
+            if (!assemblyId) { setIsSyncing(false); return alert(`Couldn't find assembly ${erpOf(target)} in NetSuite by item id — confirm it exists there as an assembly with exactly that item id.`); }
+            const componentId = (await resolveItemId(base.erpId)) || base.netSuiteInternalId;
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
                 method: 'POST',
                 payload: {
-                    item: { id: target.netSuiteInternalId }, // the assembly being built
+                    item: { id: assemblyId }, // the assembly being built
                     quantity: qty,
                     location: { id: nsConfig.location },
                     memo: memoText,
@@ -337,7 +360,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                     // Consume the raw base from its bin (the rest of the BOM consumes per the NetSuite assembly definition):
                     component: {
                         items: [{
-                            item: { id: base.netSuiteInternalId },
+                            item: { id: componentId },
                             inventoryDetail: {
                                 quantity: qty,
                                 inventoryAssignment: { items: [{ binNumber: { refName: srcBin }, quantity: qty }] }
