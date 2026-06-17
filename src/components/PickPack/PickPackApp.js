@@ -43,6 +43,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [isSyncing, setIsSyncing] = useState(false);
     const [physicalCounts, setPhysicalCounts] = useState({});
     const [showSynapsis, setShowSynapsis] = useState(false);
+    const [countMemo, setCountMemo] = useState("");
     
     // Counting Filter State
     const [searchQuery, setSearchQuery] = useState("");
@@ -195,12 +196,15 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
         try {
             setIsSyncing(true);
+            // Stamp who ran the count (app operator) + their note into the NetSuite memo field.
+            const memoText = `Cycle count by ${operator?.name || 'Unknown'}${countMemo.trim() ? ` — ${countMemo.trim()}` : ''}`;
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
                 method: 'POST',
                 payload: {
                     account: { id: "254" }, // NetSuite Inventory Adjustment Account internal id
                     subsidiary: { id: nsConfig.subsidiary },
+                    memo: memoText,
                     // REST sublist for adjustment lines is `inventory` (NOT `inventoryList` — that's the
                     // legacy SOAP name; REST ignores it and reports "must enter at least one line item").
                     inventory: {
@@ -230,8 +234,9 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
 
             alert(`✅ Inventory adjusted in NetSuite (${adjustments.length} line${adjustments.length === 1 ? '' : 's'}).${skipped.length ? `\n\n⚠️ Skipped ${skipped.length} counted item(s) with no NetSuite Internal ID.` : ''}`);
-            writeLog(`Pushed Inventory Adjustment for ${adjustments.length} lines.`, 'wms');
+            writeLog(`Pushed Inventory Adjustment for ${adjustments.length} lines.${countMemo.trim() ? ` Memo: ${countMemo.trim()}` : ''}`, 'wms');
             setPhysicalCounts({});
+            setCountMemo("");
             setShowSynapsis(false);
             pullNetSuiteStock();
         } catch (e) {
@@ -564,6 +569,18 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                             })}
                                         </tbody>
                                     </table>
+                                    <div style={{ marginBottom: '24px' }}>
+                                        <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>
+                                            Adjustment Memo{operator?.name ? ` — recorded as ${operator.name}` : ''}
+                                        </label>
+                                        <textarea
+                                            value={countMemo}
+                                            onChange={e => setCountMemo(e.target.value)}
+                                            placeholder="Optional note (reason for the variance, who verified, etc.). Pushed to the NetSuite memo field along with your name."
+                                            rows={2}
+                                            style={{ width: '100%', padding: '12px', fontFamily: theme.sans, fontSize: '0.9rem', color: theme.ink, border: `1px solid ${theme.line}`, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }}
+                                        />
+                                    </div>
                                     <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
                                         <button onClick={() => setShowSynapsis(false)} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Go Back</button>
                                         <button onClick={pushInventoryAdjustment} disabled={isSyncing} style={{ padding: '15px 30px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
