@@ -193,20 +193,26 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     // Ensure a bin exists in NetSuite so transactions can reference it by name (idempotent — an already-existing bin is fine).
     // Resolve a NetSuite item's INTERNAL id from its item number. The stored netSuiteInternalId can be stale or
     // hold the item number itself, which NetSuite rejects as INVALID_VALUE — so look it up authoritatively.
-    const resolveItemId = async (itemNumber) => {
+    // Resolve a NetSuite item's internal id (+ type) from its item number. The stored netSuiteInternalId can be
+    // stale or hold the item number (→ INVALID_VALUE), so look it up authoritatively; type confirms it's an Assembly.
+    const resolveItemDetail = async (itemNumber) => {
         const name = (itemNumber || '').trim();
         if (!name) return null;
-        const r = await fetch(FIREBASE_FUNCTION_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+        const run = async (cols) => {
+            const r = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
-                payload: { q: `SELECT id FROM item WHERE UPPER(itemid) = '${name.toUpperCase().replace(/'/g, "''")}'` }
-            })
-        });
-        const b = await r.json().catch(() => ({}));
-        return (r.ok && b.items && b.items.length) ? String(b.items[0].id) : null;
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                    method: 'POST',
+                    payload: { q: `SELECT ${cols} FROM item WHERE UPPER(itemid) = '${name.toUpperCase().replace(/'/g, "''")}'` }
+                })
+            });
+            const b = await r.json().catch(() => ({}));
+            return (r.ok && b.items && b.items.length) ? b.items[0] : null;
+        };
+        const row = (await run('id, itemtype')) || (await run('id')); // fall back if itemtype column is unavailable
+        return row ? { id: String(row.id), type: String(row.itemtype || '') } : null;
     };
 
     const ensureBinExists = async (binNumber, locationId) => {
@@ -337,13 +343,18 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         const destBin = binOf(target);
         const memoText = `Phosphate convert by ${operator?.name || 'Unknown'}${convertMemo.trim() ? ` — ${convertMemo.trim()}` : ''}`;
 
+        let dbg = '';
         try {
             setIsSyncing(true);
-            // Resolve authoritative NetSuite internal ids from item numbers (stored id can be stale / hold the
-            // item number → INVALID_VALUE). Assembly must resolve; component falls back to its proven stored id.
-            const assemblyId = await resolveItemId(erpOf(target));
-            if (!assemblyId) { setIsSyncing(false); return alert(`Couldn't find assembly ${erpOf(target)} in NetSuite by item id — confirm it exists there as an assembly with exactly that item id.`); }
-            const componentId = (await resolveItemId(base.erpId)) || base.netSuiteInternalId;
+            // Resolve authoritative NetSuite internal ids + verify the target is actually an Assembly item
+            // (an assembly build rejects a non-assembly id as INVALID_VALUE on `item`).
+            const assembly = await resolveItemDetail(erpOf(target));
+            if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${erpOf(target)} in NetSuite by item id — confirm the exact item id.`); }
+            if (assembly.type && !/assembl/i.test(assembly.type)) { setIsSyncing(false); return alert(`${erpOf(target)} is type "${assembly.type}" in NetSuite, not an Assembly. An assembly build needs an Assembly/BOM item — set ${erpOf(target)} up as an assembly (with ${base.erpId} as a component), or tell me the correct assembly item id.`); }
+            const assemblyId = assembly.id;
+            const comp = await resolveItemDetail(base.erpId);
+            const componentId = (comp && comp.id) || base.netSuiteInternalId;
+            dbg = `resolved ${erpOf(target)} -> id ${assemblyId} (type ${assembly.type || '?'})`;
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
                 method: 'POST',
@@ -384,7 +395,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             pullNetSuiteStock();
         } catch (e) {
             console.error("Assembly build push failed:", e);
-            alert("❌ NetSuite rejected the build:\n\n" + (e.message || e) + "\n\nThis is the first assembly build we've posted — if it names a field (component / inventoryDetail / item / quantity), paste it and I'll correct the REST shape.");
+            alert("❌ NetSuite rejected the build:\n\n" + (e.message || e) + (dbg ? `\n\n(${dbg})` : '') + "\n\nIf 'item' is still rejected with a valid Assembly id, the field name may differ — tell me and I'll adjust.");
         } finally {
             setIsSyncing(false);
         }
