@@ -46,6 +46,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [nsStock, setNsStock] = useState({});
     const [isSyncing, setIsSyncing] = useState(false);
     const [physicalCounts, setPhysicalCounts] = useState({});
+    const [binEdits, setBinEdits] = useState({}); // per-item bin reassignment during a count; a new bin is created in NetSuite on push
     const [showSynapsis, setShowSynapsis] = useState(false);
     const [countMemo, setCountMemo] = useState("");
 
@@ -182,6 +183,25 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         setIsSyncing(false);
     };
 
+    // Ensure a bin exists in NetSuite so transactions can reference it by name (idempotent — an already-existing bin is fine).
+    const ensureBinExists = async (binNumber, locationId) => {
+        const response = await fetch(FIREBASE_FUNCTION_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/bin`,
+                method: 'POST',
+                payload: { binNumber, location: { id: locationId } }
+            })
+        });
+        if (response.ok) return true;
+        const body = await response.json().catch(() => ({}));
+        const msg = JSON.stringify(body).toLowerCase();
+        // A duplicate / already-exists error means the bin is already usable — treat as success.
+        if (msg.includes('exist') || msg.includes('duplicate') || msg.includes('unique') || msg.includes('already')) return true;
+        throw new Error(`Bin "${binNumber}" could not be created in NetSuite: ${typeof body === 'object' ? JSON.stringify(body) : String(body)}`);
+    };
+
     // --- NETSUITE INVENTORY ADJUSTMENT (PUSH) ---
     const pushInventoryAdjustment = async () => {
         const skipped = [];
@@ -191,9 +211,14 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             if (delta === 0) return null;
             // Don't send a Firestore doc id as a NetSuite item ref — skip unmapped items (they'd 400).
             if (!item.netSuiteInternalId) { skipped.push(item.itemName || item.erpId || item.id); return null; }
+            const storedBin = (item.binLocation || '').trim();
+            const effBin = ((binEdits[item.id] ?? item.binLocation) || '').trim();
             return {
                 internalId: item.netSuiteInternalId,
-                binNumber: item.binLocation,
+                docId: item.id,
+                binNumber: effBin,
+                // operator typed a different bin than the item's stored one → create it in NetSuite + write it back
+                binChanged: effBin !== '' && effBin.toUpperCase() !== storedBin.toUpperCase(),
                 adjustQtyBy: delta
             };
         }).filter(Boolean);
@@ -209,6 +234,15 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
         try {
             setIsSyncing(true);
+
+            // Create any newly-assigned bins in NetSuite (idempotent) and write the bin back onto the item
+            // so the CONVERT / plating flows pick it up. Done before the adjustment so the bin resolves.
+            const newBins = [...new Set(adjustments.filter(a => a.binChanged).map(a => a.binNumber))];
+            for (const bin of newBins) { await ensureBinExists(bin, nsConfig.location); }
+            await Promise.all(adjustments.filter(a => a.binChanged).map(a =>
+                updateDoc(doc(db, "Approved_Designs", a.docId), { "manufacturingSpecs.binLocation": a.binNumber }).catch(() => {})
+            ));
+
             // Stamp who ran the count (app operator) + their note into the NetSuite memo field.
             const memoText = `Cycle count by ${operator?.name || 'Unknown'}${countMemo.trim() ? ` — ${countMemo.trim()}` : ''}`;
             const payload = {
@@ -249,6 +283,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             alert(`✅ Inventory adjusted in NetSuite (${adjustments.length} line${adjustments.length === 1 ? '' : 's'}).${skipped.length ? `\n\n⚠️ Skipped ${skipped.length} counted item(s) with no NetSuite Internal ID.` : ''}`);
             writeLog(`Pushed Inventory Adjustment for ${adjustments.length} lines.${countMemo.trim() ? ` Memo: ${countMemo.trim()}` : ''}`, 'wms');
             setPhysicalCounts({});
+            setBinEdits({});
             setCountMemo("");
             setShowSynapsis(false);
             pullNetSuiteStock();
@@ -422,7 +457,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         const matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase();
         const matchesCollection = collectionFilter === "" || collectionsOf(specs).includes(collectionFilter.toUpperCase());
 
-        const isInventory = part.partClass === "Inventory" && specs.isInHouse !== false;
+        const isInventory = part.partClass === "Inventory"; // count stock whether we make it (in-house) or buy it (outsourced)
 
         return matchesSearch && matchesType && matchesCollection && isInventory;
     }).map(part => {
@@ -638,6 +673,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                         <thead style={{ borderBottom: `2px solid ${theme.ink}` }}>
                                             <tr>
                                                 <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>Item</th>
+                                                <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Bin</th>
                                                 <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>System O.H.</th>
                                                 <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Physical</th>
                                                 <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Net Delta</th>
@@ -646,9 +682,12 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                         <tbody>
                                             {baseFilteredItems.filter(item => physicalCounts[item.id] !== undefined).map(item => {
                                                 const delta = physicalCounts[item.id] - item.onHand;
+                                                const effBin = ((binEdits[item.id] ?? item.binLocation) || '').trim();
+                                                const binIsNew = effBin !== '' && effBin.toUpperCase() !== (item.binLocation || '').trim().toUpperCase();
                                                 return (
                                                     <tr key={item.id} style={{ borderBottom: `1px solid ${theme.line}` }}>
                                                         <td style={{ padding: '15px 10px', fontFamily: theme.sans, fontSize: '0.9rem' }}>{item.itemName}</td>
+                                                        <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '0.85rem', textAlign: 'center', color: binIsNew ? theme.brass : theme.inkSoft }}>{effBin || '—'}{binIsNew ? ' (new)' : ''}</td>
                                                         <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '1.1rem', textAlign: 'center' }}>{item.onHand}</td>
                                                         <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '1.1rem', textAlign: 'center' }}>{physicalCounts[item.id]}</td>
                                                         <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '1.1rem', textAlign: 'center', color: delta < 0 ? '#d9534f' : delta > 0 ? '#7dbb81' : theme.inkSoft }}>
@@ -716,11 +755,13 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                                 <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{item.erpId}</div>
                                                 <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{item.itemName}</div>
                                             </td>
-                                            <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{item.binLocation}</td>
+                                            <td style={{ padding: '16px', textAlign: 'center' }}>
+                                                <input value={binEdits[item.id] ?? item.binLocation} onChange={e => setBinEdits(prev => ({ ...prev, [item.id]: e.target.value }))} placeholder="bin…" style={{ width: '130px', padding: '8px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass, background: 'transparent', border: (binEdits[item.id] !== undefined && (binEdits[item.id] || '').toUpperCase() !== (item.binLocation || '').toUpperCase()) ? `2px solid ${theme.brass}` : `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            </td>
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
-                                                <input 
-                                                    type="number" 
+                                                <input
+                                                    type="number"
                                                     placeholder="-"
                                                     value={physicalCounts[item.id] !== undefined ? physicalCounts[item.id] : ''} 
                                                     onChange={(e) => setPhysicalCounts(prev => ({ ...prev, [item.id]: e.target.value === "" ? undefined : Math.max(0, parseInt(e.target.value) || 0) }))}
