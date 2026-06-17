@@ -902,7 +902,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                  dynamicAssets.find(a => a.id === id) ||
                  globalFinishes.find(f => f.id === id) ||
                  outsourceFinishes.find(f => f.id === id) ||
-                 { id: id, itemName: opt?.partName || id, __opt: opt ? { partId: opt.partId, partName: opt.partName } : null };
+                 { id: id, itemName: opt?.partName || id };
       });
 
       // Resolve a rule's disableStep value to the REAL step title(s) tolerantly (trim + case), then
@@ -935,16 +935,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               }
           });
       });
-
-      if (typeof window !== 'undefined' && window.localStorage && window.localStorage.getItem('cpqRuleDebug') === '1') {
-          console.log('[cpqRuleDebug]', JSON.stringify({
-              rules: (cpqRules || []).map(r => ({ f: r.conditionField, op: r.conditionOp, v: r.conditionVal, eff: r.effectVal })),
-              irbParts: selectedParts.filter(p => (p.manufacturingSpecs || p)?.customData?.isReturnBracket).map(p => p.itemName || p.name || p.id),
-              flow: { steps: flowSteps.length, opts: flowSteps.reduce((n, s) => n + ((s.styleOptions || []).length), 0) },
-              sel: selectedParts.map(p => ({ n: p.itemName || p.name || p.id, irb: (p.manufacturingSpecs || p)?.customData?.isReturnBracket, optPid: p.__opt?.partId, optPn: p.__opt?.partName })),
-              disabled: newFlags.disabledSteps
-          }));
-      }
 
       setEngineFlags(newFlags);
   }, [dynamicConfigParams, cpqRules, libraryParts, liveAssemblies, dynamicAssets, globalFinishes, outsourceFinishes, activeFlow]);
@@ -2061,12 +2051,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               }} style={{ width: '36px', height: '36px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontSize: '1.2rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
                           </div>
                       </div>
-                      )}
-
-                      {engineFlags.warnings.length > 0 && (
-                           <div style={{ background: 'var(--paper-2)', borderTop: '1px solid var(--brass)', padding: '16px 24px' }}>
-                               {engineFlags.warnings.map((log, i) => <div key={i} style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>{log}</div>)}
-                           </div>
                       )}
 
                       <div style={{ padding: '24px', display: 'flex', justifyContent: 'space-between', background: '#fff' }}>
