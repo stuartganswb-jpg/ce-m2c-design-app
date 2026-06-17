@@ -872,20 +872,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       // STYLE_SWAP steps store an option id (optId||partId); map it back to the underlying library
       // partId so a rule can read the SELECTED part's customData (e.g. isReturnBracket). Without this,
       // a bracket whose option id != its library doc id resolves to a stub and the rule never fires.
-      const optToPartId = {};
-      flowSteps.forEach(s => (s.styleOptions || []).forEach(o => { const k = o.optId || o.partId; if (k != null) optToPartId[k] = o.partId || k; }));
+      // Map a STYLE_SWAP selection id (optId) to its full option. Hardware options' partId is often a
+      // PROJECTED name — neither the doc id nor itemId — so to read the selected part's customData we
+      // chase every link (the option's partId + partName) against every part key (id, itemId, itemName,
+      // legacyErpId). Without resolving to the real part, disable-step rules silently never fire.
+      const optById = {};
+      flowSteps.forEach(s => (s.styleOptions || []).forEach(o => { const k = o.optId || o.partId; if (k != null && optById[k] === undefined) optById[k] = o; }));
+      const matchPart = (key) => (key == null || key === '') ? null : (allParts.find(p => p.id === key || p.itemId === key || p.itemName === key || p.legacyErpId === key) || null);
 
       const selectedParts = selectedItemIds.map(id => {
-          const pid = optToPartId[id] || id;
-          // Hardware STYLE_SWAP options carry partId = the part's itemId (not its Firestore doc id),
-          // and itemId != doc id for many legacy parts — so match BOTH, else the part (and its
-          // customData, e.g. isReturnBracket) can't be read and disable-step rules silently never fire.
-          return allParts.find(p => p.id === pid || p.itemId === pid) ||
-                 allParts.find(p => p.id === id || p.itemId === id) ||
+          const opt = optById[id];
+          return matchPart(id) || (opt && (matchPart(opt.partId) || matchPart(opt.partName))) ||
                  dynamicAssets.find(a => a.id === id) ||
                  globalFinishes.find(f => f.id === id) ||
                  outsourceFinishes.find(f => f.id === id) ||
-                 { id: id, itemName: id };
+                 { id: id, itemName: opt?.partName || id, __opt: opt ? { partId: opt.partId, partName: opt.partName } : null };
       });
 
       // Resolve a rule's disableStep value to the REAL step title(s) tolerantly (trim + case), then
@@ -923,7 +924,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           console.log('[cpqRuleDebug]', JSON.stringify({
               rules: (cpqRules || []).map(r => ({ f: r.conditionField, op: r.conditionOp, v: r.conditionVal, eff: r.effectVal })),
               irbParts: selectedParts.filter(p => (p.manufacturingSpecs || p)?.customData?.isReturnBracket).map(p => p.itemName || p.name || p.id),
-              sel: selectedParts.map(p => ({ n: p.itemName || p.name || p.id, irb: (p.manufacturingSpecs || p)?.customData?.isReturnBracket })),
+              flow: { steps: flowSteps.length, opts: flowSteps.reduce((n, s) => n + ((s.styleOptions || []).length), 0) },
+              sel: selectedParts.map(p => ({ n: p.itemName || p.name || p.id, irb: (p.manufacturingSpecs || p)?.customData?.isReturnBracket, optPid: p.__opt?.partId, optPn: p.__opt?.partName })),
               disabled: newFlags.disabledSteps
           }));
       }
