@@ -851,15 +851,35 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   };
 
   const handleNukeJobs = async () => {
-      const promptStr = window.prompt(`Type "DELETE ALL JOBS" to confirm wiping ${activeBrand.toUpperCase()} jobs:`);
-      if (promptStr === "DELETE ALL JOBS") {
-          try {
-              const jobsSnap = await getDocs(query(collection(db, "jobs"), where("brandId", "==", activeBrand)));
-              const draftsSnap = await getDocs(query(collection(db, "cpq_drafts"), where("brandId", "==", activeBrand)));
-              await Promise.all([...jobsSnap.docs.map(d => deleteDoc(doc(db, "jobs", d.id))), ...draftsSnap.docs.map(d => deleteDoc(doc(db, "cpq_drafts", d.id)))]);
-              alert(`✅ ALL ${activeBrand.toUpperCase()} PIPELINE JOBS AND DRAFTS HAVE BEEN NUKED.`);
-          } catch(e) { console.error(e); }
-      }
+      const promptStr = window.prompt(`Type "DELETE ALL JOBS" to wipe ALL ${activeBrand.toUpperCase()} jobs across HQ, Shop Floor, Finishing & Packaging:`);
+      if (promptStr !== "DELETE ALL JOBS") return;
+      try {
+          // A CPQ job fans out into order docs across every floor (WORK_ORDER_CONTRACT shared orderKey),
+          // so an HQ-only nuke left orphans on the Shop/Finishing floors. Cascade brand-scoped through
+          // the whole order lifecycle. Note the field name differs: jobs/cpq_drafts use brandId, the
+          // order docs use brand. Each collection is guarded so one failure can't abort the rest.
+          const targets = [
+              { col: "jobs", field: "brandId" },
+              { col: "cpq_drafts", field: "brandId" },
+              { col: "hq_sales_orders", field: "brand" },
+              { col: "hq_work_orders", field: "brand" },
+              { col: "shop_custom_orders", field: "brand" },
+              { col: "shop_milling", field: "brand" },
+              { col: "fin_workorders", field: "brand" },
+              { col: "packaging_orders", field: "brand" },
+          ];
+          let total = 0;
+          const summary = [];
+          for (const t of targets) {
+              try {
+                  const snap = await getDocs(query(collection(db, t.col), where(t.field, "==", activeBrand)));
+                  await Promise.all(snap.docs.map(d => deleteDoc(doc(db, t.col, d.id))));
+                  if (snap.docs.length) summary.push(`${t.col}: ${snap.docs.length}`);
+                  total += snap.docs.length;
+              } catch (e) { console.error(`Nuke ${t.col} failed:`, e); summary.push(`${t.col}: ⚠️ ${e.message}`); }
+          }
+          alert(`✅ Nuked ${total} ${activeBrand.toUpperCase()} job doc(s) across all floors.\n\n${summary.join("\n") || "(nothing found)"}`);
+      } catch(e) { console.error(e); alert("❌ Nuke failed: " + e.message); }
   };
 
   // 🚀 UPDATED: Wipes Assemblies AND their BOM Pins to prevent ghosts
