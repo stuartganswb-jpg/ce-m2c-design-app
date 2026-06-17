@@ -866,37 +866,61 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (!cpqRules || cpqRules.length === 0) return;
       let newFlags = { disabledSteps: [], warnings: [] };
       const selectedItemIds = Object.values(dynamicConfigParams);
-      
+
       const allParts = [...libraryParts, ...liveAssemblies];
-      
+      const flowSteps = activeFlow?.steps || [];
+      // STYLE_SWAP steps store an option id (optId||partId); map it back to the underlying library
+      // partId so a rule can read the SELECTED part's customData (e.g. isReturnBracket). Without this,
+      // a bracket whose option id != its library doc id resolves to a stub and the rule never fires.
+      const optToPartId = {};
+      flowSteps.forEach(s => (s.styleOptions || []).forEach(o => { const k = o.optId || o.partId; if (k != null) optToPartId[k] = o.partId || k; }));
+
       const selectedParts = selectedItemIds.map(id => {
-          return allParts.find(p => p.id === id) || 
-                 dynamicAssets.find(a => a.id === id) || 
+          const pid = optToPartId[id] || id;
+          return allParts.find(p => p.id === pid) || allParts.find(p => p.id === id) ||
+                 dynamicAssets.find(a => a.id === id) ||
                  globalFinishes.find(f => f.id === id) ||
                  outsourceFinishes.find(f => f.id === id) ||
-                 { id: id, itemName: id }; 
+                 { id: id, itemName: id };
       });
 
+      // Resolve a rule's disableStep value to the REAL step title(s) tolerantly (trim + case), then
+      // store the real title so every downstream exact `.includes(step.title)` check still matches.
+      const resolveStepTitles = (val) => {
+          const want = String(val == null ? '' : val).trim().toUpperCase();
+          const hits = flowSteps.filter(s => String(s.title == null ? '' : s.title).trim().toUpperCase() === want).map(s => s.title);
+          return hits.length ? hits : [val];
+      };
+
       selectedParts.forEach(part => {
-          const specs = part.manufacturingSpecs || part; 
+          const specs = part.manufacturingSpecs || part;
           cpqRules.forEach(rule => {
-              let testVal = rule.conditionField.startsWith('customData.') ? specs.customData?.[rule.conditionField.split('.')[1]] : specs[rule.conditionField] || part[rule.conditionField];
-              
+              const field = rule.conditionField || '';
+              const testVal = field.startsWith('customData.')
+                  ? specs.customData?.[field.split('.')[1]]
+                  : (specs[field] ?? specs.customData?.[field] ?? part[field]);
+
               if (testVal !== undefined && testVal !== null) {
                   const safeTest = String(testVal).toUpperCase();
                   const safeCond = String(rule.conditionVal).toUpperCase();
-                  if (rule.conditionOp === 'EQUALS' && safeTest === safeCond) {
-                      if (rule.effectField === 'UI.disableStep') {
-                          newFlags.disabledSteps.push(rule.effectVal);
-                          const warningMsg = `⚠️ Step "${rule.effectVal}" is disabled because ${part.itemName || part.name} is ${safeCond}.`;
-                          if (!newFlags.warnings.includes(warningMsg)) newFlags.warnings.push(warningMsg);
-                      }
+                  const matched = (rule.conditionOp === 'EQUALS' && safeTest === safeCond)
+                      || (rule.conditionOp === 'NOT_EQUALS' && safeTest !== safeCond)
+                      || (rule.conditionOp === 'CONTAINS' && safeTest.includes(safeCond));
+                  if (matched && rule.effectField === 'UI.disableStep') {
+                      resolveStepTitles(rule.effectVal).forEach(t => { if (!newFlags.disabledSteps.includes(t)) newFlags.disabledSteps.push(t); });
+                      const warningMsg = `⚠️ Step "${rule.effectVal}" is disabled because ${part.itemName || part.name} is ${safeCond}.`;
+                      if (!newFlags.warnings.includes(warningMsg)) newFlags.warnings.push(warningMsg);
                   }
               }
           });
       });
+
+      if (typeof window !== 'undefined' && window.localStorage && window.localStorage.getItem('cpqRuleDebug') === '1') {
+          console.log('[cpqRuleDebug] selected →', selectedParts.map(p => ({ id: p.id, name: p.itemName || p.name, isReturnBracket: (p.manufacturingSpecs || p)?.customData?.isReturnBracket })), '| disabledSteps →', newFlags.disabledSteps);
+      }
+
       setEngineFlags(newFlags);
-  }, [dynamicConfigParams, cpqRules, libraryParts, liveAssemblies, dynamicAssets, globalFinishes, outsourceFinishes]);
+  }, [dynamicConfigParams, cpqRules, libraryParts, liveAssemblies, dynamicAssets, globalFinishes, outsourceFinishes, activeFlow]);
 
   // A step disabled by a rule (e.g. an end-arm bracket that replaces a finial / miter return) must
   // contribute NOTHING — clear its selection, sub-pick, finish, and qty so it drops out of the price,
