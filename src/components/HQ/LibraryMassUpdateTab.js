@@ -325,7 +325,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             "ID (DO NOT EDIT)", "Legacy ERP ID", "Item ID", "NetSuite Internal ID", "Item Name", "Brand", "Part Class", "Routing Type",
             "Product Type (Category)", "Collection", "Watchlist", "UOM", "Part Handling", "Outsource Action", "Bracket Projection", "Bracket Type / Mount",
             "Weight", "Base Price", "Cost", "Reorder Pt (ROP)", "Lead Time (Days)", "Vendor Name", "Vendor SKU", "Bin Location", "Is In-House (TRUE/FALSE)",
-            "Backplate Orientation", "Is Return Bracket (TRUE/FALSE)", "Backplate Length", "Backplate Width", "Backplate Height", "Bracket Arm Thickness"
+            "Backplate Orientation", "Is Return Bracket (TRUE/FALSE)", "Backplate Length", "Backplate Width", "Backplate Height", "Bracket Arm Thickness",
+            "Client Customer ID", "Client SKU", "Client Cost", "Client Sales Price"
         ];
 
         let csvContent = headers.join(",") + "\n";
@@ -345,6 +346,10 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             const currentCollection = specs.collections && specs.collections.length > 0 ? specs.collections.join(';') : (cust.collection && cust.collection !== 'N/A' ? cust.collection : legacyCollection);
             
             const watchList = specs.watchList && specs.watchList !== 'NONE' ? specs.watchList : (cust.watchlist && cust.watchlist !== 'N/A' ? cust.watchlist : "");
+
+            // clientPricing is an array (one entry per customer); CSV is flat, so export the FIRST
+            // entry. Import upserts by customer id, so other customers' entries are preserved.
+            const cp0 = (Array.isArray(part.clientPricing) && part.clientPricing[0]) || {};
 
             const row = [
                 part.id,
@@ -377,10 +382,14 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 specs.parametric?.length || "",
                 specs.parametric?.width || "",
                 specs.parametric?.height || "",
-                cust.armThickness || ""
+                cust.armThickness || "",
+                cp0.customerId || "",
+                cp0.clientSku || "",
+                cp0.price ?? "",
+                cp0.clientSalesPrice ?? ""
             ];
-            
-            csvContent += row.map(v => `"${(v || '').toString().replace(/"/g, '""')}"`).join(",") + "\n";
+
+            csvContent += row.map(v => `"${(v ?? '').toString().replace(/"/g, '""')}"`).join(",") + "\n";
         });
 
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -483,6 +492,22 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 if (col !== null) {
                     if (col === "") payload["manufacturingSpecs.collections"] = [];
                     else payload["manufacturingSpecs.collections"] = col.split(";").map(s => s.trim().toUpperCase()).filter(Boolean);
+                }
+
+                // Client-specific pricing — clientPricing is an ARRAY (one per customer). UPSERT the row's
+                // entry by Customer ID so other customers' entries on the item are preserved, and only
+                // overwrite the cells that are filled in. Blank Customer ID = leave clientPricing untouched.
+                const cliCust = getVal("Client Customer ID");
+                if (cliCust !== null && cliCust.trim() !== "") {
+                    const cid = cliCust.trim();
+                    const list = Array.isArray(targetPart.clientPricing) ? targetPart.clientPricing.map(e => ({ ...e })) : [];
+                    const idx = list.findIndex(e => String(e.customerId) === cid);
+                    const entry = idx >= 0 ? list[idx] : { customerId: cid };
+                    const cSku = getVal("Client SKU"); if (cSku !== null && cSku.trim() !== "") entry.clientSku = cSku.trim();
+                    const cCost = getVal("Client Cost"); if (cCost !== null && cCost.trim() !== "") entry.price = parseFloat(cCost);
+                    const cSale = getVal("Client Sales Price"); if (cSale !== null && cSale.trim() !== "") entry.clientSalesPrice = parseFloat(cSale);
+                    if (idx >= 0) list[idx] = entry; else list.push(entry);
+                    payload.clientPricing = list;
                 }
 
                 payload.updatedAt = new Date().toISOString();
