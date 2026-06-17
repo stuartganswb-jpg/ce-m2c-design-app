@@ -1864,6 +1864,15 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                               <option value="">-- Select Trigger Attribute --</option>
                               <optgroup label="Core Specs">
                                   <option value="productType">Product Type</option>
+                                  <option value="collections">Collection (use CONTAINS)</option>
+                              </optgroup>
+                              <optgroup label="Bracket / Hardware">
+                                  <option value="customData.isReturnBracket">Is Return Bracket (End-Return) — value TRUE/FALSE</option>
+                                  <option value="customData.bracketType">Bracket Type / Mount</option>
+                                  <option value="customData.projection">Projection</option>
+                                  <option value="customData.bpOrientation">Backplate Orientation</option>
+                                  <option value="customData.armThickness">Bracket Arm Thickness</option>
+                                  <option value="customData.feeType">Fee Type</option>
                               </optgroup>
                               <optgroup label="Dynamic Schema">
                                   {customSchema.map(f => <option key={f.key} value={`customData.${f.key}`}>{f.label}</option>)}
