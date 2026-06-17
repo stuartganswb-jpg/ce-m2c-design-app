@@ -479,7 +479,16 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 };
 
                 if (existingAppRecord) {
-                    payload.manufacturingSpecs = { ...(existingAppRecord.manufacturingSpecs || {}), ...newSpecs };
+                    const existingSpecs = existingAppRecord.manufacturingSpecs || {};
+                    // App is master for curated tags: deep-merge customData so every App-set key
+                    // (isReturnBracket, bracketType, collection, cpq tags, …) SURVIVES the pull
+                    // instead of being wiped by the 3-key rebuild above. NetSuite only fills
+                    // customData keys the App hasn't set. (Other specs still refresh from NS.)
+                    payload.manufacturingSpecs = {
+                        ...existingSpecs,
+                        ...newSpecs,
+                        customData: { ...(newSpecs.customData || {}), ...(existingSpecs.customData || {}) }
+                    };
                 } else {
                     payload.id = docId;
                     payload.itemId = docId;

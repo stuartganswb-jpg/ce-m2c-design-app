@@ -56,14 +56,44 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       if (!job || !job.cpqData) return result;
 
       const flow = cpqFlows.find(f => f.id === job.flowId);
+      const flowSteps = flow?.steps || [];
       const activeStepIds = new Set([
           ...Object.keys(job.cpqData?.configuration || {}),
           ...Object.keys(job.cpqData?.quantities || {})
       ]);
       result.hasConfig = activeStepIds.size > 0;
 
+      // Resolve a CPQ selection to its real library part. STYLE_SWAP selections are per-instance
+      // optIds whose styleOption carries a PROJECTED partId/partName (e.g. "FICERA1001 CEILING BRACKET
+      // LEFT") that is NOT the doc id, and legacy parts have itemId != doc id — so without this, every
+      // STYLE_SWAP bracket/finial/backplate silently dropped from the pushed BOM. Match exact, then by
+      // longest part-code prefix (brackets: FICERA1001…→FICERA) or full item-name (poles/rings).
+      const normCode = (s) => String(s == null ? '' : s).toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const matchPart = (key) => {
+          if (key == null || key === '') return null;
+          const exact = libraryParts.find(p => p.id === key || p.itemId === key || p.itemName === key || p.legacyErpId === key);
+          if (exact) return exact;
+          const nk = normCode(key);
+          if (nk.length < 3) return null;
+          let best = null, bestLen = 0;
+          libraryParts.forEach(p => {
+              [p.legacyErpId, p.itemId].forEach(code => { const nc = normCode(code); if (nc.length >= 3 && nk.startsWith(nc) && nc.length > bestLen) { best = p; bestLen = nc.length; } });
+              const nn = normCode(p.itemName); if (nn.length >= 3 && nk === nn && nn.length > bestLen) { best = p; bestLen = nn.length; }
+          });
+          return best;
+      };
+      // Find the styleOption (main step or backplate __sub) behind a selection id, to read its part link.
+      const findOpt = (stepId, selId) => {
+          const base = stepId.endsWith('__sub') ? stepId.slice(0, -5) : stepId;
+          const st = flowSteps.find(s => s.id === base);
+          if (!st) return null;
+          const pool = stepId.endsWith('__sub') ? (st.subOptions || []) : (st.styleOptions || []);
+          return pool.find(o => (o.optId || o.partId) === selId) || null;
+      };
+
       activeStepIds.forEach(stepId => {
-          const step = flow?.steps?.find(s => s.id === stepId);
+          if (stepId.endsWith('__finish')) return; // finishes are applied, not physical BOM components
+          const step = flowSteps.find(s => s.id === stepId);
           const userSelectionId = job.cpqData.configuration?.[stepId];
           let qty = job.cpqData.quantities?.[stepId];
           if (qty === undefined || qty === null || qty === '') qty = 1;
@@ -72,7 +102,12 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           if (!targetPartId) return;
 
           result.stepsConsidered++;
-          const masterPart = libraryParts.find(p => p.id === targetPartId || p.itemId === targetPartId || p.legacyErpId === targetPartId);
+          // direct match first, then resolve through the selection's styleOption (projected name → code)
+          let masterPart = matchPart(targetPartId);
+          if (!masterPart) {
+              const opt = findOpt(stepId, userSelectionId);
+              masterPart = matchPart(opt?.partId) || matchPart(opt?.partName);
+          }
           if (!masterPart) {
               result.unresolved.push({ stepTitle: step?.title || stepId, partId: targetPartId });
               return;
