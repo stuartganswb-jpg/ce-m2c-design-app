@@ -322,8 +322,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     // --- CSV BULK UPLOAD & MAPPING LOGIC ---
     const handleDownloadCsvTemplate = () => {
         const headers = [
-            "ID (DO NOT EDIT)", "Legacy ERP ID", "Item Name", "Brand", "Part Class", "Routing Type", 
-            "Product Type (Category)", "Collection", "Watchlist", "UOM", "Part Handling", "Outsource Action", "Bracket Projection",
+            "ID (DO NOT EDIT)", "Legacy ERP ID", "Item ID", "NetSuite Internal ID", "Item Name", "Brand", "Part Class", "Routing Type",
+            "Product Type (Category)", "Collection", "Watchlist", "UOM", "Part Handling", "Outsource Action", "Bracket Projection", "Bracket Type / Mount",
             "Weight", "Base Price", "Cost", "Reorder Pt (ROP)", "Lead Time (Days)", "Vendor Name", "Vendor SKU", "Bin Location", "Is In-House (TRUE/FALSE)",
             "Backplate Orientation", "Is Return Bracket (TRUE/FALSE)", "Backplate Length", "Backplate Width", "Backplate Height", "Bracket Arm Thickness"
         ];
@@ -347,8 +347,10 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             const watchList = specs.watchList && specs.watchList !== 'NONE' ? specs.watchList : (cust.watchlist && cust.watchlist !== 'N/A' ? cust.watchlist : "");
 
             const row = [
-                part.id, 
-                part.legacyErpId || part.itemId || "",
+                part.id,
+                part.legacyErpId || "",
+                part.itemId || "",
+                part.netSuiteInternalId || "",
                 part.itemName || "",
                 part.brandId || "",
                 part.partClass || "",
@@ -360,6 +362,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 specs.partHandling || "",
                 specs.outsourceAction || "",
                 cust.projection || "",
+                cust.bracketType || "",
                 specs.weight || "",
                 specs.basePrice || "",
                 specs.cost || "",
@@ -447,7 +450,17 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 const wl = getVal("Watchlist"); if(wl !== null) { payload["manufacturingSpecs.watchList"] = wl.toUpperCase(); }
                 const ph = getVal("Part Handling"); if(ph !== null) { payload["manufacturingSpecs.partHandling"] = ph; }
                 const outAct = getVal("Outsource Action"); if(outAct !== null) { payload["manufacturingSpecs.outsourceAction"] = outAct; }
-                
+
+                // Identity / mapping fields — the keys resolution + the NetSuite write-back hinge on.
+                // Row match is by the doc id ("ID (DO NOT EDIT)"), so these can be edited safely. Only
+                // written when non-empty (so a blank cell never clears an identifier).
+                const newErp = getVal("Legacy ERP ID"); if(newErp !== null && newErp.trim() !== "") { payload.legacyErpId = newErp.trim(); }
+                const itemIdVal = getVal("Item ID"); if(itemIdVal !== null && itemIdVal.trim() !== "") { payload.itemId = itemIdVal.trim(); }
+                const nsIid = getVal("NetSuite Internal ID"); if(nsIid !== null && nsIid.trim() !== "") { payload.netSuiteInternalId = nsIid.trim(); }
+                const bType = getVal("Bracket Type / Mount"); if(bType !== null && bType.trim() !== "") { payload["manufacturingSpecs.customData.bracketType"] = bType.trim().toUpperCase(); }
+                const iName = getVal("Item Name"); if(iName !== null && iName.trim() !== "") { payload.itemName = iName.trim(); }
+                const pClass = getVal("Part Class"); if(pClass !== null && pClass.trim() !== "") { payload.partClass = pClass.trim(); }
+
                 const w = getVal("Weight"); if(w !== null) { payload["manufacturingSpecs.weight"] = w === "" ? "" : parseFloat(w); }
                 const bp = getVal("Base Price"); if(bp !== null) { payload["manufacturingSpecs.basePrice"] = bp === "" ? "" : parseFloat(bp); }
                 const c = getVal("Cost"); if(c !== null) { payload["manufacturingSpecs.cost"] = c === "" ? "" : parseFloat(c); }
