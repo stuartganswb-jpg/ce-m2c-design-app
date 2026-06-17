@@ -360,13 +360,9 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                     item: { id: assemblyId }, // the assembly being built
                     quantity: qty,
                     location: { id: nsConfig.location },
-                    memo: memoText,
-                    // Built assembly placed into its (phosphate) bin:
-                    inventoryDetail: {
-                        quantity: qty,
-                        inventoryAssignment: { items: [{ binNumber: { refName: destBin }, quantity: qty }] }
-                    }
-                    // Components auto-consume from the assembly's BOM (the base pulls from its default/home bin).
+                    memo: memoText
+                    // No inventoryDetail: this /P assembly isn't bin-managed in NetSuite, which rejects a bin
+                    // assignment for it. Components auto-consume from the BOM (base pulls from its default bin).
                 }
             };
 
@@ -378,7 +374,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
 
-            alert(`✅ Assembly build posted: +${qty} × ${erpOf(target)} into ${destBin}, −${qty} × ${base.erpId} from ${srcBin}.`);
+            alert(`✅ Assembly build posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${srcBin}).\n\nPlace the finished stock in bin ${destBin}. (This assembly isn't bin-tracked in NetSuite, so the bin is for your reference.)`);
             writeLog(`Assembly Build (phosphate): +${qty} ${erpOf(target)} / -${qty} ${base.erpId}.${convertMemo.trim() ? ` Memo: ${convertMemo.trim()}` : ''}`, 'wms');
             setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo("");
             pullNetSuiteStock();
