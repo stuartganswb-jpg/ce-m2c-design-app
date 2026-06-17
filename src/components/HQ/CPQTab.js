@@ -878,7 +878,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       // legacyErpId). Without resolving to the real part, disable-step rules silently never fire.
       const optById = {};
       flowSteps.forEach(s => (s.styleOptions || []).forEach(o => { const k = o.optId || o.partId; if (k != null && optById[k] === undefined) optById[k] = o; }));
-      const matchPart = (key) => (key == null || key === '') ? null : (allParts.find(p => p.id === key || p.itemId === key || p.itemName === key || p.legacyErpId === key) || null);
+      const normCode = (s) => String(s == null ? '' : s).toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const matchPart = (key) => {
+          if (key == null || key === '') return null;
+          const exact = allParts.find(p => p.id === key || p.itemId === key || p.itemName === key || p.legacyErpId === key);
+          if (exact) return exact;
+          // Hardware options carry a PROJECTED name that BEGINS with the source part's code, e.g.
+          // "FICERA1001 CEILING BRACKET LEFT" -> FICERA (and "FICPBA…"/"FIEC…" stay distinct). The
+          // projection keeps no source-id, so resolve by the longest part code that prefixes the name.
+          const nk = normCode(key);
+          if (nk.length < 3) return null;
+          let best = null, bestLen = 0;
+          allParts.forEach(p => [p.legacyErpId, p.itemId].forEach(code => {
+              const nc = normCode(code);
+              if (nc.length >= 3 && nk.startsWith(nc) && nc.length > bestLen) { best = p; bestLen = nc.length; }
+          }));
+          return best;
+      };
 
       const selectedParts = selectedItemIds.map(id => {
           const opt = optById[id];
