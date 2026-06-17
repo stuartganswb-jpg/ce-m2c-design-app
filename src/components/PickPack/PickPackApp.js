@@ -183,23 +183,37 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         setIsSyncing(false);
     };
 
-    // Ensure a bin exists in NetSuite so transactions can reference it by name (idempotent — an already-existing bin is fine).
-    const ensureBinExists = async (binNumber, locationId) => {
-        const response = await fetch(FIREBASE_FUNCTION_URL, {
+    // Resolve a bin's NetSuite INTERNAL ID. Placement is silently ignored when a bin is referenced by name/refName,
+    // so transactions must use the id. Looks the bin up by number; creates it if missing and returns the new id.
+    const resolveBinId = async (binNumber, locationId) => {
+        const name = (binNumber || '').trim();
+        if (!name || name.toUpperCase() === 'UNASSIGNED') return null;
+        const post = (targetUrl, payload) => fetch(FIREBASE_FUNCTION_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/bin`,
-                method: 'POST',
-                payload: { binNumber, location: { id: locationId } }
-            })
+            body: JSON.stringify({ targetUrl, method: 'POST', payload })
         });
-        if (response.ok) return true;
-        const body = await response.json().catch(() => ({}));
-        const msg = JSON.stringify(body).toLowerCase();
-        // A duplicate / already-exists error means the bin is already usable — treat as success.
-        if (msg.includes('exist') || msg.includes('duplicate') || msg.includes('unique') || msg.includes('already')) return true;
-        throw new Error(`Bin "${binNumber}" could not be created in NetSuite: ${typeof body === 'object' ? JSON.stringify(body) : String(body)}`);
+        const SUITEQL = `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`;
+        const BIN = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/bin`;
+        const lookup = async () => {
+            const q = `SELECT id, location FROM bin WHERE UPPER(binnumber) = '${name.toUpperCase().replace(/'/g, "''")}'`;
+            const r = await post(SUITEQL, { q });
+            const b = await r.json().catch(() => ({}));
+            if (!r.ok || !b.items || !b.items.length) return null;
+            const match = b.items.find(it => String(it.location) === String(locationId)) || b.items[0];
+            return match ? String(match.id) : null;
+        };
+        // 1. existing bin?
+        let id = await lookup();
+        if (id) return id;
+        // 2. create it — the representation response carries the new internal id
+        const cr = await post(BIN, { binNumber: name, location: { id: locationId } });
+        const cb = await cr.json().catch(() => ({}));
+        if (cr.ok && cb.id) return String(cb.id);
+        // 3. create raced / reported duplicate → look it up once more
+        id = await lookup();
+        if (id) return id;
+        throw new Error(`Bin "${name}" could not be resolved or created in NetSuite: ${typeof cb === 'object' ? JSON.stringify(cb) : String(cb)}`);
     };
 
     // --- NETSUITE INVENTORY ADJUSTMENT (PUSH) ---
@@ -235,10 +249,13 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         try {
             setIsSyncing(true);
 
-            // Create any newly-assigned bins in NetSuite (idempotent) and write the bin back onto the item
-            // so the CONVERT / plating flows pick it up. Done before the adjustment so the bin resolves.
-            const newBins = [...new Set(adjustments.filter(a => a.binChanged).map(a => a.binNumber))];
-            for (const bin of newBins) { await ensureBinExists(bin, nsConfig.location); }
+            // Resolve every referenced bin to its NetSuite internal id (creating any new bins). Placement
+            // needs the id — a bin referenced by name is silently ignored and the qty lands in the default bin.
+            const binIdMap = {};
+            for (const name of [...new Set(adjustments.map(a => a.binNumber).filter(Boolean))]) {
+                binIdMap[name] = await resolveBinId(name, nsConfig.location);
+            }
+            // Write any reassigned bins back onto the item so the CONVERT / plating flows pick them up.
             await Promise.all(adjustments.filter(a => a.binChanged).map(a =>
                 updateDoc(doc(db, "Approved_Designs", a.docId), { "manufacturingSpecs.binLocation": a.binNumber }).catch(() => {})
             ));
@@ -255,19 +272,23 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                     // REST sublist for adjustment lines is `inventory` (NOT `inventoryList` — that's the
                     // legacy SOAP name; REST ignores it and reports "must enter at least one line item").
                     inventory: {
-                        items: adjustments.map(adj => ({
-                            item: { id: adj.internalId },
-                            location: { id: nsConfig.location }, // location is a LINE field on REST adjustments
-                            adjustQtyBy: adj.adjustQtyBy,
-                            // Bin-tracked item: the detail qty and the bin assignment must reconcile to the
-                            // line's signed adjustQtyBy. Bin referenced by refName (its bin number string).
-                            inventoryDetail: {
-                                quantity: adj.adjustQtyBy,
-                                inventoryAssignment: {
-                                    items: [{ binNumber: { refName: adj.binNumber }, quantity: adj.adjustQtyBy }]
-                                }
+                        items: adjustments.map(adj => {
+                            const line = {
+                                item: { id: adj.internalId },
+                                location: { id: nsConfig.location }, // location is a LINE field on REST adjustments
+                                adjustQtyBy: adj.adjustQtyBy
+                            };
+                            // Place into the specific bin by INTERNAL ID (refName is ignored on placement).
+                            // Detail qty + bin-assignment qty reconcile to the line's signed adjustQtyBy.
+                            const binId = binIdMap[adj.binNumber];
+                            if (binId) {
+                                line.inventoryDetail = {
+                                    quantity: adj.adjustQtyBy,
+                                    inventoryAssignment: { items: [{ binNumber: { id: binId }, quantity: adj.adjustQtyBy }] }
+                                };
                             }
-                        }))
+                            return line;
+                        })
                     }
                 }
             };
@@ -314,6 +335,10 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
         try {
             setIsSyncing(true);
+            // Bins must be referenced by internal id (refName is ignored on placement).
+            const destBinId = await resolveBinId(destBin, nsConfig.location);
+            const srcBinId = await resolveBinId(srcBin, nsConfig.location);
+            if (!destBinId || !srcBinId) { setIsSyncing(false); return alert("Couldn't resolve the source or destination bin in NetSuite — make sure both items have a real bin set."); }
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
                 method: 'POST',
@@ -325,7 +350,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                     // Built assembly placed into its (phosphate) bin:
                     inventoryDetail: {
                         quantity: qty,
-                        inventoryAssignment: { items: [{ binNumber: { refName: destBin }, quantity: qty }] }
+                        inventoryAssignment: { items: [{ binNumber: { id: destBinId }, quantity: qty }] }
                     },
                     // Consume the raw base from its bin (the rest of the BOM consumes per the NetSuite assembly definition):
                     component: {
@@ -333,7 +358,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                             item: { id: base.netSuiteInternalId },
                             inventoryDetail: {
                                 quantity: qty,
-                                inventoryAssignment: { items: [{ binNumber: { refName: srcBin }, quantity: qty }] }
+                                inventoryAssignment: { items: [{ binNumber: { id: srcBinId }, quantity: qty }] }
                             }
                         }]
                     }
