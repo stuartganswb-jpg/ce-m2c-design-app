@@ -877,7 +877,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       const selectedParts = selectedItemIds.map(id => {
           const pid = optToPartId[id] || id;
-          return allParts.find(p => p.id === pid) || allParts.find(p => p.id === id) ||
+          // Hardware STYLE_SWAP options carry partId = the part's itemId (not its Firestore doc id),
+          // and itemId != doc id for many legacy parts — so match BOTH, else the part (and its
+          // customData, e.g. isReturnBracket) can't be read and disable-step rules silently never fire.
+          return allParts.find(p => p.id === pid || p.itemId === pid) ||
+                 allParts.find(p => p.id === id || p.itemId === id) ||
                  dynamicAssets.find(a => a.id === id) ||
                  globalFinishes.find(f => f.id === id) ||
                  outsourceFinishes.find(f => f.id === id) ||
