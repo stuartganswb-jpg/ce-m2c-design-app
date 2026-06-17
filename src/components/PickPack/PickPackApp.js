@@ -352,8 +352,6 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${erpOf(target)} in NetSuite by item id — confirm the exact item id.`); }
             if (assembly.type && !/assembl/i.test(assembly.type)) { setIsSyncing(false); return alert(`${erpOf(target)} is type "${assembly.type}" in NetSuite, not an Assembly. An assembly build needs an Assembly/BOM item — set ${erpOf(target)} up as an assembly (with ${base.erpId} as a component), or tell me the correct assembly item id.`); }
             const assemblyId = assembly.id;
-            const comp = await resolveItemDetail(base.erpId);
-            const componentId = (comp && comp.id) || base.netSuiteInternalId;
             dbg = `resolved ${erpOf(target)} -> id ${assemblyId} (type ${assembly.type || '?'})`;
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
@@ -367,17 +365,8 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                     inventoryDetail: {
                         quantity: qty,
                         inventoryAssignment: { items: [{ binNumber: { refName: destBin }, quantity: qty }] }
-                    },
-                    // Consume the raw base from its bin (the rest of the BOM consumes per the NetSuite assembly definition):
-                    component: {
-                        items: [{
-                            item: { id: componentId },
-                            inventoryDetail: {
-                                quantity: qty,
-                                inventoryAssignment: { items: [{ binNumber: { refName: srcBin }, quantity: qty }] }
-                            }
-                        }]
                     }
+                    // Components auto-consume from the assembly's BOM (the base pulls from its default/home bin).
                 }
             };
 
