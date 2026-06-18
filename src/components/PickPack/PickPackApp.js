@@ -599,19 +599,19 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
         const total = lines.reduce((s, l) => s + rateOf(l) * (parseInt(l.qty) || 0), 0);
         const pcs = lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0);
         const shipId = `PLT-${activeBrand.toUpperCase()}-${Date.now()}`;
-        let vendorSub = null;
+        let vendorSub = "3"; // Dayton Grey's subsidiary = M2C Studio (CE/2 was rejected; vendor + item both live on M2C). Fallback if the lookup can't resolve it.
 
         try {
             setIsSyncing(true);
-            // Resolve the vendor's own (primary) subsidiary from NetSuite — a PO must post to the vendor's subsidiary.
+            // Resolve Dayton Grey's PRIMARY subsidiary authoritatively (a PO must post to the vendor's subsidiary).
             try {
                 const vr = await fetch(FIREBASE_FUNCTION_URL, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q: `SELECT subsidiary FROM vendor WHERE id = 83361` } })
+                    body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q: `SELECT subsidiary FROM vendorSubsidiaryRelationship WHERE entity = 83361 AND isprimarysub = 'T'` } })
                 });
                 const vb = await vr.json().catch(() => ({}));
-                if (vr.ok && vb.items && vb.items.length) vendorSub = String(vb.items[0].subsidiary);
-            } catch (_) { /* fall back to letting NetSuite derive the subsidiary */ }
+                if (vr.ok && vb.items && vb.items.length && vb.items[0].subsidiary) vendorSub = String(vb.items[0].subsidiary);
+            } catch (_) { /* keep the M2C fallback */ }
 
             // 1) NetSuite PO to the plater — one summary line at the total plating cost.
             const payload = {
@@ -619,7 +619,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                 method: 'POST',
                 payload: {
                     entity: { id: "83361" }, // Dayton Grey vendor
-                    ...(vendorSub ? { subsidiary: { id: vendorSub } } : {}),
+                    subsidiary: { id: vendorSub },
                     memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
                     item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] } // "Weekly Plating Shipment" service item
                 }
@@ -653,7 +653,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
             pullNetSuiteStock();
         } catch (e) {
             console.error("Plating shipment push failed:", e);
-            alert("❌ NetSuite rejected the plating PO:\n\n" + (e.message || e) + `\n\n(posted with vendor subsidiary: ${vendorSub || 'auto'}). If 'item' is still rejected, item 61947 isn't on that subsidiary — tell me which leaf subsidiary the PO should use. If 'subsidiary' is rejected, that vendor-subsidiary value is wrong.`);
+            alert("❌ NetSuite rejected the plating PO:\n\n" + (e.message || e) + `\n\n(posted with subsidiary ${vendorSub}). If 'item' or 'subsidiary' is still rejected, this isn't the right subsidiary — open a manual PO to Dayton Grey + this item in NetSuite and tell me the exact subsidiary internal id it uses.`);
         } finally {
             setIsSyncing(false);
         }
