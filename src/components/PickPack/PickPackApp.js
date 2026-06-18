@@ -151,6 +151,8 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [platingDestScan, setPlatingDestScan] = useState("");
     const [platingMemo, setPlatingMemo] = useState("");
     const [platingWO, setPlatingWO] = useState(""); // work order # (from HQ RTG) — printed on the plating label
+    const [platingDemands, setPlatingDemands] = useState([]); // plating_demand — "Needs Plating" to-dos routed from the Library WO tool
+    const [platingDemandId, setPlatingDemandId] = useState(null); // the demand the current pull is fulfilling (deleted on success)
     const [platingStaged, setPlatingStaged] = useState([]); // open (staged) plating-shipment lines
     const [platingShipped, setPlatingShipped] = useState([]); // lines shipped to the plater, awaiting receive/build-back
     const [platingReceived, setPlatingReceived] = useState([]); // lines received back from the plater, awaiting build-back (Phase 4b)
@@ -190,7 +192,12 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(f => f.code || f.name));
         });
 
-        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); };
+        // "Needs Plating" to-dos routed from the Library WO tool (base in stock → plate it).
+        const unsubDemand = onSnapshot(collection(db, "plating_demand"), (snap) => {
+            setPlatingDemands(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => d.brandId === activeBrand && d.status === 'open'));
+        });
+
+        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); };
     }, [activeBrand]);
 
     const attemptLogin = async (e) => {
@@ -670,7 +677,9 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
             printPlatingLabel({ erpId: item.erpId, itemName: item.itemName, qty, woNum: platingWO, platingBin, finishCode, finishName: finish.name || '', targetErpId });
             alert(`✅ Pulled ${qty} × ${item.erpId} to plating WIP (${finishCode} → ${targetErpId}) — moved ${fromBin} → ${platingBin}, status WIP-Plating. Removed from Available.\n\n🖨️ 2×4 plating label spooled${(platingWO || '').trim() ? ` (WO ${(platingWO || '').trim()})` : ''}.`);
             writeLog(`Plating pull: ${qty} ${item.erpId} ${fromBin} -> ${platingBin} (WIP-Plating).${platingMemo.trim() ? ` Memo: ${platingMemo.trim()}` : ''}`, 'wms');
-            setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(""); setPlatingFinish("");
+            // If this pull fulfilled a "Needs Plating" demand, clear it off the queue.
+            if (platingDemandId) { await deleteDoc(doc(db, "plating_demand", platingDemandId)).catch(() => {}); }
+            setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(""); setPlatingFinish(""); setPlatingDemandId(null);
             pullNetSuiteStock();
         } catch (e) {
             console.error("Plating status-change push failed:", e);
@@ -1691,6 +1700,29 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 {activeTab === 'PLATING' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
 
+                        {/* NEEDS PLATING — to-dos routed from the Library WO tool (base in stock → plate it) */}
+                        {!platingBase && platingDemands.length > 0 && (
+                            <div style={{ background: '#fff', border: `1px solid #7d9a6f`, padding: '20px' }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>Needs Plating · {platingDemands.length} item{platingDemands.length === 1 ? '' : 's'} routed from HQ</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    {platingDemands.map(d => (
+                                        <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderBottom: `1px solid ${theme.line}`, paddingBottom: '8px' }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>
+                                                {d.baseErpId} → <span style={{ color: theme.brass }}>{d.targetErpId}</span> · {d.qty} pcs · finish {d.finishCode}{d.createdBy ? ` · ${d.createdBy}` : ''}
+                                            </div>
+                                            <button onClick={() => {
+                                                const basePart = baseFilteredItems.find(p => p.id === d.baseItemId) || baseFilteredItems.find(p => p.erpId === (d.baseErpId || '').toUpperCase());
+                                                if (!basePart) { alert(`${d.baseErpId} isn't in this brand's list yet — Sync NetSuite Stock first, then try again.`); return; }
+                                                const fin = outsourceFinishes.find(f => finishCodeOf(f) === (d.finishCode || '').toUpperCase());
+                                                setPlatingBase(basePart); setPlatingQty(String(d.qty || '')); setPlatingFinish(fin ? fin.id : '');
+                                                setPlatingSrcScan(''); setPlatingDestScan(''); setPlatingMemo(''); setPlatingWO(''); setPlatingDemandId(d.id);
+                                            }} disabled={isSyncing} style={{ padding: '10px 16px', background: '#5e7d54', color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Pull &amp; Plate →</button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         {/* PULL MODAL */}
                         {platingBase && (
                             <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1745,7 +1777,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     </div>
 
                                     <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
-                                        <button onClick={() => { setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); }} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
+                                        <button onClick={() => { setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingDemandId(null); }} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
                                         <button onClick={pushPlatingPull} disabled={!platReady || isSyncing} style={{ padding: '15px 30px', background: platReady && !isSyncing ? theme.brass : theme.paper2, color: platReady && !isSyncing ? '#fff' : theme.inkSoft, border: 'none', cursor: platReady && !isSyncing ? 'pointer' : 'not-allowed', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
                                             {isSyncing ? 'Pulling…' : 'Pull to Plating WIP'}
                                         </button>
@@ -1930,7 +1962,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{item.binLocation}</td>
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
-                                                <button onClick={() => { setPlatingBase(item); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Pull →</button>
+                                                <button onClick={() => { setPlatingBase(item); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(""); setPlatingDemandId(null); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Pull →</button>
                                             </td>
                                         </tr>
                                     ))}

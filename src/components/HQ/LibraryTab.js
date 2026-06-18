@@ -15,6 +15,11 @@ const AVAILABLE_BRANDS = [
 
 // DEFAULT_SYSTEM_WINDOWS + merge logic now live in ./systemWindows (single source of truth).
 
+// Finish code = the assembly suffix (base + CODE → base/CODE); some finish docs hold it in `name` (matches PickPack).
+const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
+// Brand → NetSuite location id (for the base-stock check when routing outsourced finished assemblies).
+const BRAND_NS_LOCATION = { m2c: "19", uniquity: "22", ce: "17", leyla: "18" };
+
 const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [isAdmin] = useState(true);
 
@@ -28,6 +33,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   
   const [customSchema, setCustomSchema] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
+  const [outsourceFinishes, setOutsourceFinishes] = useState([]); // hq_outsource_finishes — detect/route outsourced finished assemblies in the WO tool
   const [collectionsData, setCollectionsData] = useState([]); 
   const [liveVendors, setLiveVendors] = useState([]); 
   const [liveCustomers, setLiveCustomers] = useState([]); 
@@ -111,7 +117,9 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
     const unsubPrints = subscribeProgramPrints(db, setPrintMap);
 
-    return () => { unsubSchema(); unsubAssets(); unsubCollections(); unsubLists(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); unsubPrints(); };
+    const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+
+    return () => { unsubSchema(); unsubAssets(); unsubCollections(); unsubLists(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); unsubPrints(); unsubOutsource(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -543,35 +551,88 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       }
   };
 
+  // Build an "Approved" Stock Build WO for a part and push it to RTG Dispatch. Returns the WO id.
+  // Firestore doc ids can't contain "/", and finished assemblies carry it (e.g. H1-138BF/EP1) — sanitize it
+  // out of the DOC id while keeping the real part number on the record (woDisplayId / partErpId) for display.
+  const createStockBuildWO = async (part, qty) => {
+      const stamp = Date.now().toString().slice(-6);
+      const safeErp = String(part.legacyErpId).replace(/[^A-Za-z0-9]+/g, '-');
+      const newWoId = `WO-${safeErp}-${stamp}`;
+      await setDoc(doc(db, "hq_work_orders", newWoId), {
+          id: newWoId, woId: newWoId,
+          woDisplayId: `WO-${part.legacyErpId}-${stamp}`, partErpId: part.legacyErpId,
+          brand: activeBrand, status: "Approved", customer: "Internal Stock",
+          hqJobId: part.id, totalParts: Number(qty),
+          reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+          type: "Stock Build", createdAt: Date.now()
+      });
+      return newWoId;
+  };
+
   const handleGenerateWO = async () => {
       if (!activePart || activePart.legacyErpId === "PENDING") {
           return alert("Part must be saved with an ERP Legacy ID before generating a Work Order.");
       }
-      if (!window.confirm(`Generate a Stock Build Work Order for ${woTargetQty}x ${activePart.legacyErpId}?`)) return;
-      
-      // Firestore doc ids can't contain "/", and finished assemblies carry it (e.g. H1-138BF/EP1) — sanitize it
-      // out of the DOC id while keeping the real part number on the record (woDisplayId / partErpId) for display.
-      const stamp = Date.now().toString().slice(-6);
-      const safeErp = String(activePart.legacyErpId).replace(/[^A-Za-z0-9]+/g, '-');
-      const newWoId = `WO-${safeErp}-${stamp}`;
+      const qty = Number(woTargetQty) || 0;
+      if (qty <= 0) return alert("Enter a target quantity.");
 
+      const erp = String(activePart.legacyErpId);
+      // Outsourced finished assembly? code = base/CODE where CODE is an outsourced finish (e.g. H1-138BF/EP1).
+      const slash = erp.lastIndexOf('/');
+      const suffix = slash > -1 ? erp.slice(slash + 1).toUpperCase() : '';
+      const outFinish = suffix ? outsourceFinishes.find(f => finishCodeOf(f) === suffix) : null;
+
+      if (outFinish) {
+          // Route via the base: base in stock → PickPack Plating; base short → shop-floor WO to make the base first.
+          const baseErp = erp.slice(0, slash);
+          const basePart = inventory.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === baseErp.toUpperCase());
+          if (!basePart) return alert(`Can't route ${erp}: its base component ${baseErp} isn't in the library. Add/sync ${baseErp} first.`);
+          if (!window.confirm(`Generate plating demand for ${qty}x ${erp}?\n\nWe'll check stock of the base ${baseErp}:\n• in stock → PickPack Plating (pull + plate)\n• short → a shop-floor WO to build ${baseErp} first.`)) return;
+
+          // Live NetSuite on-hand for the base at this brand's location.
+          let onHand;
+          try {
+              const locationId = BRAND_NS_LOCATION[activeBrand] || "17";
+              const q = `SELECT SUM(AggregateItemLocation.quantityonhand) AS onhand FROM Item LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id WHERE UPPER(Item.itemid) = '${baseErp.toUpperCase().replace(/'/g, "''")}' AND AggregateItemLocation.location = ${locationId} GROUP BY Item.itemid`;
+              const resp = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } }) });
+              const data = await resp.json().catch(() => ({}));
+              if (!resp.ok) throw new Error(JSON.stringify(data));
+              onHand = (data.items && data.items[0]) ? (parseInt(data.items[0].onhand) || 0) : 0;
+          } catch (err) {
+              console.error("Base stock check failed:", err);
+              return alert(`Couldn't check NetSuite stock for ${baseErp} — nothing was created. Try again.`);
+          }
+
+          try {
+              if (onHand >= qty) {
+                  // Base in stock → plating to-do for PickPack (operator pulls + plates from there).
+                  const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}`;
+                  await setDoc(doc(db, "plating_demand", demandId), {
+                      id: demandId, brandId: activeBrand, status: 'open',
+                      baseItemId: basePart.id, baseErpId: baseErp.toUpperCase(), targetErpId: erp.toUpperCase(),
+                      finishCode: suffix, finishName: outFinish.name || '',
+                      qty, source: 'library-wo', createdBy: currentUser?.name || 'Unknown', createdAt: Date.now()
+                  });
+                  alert(`✅ ${baseErp} in stock (${onHand} on hand). Sent ${qty}x → PickPack Plating ("Needs Plating") to pull + plate into ${erp}.`);
+              } else {
+                  // Base short → shop-floor WO to build the base; plate it after.
+                  const woId = await createStockBuildWO(basePart, qty);
+                  alert(`⚠️ ${baseErp} short (${onHand} on hand, need ${qty}). Generated shop-floor WO ${woId} to build ${baseErp}; plate it into ${erp} after it's made.`);
+              }
+              setWoTargetQty(1);
+          } catch (err) {
+              console.error("Plating demand routing error:", err);
+              alert("Failed to route the demand. Check console.");
+          }
+          return;
+      }
+
+      // Default: in-house / non-finish → shop-floor Stock Build WO for this part.
+      if (!window.confirm(`Generate a Stock Build Work Order for ${qty}x ${erp}?`)) return;
       try {
-          await setDoc(doc(db, "hq_work_orders", newWoId), {
-              id: newWoId,
-              woId: newWoId,
-              woDisplayId: `WO-${activePart.legacyErpId}-${stamp}`,
-              partErpId: activePart.legacyErpId,
-              brand: activeBrand,
-              status: "Approved",
-              customer: "Internal Stock",
-              hqJobId: activePart.id,
-              totalParts: Number(woTargetQty),
-              reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], 
-              type: "Stock Build",
-              createdAt: Date.now()
-          });
-          alert(`✅ Work Order ${newWoId} successfully pushed to RTG Dispatch!`);
-          setWoTargetQty(1); 
+          const woId = await createStockBuildWO(activePart, qty);
+          alert(`✅ Work Order ${woId} successfully pushed to RTG Dispatch!`);
+          setWoTargetQty(1);
       } catch (err) {
           console.error("WO Generation Error:", err);
           alert("Failed to generate Work Order. Check console.");
