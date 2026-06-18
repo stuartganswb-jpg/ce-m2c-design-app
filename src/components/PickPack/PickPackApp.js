@@ -75,6 +75,8 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [platingMemo, setPlatingMemo] = useState("");
     const [platingWO, setPlatingWO] = useState(""); // work order # (from HQ RTG) — printed on the plating label
     const [platingStaged, setPlatingStaged] = useState([]); // open (staged) plating-shipment lines
+    const [showShipModal, setShowShipModal] = useState(false);
+    const [shipCosts, setShipCosts] = useState({}); // {plating_shipments docId: plating $/ea string}
 
     // Counting Filter State
     const [searchQuery, setSearchQuery] = useState("");
@@ -560,6 +562,83 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
         } catch (e) {
             console.error("Plating status-change push failed:", e);
             alert("❌ NetSuite rejected the plating pull:\n\n" + (e.message || e) + "\n\nThis posts a status-aware inventory adjustment (Good→WIP-Plating) — if it names a field (inventoryStatus / inventoryDetail / account), paste it and I'll correct the REST shape.");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
+    // Spool a pallet/shipment label for the weekly plating shipment (ship id + vendor + pcs + total + barcode).
+    const printShipmentLabel = ({ shipId, vendor, pcs, lineCount, total }) => {
+        const zpl = `^XA
+^PW812
+^CI28
+^FO40,40^A0N,54,54^FDPLATING SHIPMENT^FS
+^FO40,110^A0N,34,34^FD${vendor}^FS
+^FO40,160^A0N,30,30^FDShip ID: ${shipId}^FS
+^FO40,205^A0N,30,30^FDLines: ${lineCount}    Pcs: ${pcs}^FS
+^FO40,250^A0N,30,30^FDPlating $: ${total.toFixed(2)}^FS
+^FO40,310^BY3,2,120^BCN,120,Y,N,N^FD${shipId}^FS
+^XZ`;
+        console.log("Sending ZPL to Zebra Printer (plating shipment label):", zpl);
+    };
+
+    // --- PHASE 3: SHIP THE WEEKLY PLATING PALLET ---
+    // Bundles the staged plating lines into a shipment: a NetSuite PO to the plater (vendor 83361) with one
+    // summary "Weekly Plating Shipment" service line (item 61947) at the total plating cost, a detailed app-side
+    // PO (hq_purchase_orders) for the plater, a pallet label, then flips the staged lines to 'shipped'.
+    const pushPlatingShipment = async () => {
+        const lines = platingStaged;
+        if (!lines.length) return alert("No staged plating lines to ship.");
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+        const rateOf = (l) => parseFloat(shipCosts[l.id] || 0) || 0;
+        const total = lines.reduce((s, l) => s + rateOf(l) * (parseInt(l.qty) || 0), 0);
+        const pcs = lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0);
+        const shipId = `PLT-${activeBrand.toUpperCase()}-${Date.now()}`;
+
+        try {
+            setIsSyncing(true);
+            // 1) NetSuite PO to the plater — one summary line at the total plating cost.
+            const payload = {
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
+                method: 'POST',
+                payload: {
+                    entity: { id: "83361" }, // Dayton Grey vendor
+                    subsidiary: { id: nsConfig.subsidiary },
+                    memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
+                    item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] } // "Weekly Plating Shipment" service item
+                }
+            };
+            const response = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
+            const nsPoId = result.id ? String(result.id) : null;
+
+            // 2) Detailed app-side PO for the plater.
+            await addDoc(collection(db, "hq_purchase_orders"), {
+                poId: shipId, brand: activeBrand, vendor: "Dayton Grey", status: "Sent to Plater", kind: "plating",
+                nsPoId, shipmentId: shipId,
+                items: lines.map(l => ({ itemId: l.erpId, description: l.itemName, quantity: parseInt(l.qty) || 0, rate: rateOf(l), woNum: l.woNum || '', platingBin: l.platingBin })),
+                total: Number(total.toFixed(2)), pcs, createdBy: operator?.name || 'Unknown', createdAt: serverTimestamp()
+            }).catch(err => console.warn("app PO log failed", err));
+
+            // 3) Flip the staged lines to 'shipped' (Phase 4 receives against this shipment).
+            await Promise.all(lines.map(l => updateDoc(doc(db, "plating_shipments", l.id), {
+                status: 'shipped', shipmentId: shipId, nsPoId, platingRate: rateOf(l), shippedAt: serverTimestamp()
+            }).catch(() => {})));
+
+            // 4) Pallet/shipment label.
+            printShipmentLabel({ shipId, vendor: "Dayton Grey", pcs, lineCount: lines.length, total });
+
+            alert(`✅ Plating shipment ${shipId} created.\n\nNetSuite PO to Dayton Grey: ${nsPoId ? `#${nsPoId}` : 'posted'} — "Weekly Plating Shipment" $${total.toFixed(2)} (${pcs} pcs).\n🖨️ Shipment label spooled.`);
+            writeLog(`Plating shipment ${shipId}: PO to Dayton Grey $${total.toFixed(2)}, ${lines.length} lines / ${pcs} pcs. NS PO ${nsPoId || 'n/a'}.`, 'wms');
+            setShipCosts({}); setShowShipModal(false);
+            pullNetSuiteStock();
+        } catch (e) {
+            console.error("Plating shipment push failed:", e);
+            alert("❌ NetSuite rejected the plating PO:\n\n" + (e.message || e) + "\n\nFirst purchase order we've posted — if it names a field (entity / item / rate / subsidiary / location), paste it and I'll correct the REST shape.");
         } finally {
             setIsSyncing(false);
         }
@@ -1329,10 +1408,61 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '160px', overflowY: 'auto' }}>
                                     {platingStaged.map(l => (
                                         <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: theme.mono, fontSize: '12px', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '4px' }}>
-                                            <span>{l.erpId} — {l.itemName}</span>
+                                            <span>{l.erpId} — {l.itemName}{l.woNum ? ` · WO ${l.woNum}` : ''}</span>
                                             <span style={{ color: theme.brass }}>{l.qty} → {l.platingBin}</span>
                                         </div>
                                     ))}
+                                </div>
+                                <button onClick={() => setShowShipModal(true)} style={{ marginTop: '14px', padding: '12px 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Ship Pallet → Create Plater PO</button>
+                            </div>
+                        )}
+
+                        {/* SHIP PALLET MODAL */}
+                        {showShipModal && (
+                            <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <div style={{ background: '#fff', padding: '40px', width: '760px', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
+                                    <h2 style={{ margin: '0 0 6px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>Ship Plating Pallet</h2>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '20px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
+                                        Vendor: Dayton Grey · NetSuite PO summary line "Weekly Plating Shipment" · enter plating $/ea
+                                    </div>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginBottom: '20px' }}>
+                                        <thead style={{ borderBottom: `2px solid ${theme.ink}` }}>
+                                            <tr>
+                                                <th style={{ padding: '8px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>Item</th>
+                                                <th style={{ padding: '8px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>WO</th>
+                                                <th style={{ padding: '8px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Qty</th>
+                                                <th style={{ padding: '8px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>$ / ea</th>
+                                                <th style={{ padding: '8px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'right' }}>Line $</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {platingStaged.map(l => {
+                                                const rate = parseFloat(shipCosts[l.id] || 0) || 0;
+                                                const lineAmt = rate * (parseInt(l.qty) || 0);
+                                                return (
+                                                    <tr key={l.id} style={{ borderBottom: `1px solid ${theme.line}` }}>
+                                                        <td style={{ padding: '10px 8px', fontFamily: theme.sans, fontSize: '0.85rem' }}>{l.erpId} — {l.itemName}</td>
+                                                        <td style={{ padding: '10px 8px', textAlign: 'center', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{l.woNum || '—'}</td>
+                                                        <td style={{ padding: '10px 8px', textAlign: 'center', fontFamily: theme.mono }}>{l.qty}</td>
+                                                        <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+                                                            <input type="number" min="0" step="0.01" value={shipCosts[l.id] ?? ''} onChange={e => setShipCosts(prev => ({ ...prev, [l.id]: e.target.value }))} placeholder="0.00" style={{ width: '80px', padding: '8px', textAlign: 'center', fontFamily: theme.mono, border: `1px solid ${theme.line}`, outline: 'none' }} />
+                                                        </td>
+                                                        <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: theme.mono, color: theme.ink }}>${lineAmt.toFixed(2)}</td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '30px', alignItems: 'center', marginBottom: '24px' }}>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>Total plating cost</span>
+                                        <span style={{ fontFamily: theme.serif, fontSize: '1.8rem', color: theme.ink }}>${platingStaged.reduce((s, l) => s + (parseFloat(shipCosts[l.id] || 0) || 0) * (parseInt(l.qty) || 0), 0).toFixed(2)}</span>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
+                                        <button onClick={() => setShowShipModal(false)} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
+                                        <button onClick={pushPlatingShipment} disabled={isSyncing} style={{ padding: '15px 30px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
+                                            {isSyncing ? 'Creating PO…' : 'Create PO & Ship Pallet'}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         )}
