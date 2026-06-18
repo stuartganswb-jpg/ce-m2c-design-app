@@ -610,7 +610,8 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                 payload: {
                     customForm: { id: "272" }, // "LG - Purchase Order Form"
                     entity: { id: "83361" }, // Dayton Grey vendor
-                    location: { id: nsConfig.location }, // header location; subsidiary derives from the form
+                    subsidiary: { id: nsConfig.subsidiary }, // force CE (2) — the form otherwise derives the integration user's sub, making the CE location invalid
+                    location: { id: nsConfig.location }, // header location (High Point - CE = 17), valid for CE
                     memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
                     item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] }
                 }
