@@ -609,8 +609,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                 method: 'POST',
                 payload: {
                     entity: { id: "83361" }, // Dayton Grey vendor
-                    subsidiary: { id: nsConfig.subsidiary },
-                    location: { id: nsConfig.location },
+                    location: { id: nsConfig.location }, // on a PO, subsidiary is DERIVED from the location — setting it directly is rejected
                     memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
                     item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] } // "Weekly Plating Shipment" service item
                 }
@@ -644,7 +643,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
             pullNetSuiteStock();
         } catch (e) {
             console.error("Plating shipment push failed:", e);
-            alert("❌ NetSuite rejected the plating PO:\n\n" + (e.message || e) + `\n\n(posted with subsidiary ${nsConfig.subsidiary} / location ${nsConfig.location}). If it still names a field, paste it.`);
+            alert("❌ NetSuite rejected the plating PO:\n\n" + (e.message || e) + `\n\n(posted with location ${nsConfig.location}; subsidiary derives from it). If it still names a field, paste it.`);
         } finally {
             setIsSyncing(false);
         }
