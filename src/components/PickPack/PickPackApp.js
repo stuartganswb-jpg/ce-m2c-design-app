@@ -150,6 +150,8 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [platingWO, setPlatingWO] = useState(""); // work order # (from HQ RTG) — printed on the plating label
     const [platingStaged, setPlatingStaged] = useState([]); // open (staged) plating-shipment lines
     const [platingShipped, setPlatingShipped] = useState([]); // lines shipped to the plater, awaiting receive/build-back
+    const [platingFinish, setPlatingFinish] = useState(""); // selected outsource finish doc id — the plated finish to apply (drives the target assembly erpId/CODE)
+    const [outsourceFinishes, setOutsourceFinishes] = useState([]); // hq_outsource_finishes (EP1, EP2…) — finish code + NS-synced vendor
     const [showShipModal, setShowShipModal] = useState(false);
     const [shipCosts, setShipCosts] = useState({}); // {plating_shipments docId: plating $/ea string}
 
@@ -177,7 +179,13 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             setPlatingShipped(all.filter(s => s.status === 'shipped'));
         });
 
-        return () => { unsubParts(); unsubLists(); unsubPlating(); };
+        // Outsourced finishes (EP1, EP2…) — the plating finish the operator assigns at pull time. The `code`
+        // is the suffix that turns a raw erpId into its plated assembly (H1-138EC + EP1 → H1-138EC/EP1).
+        const unsubFinishes = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => {
+            setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(f => f.code));
+        });
+
+        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); };
     }, [activeBrand]);
 
     const attemptLogin = async (e) => {
@@ -547,27 +555,32 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
     // Spool a 2"x4" Zebra label for a plating pull (item / qty / work order + WO barcode). Matches the app's
     // existing ZPL-spool pattern (console.log) — no physical printer is wired anywhere in the app yet.
-    const printPlatingLabel = ({ erpId, itemName, qty, woNum, platingBin }) => {
+    const printPlatingLabel = ({ erpId, itemName, qty, woNum, platingBin, finishCode, finishName, targetErpId }) => {
         const wo = (woNum || '').trim();
         const name = String(itemName || '').slice(0, 40);
+        const fin = (finishCode || '').toUpperCase();
+        const finLong = finishName ? `${finishName} (${fin})` : fin;
+        const target = targetErpId || (fin ? `${erpId}/${fin}` : erpId);
+        // FINISH is the headline — it's what tells the plater what to do.
         const zpl = `^XA
 ^PW406
 ^CI28
-^FO20,28^A0N,38,38^FDPLATING WIP^FS
-^FO20,78^A0N,30,30^FD${erpId}^FS
-^FO20,116^A0N,24,24^FB366,2,0,L^FD${name}^FS
-^FO20,190^A0N,34,34^FDQty: ${qty}^FS
-^FO20,238^A0N,34,34^FDWO: ${wo || '—'}^FS
-^FO20,286^A0N,26,26^FDBin: ${platingBin}^FS
-${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
+^FO20,24^A0N,44,44^FDFINISH: ${fin || '—'}^FS
+^FO20,76^A0N,26,26^FD${erpId}^FS
+^FO20,108^A0N,28,28^FD-> ${target}^FS
+^FO20,146^A0N,22,22^FB366,2,0,L^FD${name}^FS
+^FO20,196^A0N,30,30^FDQty: ${qty}^FS
+^FO20,234^A0N,26,26^FDWO: ${wo || '—'}^FS
+^FO20,270^A0N,24,24^FDBin: ${platingBin}^FS
+${wo ? `^FO20,308^BY2,2,80^BCN,80,Y,N,N^FD${wo}^FS` : ''}
 ^XZ`;
         emitLabel(zpl, {
-            title: 'Plating WIP', widthIn: 4, heightIn: 2,
-            html: `<div class="hdr">PLATING WIP</div>
-<div class="big">${esc(erpId)}</div>
+            title: `Plating ${fin || ''}`.trim(), widthIn: 4, heightIn: 2,
+            html: `<div class="hdr">PLATING · ${esc(fin || '—')}</div>
+<div class="big">${esc(erpId)} → ${esc(target)}</div>
 <div class="line">${esc(name)}</div>
-<div class="line"><b>Qty:</b> ${esc(qty)}&nbsp;&nbsp;&nbsp;<b>WO:</b> ${esc(wo || '—')}</div>
-<div class="line"><b>Bin:</b> ${esc(platingBin)}</div>
+<div class="line"><b>Finish:</b> ${esc(finLong || '—')}</div>
+<div class="line"><b>Qty:</b> ${esc(qty)}&nbsp;&nbsp;<b>WO:</b> ${esc(wo || '—')}&nbsp;&nbsp;<b>Bin:</b> ${esc(platingBin)}</div>
 ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></div>` : ''}`
         });
     };
@@ -586,7 +599,15 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
         if (fromBin === platingBin) return alert("Source and plating bins are the same.");
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
-        const memoText = `Pulled to plating by ${operator?.name || 'Unknown'}${platingMemo.trim() ? ` — ${platingMemo.trim()}` : ''}`;
+        // The plating FINISH is required — it sets the finished assembly (erpId/CODE) that Phase 4b builds back,
+        // and it's the line on the label that tells the plater what finish to apply.
+        const finish = outsourceFinishes.find(f => f.id === platingFinish);
+        if (!finish || !finish.code) return alert("Select the plating finish — it determines the finished assembly and tells the plater what to apply.");
+        const finishCode = String(finish.code).toUpperCase();
+        const targetErpId = `${item.erpId}/${finishCode}`; // e.g. H1-138EC/EP1 — the plated assembly built back in Phase 4b
+        const finishVendorCrmId = finish.vendorCrmId || '';  // External Coop crm_records id, e.g. "VEND-42036"
+        const finishVendorNsId = /^VEND-(\d+)$/.test(finishVendorCrmId) ? finishVendorCrmId.replace('VEND-', '') : ''; // NS internal id
+        const memoText = `Pulled to plating (${finishCode}) by ${operator?.name || 'Unknown'}${platingMemo.trim() ? ` — ${platingMemo.trim()}` : ''}`;
 
         try {
             setIsSyncing(true);
@@ -636,13 +657,15 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
             await addDoc(collection(db, "plating_shipments"), {
                 brandId: activeBrand, status: 'staged',
                 itemId: item.id, netSuiteInternalId: item.netSuiteInternalId, erpId: item.erpId, itemName: item.itemName || '',
+                finishCode, finishName: finish.name || '', targetErpId, // plated finish + the assembly Phase 4b builds back
+                vendorCrmId: finishVendorCrmId, nsVendorId: finishVendorNsId, vendorName: finish.vendor || '', // NS-synced plater from the finish
                 qty, fromBin, platingBin, woNum: (platingWO || '').trim(), operator: operator?.name || 'Unknown', createdAt: serverTimestamp()
             }).catch(err => console.warn("plating_shipments log failed (is the firestore rule published?)", err)); // non-fatal: the NetSuite move already succeeded
 
-            printPlatingLabel({ erpId: item.erpId, itemName: item.itemName, qty, woNum: platingWO, platingBin });
-            alert(`✅ Pulled ${qty} × ${item.erpId} to plating WIP — moved ${fromBin} → ${platingBin}, status WIP-Plating. Removed from Available.\n\n🖨️ 2×4 plating label spooled${(platingWO || '').trim() ? ` (WO ${(platingWO || '').trim()})` : ''}.`);
+            printPlatingLabel({ erpId: item.erpId, itemName: item.itemName, qty, woNum: platingWO, platingBin, finishCode, finishName: finish.name || '', targetErpId });
+            alert(`✅ Pulled ${qty} × ${item.erpId} to plating WIP (${finishCode} → ${targetErpId}) — moved ${fromBin} → ${platingBin}, status WIP-Plating. Removed from Available.\n\n🖨️ 2×4 plating label spooled${(platingWO || '').trim() ? ` (WO ${(platingWO || '').trim()})` : ''}.`);
             writeLog(`Plating pull: ${qty} ${item.erpId} ${fromBin} -> ${platingBin} (WIP-Plating).${platingMemo.trim() ? ` Memo: ${platingMemo.trim()}` : ''}`, 'wms');
-            setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO("");
+            setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(""); setPlatingFinish("");
             pullNetSuiteStock();
         } catch (e) {
             console.error("Plating status-change push failed:", e);
@@ -966,7 +989,7 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
     const platFrom = (platingSrcScan || '').trim();
     const platTo = (platingDestScan || '').trim();
     const platSrcKnown = !!platingBase && binOf(platingBase) !== 'UNASSIGNED' && platFrom.toUpperCase() === binOf(platingBase).toUpperCase();
-    const platReady = !!platingBase && !!platingBase.netSuiteInternalId && platQtyNum > 0 && platQtyNum <= platingBase.onHand && platFrom !== '' && platTo !== '' && platFrom.toUpperCase() !== platTo.toUpperCase();
+    const platReady = !!platingBase && !!platingBase.netSuiteInternalId && !!platingFinish && platQtyNum > 0 && platQtyNum <= platingBase.onHand && platFrom !== '' && platTo !== '' && platFrom.toUpperCase() !== platTo.toUpperCase();
 
     // Plating shipment cost helpers: $/ea defaults to the item's outsourced Base Cost (manufacturingSpecs.cost).
     const platingBaseCost = (l) => parseFloat(hqParts.find(p => p.id === l.itemId)?.manufacturingSpecs?.cost) || 0;
@@ -1574,6 +1597,17 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
                                     <div style={{ marginBottom: '24px' }}>
                                         <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Work Order # — scan the RTG label</label>
                                         <input value={platingWO} onChange={e => setPlatingWO(e.target.value)} placeholder="WO # from HQ / RTG — printed on the plating label" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', color: theme.ink, border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                    </div>
+
+                                    <div style={{ marginBottom: '24px' }}>
+                                        <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Plating finish — what the plater applies</label>
+                                        <select value={platingFinish} onChange={e => setPlatingFinish(e.target.value)} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${platingFinish ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box', background: '#fff' }}>
+                                            <option value="">Select finish…</option>
+                                            {outsourceFinishes.map(f => <option key={f.id} value={f.id}>{f.code}{f.name ? ` — ${f.name}` : ''}{f.vendor ? ` · ${f.vendor}` : ''}</option>)}
+                                        </select>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '10px', color: platingFinish ? theme.brass : theme.inkSoft, marginTop: '6px', textAlign: 'center' }}>
+                                            {platingFinish ? `↳ builds back as ${platingBase.erpId}/${(outsourceFinishes.find(f => f.id === platingFinish)?.code || '').toUpperCase()}` : 'Required — sets the finished assembly & tells the plater what finish to do'}
+                                        </div>
                                     </div>
 
                                     <div style={{ marginBottom: '24px' }}>
