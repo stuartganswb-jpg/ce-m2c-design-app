@@ -98,6 +98,9 @@ const emitLabel = (zpl, htmlSpec) => {
 // Bin / ERP-id helpers (raw items carry binLocation top-level after mapping; library docs nest it under manufacturingSpecs).
 const binOf = (p) => (p?.binLocation || p?.manufacturingSpecs?.binLocation || 'UNASSIGNED');
 const erpOf = (p) => String(p?.legacyErpId || p?.itemId || '').toUpperCase();
+// A finish's code is the assembly suffix (H1-138EC + EP1 → H1-138EC/EP1). Some finish records carry the
+// identifier in `name` rather than `code`, so fall back to name — that's the suffix the assembly uses.
+const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
 
 const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [operator, setOperator] = useState(null);
@@ -184,7 +187,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         // Outsourced finishes (EP1, EP2…) — the plating finish the operator assigns at pull time. The `code`
         // is the suffix that turns a raw erpId into its plated assembly (H1-138EC + EP1 → H1-138EC/EP1).
         const unsubFinishes = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => {
-            setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(f => f.code));
+            setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(f => f.code || f.name));
         });
 
         return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); };
@@ -604,8 +607,8 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
         // The plating FINISH is required — it sets the finished assembly (erpId/CODE) that Phase 4b builds back,
         // and it's the line on the label that tells the plater what finish to apply.
         const finish = outsourceFinishes.find(f => f.id === platingFinish);
-        if (!finish || !finish.code) return alert("Select the plating finish — it determines the finished assembly and tells the plater what to apply.");
-        const finishCode = String(finish.code).toUpperCase();
+        if (!finish || !finishCodeOf(finish)) return alert("Select the plating finish — it determines the finished assembly and tells the plater what to apply.");
+        const finishCode = finishCodeOf(finish);
         const targetErpId = `${item.erpId}/${finishCode}`; // e.g. H1-138EC/EP1 — the plated assembly built back in Phase 4b
         const finishVendorCrmId = finish.vendorCrmId || '';  // External Coop crm_records id, e.g. "VEND-42036"
         const finishVendorNsId = /^VEND-(\d+)$/.test(finishVendorCrmId) ? finishVendorCrmId.replace('VEND-', '') : ''; // NS internal id
@@ -1720,10 +1723,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Plating finish — what the plater applies</label>
                                         <select value={platingFinish} onChange={e => setPlatingFinish(e.target.value)} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${platingFinish ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box', background: '#fff' }}>
                                             <option value="">Select finish…</option>
-                                            {outsourceFinishes.map(f => <option key={f.id} value={f.id}>{f.code}{f.name ? ` — ${f.name}` : ''}{f.vendor ? ` · ${f.vendor}` : ''}</option>)}
+                                            {outsourceFinishes.map(f => <option key={f.id} value={f.id}>{finishCodeOf(f)}{f.name && f.name.toUpperCase() !== finishCodeOf(f) ? ` — ${f.name}` : ''}{f.vendor ? ` · ${f.vendor}` : ''}</option>)}
                                         </select>
                                         <div style={{ fontFamily: theme.mono, fontSize: '10px', color: platingFinish ? theme.brass : theme.inkSoft, marginTop: '6px', textAlign: 'center' }}>
-                                            {platingFinish ? `↳ builds back as ${platingBase.erpId}/${(outsourceFinishes.find(f => f.id === platingFinish)?.code || '').toUpperCase()}` : 'Required — sets the finished assembly & tells the plater what finish to do'}
+                                            {platingFinish ? `↳ builds back as ${platingBase.erpId}/${finishCodeOf(outsourceFinishes.find(f => f.id === platingFinish))}` : 'Required — sets the finished assembly & tells the plater what finish to do'}
                                         </div>
                                     </div>
 
