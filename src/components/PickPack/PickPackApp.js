@@ -1110,6 +1110,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const platTo = (platingDestScan || '').trim();
     const platSrcKnown = !!platingBase && binOf(platingBase) !== 'UNASSIGNED' && platFrom.toUpperCase() === binOf(platingBase).toUpperCase();
     const platReady = !!platingBase && !!platingBase.netSuiteInternalId && !!platingFinish && platQtyNum > 0 && platQtyNum <= platingBase.onHand && platFrom !== '' && platTo !== '' && platFrom.toUpperCase() !== platTo.toUpperCase();
+    // Finishes valid for THIS part/brand = those whose plated assembly (base/CODE) exists in the active-brand
+    // library (hqParts is brand-scoped, so EP* resolve on CE, MEP* on M2C). Falls back to all finishes if none
+    // of the targets are synced yet, so the operator is never stuck — the build-back still validates the assembly.
+    const platingFinishOptions = (() => {
+        if (!platingBase) return [];
+        const base = erpOf(platingBase);
+        const valid = outsourceFinishes.filter(f => hqParts.some(p => erpOf(p) === `${base}/${finishCodeOf(f)}`));
+        return valid.length ? valid : outsourceFinishes;
+    })();
 
     // Plating shipment cost helpers: $/ea defaults to the item's outsourced Base Cost (manufacturingSpecs.cost).
     const platingBaseCost = (l) => parseFloat(hqParts.find(p => p.id === l.itemId)?.manufacturingSpecs?.cost) || 0;
@@ -1723,7 +1732,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Plating finish — what the plater applies</label>
                                         <select value={platingFinish} onChange={e => setPlatingFinish(e.target.value)} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${platingFinish ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box', background: '#fff' }}>
                                             <option value="">Select finish…</option>
-                                            {outsourceFinishes.map(f => <option key={f.id} value={f.id}>{finishCodeOf(f)}{f.name && f.name.toUpperCase() !== finishCodeOf(f) ? ` — ${f.name}` : ''}{f.vendor ? ` · ${f.vendor}` : ''}</option>)}
+                                            {platingFinishOptions.map(f => <option key={f.id} value={f.id}>{finishCodeOf(f)}{f.name && f.name.toUpperCase() !== finishCodeOf(f) ? ` — ${f.name}` : ''}{f.vendor ? ` · ${f.vendor}` : ''}</option>)}
                                         </select>
                                         <div style={{ fontFamily: theme.mono, fontSize: '10px', color: platingFinish ? theme.brass : theme.inkSoft, marginTop: '6px', textAlign: 'center' }}>
                                             {platingFinish ? `↳ builds back as ${platingBase.erpId}/${finishCodeOf(outsourceFinishes.find(f => f.id === platingFinish))}` : 'Required — sets the finished assembly & tells the plater what finish to do'}
