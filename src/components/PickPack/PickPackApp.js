@@ -465,23 +465,6 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         }
     };
 
-    // Resolve a NetSuite inventory-status internal id by name (e.g. the available "Good" status).
-    const resolveStatusId = async (statusName) => {
-        const name = (statusName || '').trim();
-        if (!name) return null;
-        const r = await fetch(FIREBASE_FUNCTION_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                method: 'POST',
-                payload: { q: `SELECT id FROM inventorystatus WHERE UPPER(name) = '${name.toUpperCase().replace(/'/g, "''")}'` }
-            })
-        });
-        const b = await r.json().catch(() => ({}));
-        return (r.ok && b.items && b.items.length) ? String(b.items[0].id) : null;
-    };
-
     // --- NETSUITE INVENTORY STATUS CHANGE (Phase 2: pull raw stock to plating WIP) ---
     // Moves qty from the available "Good" status to non-available "WIP-Plating" (id 13) and into the plating
     // staging bin — drops it from Available while keeping it on-hand. Logs a staged plating-shipment line.
@@ -499,8 +482,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
         try {
             setIsSyncing(true);
-            const goodId = await resolveStatusId('Good');
-            if (!goodId) { setIsSyncing(false); return alert("Couldn't find the 'Good' inventory status in NetSuite by name. Tell me its internal id and I'll set it directly."); }
+            const goodId = "14"; // "Good - Available" inventory status (user-supplied)
             await ensureBinExists(platingBin, nsConfig.location);
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventorystatuschange`,
