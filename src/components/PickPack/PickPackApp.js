@@ -465,6 +465,21 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         }
     };
 
+    // Fetch all NetSuite inventory statuses (id + name) so we can resolve the real internal ids by name.
+    const fetchInventoryStatuses = async () => {
+        const r = await fetch(FIREBASE_FUNCTION_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                method: 'POST',
+                payload: { q: `SELECT id, name FROM inventorystatus` }
+            })
+        });
+        const b = await r.json().catch(() => ({}));
+        return (r.ok && Array.isArray(b.items)) ? b.items.map(s => ({ id: String(s.id), name: String(s.name || '') })) : [];
+    };
+
     // --- NETSUITE PLATING PULL (Phase 2: move raw stock into WIP-Plating status) ---
     // NetSuite REST has no inventorystatuschange record, so we move the qty with a STATUS-AWARE inventory
     // adjustment: two offsetting lines — -qty out of Good(14)@source bin and +qty into WIP-Plating(13)@plating
@@ -483,7 +498,20 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
         try {
             setIsSyncing(true);
-            const goodId = "14"; // "Good - Available" inventory status (user-supplied)
+            // Resolve the REAL inventory-status internal ids by name (the setup-list numbers aren't the record ids).
+            const statuses = await fetchInventoryStatuses();
+            const pick = (exact, re) => {
+                const ex = statuses.find(s => s.name.toUpperCase() === exact);
+                if (ex) return ex.id;
+                const m = statuses.find(s => re.test(s.name));
+                return m ? m.id : null;
+            };
+            const goodId = pick('GOOD - AVAILABLE', /good|avail/i);
+            const wipId = pick('WIP-PLATING', /plat/i);
+            if (!goodId || !wipId) {
+                setIsSyncing(false);
+                return alert("Couldn't match the inventory statuses by name. Statuses NetSuite returned:\n\n" + (statuses.length ? statuses.map(s => `${s.id} — ${s.name}`).join('\n') : '(none)') + "\n\nTell me which id is the available 'from' status and which is WIP-Plating.");
+            }
             await ensureBinExists(platingBin, nsConfig.location);
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
@@ -509,7 +537,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                 adjustQtyBy: qty,
                                 inventoryDetail: {
                                     quantity: qty,
-                                    inventoryAssignment: { items: [{ binNumber: { refName: platingBin }, inventoryStatus: { id: "13" }, quantity: qty }] }
+                                    inventoryAssignment: { items: [{ binNumber: { refName: platingBin }, inventoryStatus: { id: wipId }, quantity: qty }] }
                                 }
                             }
                         ]
