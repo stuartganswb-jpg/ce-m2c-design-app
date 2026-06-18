@@ -10,7 +10,7 @@ import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
 // TABS updated to include COUNT
-const TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'GALLERY', 'MESSAGING'];
+const TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'GALLERY', 'MESSAGING'];
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
 // NetSuite Mapping Dictionary
@@ -66,7 +66,15 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [transferQty, setTransferQty] = useState("");
     const [transferDestScan, setTransferDestScan] = useState("");
     const [transferMemo, setTransferMemo] = useState("");
-    
+
+    // PLATING WIP state (pull raw stock out to a plating staging bin + WIP-Plating status)
+    const [platingBase, setPlatingBase] = useState(null);
+    const [platingSrcScan, setPlatingSrcScan] = useState("");
+    const [platingQty, setPlatingQty] = useState("");
+    const [platingDestScan, setPlatingDestScan] = useState("");
+    const [platingMemo, setPlatingMemo] = useState("");
+    const [platingStaged, setPlatingStaged] = useState([]); // open (staged) plating-shipment lines
+
     // Counting Filter State
     const [searchQuery, setSearchQuery] = useState("");
     const [typeFilter, setTypeFilter] = useState("");
@@ -85,7 +93,11 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             if (docSnap.exists()) setGlobalLists(docSnap.data());
         });
 
-        return () => { unsubParts(); unsubLists(); };
+        const unsubPlating = onSnapshot(collection(db, "plating_shipments"), (snap) => {
+            setPlatingStaged(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => s.brandId === activeBrand && s.status === 'staged'));
+        });
+
+        return () => { unsubParts(); unsubLists(); unsubPlating(); };
     }, [activeBrand]);
 
     const attemptLogin = async (e) => {
@@ -453,6 +465,92 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         }
     };
 
+    // Resolve a NetSuite inventory-status internal id by name (e.g. the available "Good" status).
+    const resolveStatusId = async (statusName) => {
+        const name = (statusName || '').trim();
+        if (!name) return null;
+        const r = await fetch(FIREBASE_FUNCTION_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                method: 'POST',
+                payload: { q: `SELECT id FROM inventorystatus WHERE UPPER(name) = '${name.toUpperCase().replace(/'/g, "''")}'` }
+            })
+        });
+        const b = await r.json().catch(() => ({}));
+        return (r.ok && b.items && b.items.length) ? String(b.items[0].id) : null;
+    };
+
+    // --- NETSUITE INVENTORY STATUS CHANGE (Phase 2: pull raw stock to plating WIP) ---
+    // Moves qty from the available "Good" status to non-available "WIP-Plating" (id 13) and into the plating
+    // staging bin — drops it from Available while keeping it on-hand. Logs a staged plating-shipment line.
+    const pushPlatingPull = async () => {
+        const item = platingBase;
+        const qty = parseInt(platingQty) || 0;
+        const fromBin = (platingSrcScan || '').trim().toUpperCase();
+        const platingBin = (platingDestScan || '').trim().toUpperCase();
+        if (!item || qty <= 0 || !fromBin || !platingBin) return;
+        if (!item.netSuiteInternalId) return alert(`${item.erpId} has no NetSuite Internal ID — map it first (HQ → ERP Mapping Audit / Mass Update).`);
+        if (fromBin === platingBin) return alert("Source and plating bins are the same.");
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+        const memoText = `Pulled to plating by ${operator?.name || 'Unknown'}${platingMemo.trim() ? ` — ${platingMemo.trim()}` : ''}`;
+
+        try {
+            setIsSyncing(true);
+            const goodId = await resolveStatusId('Good');
+            if (!goodId) { setIsSyncing(false); return alert("Couldn't find the 'Good' inventory status in NetSuite by name. Tell me its internal id and I'll set it directly."); }
+            await ensureBinExists(platingBin, nsConfig.location);
+            const payload = {
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventorystatuschange`,
+                method: 'POST',
+                payload: {
+                    subsidiary: { id: nsConfig.subsidiary },
+                    location: { id: nsConfig.location },
+                    memo: memoText,
+                    inventory: {
+                        items: [{
+                            item: { id: item.netSuiteInternalId },
+                            location: { id: nsConfig.location },
+                            quantity: qty,
+                            previousStatus: { id: goodId },
+                            revisedStatus: { id: "13" }, // WIP-Plating (non-available)
+                            inventoryDetail: {
+                                quantity: qty,
+                                inventoryAssignment: { items: [{ binNumber: { refName: fromBin }, toBinNumber: { refName: platingBin }, quantity: qty }] }
+                            }
+                        }]
+                    }
+                }
+            };
+
+            const response = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
+
+            await addDoc(collection(db, "plating_shipments"), {
+                brandId: activeBrand, status: 'staged',
+                itemId: item.id, netSuiteInternalId: item.netSuiteInternalId, erpId: item.erpId, itemName: item.itemName || '',
+                qty, fromBin, platingBin, operator: operator?.name || 'Unknown', createdAt: serverTimestamp()
+            }).catch(err => console.warn("plating_shipments log failed (is the firestore rule published?)", err)); // non-fatal: the NetSuite move already succeeded
+
+            alert(`✅ Pulled ${qty} × ${item.erpId} to plating WIP — moved ${fromBin} → ${platingBin}, status WIP-Plating. Removed from Available.`);
+            writeLog(`Plating pull: ${qty} ${item.erpId} ${fromBin} -> ${platingBin} (WIP-Plating).${platingMemo.trim() ? ` Memo: ${platingMemo.trim()}` : ''}`, 'wms');
+            setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo("");
+            pullNetSuiteStock();
+        } catch (e) {
+            console.error("Plating status-change push failed:", e);
+            alert("❌ NetSuite rejected the status change:\n\n" + (e.message || e) + "\n\nFirst inventory status change we've posted — if it names a field (previousStatus / revisedStatus / inventory / toBinNumber / inventoryDetail), paste it and I'll correct the REST shape.");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
     const handlePickValidation = async (e) => {
         e.preventDefault();
         const lineItem = activePickJob.partsList[currentPickLine];
@@ -583,6 +681,13 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const xferTo = (transferDestScan || '').trim();
     const xferSrcKnown = !!transferBase && binOf(transferBase) !== 'UNASSIGNED' && xferFrom.toUpperCase() === binOf(transferBase).toUpperCase();
     const xferReady = !!transferBase && !!transferBase.netSuiteInternalId && xferQtyNum > 0 && xferQtyNum <= transferBase.onHand && xferFrom !== '' && xferTo !== '' && xferFrom.toUpperCase() !== xferTo.toUpperCase();
+
+    // PLATING WIP derived: readiness gates
+    const platQtyNum = parseInt(platingQty) || 0;
+    const platFrom = (platingSrcScan || '').trim();
+    const platTo = (platingDestScan || '').trim();
+    const platSrcKnown = !!platingBase && binOf(platingBase) !== 'UNASSIGNED' && platFrom.toUpperCase() === binOf(platingBase).toUpperCase();
+    const platReady = !!platingBase && !!platingBase.netSuiteInternalId && platQtyNum > 0 && platQtyNum <= platingBase.onHand && platFrom !== '' && platTo !== '' && platFrom.toUpperCase() !== platTo.toUpperCase();
 
     const safeUserRole = operator?.role ? operator.role.toLowerCase() : 'operator';
     const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
@@ -1133,6 +1238,125 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
                                                 <button onClick={() => { setTransferBase(item); setTransferSrcScan(""); setTransferQty(""); setTransferDestScan(""); setTransferMemo(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Transfer →</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {baseFilteredItems.length === 0 && (
+                                        <tr>
+                                            <td colSpan="4" style={{ padding: '40px', textAlign: 'center', color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No inventory items matched your filter.</td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
+
+                {/* ⚗ TAB: PLATING (pull raw stock to plating WIP via inventory status change) */}
+                {activeTab === 'PLATING' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
+
+                        {/* PULL MODAL */}
+                        {platingBase && (
+                            <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <div style={{ background: '#fff', padding: '40px', width: '680px', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
+                                    <h2 style={{ margin: '0 0 6px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>Pull to Plating WIP</h2>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '24px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
+                                        Status change Good → WIP-Plating · Subsidiary {BRAND_NETSUITE_MAP[activeBrand]?.subsidiary} | Location {BRAND_NETSUITE_MAP[activeBrand]?.location} · drops from Available
+                                    </div>
+
+                                    <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: theme.paper, marginBottom: '24px' }}>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{platingBase.erpId}</div>
+                                        <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{platingBase.itemName}</div>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '6px' }}>home bin {binOf(platingBase)} · {platingBase.onHand} on hand</div>
+                                    </div>
+
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                                        <div>
+                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan source bin</label>
+                                            <input value={platingSrcScan} onChange={e => setPlatingSrcScan(e.target.value)} placeholder={binOf(platingBase)} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${platSrcKnown ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: platSrcKnown ? '#7dbb81' : theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>{platSrcKnown ? '✓ home bin' : `home: ${binOf(platingBase)}`}</div>
+                                        </div>
+                                        <div>
+                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Quantity</label>
+                                            <input type="number" min="1" max={platingBase.onHand} value={platingQty} onChange={e => setPlatingQty(e.target.value)} placeholder="0" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `2px solid ${platQtyNum > 0 && platQtyNum <= platingBase.onHand ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                        </div>
+                                        <div>
+                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan / enter plating bin</label>
+                                            <input value={platingDestScan} onChange={e => setPlatingDestScan(e.target.value)} placeholder="PLATING" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${platTo !== '' && platTo.toUpperCase() !== platFrom.toUpperCase() ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>created if new</div>
+                                        </div>
+                                    </div>
+
+                                    <div style={{ marginBottom: '24px' }}>
+                                        <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Note{operator?.name ? ` — recorded as ${operator.name}` : ''}</label>
+                                        <textarea value={platingMemo} onChange={e => setPlatingMemo(e.target.value)} placeholder="Optional note. Pushed to the NetSuite status-change memo with your name." rows={2} style={{ width: '100%', padding: '12px', fontFamily: theme.sans, fontSize: '0.9rem', color: theme.ink, border: `1px solid ${theme.line}`, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
+                                    </div>
+
+                                    <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
+                                        <button onClick={() => { setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); }} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
+                                        <button onClick={pushPlatingPull} disabled={!platReady || isSyncing} style={{ padding: '15px 30px', background: platReady && !isSyncing ? theme.brass : theme.paper2, color: platReady && !isSyncing ? '#fff' : theme.inkSoft, border: 'none', cursor: platReady && !isSyncing ? 'pointer' : 'not-allowed', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
+                                            {isSyncing ? 'Pulling…' : 'Pull to Plating WIP'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* STAGED-FOR-PLATING SUMMARY */}
+                        {platingStaged.length > 0 && (
+                            <div style={{ background: '#fff', border: `1px solid ${theme.brass}`, padding: '20px' }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>Staged for this week's plating shipment — {platingStaged.length} line{platingStaged.length === 1 ? '' : 's'} ({platingStaged.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)} pcs)</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '160px', overflowY: 'auto' }}>
+                                    {platingStaged.map(l => (
+                                        <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: theme.mono, fontSize: '12px', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '4px' }}>
+                                            <span>{l.erpId} — {l.itemName}</span>
+                                            <span style={{ color: theme.brass }}>{l.qty} → {l.platingBin}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* HEADER FILTERS */}
+                        <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px', display: 'flex', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', background: theme.paper2, minWidth: '150px' }}>
+                                <option value="">All Categories</option>
+                                {dynamicProdTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                            </select>
+                            <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', background: theme.paper2, minWidth: '150px' }}>
+                                <option value="">All Collections</option>
+                                {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                            <input placeholder="Search an item to pull for plating…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', flex: 1, minWidth: '180px' }} />
+                            {(typeFilter || collectionFilter || searchQuery) && <button onClick={() => { setTypeFilter(''); setCollectionFilter(''); setSearchQuery(''); }} style={{ padding: '12px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>}
+                            <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '12px 20px', background: isSyncing ? theme.paper : theme.ink, color: isSyncing ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>
+                                {isSyncing ? 'Syncing...' : 'Pull Live Stock'}
+                            </button>
+                        </div>
+
+                        {/* INVENTORY TABLE */}
+                        <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, overflowY: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                <thead style={{ background: theme.paper2, position: 'sticky', top: 0, zIndex: 10 }}>
+                                    <tr>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>ERP ID / Item</th>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Home Bin</th>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>On Hand</th>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Pull</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {baseFilteredItems.map(item => (
+                                        <tr key={item.id} style={{ borderBottom: `1px solid ${theme.line}` }}>
+                                            <td style={{ padding: '16px' }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{item.erpId}</div>
+                                                <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{item.itemName}</div>
+                                            </td>
+                                            <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{item.binLocation}</td>
+                                            <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
+                                            <td style={{ padding: '16px', textAlign: 'center' }}>
+                                                <button onClick={() => { setPlatingBase(item); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Pull →</button>
                                             </td>
                                         </tr>
                                     ))}
