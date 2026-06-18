@@ -608,6 +608,14 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
             // ("Invalid Field Value 2 for subsidiary"). With the real internal id the vendor resolves to subsidiary 2
             // (CE), so subsidiary 2 + location 17 (High Point - CE, also sub 2) are valid. customForm 272 matches the
             // working manual PO. Item 61947 IS already the internal id of "Weekly Plating Shipment" (Service).
+            // The single summary line carries the actual plated parts as a TEXT reference in its description (like the
+            // CPQ push) so the PO itself shows what's on the pallet — item, qty, finish/WO — without separate item lines.
+            const lineDetail = lines.map(l => {
+                const wo = l.woNum ? ` · WO# ${l.woNum}` : '';
+                const ref = l.erpId ? ` [${l.erpId}]` : '';
+                return `• ${l.itemName || 'Item'}${ref} — qty ${parseInt(l.qty) || 0}${wo}`;
+            }).join('\n');
+            const lineDescription = `Weekly Plating Shipment (${shipId}) — ${lines.length} item${lines.length === 1 ? '' : 's'}, ${pcs} pcs:\n${lineDetail}`;
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
                 method: 'POST',
@@ -617,7 +625,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                     // subsidiary intentionally OMITTED — it derives from the (now-resolving) vendor 42036, which is sub 2 (CE).
                     location: { id: nsConfig.location }, // High Point - CE = 17 (subsidiary 2)
                     memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
-                    item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] }
+                    item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), description: lineDescription }] }
                 }
             };
             const response = await fetch(FIREBASE_FUNCTION_URL, {
@@ -625,26 +633,48 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
             });
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
-            const nsPoId = result.id ? String(result.id) : null;
+            // NetSuite record POSTs return 204 with the new internal id ONLY in the Location header (which the proxy
+            // doesn't forward), so result.id is usually empty. Recover the PO's internal id via SuiteQL by its unique
+            // memo (shipId) — Phase 4a receive needs this id to transform the PO into an item receipt.
+            let nsPoId = result.id ? String(result.id) : null;
+            let nsPoTran = result.tranId || null; // human-readable PO number, e.g. "PO2179"
+            if (!nsPoId || !nsPoTran) {
+                try {
+                    const lookup = await fetch(FIREBASE_FUNCTION_URL, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                            method: 'POST',
+                            payload: { q: `SELECT id, tranid FROM transaction WHERE type = 'PurchOrd' AND UPPER(memo) LIKE '%${shipId.toUpperCase()}%'` }
+                        })
+                    });
+                    const lr = await lookup.json().catch(() => ({}));
+                    if (lr.items && lr.items[0]) {
+                        if (lr.items[0].id) nsPoId = String(lr.items[0].id);
+                        if (lr.items[0].tranid) nsPoTran = String(lr.items[0].tranid);
+                    }
+                } catch (lookupErr) { console.warn("PO id lookup failed (PO still created):", lookupErr); }
+            }
+            const nsPoLabel = nsPoTran || nsPoId || '(pending sync)';
 
             // 2) Detailed app-side PO for the plater (only reached after the NS PO succeeded).
             await addDoc(collection(db, "hq_purchase_orders"), {
                 poId: shipId, brand: activeBrand, vendor: "Dayton Grey", status: "Sent to Plater", kind: "plating",
-                nsPoId, shipmentId: shipId,
+                nsPoId, nsPoTran, shipmentId: shipId,
                 items: lines.map(l => ({ itemId: l.erpId, description: l.itemName, quantity: parseInt(l.qty) || 0, rate: rateOf(l), woNum: l.woNum || '', platingBin: l.platingBin })),
                 total: Number(total.toFixed(2)), pcs, createdBy: operator?.name || 'Unknown', createdAt: serverTimestamp()
             }).catch(err => console.warn("app PO log failed", err));
 
             // 3) Flip the staged lines to 'shipped' (Phase 4 receives against this shipment).
             await Promise.all(lines.map(l => updateDoc(doc(db, "plating_shipments", l.id), {
-                status: 'shipped', shipmentId: shipId, nsPoId, platingRate: rateOf(l), shippedAt: serverTimestamp()
+                status: 'shipped', shipmentId: shipId, nsPoId, nsPoTran, platingRate: rateOf(l), shippedAt: serverTimestamp()
             }).catch(() => {})));
 
             // 4) Pallet/shipment label.
             printShipmentLabel({ shipId, vendor: "Dayton Grey", pcs, lineCount: lines.length, total });
 
-            alert(`✅ Plating shipment ${shipId} created — NetSuite PO #${nsPoId} ("Weekly Plating Shipment" $${total.toFixed(2)}), ${lines.length} line${lines.length === 1 ? '' : 's'} / ${pcs} pcs shipped, label spooled.`);
-            writeLog(`Plating shipment ${shipId}: NS PO ${nsPoId}, $${total.toFixed(2)}, ${lines.length} lines / ${pcs} pcs.`, 'wms');
+            alert(`✅ Plating shipment ${shipId} created — NetSuite ${nsPoLabel} ("Weekly Plating Shipment" $${total.toFixed(2)}), ${lines.length} line${lines.length === 1 ? '' : 's'} / ${pcs} pcs shipped, label spooled.`);
+            writeLog(`Plating shipment ${shipId}: NS PO ${nsPoLabel}, $${total.toFixed(2)}, ${lines.length} lines / ${pcs} pcs.`, 'wms');
             setShipCosts({}); setShowShipModal(false);
             pullNetSuiteStock();
         } catch (e) {
