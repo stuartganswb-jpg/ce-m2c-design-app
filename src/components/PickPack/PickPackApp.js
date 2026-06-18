@@ -223,7 +223,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             body: JSON.stringify({
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/bin`,
                 method: 'POST',
-                payload: { binNumber, location: { id: locationId } }
+                payload: { binNumber: (binNumber || '').toUpperCase(), location: { id: locationId } }
             })
         });
         if (response.ok) return true;
@@ -244,7 +244,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             // Don't send a Firestore doc id as a NetSuite item ref — skip unmapped items (they'd 400).
             if (!item.netSuiteInternalId) { skipped.push(item.itemName || item.erpId || item.id); return null; }
             const storedBin = (item.binLocation || '').trim();
-            const effBin = ((binEdits[item.id] ?? item.binLocation) || '').trim();
+            const effBin = ((binEdits[item.id] ?? item.binLocation) || '').trim().toUpperCase();
             return {
                 internalId: item.netSuiteInternalId,
                 docId: item.id,
@@ -399,8 +399,8 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const pushBinTransfer = async () => {
         const item = transferBase;
         const qty = parseInt(transferQty) || 0;
-        const fromBin = (transferSrcScan || '').trim();
-        const toBin = (transferDestScan || '').trim();
+        const fromBin = (transferSrcScan || '').trim().toUpperCase();
+        const toBin = (transferDestScan || '').trim().toUpperCase();
         if (!item || qty <= 0 || !fromBin || !toBin) return;
         if (!item.netSuiteInternalId) return alert(`${item.erpId} has no NetSuite Internal ID — map it first (HQ → ERP Mapping Audit / Mass Update).`);
         if (fromBin.toUpperCase() === toBin.toUpperCase()) return alert("Source and destination bins are the same.");
@@ -782,7 +782,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                         <tbody>
                                             {baseFilteredItems.filter(item => physicalCounts[item.id] !== undefined).map(item => {
                                                 const delta = physicalCounts[item.id] - item.onHand;
-                                                const effBin = ((binEdits[item.id] ?? item.binLocation) || '').trim();
+                                                const effBin = ((binEdits[item.id] ?? item.binLocation) || '').trim().toUpperCase();
                                                 const binIsNew = effBin !== '' && effBin.toUpperCase() !== (item.binLocation || '').trim().toUpperCase();
                                                 return (
                                                     <tr key={item.id} style={{ borderBottom: `1px solid ${theme.line}` }}>
@@ -1025,7 +1025,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{item.binLocation}</td>
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
-                                                <button onClick={() => { setConvertBase(item); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Convert →</button>
+                                                <button onClick={() => { setConvertBase(item); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(new Date().toLocaleDateString('en-CA')); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Convert →</button>
                                             </td>
                                         </tr>
                                     ))}
