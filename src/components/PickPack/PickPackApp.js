@@ -611,10 +611,11 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                     targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
                     method: 'POST',
                     payload: {
+                        customForm: { id: "272" }, // "LG - Purchase Order Form" — the form your manual POs use; the default form was mishandling subsidiary
                         entity: { id: "83361" }, // Dayton Grey vendor
-                        subsidiary: { id: nsConfig.subsidiary },
+                        location: { id: nsConfig.location }, // header location (High Point - CE); subsidiary derives from the form/location (like the manual PO)
                         memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
-                        item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), location: { id: nsConfig.location } }] }
+                        item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] }
                     }
                 };
                 const response = await fetch(FIREBASE_FUNCTION_URL, {
