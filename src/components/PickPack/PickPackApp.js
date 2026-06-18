@@ -614,7 +614,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                 payload: {
                     customForm: { id: "272" }, // "LG - Purchase Order Form" (matches the working manual PO)
                     entity: { id: "42036" }, // Dayton Grey vendor INTERNAL id (NOT 83361 — that's the vendor#/entityid)
-                    subsidiary: { id: nsConfig.subsidiary }, // CE (2) — matches the vendor's subsidiary
+                    // subsidiary intentionally OMITTED — it derives from the (now-resolving) vendor 42036, which is sub 2 (CE).
                     location: { id: nsConfig.location }, // High Point - CE = 17 (subsidiary 2)
                     memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
                     item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] }
