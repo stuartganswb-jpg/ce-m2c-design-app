@@ -549,16 +549,22 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       }
       if (!window.confirm(`Generate a Stock Build Work Order for ${woTargetQty}x ${activePart.legacyErpId}?`)) return;
       
-      const newWoId = `WO-${activePart.legacyErpId}-${Date.now().toString().slice(-6)}`;
-      
+      // Firestore doc ids can't contain "/", and finished assemblies carry it (e.g. H1-138BF/EP1) — sanitize it
+      // out of the DOC id while keeping the real part number on the record (woDisplayId / partErpId) for display.
+      const stamp = Date.now().toString().slice(-6);
+      const safeErp = String(activePart.legacyErpId).replace(/[^A-Za-z0-9]+/g, '-');
+      const newWoId = `WO-${safeErp}-${stamp}`;
+
       try {
           await setDoc(doc(db, "hq_work_orders", newWoId), {
               id: newWoId,
               woId: newWoId,
+              woDisplayId: `WO-${activePart.legacyErpId}-${stamp}`,
+              partErpId: activePart.legacyErpId,
               brand: activeBrand,
-              status: "Approved", 
+              status: "Approved",
               customer: "Internal Stock",
-              hqJobId: activePart.id, 
+              hqJobId: activePart.id,
               totalParts: Number(woTargetQty),
               reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], 
               type: "Stock Build",
