@@ -602,16 +602,20 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
         try {
             setIsSyncing(true);
             // 1) NetSuite PO to the plater — ALL-OR-NOTHING. If the PO doesn't post we throw and abort BEFORE
-            // creating the shipment, so there are never orphaned shipments without a PO. Uses the LG PO form (272),
-            // which makes the subsidiary derive correctly (the default form mishandled it).
+            // creating the shipment, so there are never orphaned shipments without a PO.
+            // entity MUST be the vendor's INTERNAL id (42036), NOT the vendor number/entityid (83361). Sending the
+            // entityid left the entity unresolved, so subsidiary validation fell back to user context and rejected 2
+            // ("Invalid Field Value 2 for subsidiary"). With the real internal id the vendor resolves to subsidiary 2
+            // (CE), so subsidiary 2 + location 17 (High Point - CE, also sub 2) are valid. customForm 272 matches the
+            // working manual PO. Item 61947 IS already the internal id of "Weekly Plating Shipment" (Service).
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
                 method: 'POST',
                 payload: {
-                    customForm: { id: "272" }, // "LG - Purchase Order Form"
-                    entity: { id: "83361" }, // Dayton Grey vendor
-                    subsidiary: { id: nsConfig.subsidiary }, // force CE (2) — the form otherwise derives the integration user's sub, making the CE location invalid
-                    location: { id: nsConfig.location }, // header location (High Point - CE = 17), valid for CE
+                    customForm: { id: "272" }, // "LG - Purchase Order Form" (matches the working manual PO)
+                    entity: { id: "42036" }, // Dayton Grey vendor INTERNAL id (NOT 83361 — that's the vendor#/entityid)
+                    subsidiary: { id: nsConfig.subsidiary }, // CE (2) — matches the vendor's subsidiary
+                    location: { id: nsConfig.location }, // High Point - CE = 17 (subsidiary 2)
                     memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
                     item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] }
                 }
