@@ -465,9 +465,10 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         }
     };
 
-    // --- NETSUITE INVENTORY STATUS CHANGE (Phase 2: pull raw stock to plating WIP) ---
-    // Moves qty from the available "Good" status to non-available "WIP-Plating" (id 13) and into the plating
-    // staging bin — drops it from Available while keeping it on-hand. Logs a staged plating-shipment line.
+    // --- NETSUITE PLATING PULL (Phase 2: move raw stock into WIP-Plating status) ---
+    // NetSuite REST has no inventorystatuschange record, so we move the qty with a STATUS-AWARE inventory
+    // adjustment: two offsetting lines — -qty out of Good(14)@source bin and +qty into WIP-Plating(13)@plating
+    // bin. Net on-hand unchanged; available drops (WIP-Plating is non-available). Logs a staged shipment line.
     const pushPlatingPull = async () => {
         const item = platingBase;
         const qty = parseInt(platingQty) || 0;
@@ -485,24 +486,33 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             const goodId = "14"; // "Good - Available" inventory status (user-supplied)
             await ensureBinExists(platingBin, nsConfig.location);
             const payload = {
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventorystatuschange`,
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
                 method: 'POST',
                 payload: {
+                    account: { id: "254" }, // Inventory Adjustment account
                     subsidiary: { id: nsConfig.subsidiary },
-                    location: { id: nsConfig.location },
                     memo: memoText,
                     inventory: {
-                        items: [{
-                            item: { id: item.netSuiteInternalId },
-                            location: { id: nsConfig.location },
-                            quantity: qty,
-                            previousStatus: { id: goodId },
-                            revisedStatus: { id: "13" }, // WIP-Plating (non-available)
-                            inventoryDetail: {
-                                quantity: qty,
-                                inventoryAssignment: { items: [{ binNumber: { refName: fromBin }, toBinNumber: { refName: platingBin }, quantity: qty }] }
+                        items: [
+                            { // out of Good (available) at the source bin
+                                item: { id: item.netSuiteInternalId },
+                                location: { id: nsConfig.location },
+                                adjustQtyBy: -qty,
+                                inventoryDetail: {
+                                    quantity: -qty,
+                                    inventoryAssignment: { items: [{ binNumber: { refName: fromBin }, inventoryStatus: { id: goodId }, quantity: -qty }] }
+                                }
+                            },
+                            { // into WIP-Plating (non-available) at the plating bin
+                                item: { id: item.netSuiteInternalId },
+                                location: { id: nsConfig.location },
+                                adjustQtyBy: qty,
+                                inventoryDetail: {
+                                    quantity: qty,
+                                    inventoryAssignment: { items: [{ binNumber: { refName: platingBin }, inventoryStatus: { id: "13" }, quantity: qty }] }
+                                }
                             }
-                        }]
+                        ]
                     }
                 }
             };
@@ -527,7 +537,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             pullNetSuiteStock();
         } catch (e) {
             console.error("Plating status-change push failed:", e);
-            alert("❌ NetSuite rejected the status change:\n\n" + (e.message || e) + "\n\nFirst inventory status change we've posted — if it names a field (previousStatus / revisedStatus / inventory / toBinNumber / inventoryDetail), paste it and I'll correct the REST shape.");
+            alert("❌ NetSuite rejected the plating pull:\n\n" + (e.message || e) + "\n\nThis posts a status-aware inventory adjustment (Good→WIP-Plating) — if it names a field (inventoryStatus / inventoryDetail / account), paste it and I'll correct the REST shape.");
         } finally {
             setIsSyncing(false);
         }
