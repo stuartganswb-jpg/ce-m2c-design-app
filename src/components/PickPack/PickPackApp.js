@@ -601,31 +601,37 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
         const shipId = `PLT-${activeBrand.toUpperCase()}-${Date.now()}`;
         try {
             setIsSyncing(true);
-            // 1) NetSuite PO to the plater — one summary line at the total plating cost.
-            // Subsidiary + LOCATION both come from the brand (CE = sub 2 / loc 17). Location is REQUIRED on a PO;
-            // omitting it was what made NetSuite throw the misleading "invalid subsidiary/item" errors.
-            const payload = {
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
-                method: 'POST',
-                payload: {
-                    entity: { id: "83361" }, // Dayton Grey vendor
-                    subsidiary: { id: nsConfig.subsidiary }, // CE=2 on the header — mirrors the WORKING inventory adjustment (header sub + line location)
-                    memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
-                    // location on the LINE (like the adjustment), not the header
-                    item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), location: { id: nsConfig.location } }] } // "Weekly Plating Shipment" service item
-                }
-            };
-            const response = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-            });
-            const result = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
-            const nsPoId = result.id ? String(result.id) : null;
+            // 1) NetSuite PO to the plater — NON-FATAL. A PO via this integration role won't accept a set
+            // subsidiary (CE/2 is rejected on a PO though it works on inventory adjustments) and derives the wrong
+            // one when omitted. So if the PO fails we STILL record the shipment, ship the lines, and print — the
+            // operator creates the NS PO manually until the integration role's PO/subsidiary prefs are fixed.
+            let nsPoId = null, poError = null;
+            try {
+                const payload = {
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
+                    method: 'POST',
+                    payload: {
+                        entity: { id: "83361" }, // Dayton Grey vendor
+                        subsidiary: { id: nsConfig.subsidiary },
+                        memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
+                        item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), location: { id: nsConfig.location } }] }
+                    }
+                };
+                const response = await fetch(FIREBASE_FUNCTION_URL, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                });
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
+                nsPoId = result.id ? String(result.id) : null;
+            } catch (pe) {
+                poError = (pe && pe.message) ? pe.message : String(pe);
+                console.warn("Plating PO push failed (non-fatal — shipment still recorded):", pe);
+            }
 
             // 2) Detailed app-side PO for the plater.
             await addDoc(collection(db, "hq_purchase_orders"), {
                 poId: shipId, brand: activeBrand, vendor: "Dayton Grey", status: "Sent to Plater", kind: "plating",
-                nsPoId, shipmentId: shipId,
+                nsPoId, nsPoError: poError, shipmentId: shipId,
                 items: lines.map(l => ({ itemId: l.erpId, description: l.itemName, quantity: parseInt(l.qty) || 0, rate: rateOf(l), woNum: l.woNum || '', platingBin: l.platingBin })),
                 total: Number(total.toFixed(2)), pcs, createdBy: operator?.name || 'Unknown', createdAt: serverTimestamp()
             }).catch(err => console.warn("app PO log failed", err));
@@ -638,13 +644,16 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
             // 4) Pallet/shipment label.
             printShipmentLabel({ shipId, vendor: "Dayton Grey", pcs, lineCount: lines.length, total });
 
-            alert(`✅ Plating shipment ${shipId} created.\n\nNetSuite PO to Dayton Grey: ${nsPoId ? `#${nsPoId}` : 'posted'} — "Weekly Plating Shipment" $${total.toFixed(2)} (${pcs} pcs).\n🖨️ Shipment label spooled.`);
-            writeLog(`Plating shipment ${shipId}: PO to Dayton Grey $${total.toFixed(2)}, ${lines.length} lines / ${pcs} pcs. NS PO ${nsPoId || 'n/a'}.`, 'wms');
+            alert(`✅ Plating shipment ${shipId} created — ${lines.length} line${lines.length === 1 ? '' : 's'} / ${pcs} pcs shipped, label spooled.` +
+                (nsPoId
+                    ? `\n\nNetSuite PO #${nsPoId} ("Weekly Plating Shipment" $${total.toFixed(2)}).`
+                    : `\n\n⚠️ NetSuite PO did NOT auto-post (this integration role can't set a PO's subsidiary). Create it manually: vendor Dayton Grey, item "Weekly Plating Shipment", $${total.toFixed(2)} — then it's identical.`));
+            writeLog(`Plating shipment ${shipId}: $${total.toFixed(2)}, ${lines.length} lines / ${pcs} pcs. NS PO ${nsPoId || 'MANUAL (auto-post blocked)'}.`, 'wms');
             setShipCosts({}); setShowShipModal(false);
             pullNetSuiteStock();
         } catch (e) {
-            console.error("Plating shipment push failed:", e);
-            alert("❌ NetSuite rejected the plating PO:\n\n" + (e.message || e) + `\n\n(subsidiary ${nsConfig.subsidiary} header + location ${nsConfig.location} on the line — same shape as the working inventory adjustment). If it still names a field, paste it.`);
+            console.error("Plating shipment failed:", e);
+            alert("❌ Plating shipment failed:\n\n" + (e.message || e));
         } finally {
             setIsSyncing(false);
         }
