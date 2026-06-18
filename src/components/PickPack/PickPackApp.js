@@ -675,24 +675,26 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
         }
     };
 
-    // Spool a pallet/shipment label for the weekly plating shipment (ship id + vendor + pcs + total + barcode).
-    const printShipmentLabel = ({ shipId, vendor, pcs, lineCount, total }) => {
+    // Spool a pallet/shipment label for the weekly plating shipment (ship id + vendor + finish + pcs + total + barcode).
+    const printShipmentLabel = ({ shipId, vendor, pcs, lineCount, total, finishes }) => {
+        const fin = (finishes || '').toUpperCase();
         const zpl = `^XA
 ^PW812
 ^CI28
-^FO40,40^A0N,54,54^FDPLATING SHIPMENT^FS
-^FO40,110^A0N,34,34^FD${vendor}^FS
-^FO40,160^A0N,30,30^FDShip ID: ${shipId}^FS
-^FO40,205^A0N,30,30^FDLines: ${lineCount}    Pcs: ${pcs}^FS
-^FO40,250^A0N,30,30^FDPlating $: ${total.toFixed(2)}^FS
-^FO40,310^BY3,2,120^BCN,120,Y,N,N^FD${shipId}^FS
+^FO40,36^A0N,50,50^FDPLATING SHIPMENT^FS
+^FO40,98^A0N,34,34^FD${vendor}^FS
+${fin ? `^FO40,144^A0N,32,32^FDFinish: ${fin}^FS` : ''}
+^FO40,188^A0N,28,28^FDShip ID: ${shipId}^FS
+^FO40,228^A0N,28,28^FDLines: ${lineCount}    Pcs: ${pcs}    Plating $: ${total.toFixed(2)}^FS
+^FO40,288^BY3,2,110^BCN,110,Y,N,N^FD${shipId}^FS
 ^XZ`;
         emitLabel(zpl, {
             title: 'Plating Shipment', widthIn: 4, heightIn: 2,
             html: `<div class="hdr">PLATING SHIPMENT</div>
 <div class="big">${esc(vendor)}</div>
+${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 <div class="line">Ship ID: ${esc(shipId)}</div>
-<div class="line"><b>Lines:</b> ${esc(lineCount)}&nbsp;&nbsp;&nbsp;<b>Pcs:</b> ${esc(pcs)}&nbsp;&nbsp;&nbsp;<b>$:</b> ${esc(Number(total).toFixed(2))}</div>
+<div class="line"><b>Lines:</b> ${esc(lineCount)}&nbsp;&nbsp;<b>Pcs:</b> ${esc(pcs)}&nbsp;&nbsp;<b>$:</b> ${esc(Number(total).toFixed(2))}</div>
 <div class="bc">${code128BSvg(shipId)}<div class="bctxt">${esc(shipId)}</div></div>`
         });
     };
@@ -711,6 +713,13 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
         const total = lines.reduce((s, l) => s + rateOf(l) * (parseInt(l.qty) || 0), 0);
         const pcs = lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0);
         const shipId = `PLT-${activeBrand.toUpperCase()}-${Date.now()}`;
+        // Vendor = the plater carried on each line from its finish (vendorCrmId "VEND-{id}" → nsVendorId). A weekly
+        // shipment is per-vendor; if lines mix vendors, ship them separately so each gets its own PO.
+        const vendorIds = [...new Set(lines.map(l => l.nsVendorId).filter(Boolean))];
+        if (vendorIds.length > 1) return alert(`These staged lines have different plating vendors (${vendorIds.join(', ')}). Ship one vendor at a time so each gets its own PO.`);
+        const nsVendorId = vendorIds[0] || "42036"; // resolved plater internal id, else default Dayton Grey
+        const vendorName = lines.find(l => l.vendorName)?.vendorName || "Dayton Grey";
+        const finishSummary = [...new Set(lines.map(l => l.finishCode).filter(Boolean))].join(', ');
         try {
             setIsSyncing(true);
             // 1) NetSuite PO to the plater — ALL-OR-NOTHING. If the PO doesn't post we throw and abort BEFORE
@@ -724,19 +733,20 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
             // CPQ push) so the PO itself shows what's on the pallet — item, qty, finish/WO — without separate item lines.
             const lineDetail = lines.map(l => {
                 const wo = l.woNum ? ` · WO# ${l.woNum}` : '';
-                const ref = l.erpId ? ` [${l.erpId}]` : '';
-                return `• ${l.itemName || 'Item'}${ref} — qty ${parseInt(l.qty) || 0}${wo}`;
+                const tgt = l.targetErpId ? ` → ${l.targetErpId}` : '';
+                const finx = l.finishCode ? ` · FINISH ${l.finishCode}` : '';
+                return `• ${l.itemName || 'Item'} [${l.erpId || ''}${tgt}]${finx} — qty ${parseInt(l.qty) || 0}${wo}`;
             }).join('\n');
-            const lineDescription = `Weekly Plating Shipment (${shipId}) — ${lines.length} item${lines.length === 1 ? '' : 's'}, ${pcs} pcs:\n${lineDetail}`;
+            const lineDescription = `Weekly Plating Shipment (${shipId})${finishSummary ? ` — finish ${finishSummary}` : ''} — ${lines.length} item${lines.length === 1 ? '' : 's'}, ${pcs} pcs:\n${lineDetail}`;
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
                 method: 'POST',
                 payload: {
                     customForm: { id: "272" }, // "LG - Purchase Order Form" (matches the working manual PO)
-                    entity: { id: "42036" }, // Dayton Grey vendor INTERNAL id (NOT 83361 — that's the vendor#/entityid)
-                    // subsidiary intentionally OMITTED — it derives from the (now-resolving) vendor 42036, which is sub 2 (CE).
+                    entity: { id: nsVendorId }, // plater INTERNAL id from the finish's NS-synced vendor (NOT the entityid/vendor#); default 42036 (Dayton Grey)
+                    // subsidiary intentionally OMITTED — it derives from the (now-resolving) vendor, which is sub 2 (CE).
                     location: { id: nsConfig.location }, // High Point - CE = 17 (subsidiary 2)
-                    memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
+                    memo: `Weekly Plating Shipment ${shipId}${finishSummary ? ` (${finishSummary})` : ''} — ${lines.length} items, ${pcs} pcs`,
                     item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), description: lineDescription }] }
                 }
             };
@@ -771,9 +781,9 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
 
             // 2) Detailed app-side PO for the plater (only reached after the NS PO succeeded).
             await addDoc(collection(db, "hq_purchase_orders"), {
-                poId: shipId, brand: activeBrand, vendor: "Dayton Grey", status: "Sent to Plater", kind: "plating",
+                poId: shipId, brand: activeBrand, vendor: vendorName, nsVendorId, status: "Sent to Plater", kind: "plating",
                 nsPoId, nsPoTran, shipmentId: shipId,
-                items: lines.map(l => ({ itemId: l.erpId, description: l.itemName, quantity: parseInt(l.qty) || 0, rate: rateOf(l), woNum: l.woNum || '', platingBin: l.platingBin })),
+                items: lines.map(l => ({ itemId: l.erpId, description: l.itemName, finishCode: l.finishCode || '', targetErpId: l.targetErpId || '', quantity: parseInt(l.qty) || 0, rate: rateOf(l), woNum: l.woNum || '', platingBin: l.platingBin })),
                 total: Number(total.toFixed(2)), pcs, createdBy: operator?.name || 'Unknown', createdAt: serverTimestamp()
             }).catch(err => console.warn("app PO log failed", err));
 
@@ -783,7 +793,7 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
             }).catch(() => {})));
 
             // 4) Pallet/shipment label.
-            printShipmentLabel({ shipId, vendor: "Dayton Grey", pcs, lineCount: lines.length, total });
+            printShipmentLabel({ shipId, vendor: vendorName, pcs, lineCount: lines.length, total, finishes: finishSummary });
 
             alert(`✅ Plating shipment ${shipId} created — NetSuite ${nsPoLabel} ("Weekly Plating Shipment" $${total.toFixed(2)}), ${lines.length} line${lines.length === 1 ? '' : 's'} / ${pcs} pcs shipped, label spooled.`);
             writeLog(`Plating shipment ${shipId}: NS PO ${nsPoLabel}, $${total.toFixed(2)}, ${lines.length} lines / ${pcs} pcs.`, 'wms');
