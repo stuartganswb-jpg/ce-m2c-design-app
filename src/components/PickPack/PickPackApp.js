@@ -150,6 +150,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [platingWO, setPlatingWO] = useState(""); // work order # (from HQ RTG) — printed on the plating label
     const [platingStaged, setPlatingStaged] = useState([]); // open (staged) plating-shipment lines
     const [platingShipped, setPlatingShipped] = useState([]); // lines shipped to the plater, awaiting receive/build-back
+    const [platingReceived, setPlatingReceived] = useState([]); // lines received back from the plater, awaiting build-back (Phase 4b)
     const [platingFinish, setPlatingFinish] = useState(""); // selected outsource finish doc id — the plated finish to apply (drives the target assembly erpId/CODE)
     const [outsourceFinishes, setOutsourceFinishes] = useState([]); // hq_outsource_finishes (EP1, EP2…) — finish code + NS-synced vendor
     const [showShipModal, setShowShipModal] = useState(false);
@@ -177,6 +178,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             const all = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => s.brandId === activeBrand);
             setPlatingStaged(all.filter(s => s.status === 'staged'));
             setPlatingShipped(all.filter(s => s.status === 'shipped'));
+            setPlatingReceived(all.filter(s => s.status === 'received'));
         });
 
         // Outsourced finishes (EP1, EP2…) — the plating finish the operator assigns at pull time. The `code`
@@ -858,6 +860,75 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         } catch (e) {
             console.error("Plating shipment reset failed:", e);
             alert("Couldn't reset the shipment: " + (e.message || e));
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
+    // --- PHASE 4b: BUILD BACK THE PLATED PART (received raw → finished plated assembly) ---
+    // Two NetSuite writes: (1) reverse the Phase-2 status move so the returned raw is available again
+    // (WIP-Plating(13)@platingBin → Good(1)@fromBin), then (2) assembly-build the plated finished good
+    // (targetErpId = erpId/finishCode, e.g. H1-138EC/EP1), which auto-consumes the raw from its BOM.
+    // The reversal is guarded by `wipReversed` so a retry after a failed build can't double-reverse.
+    const pushPlatingBuildBack = async (line) => {
+        if (!line) return;
+        const qty = parseInt(line.qty) || 0;
+        if (qty <= 0) return alert("This line has no quantity to build.");
+        const target = line.targetErpId || (line.finishCode ? `${line.erpId}/${String(line.finishCode).toUpperCase()}` : '');
+        if (!target) return alert("This line has no plated finish/target assembly — it predates finish assignment. Reset & re-pull it with a finish.");
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+        if (!window.confirm(`Build back ${qty} × ${target}?\n\nReturns the plated raw ${line.erpId} to Good (from WIP-Plating) and builds the finished assembly, consuming the raw.`)) return;
+        try {
+            setIsSyncing(true);
+            const goodId = "1", wipId = "13";
+            // 1) Reverse the status move (guarded) — WIP-Plating@platingBin back to Good@fromBin.
+            if (!line.wipReversed) {
+                const revPayload = {
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
+                    method: 'POST',
+                    payload: {
+                        account: { id: "254" },
+                        subsidiary: { id: nsConfig.subsidiary },
+                        memo: `Plating return → Good (${line.finishCode || ''}) ${line.erpId}`,
+                        inventory: { items: [
+                            { item: { id: line.netSuiteInternalId }, location: { id: nsConfig.location }, adjustQtyBy: -qty,
+                              inventoryDetail: { quantity: -qty, inventoryAssignment: { items: [{ binNumber: { refName: line.platingBin }, inventoryStatus: { id: wipId }, quantity: -qty }] } } },
+                            { item: { id: line.netSuiteInternalId }, location: { id: nsConfig.location }, adjustQtyBy: qty,
+                              inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: line.fromBin }, inventoryStatus: { id: goodId }, quantity: qty }] } } }
+                        ] }
+                    }
+                };
+                const rr = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(revPayload) });
+                const rb = await rr.json().catch(() => ({}));
+                if (!rr.ok) throw new Error("Status reversal (WIP-Plating → Good) failed: " + (typeof rb === 'object' ? JSON.stringify(rb) : String(rb)));
+                await updateDoc(doc(db, "plating_shipments", line.id), { wipReversed: true }).catch(() => {});
+            }
+            // 2) Build the plated assembly (auto-consumes the now-Good raw from its BOM).
+            const assembly = await resolveItemDetail(target);
+            if (!assembly) throw new Error(`Couldn't find ${target} in NetSuite by item id. Confirm the plated assembly exists with ${line.erpId} as a BOM component.`);
+            if (assembly.type && !/assembl/i.test(assembly.type)) throw new Error(`${target} is type "${assembly.type}" in NetSuite, not an Assembly. It needs to be an Assembly/BOM with ${line.erpId} as a component.`);
+            const buildPayload = {
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
+                method: 'POST',
+                payload: {
+                    item: { id: assembly.id },
+                    subsidiary: { id: nsConfig.subsidiary },
+                    quantity: qty,
+                    location: { id: nsConfig.location },
+                    memo: `Plating build-back ${target} (${line.finishCode || ''})${line.shipmentId ? ` — shipment ${line.shipmentId}` : ''}`
+                }
+            };
+            const br = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildPayload) });
+            const bb = await br.json().catch(() => ({}));
+            if (!br.ok) throw new Error("Assembly build failed: " + (typeof bb === 'object' ? JSON.stringify(bb) : String(bb)));
+            await updateDoc(doc(db, "plating_shipments", line.id), { status: 'built', builtAt: serverTimestamp(), builtAssemblyId: bb.id ? String(bb.id) : null }).catch(() => {});
+            alert(`✅ Built back ${qty} × ${target} — plated raw returned to Good and consumed into the finished assembly.`);
+            writeLog(`Plating build-back: ${qty} ${target} (raw ${line.erpId}) built; WIP-Plating → Good reversed.`, 'wms');
+            pullNetSuiteStock();
+        } catch (e) {
+            console.error("Plating build-back failed:", e);
+            alert("❌ Build-back problem:\n\n" + (e.message || e) + "\n\nThe WIP→Good reversal is guarded, so retrying won't double-reverse. If the build says \"configure the inventory detail\", the plated assembly is lot-numbered (like the phosphate /P) and needs a lot # — tell me and I'll add a lot field.");
         } finally {
             setIsSyncing(false);
         }
@@ -1674,6 +1745,38 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             <span>{l.qty} @ {l.platingBin}</span>
                                                         </div>
                                                     ))}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
+                        {/* RETURNED FROM PLATER — BUILD BACK (Phase 4b) */}
+                        {platingReceived.length > 0 && (() => {
+                            const groups = Object.values(platingReceived.reduce((a, l) => { (a[l.shipmentId || l.id] = a[l.shipmentId || l.id] || { shipmentId: l.shipmentId || l.id, lines: [] }).lines.push(l); return a; }, {}));
+                            return (
+                                <div style={{ background: '#fff', border: `1px solid #7d9a6f`, padding: '20px' }}>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>Returned — ready to build back · {platingReceived.length} line{platingReceived.length === 1 ? '' : 's'}</div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                        {groups.map(g => (
+                                            <div key={g.shipmentId} style={{ border: `1px solid ${theme.line}`, padding: '14px' }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink, marginBottom: '8px' }}>{g.shipmentId} · {g.lines.length} line{g.lines.length === 1 ? '' : 's'}</div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                    {g.lines.map(l => {
+                                                        const tgt = l.targetErpId || (l.finishCode ? `${l.erpId}/${String(l.finishCode).toUpperCase()}` : '');
+                                                        return (
+                                                            <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderTop: `1px solid ${theme.line}`, paddingTop: '8px' }}>
+                                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
+                                                                    {l.erpId} → <span style={{ color: theme.brass }}>{tgt || '— no finish on line'}</span> · {l.qty} pcs{l.wipReversed ? ' · ✓ back in Good' : ''}
+                                                                </div>
+                                                                <button onClick={() => pushPlatingBuildBack(l)} disabled={isSyncing || !tgt} style={{ padding: '10px 16px', background: !tgt ? theme.paper2 : '#5e7d54', color: !tgt ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : (!tgt ? 'not-allowed' : 'pointer'), fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                                                                    {isSyncing ? '…' : (tgt ? `Build ${tgt}` : 'No finish')}
+                                                                </button>
+                                                            </div>
+                                                        );
+                                                    })}
                                                 </div>
                                             </div>
                                         ))}
