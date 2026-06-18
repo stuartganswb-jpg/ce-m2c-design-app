@@ -169,7 +169,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const [editingGlobalFinish, setEditingGlobalFinish] = useState(null);
     const [editingOutsourceFinish, setEditingOutsourceFinish] = useState(null);
     const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '', clientMapping: [] });
-    const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] });
+    const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', vendorCrmId: '', textureUrl: '', clientMapping: [] });
     const [newFinishClientMapping, setNewFinishClientMapping] = useState({ customerId: '', clientFinishName: '' });
     
     const [finishUploadProgress, setFinishUploadProgress] = useState(0);
@@ -858,11 +858,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             description: newOutsourceFinishConfig.description || "",
             multiplier: parseFloat(newOutsourceFinishConfig.multiplier) || 1.0,
             vendor: newOutsourceFinishConfig.vendor || "",
+            vendorCrmId: newOutsourceFinishConfig.vendorCrmId || "", // External Coop NS-synced vendor id ("VEND-{nsInternalId}") — keeps the plating PO linked to the real NetSuite vendor
             textureUrl: newOutsourceFinishConfig.textureUrl || "",
             clientMapping: newOutsourceFinishConfig.clientMapping || []
         }, { merge: true });
 
-        setNewOutsourceFinishConfig({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: [] });
+        setNewOutsourceFinishConfig({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', vendorCrmId: '', textureUrl: '', clientMapping: [] });
         setShowOutsourceFinishForm(false);
         setEditingOutsourceFinish(null);
     };
@@ -874,6 +875,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             description: finish.description || '',
             multiplier: finish.multiplier || 1.0,
             vendor: finish.vendor || '',
+            vendorCrmId: finish.vendorCrmId || '',
             textureUrl: finish.textureUrl || '',
             clientMapping: finish.clientMapping || []
         });
@@ -1437,7 +1439,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <div style={{ background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                                 <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
                                     <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Outsourced Master Finishes</span>
-                                    <button onClick={() => { setShowOutsourceFinishForm(!showOutsourceFinishForm); setEditingOutsourceFinish(null); setNewOutsourceFinishConfig({name: '', code: '', description: '', multiplier: 1.0, vendor: '', textureUrl: '', clientMapping: []}); }} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showOutsourceFinishForm && !editingOutsourceFinish ? 'Close' : 'Add Finish'}</button>
+                                    <button onClick={() => { setShowOutsourceFinishForm(!showOutsourceFinishForm); setEditingOutsourceFinish(null); setNewOutsourceFinishConfig({name: '', code: '', description: '', multiplier: 1.0, vendor: '', vendorCrmId: '', textureUrl: '', clientMapping: []}); }} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showOutsourceFinishForm && !editingOutsourceFinish ? 'Close' : 'Add Finish'}</button>
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                                     {showOutsourceFinishForm && (
@@ -1448,7 +1450,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                             <div><label style={labelStyle}>Finish ID / Code</label><input value={newOutsourceFinishConfig.code} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, code: e.target.value})} placeholder="e.g. EP1" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
                                             <div><label style={labelStyle}>Descriptive Name</label><input value={newOutsourceFinishConfig.name} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, name: e.target.value})} placeholder="e.g. Espresso Patina" style={fieldStyle} /></div>
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                                <div><label style={labelStyle}>Approved Vendor</label><select value={newOutsourceFinishConfig.vendor} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, vendor: e.target.value})} style={fieldStyle}><option value="">Select...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
+                                                <div><label style={labelStyle}>Approved Vendor (NetSuite-synced)</label><select value={newOutsourceFinishConfig.vendorCrmId || ''} onChange={(e) => { const v = liveVendors.find(x => x.id === e.target.value); setNewOutsourceFinishConfig({...newOutsourceFinishConfig, vendorCrmId: e.target.value, vendor: v ? (v.name || '') : ''}); }} style={fieldStyle}><option value="">Select NetSuite vendor…</option>{liveVendors.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></div>
                                                 <div><label style={labelStyle}>Price Multiplier (x)</label><input type="number" step="0.1" value={newOutsourceFinishConfig.multiplier} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, multiplier: e.target.value})} style={fieldStyle} /></div>
                                             </div>
                                             
@@ -1497,7 +1499,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                     <div>
                                                         <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.code || finish.name}</div>
                                                         {finish.code && finish.name && <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: theme.inkSoft, marginTop: '2px' }}>{finish.name}</div>}
-                                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Vendor: <span style={{color: theme.ink}}>{finish.vendor || 'Unassigned'}</span> | Mult: <span style={{color: theme.ink}}>x{finish.multiplier}</span></div>
+                                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Vendor: <span style={{color: theme.ink}}>{finish.vendor || 'Unassigned'}</span> {finish.vendorCrmId ? <span style={{ color: '#7d9a6f' }}>✓ NS</span> : (finish.vendor ? <span style={{ color: '#c08a3e' }} title="Re-pick the vendor to link it to NetSuite">⚠ relink</span> : null)} | Mult: <span style={{color: theme.ink}}>x{finish.multiplier}</span></div>
                                                         {finish.clientMapping && finish.clientMapping.length > 0 && (
                                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink, marginTop: '4px' }}>{finish.clientMapping.length} Client Map(s) Active</div>
                                                         )}
