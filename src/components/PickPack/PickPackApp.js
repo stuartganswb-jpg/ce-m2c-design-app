@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, auth, functions } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc, getDoc, addDoc, serverTimestamp } from "firebase/firestore";
+import { collection, onSnapshot, doc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp } from "firebase/firestore";
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import SharedMessaging from '../Shared/SharedMessaging';
@@ -601,38 +601,31 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
         const shipId = `PLT-${activeBrand.toUpperCase()}-${Date.now()}`;
         try {
             setIsSyncing(true);
-            // 1) NetSuite PO to the plater — NON-FATAL. A PO via this integration role won't accept a set
-            // subsidiary (CE/2 is rejected on a PO though it works on inventory adjustments) and derives the wrong
-            // one when omitted. So if the PO fails we STILL record the shipment, ship the lines, and print — the
-            // operator creates the NS PO manually until the integration role's PO/subsidiary prefs are fixed.
-            let nsPoId = null, poError = null;
-            try {
-                const payload = {
-                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
-                    method: 'POST',
-                    payload: {
-                        customForm: { id: "272" }, // "LG - Purchase Order Form" — the form your manual POs use; the default form was mishandling subsidiary
-                        entity: { id: "83361" }, // Dayton Grey vendor
-                        location: { id: nsConfig.location }, // header location (High Point - CE); subsidiary derives from the form/location (like the manual PO)
-                        memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
-                        item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] }
-                    }
-                };
-                const response = await fetch(FIREBASE_FUNCTION_URL, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-                });
-                const result = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
-                nsPoId = result.id ? String(result.id) : null;
-            } catch (pe) {
-                poError = (pe && pe.message) ? pe.message : String(pe);
-                console.warn("Plating PO push failed (non-fatal — shipment still recorded):", pe);
-            }
+            // 1) NetSuite PO to the plater — ALL-OR-NOTHING. If the PO doesn't post we throw and abort BEFORE
+            // creating the shipment, so there are never orphaned shipments without a PO. Uses the LG PO form (272),
+            // which makes the subsidiary derive correctly (the default form mishandled it).
+            const payload = {
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
+                method: 'POST',
+                payload: {
+                    customForm: { id: "272" }, // "LG - Purchase Order Form"
+                    entity: { id: "83361" }, // Dayton Grey vendor
+                    location: { id: nsConfig.location }, // header location; subsidiary derives from the form
+                    memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
+                    item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] }
+                }
+            };
+            const response = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
+            const nsPoId = result.id ? String(result.id) : null;
 
-            // 2) Detailed app-side PO for the plater.
+            // 2) Detailed app-side PO for the plater (only reached after the NS PO succeeded).
             await addDoc(collection(db, "hq_purchase_orders"), {
                 poId: shipId, brand: activeBrand, vendor: "Dayton Grey", status: "Sent to Plater", kind: "plating",
-                nsPoId, nsPoError: poError, shipmentId: shipId,
+                nsPoId, shipmentId: shipId,
                 items: lines.map(l => ({ itemId: l.erpId, description: l.itemName, quantity: parseInt(l.qty) || 0, rate: rateOf(l), woNum: l.woNum || '', platingBin: l.platingBin })),
                 total: Number(total.toFixed(2)), pcs, createdBy: operator?.name || 'Unknown', createdAt: serverTimestamp()
             }).catch(err => console.warn("app PO log failed", err));
@@ -645,16 +638,13 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
             // 4) Pallet/shipment label.
             printShipmentLabel({ shipId, vendor: "Dayton Grey", pcs, lineCount: lines.length, total });
 
-            alert(`✅ Plating shipment ${shipId} created — ${lines.length} line${lines.length === 1 ? '' : 's'} / ${pcs} pcs shipped, label spooled.` +
-                (nsPoId
-                    ? `\n\nNetSuite PO #${nsPoId} ("Weekly Plating Shipment" $${total.toFixed(2)}).`
-                    : `\n\n⚠️ NetSuite PO did NOT auto-post (this integration role can't set a PO's subsidiary). Create it manually: vendor Dayton Grey, item "Weekly Plating Shipment", $${total.toFixed(2)} — then it's identical.`));
-            writeLog(`Plating shipment ${shipId}: $${total.toFixed(2)}, ${lines.length} lines / ${pcs} pcs. NS PO ${nsPoId || 'MANUAL (auto-post blocked)'}.`, 'wms');
+            alert(`✅ Plating shipment ${shipId} created — NetSuite PO #${nsPoId} ("Weekly Plating Shipment" $${total.toFixed(2)}), ${lines.length} line${lines.length === 1 ? '' : 's'} / ${pcs} pcs shipped, label spooled.`);
+            writeLog(`Plating shipment ${shipId}: NS PO ${nsPoId}, $${total.toFixed(2)}, ${lines.length} lines / ${pcs} pcs.`, 'wms');
             setShipCosts({}); setShowShipModal(false);
             pullNetSuiteStock();
         } catch (e) {
-            console.error("Plating shipment failed:", e);
-            alert("❌ Plating shipment failed:\n\n" + (e.message || e));
+            console.error("Plating shipment push failed:", e);
+            alert("❌ NetSuite rejected the plating PO — shipment NOT created, nothing changed (fix + retry):\n\n" + (e.message || e));
         } finally {
             setIsSyncing(false);
         }
@@ -689,6 +679,28 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
         } catch (e) {
             console.error("Plating receive (item receipt) failed:", e);
             alert("❌ NetSuite rejected the item receipt:\n\n" + (e.message || e) + "\n\nFirst item receipt we've posted (PO→receipt transform) — if it names a path/field, paste it and I'll correct it (may need createdFrom instead of the transform URL).");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
+    // Re-stage a stuck/erroneous plating shipment: lines go back to 'staged' (reappear in the staged box, ready
+    // to re-ship) + remove the orphaned app PO doc. Does NOT touch the WIP-Plating inventory (that move stays).
+    const resetPlatingShipment = async (shipmentId, lineIds) => {
+        if (!shipmentId) return;
+        if (!window.confirm(`Reset shipment ${shipmentId}? Its line(s) go back to "staged" so you can re-ship. (The WIP-Plating inventory move stays as-is.)`)) return;
+        try {
+            setIsSyncing(true);
+            await Promise.all((lineIds || []).map(id => updateDoc(doc(db, "plating_shipments", id), {
+                status: 'staged', shipmentId: null, nsPoId: null, platingRate: null, shippedAt: null
+            }).catch(() => {})));
+            const poSnap = await getDocs(query(collection(db, "hq_purchase_orders"), where("poId", "==", shipmentId)));
+            await Promise.all(poSnap.docs.map(d => deleteDoc(d.ref).catch(() => {})));
+            alert(`✅ Shipment ${shipmentId} reset — its line(s) are back in "staged". Re-run Ship Pallet to test the PO.`);
+            writeLog(`Plating shipment ${shipmentId} reset to staged.`, 'wms');
+        } catch (e) {
+            console.error("Plating shipment reset failed:", e);
+            alert("Couldn't reset the shipment: " + (e.message || e));
         } finally {
             setIsSyncing(false);
         }
@@ -1482,7 +1494,10 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                                             <div key={g.shipmentId} style={{ border: `1px solid ${theme.line}`, padding: '14px' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', gap: '12px' }}>
                                                     <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>{g.shipmentId} · {g.lines.length} line{g.lines.length === 1 ? '' : 's'} · {g.lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)} pcs · NS PO {g.nsPoId || '—'}</div>
-                                                    <button onClick={() => pushPlatingReceive(g.shipmentId, g.nsPoId, g.lines.map(l => l.id))} disabled={isSyncing} style={{ padding: '10px 16px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Receive PO → Item Receipt</button>
+                                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                                        <button onClick={() => resetPlatingShipment(g.shipmentId, g.lines.map(l => l.id))} disabled={isSyncing} style={{ padding: '10px 12px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Reset</button>
+                                                        <button onClick={() => pushPlatingReceive(g.shipmentId, g.nsPoId, g.lines.map(l => l.id))} disabled={isSyncing} style={{ padding: '10px 16px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Receive PO → Item Receipt</button>
+                                                    </div>
                                                 </div>
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                                     {g.lines.map(l => (
