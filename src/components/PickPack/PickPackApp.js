@@ -21,6 +21,80 @@ const BRAND_NETSUITE_MAP = {
     'leyla': { subsidiary: "5", location: "18" }
 };
 
+// --- LABEL PRINTING (device-aware) -------------------------------------------------------------
+// PCs print 2x4 labels in LANDSCAPE via the browser print dialog, honoring whatever printer settings
+// the PC already has. Tablets ZPL-autoprint (wired up later — currently logs the ZPL). A station can
+// pin its mode with localStorage 'labelPrintMode' = 'pc' | 'tablet' if auto-detection guesses wrong.
+const detectPrintMode = () => {
+    try { const o = (localStorage.getItem('labelPrintMode') || '').toLowerCase(); if (o === 'pc' || o === 'tablet') return o; } catch (e) { /* localStorage unavailable */ }
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    const touch = ((typeof navigator !== 'undefined' && navigator.maxTouchPoints) || 0) > 1;
+    const iPad = /iPad/.test(ua) || (/Macintosh/.test(ua) && touch); // iPadOS 13+ reports as a Mac
+    const androidTablet = /Android/.test(ua) && !/Mobile/.test(ua);
+    const otherTablet = /Tablet|PlayBook|Silk|Kindle|Nexus (7|9|10)/.test(ua);
+    return (iPad || androidTablet || otherTablet) ? 'tablet' : 'pc';
+};
+
+const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Minimal Code 128-B → SVG barcode (no external lib) so PC-printed labels stay scannable like the ZPL ones.
+const CODE128B = ("212222 222122 222221 121223 121322 131222 122213 122312 132212 221213 221312 231212 112232 122132 122231 113222 123122 123221 223211 221132 221231 213212 223112 312131 311222 321122 321221 312212 322112 322211 212123 212321 232121 111323 131123 131321 112313 132113 132311 211313 231113 231311 112133 112331 132131 113123 113321 133121 313121 211331 231131 213113 213311 213131 311123 311321 331121 312113 312311 332111 314111 221411 431111 111224 111422 121124 121421 141122 141221 112214 112412 122114 122411 142112 142211 241211 221114 413111 241112 134111 111242 121142 121241 114212 124112 124211 411212 421112 421211 212141 214121 412121 111143 111341 131141 114113 114311 411113 411311 113141 114131 311141 411131 211412 211214 211232 2331112").split(' ');
+const code128BSvg = (text) => {
+    const s = String(text || '');
+    const vals = [];
+    for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c >= 32 && c <= 126) vals.push(c - 32); }
+    if (!vals.length) return '';
+    const codes = [104, ...vals];           // Start B
+    let sum = 104; vals.forEach((v, i) => { sum += v * (i + 1); });
+    codes.push(sum % 103, 106);             // checksum, Stop
+    const widths = codes.map(c => CODE128B[c]).join('');
+    const H = 10; let x = 0, rects = '';
+    for (let i = 0; i < widths.length; i++) { const w = parseInt(widths[i], 10); if (i % 2 === 0) rects += `<rect x="${x}" y="0" width="${w}" height="${H}"/>`; x += w; }
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${x} ${H}" preserveAspectRatio="none" fill="#000">${rects}</svg>`;
+};
+
+// Render a label as a sized HTML page and send it to the browser print dialog. Uses a hidden iframe so
+// it isn't blocked by pop-up blockers and prints only the label (its own @page size drives the paper).
+const printHtmlLabel = ({ widthIn = 4, heightIn = 2, title = 'Label', html = '' }) => {
+    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>
+@page{size:${widthIn}in ${heightIn}in;margin:0;}
+html,body{margin:0;padding:0;}
+.label{width:${widthIn}in;height:${heightIn}in;box-sizing:border-box;padding:0.1in 0.15in;font-family:Arial,Helvetica,sans-serif;color:#000;display:flex;flex-direction:column;overflow:hidden;}
+.hdr{font-size:15pt;font-weight:800;letter-spacing:.4px;line-height:1.05;margin-bottom:1pt;}
+.big{font-size:14pt;font-weight:800;line-height:1.1;}
+.line{font-size:10.5pt;font-weight:600;line-height:1.22;}
+.line b{font-weight:800;}
+.bc{margin-top:auto;}
+.bc svg{width:100%;height:0.42in;display:block;}
+.bctxt{font-size:8pt;text-align:center;letter-spacing:2px;margin-top:1pt;}
+</style></head><body><div class="label">${html}</div></body></html>`;
+    try {
+        const iframe = document.createElement('iframe');
+        iframe.setAttribute('aria-hidden', 'true');
+        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+        document.body.appendChild(iframe);
+        const cw = iframe.contentWindow;
+        cw.document.open(); cw.document.write(doc); cw.document.close();
+        const cleanup = () => { try { if (iframe.parentNode) document.body.removeChild(iframe); } catch (e) { /* already gone */ } };
+        cw.onafterprint = cleanup;
+        setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { console.warn('Label print failed:', e); } }, 250);
+        setTimeout(cleanup, 60000); // fallback if onafterprint never fires
+        return true;
+    } catch (e) { console.warn('printHtmlLabel error:', e); return false; }
+};
+
+// Route a label to the right device. Returns the mode used.
+const emitLabel = (zpl, htmlSpec) => {
+    const mode = detectPrintMode();
+    if (mode === 'tablet') {
+        // TODO: real ZPL autoprint (Zebra BrowserPrint SDK / local print bridge). Stub until set up.
+        console.log("[label] tablet ZPL (autoprint pending):", zpl);
+    } else {
+        printHtmlLabel(htmlSpec); // PC: browser print dialog, landscape 2x4, PC's own printer settings
+    }
+    return mode;
+};
+
 // Bin / ERP-id helpers (raw items carry binLocation top-level after mapping; library docs nest it under manufacturingSpecs).
 const binOf = (p) => (p?.binLocation || p?.manufacturingSpecs?.binLocation || 'UNASSIGNED');
 const erpOf = (p) => String(p?.legacyErpId || p?.itemId || '').toUpperCase();
@@ -487,7 +561,15 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 ^FO20,286^A0N,26,26^FDBin: ${platingBin}^FS
 ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
 ^XZ`;
-        console.log("Sending ZPL to Zebra Printer (2x4 plating label):", zpl);
+        emitLabel(zpl, {
+            title: 'Plating WIP', widthIn: 4, heightIn: 2,
+            html: `<div class="hdr">PLATING WIP</div>
+<div class="big">${esc(erpId)}</div>
+<div class="line">${esc(name)}</div>
+<div class="line"><b>Qty:</b> ${esc(qty)}&nbsp;&nbsp;&nbsp;<b>WO:</b> ${esc(wo || '—')}</div>
+<div class="line"><b>Bin:</b> ${esc(platingBin)}</div>
+${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></div>` : ''}`
+        });
     };
 
     // --- NETSUITE PLATING PULL (Phase 2: move raw stock into WIP-Plating status) ---
@@ -582,7 +664,14 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
 ^FO40,250^A0N,30,30^FDPlating $: ${total.toFixed(2)}^FS
 ^FO40,310^BY3,2,120^BCN,120,Y,N,N^FD${shipId}^FS
 ^XZ`;
-        console.log("Sending ZPL to Zebra Printer (plating shipment label):", zpl);
+        emitLabel(zpl, {
+            title: 'Plating Shipment', widthIn: 4, heightIn: 2,
+            html: `<div class="hdr">PLATING SHIPMENT</div>
+<div class="big">${esc(vendor)}</div>
+<div class="line">Ship ID: ${esc(shipId)}</div>
+<div class="line"><b>Lines:</b> ${esc(lineCount)}&nbsp;&nbsp;&nbsp;<b>Pcs:</b> ${esc(pcs)}&nbsp;&nbsp;&nbsp;<b>$:</b> ${esc(Number(total).toFixed(2))}</div>
+<div class="bc">${code128BSvg(shipId)}<div class="bctxt">${esc(shipId)}</div></div>`
+        });
     };
 
     // --- PHASE 3: SHIP THE WEEKLY PLATING PALLET ---
