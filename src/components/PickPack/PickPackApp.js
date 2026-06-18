@@ -75,6 +75,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [platingMemo, setPlatingMemo] = useState("");
     const [platingWO, setPlatingWO] = useState(""); // work order # (from HQ RTG) — printed on the plating label
     const [platingStaged, setPlatingStaged] = useState([]); // open (staged) plating-shipment lines
+    const [platingShipped, setPlatingShipped] = useState([]); // lines shipped to the plater, awaiting receive/build-back
     const [showShipModal, setShowShipModal] = useState(false);
     const [shipCosts, setShipCosts] = useState({}); // {plating_shipments docId: plating $/ea string}
 
@@ -97,7 +98,9 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         });
 
         const unsubPlating = onSnapshot(collection(db, "plating_shipments"), (snap) => {
-            setPlatingStaged(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => s.brandId === activeBrand && s.status === 'staged'));
+            const all = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => s.brandId === activeBrand);
+            setPlatingStaged(all.filter(s => s.status === 'staged'));
+            setPlatingShipped(all.filter(s => s.status === 'shipped'));
         });
 
         return () => { unsubParts(); unsubLists(); unsubPlating(); };
@@ -640,6 +643,40 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
         } catch (e) {
             console.error("Plating shipment push failed:", e);
             alert("❌ NetSuite rejected the plating PO:\n\n" + (e.message || e) + "\n\nFirst purchase order we've posted — if it names a field (entity / item / rate / subsidiary / location), paste it and I'll correct the REST shape.");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
+    // --- PHASE 4a: RECEIVE THE RETURNED PLATING PALLET (item receipt against the plater PO) ---
+    // Transforms the plater PO into an Item Receipt in NetSuite (receives the "Weekly Plating Shipment" service
+    // line → enables the vendor bill), then flips the shipment's lines to 'received' (ready for build-back).
+    const pushPlatingReceive = async (shipmentId, nsPoId, lineIds) => {
+        if (!shipmentId) return;
+        if (!nsPoId) return alert("This shipment has no NetSuite PO id on file — can't create the item receipt. (Was the PO created in Phase 3?)");
+        try {
+            setIsSyncing(true);
+            const payload = {
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder/${nsPoId}/!transform/itemreceipt`,
+                method: 'POST',
+                payload: { memo: `Plating return received — ${shipmentId}` }
+            };
+            const response = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
+            const receiptId = result.id ? String(result.id) : null;
+
+            await Promise.all((lineIds || []).map(id => updateDoc(doc(db, "plating_shipments", id), {
+                status: 'received', itemReceiptId: receiptId, receivedAt: serverTimestamp()
+            }).catch(() => {})));
+
+            alert(`✅ Plating shipment ${shipmentId} received in NetSuite${receiptId ? ` (item receipt #${receiptId})` : ''}. Lines are ready for build-back.`);
+            writeLog(`Plating receive: shipment ${shipmentId} → item receipt ${receiptId || 'n/a'} (PO ${nsPoId}).`, 'wms');
+        } catch (e) {
+            console.error("Plating receive (item receipt) failed:", e);
+            alert("❌ NetSuite rejected the item receipt:\n\n" + (e.message || e) + "\n\nFirst item receipt we've posted (PO→receipt transform) — if it names a path/field, paste it and I'll correct it (may need createdFrom instead of the transform URL).");
         } finally {
             setIsSyncing(false);
         }
@@ -1421,6 +1458,34 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                                 <button onClick={() => setShowShipModal(true)} style={{ marginTop: '14px', padding: '12px 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Ship Pallet → Create Plater PO</button>
                             </div>
                         )}
+
+                        {/* RETURNED FROM PLATER — RECEIVE (Phase 4a) */}
+                        {platingShipped.length > 0 && (() => {
+                            const groups = Object.values(platingShipped.reduce((a, l) => { (a[l.shipmentId] = a[l.shipmentId] || { shipmentId: l.shipmentId, nsPoId: l.nsPoId, lines: [] }).lines.push(l); return a; }, {}));
+                            return (
+                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px' }}>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>Out at plater — {groups.length} shipment{groups.length === 1 ? '' : 's'} awaiting receive</div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                        {groups.map(g => (
+                                            <div key={g.shipmentId} style={{ border: `1px solid ${theme.line}`, padding: '14px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', gap: '12px' }}>
+                                                    <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>{g.shipmentId} · {g.lines.length} line{g.lines.length === 1 ? '' : 's'} · {g.lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)} pcs · NS PO {g.nsPoId || '—'}</div>
+                                                    <button onClick={() => pushPlatingReceive(g.shipmentId, g.nsPoId, g.lines.map(l => l.id))} disabled={isSyncing} style={{ padding: '10px 16px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Receive PO → Item Receipt</button>
+                                                </div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                    {g.lines.map(l => (
+                                                        <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>
+                                                            <span>{l.erpId} — {l.itemName}</span>
+                                                            <span>{l.qty} @ {l.platingBin}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            );
+                        })()}
 
                         {/* SHIP PALLET MODAL */}
                         {showShipModal && (
