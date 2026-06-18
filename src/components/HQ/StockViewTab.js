@@ -422,14 +422,19 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const rootErpId = erpId.replace(/\/(P|EP[1-6])$/i, '');
                 const rootPart = hqParts.find(p => (p.legacyErpId || p.itemId || '').toUpperCase() === rootErpId) || part;
 
-                const newWoId = `WO-${erpId}-${Date.now().toString().slice(-6)}`;
+                // Firestore doc ids can't contain "/" — finished variants carry it (e.g. H1-138BF/EP1). Sanitize
+                // it out of the DOC id; keep the true code on the record (woDisplayId / variantErpId) for display.
+                const stamp = Date.now().toString().slice(-6);
+                const safeErp = String(erpId).replace(/[^A-Za-z0-9]+/g, '-');
+                const newWoId = `WO-${safeErp}-${stamp}`;
                 await setDoc(doc(db, "hq_work_orders", newWoId), {
                     id: newWoId,
                     woId: newWoId,
+                    woDisplayId: `WO-${erpId}-${stamp}`,
                     brand: activeBrand,
                     status: "Approved",
                     customer: "Internal Stock",
-                    hqJobId: rootPart.id, 
+                    hqJobId: rootPart.id,
                     originalVariantId: part.id,
                     variantErpId: erpId,
                     totalParts: Number(qty),
