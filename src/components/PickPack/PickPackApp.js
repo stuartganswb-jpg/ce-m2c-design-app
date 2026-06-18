@@ -591,7 +591,8 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
         if (!lines.length) return alert("No staged plating lines to ship.");
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
-        const rateOf = (l) => parseFloat(shipCosts[l.id] || 0) || 0;
+        // plating $/ea defaults to the item's outsourced Base Cost (manufacturingSpecs.cost) unless overridden
+        const rateOf = (l) => { const v = shipCosts[l.id]; return v !== undefined ? (parseFloat(v) || 0) : (parseFloat(hqParts.find(p => p.id === l.itemId)?.manufacturingSpecs?.cost) || 0); };
         const total = lines.reduce((s, l) => s + rateOf(l) * (parseInt(l.qty) || 0), 0);
         const pcs = lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0);
         const shipId = `PLT-${activeBrand.toUpperCase()}-${Date.now()}`;
@@ -781,6 +782,10 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
     const platTo = (platingDestScan || '').trim();
     const platSrcKnown = !!platingBase && binOf(platingBase) !== 'UNASSIGNED' && platFrom.toUpperCase() === binOf(platingBase).toUpperCase();
     const platReady = !!platingBase && !!platingBase.netSuiteInternalId && platQtyNum > 0 && platQtyNum <= platingBase.onHand && platFrom !== '' && platTo !== '' && platFrom.toUpperCase() !== platTo.toUpperCase();
+
+    // Plating shipment cost helpers: $/ea defaults to the item's outsourced Base Cost (manufacturingSpecs.cost).
+    const platingBaseCost = (l) => parseFloat(hqParts.find(p => p.id === l.itemId)?.manufacturingSpecs?.cost) || 0;
+    const platingRateFor = (l) => { const v = shipCosts[l.id]; return v !== undefined ? (parseFloat(v) || 0) : platingBaseCost(l); };
 
     const safeUserRole = operator?.role ? operator.role.toLowerCase() : 'operator';
     const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
@@ -1423,7 +1428,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                                 <div style={{ background: '#fff', padding: '40px', width: '760px', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
                                     <h2 style={{ margin: '0 0 6px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>Ship Plating Pallet</h2>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '20px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
-                                        Vendor: Dayton Grey · NetSuite PO summary line "Weekly Plating Shipment" · enter plating $/ea
+                                        Vendor: Dayton Grey · NetSuite PO summary line "Weekly Plating Shipment" · $/ea defaults to each item's outsourced Base Cost
                                     </div>
                                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginBottom: '20px' }}>
                                         <thead style={{ borderBottom: `2px solid ${theme.ink}` }}>
@@ -1437,7 +1442,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                                         </thead>
                                         <tbody>
                                             {platingStaged.map(l => {
-                                                const rate = parseFloat(shipCosts[l.id] || 0) || 0;
+                                                const rate = platingRateFor(l);
                                                 const lineAmt = rate * (parseInt(l.qty) || 0);
                                                 return (
                                                     <tr key={l.id} style={{ borderBottom: `1px solid ${theme.line}` }}>
@@ -1445,7 +1450,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                                                         <td style={{ padding: '10px 8px', textAlign: 'center', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{l.woNum || '—'}</td>
                                                         <td style={{ padding: '10px 8px', textAlign: 'center', fontFamily: theme.mono }}>{l.qty}</td>
                                                         <td style={{ padding: '10px 8px', textAlign: 'center' }}>
-                                                            <input type="number" min="0" step="0.01" value={shipCosts[l.id] ?? ''} onChange={e => setShipCosts(prev => ({ ...prev, [l.id]: e.target.value }))} placeholder="0.00" style={{ width: '80px', padding: '8px', textAlign: 'center', fontFamily: theme.mono, border: `1px solid ${theme.line}`, outline: 'none' }} />
+                                                            <input type="number" min="0" step="0.01" value={shipCosts[l.id] !== undefined ? shipCosts[l.id] : (platingBaseCost(l) || '')} onChange={e => setShipCosts(prev => ({ ...prev, [l.id]: e.target.value }))} placeholder="0.00" style={{ width: '80px', padding: '8px', textAlign: 'center', fontFamily: theme.mono, border: `1px solid ${theme.line}`, outline: 'none' }} />
                                                         </td>
                                                         <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: theme.mono, color: theme.ink }}>${lineAmt.toFixed(2)}</td>
                                                     </tr>
@@ -1455,7 +1460,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                                     </table>
                                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '30px', alignItems: 'center', marginBottom: '24px' }}>
                                         <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>Total plating cost</span>
-                                        <span style={{ fontFamily: theme.serif, fontSize: '1.8rem', color: theme.ink }}>${platingStaged.reduce((s, l) => s + (parseFloat(shipCosts[l.id] || 0) || 0) * (parseInt(l.qty) || 0), 0).toFixed(2)}</span>
+                                        <span style={{ fontFamily: theme.serif, fontSize: '1.8rem', color: theme.ink }}>${platingStaged.reduce((s, l) => s + platingRateFor(l) * (parseInt(l.qty) || 0), 0).toFixed(2)}</span>
                                     </div>
                                     <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
                                         <button onClick={() => setShowShipModal(false)} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
