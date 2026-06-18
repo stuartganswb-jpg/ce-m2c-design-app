@@ -4,11 +4,15 @@ import { collection, onSnapshot, query, doc, setDoc } from "firebase/firestore";
 
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
+// Finish code = the assembly suffix (base/CODE); some finish docs hold it in `name` (matches PickPack/Library).
+const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
+
 const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [hqParts, setHqParts] = useState([]);
     const [nsStock, setNsStock] = useState({});
-    const [lastSyncTime, setLastSyncTime] = useState(""); 
+    const [lastSyncTime, setLastSyncTime] = useState("");
     const [vendors, setVendors] = useState([]);
+    const [outsourceFinishes, setOutsourceFinishes] = useState([]); // hq_outsource_finishes — detect EP (plated) lines for plating-flow dispatch
     
     // BUILDER STATE
     const [activeBuilder, setActiveBuilder] = useState("PO"); // 'PO' or 'WO'
@@ -72,7 +76,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             setCollectionsData(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         });
 
-        return () => { unsubParts(); unsubLists(); unsubCollections(); };
+        const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), snap => {
+            setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        });
+
+        return () => { unsubParts(); unsubLists(); unsubCollections(); unsubOutsource(); };
     }, [activeBrand]);
 
     // --- ALIGNED DYNAMIC DICTIONARY LISTS ---
@@ -363,42 +371,96 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const pushPOsToDispatch = async () => {
         const lineItems = Object.entries(orderDrafts).map(([partId, qty]) => {
             if (!qty || qty <= 0) return null;
-            return { partId, qty };
+            return { partId, qty: parseInt(qty) };
         }).filter(Boolean);
 
         if (lineItems.length === 0) return alert("No items have quantities entered greater than 0.");
 
+        // Split lines: a PLATED item (outsourced finish suffix, e.g. /EP2) is NOT a direct vendor buy — you send
+        // your own base to the plater. It routes through the plating flow: a "Needs Plating" demand for PickPack,
+        // plus (if the raw base is short) a shop-floor milling WO to produce more base. Everything else is a
+        // genuine purchase → vendor PO (unchanged).
+        const platedLines = [];
+        const directBuyLines = [];
+        for (const li of lineItems) {
+            const part = hqParts.find(p => p.id === li.partId);
+            if (!part) continue;
+            const erp = String(part.legacyErpId || part.itemId || '').toUpperCase();
+            const slash = erp.lastIndexOf('/');
+            const suffix = slash > -1 ? erp.slice(slash + 1) : '';
+            const outFinish = suffix ? outsourceFinishes.find(f => finishCodeOf(f) === suffix) : null;
+            if (outFinish) platedLines.push({ ...li, part, erp, baseErp: erp.slice(0, slash), finishCode: suffix, finishName: outFinish.name || '' });
+            else directBuyLines.push({ ...li, part });
+        }
+
         try {
-            const newPoId = `PO-${activeVendor.replace(/[^a-zA-Z0-9]/g, '').substring(0,5)}-${Date.now().toString().slice(-6)}`;
-            
-            const items = lineItems.map(({ partId, qty }) => {
-                const part = hqParts.find(p => p.id === partId);
-                return {
+            let platingCount = 0, millingCount = 0;
+
+            for (let i = 0; i < platedLines.length; i++) {
+                const pl = platedLines[i];
+                const basePart = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === pl.baseErp);
+                const baseAvail = nsStock[pl.baseErp]?.available || 0;
+
+                // (a) Plated demand → PickPack "Needs Plating".
+                const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}-${i}`;
+                await setDoc(doc(db, "plating_demand", demandId), {
+                    id: demandId, brandId: activeBrand, status: 'open',
+                    baseItemId: basePart?.id || null, baseErpId: pl.baseErp, targetErpId: pl.erp,
+                    finishCode: pl.finishCode, finishName: pl.finishName, qty: pl.qty,
+                    source: 'stockview', createdBy: currentUser?.name || 'Unknown', createdAt: Date.now()
+                });
+                platingCount++;
+                addLog(`Plating demand ${pl.erp} ×${pl.qty} (base ${pl.baseErp} avail ${baseAvail}).`, 'info');
+
+                // (b) Raw base short → mill more base now (routed to the shop floor by the base's routingType).
+                if (basePart && baseAvail < pl.qty) {
+                    const shortfall = pl.qty - baseAvail;
+                    const stamp = Date.now().toString().slice(-6);
+                    const safeErp = String(basePart.legacyErpId || basePart.itemId).replace(/[^A-Za-z0-9]+/g, '-');
+                    const woId = `WO-${safeErp}-${stamp}-${i}`;
+                    await setDoc(doc(db, "hq_work_orders", woId), {
+                        id: woId, woId, woDisplayId: `WO-${basePart.legacyErpId || basePart.itemId}-${stamp}`,
+                        partErpId: basePart.legacyErpId || basePart.itemId,
+                        brand: activeBrand, status: "Approved", customer: "Internal Stock",
+                        hqJobId: basePart.id, totalParts: shortfall,
+                        reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+                        type: "Stock Build", routingType: basePart.routingType || 'Standard',
+                        rootItem: pl.baseErp, forPlating: pl.erp, createdAt: Date.now()
+                    });
+                    millingCount++;
+                    addLog(`Milling WO ${basePart.legacyErpId || basePart.itemId} ×${shortfall} (raw short for ${pl.erp}).`, 'warn');
+                } else if (!basePart) {
+                    addLog(`⚠️ base ${pl.baseErp} not in library — plating demand created, but no milling WO.`, 'warn');
+                }
+            }
+
+            let poCreated = false;
+            if (directBuyLines.length > 0) {
+                const newPoId = `PO-${(activeVendor || 'VEND').replace(/[^a-zA-Z0-9]/g, '').substring(0,5)}-${Date.now().toString().slice(-6)}`;
+                const items = directBuyLines.map(({ part, qty }) => ({
                     itemId: part.legacyErpId || part.itemId,
                     vendorPart: part.manufacturingSpecs?.vendorId || 'N/A',
-                    quantity: qty,
-                    rate: part.manufacturingSpecs?.cost || 0,
-                    description: part.itemName
-                };
-            });
+                    quantity: qty, rate: part.manufacturingSpecs?.cost || 0, description: part.itemName
+                }));
+                await setDoc(doc(db, "hq_purchase_orders", newPoId), {
+                    id: newPoId, poId: newPoId, brand: activeBrand, status: "Approved",
+                    vendor: activeVendor, items,
+                    reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], createdAt: Date.now()
+                });
+                poCreated = true;
+                addLog(`✅ Purchase Order ${newPoId} (${items.length} line${items.length === 1 ? '' : 's'}) pushed.`, "success");
+            }
 
-            await setDoc(doc(db, "hq_purchase_orders", newPoId), {
-                id: newPoId,
-                poId: newPoId,
-                brand: activeBrand,
-                status: "Approved",
-                vendor: activeVendor,
-                items: items,
-                reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
-                createdAt: Date.now()
-            });
-
-            addLog(`✅ Pushed Purchase Order to RTG Dispatch!`, "success");
-            alert("✅ Purchase Order successfully pushed to RTG Dispatch!");
-            setOrderDrafts({}); 
+            const summary = [];
+            if (platingCount) summary.push(`${platingCount} plated item${platingCount === 1 ? '' : 's'} → PickPack "Needs Plating"`);
+            if (millingCount) summary.push(`${millingCount} milling WO${millingCount === 1 ? '' : 's'} for the raw base → RTG Dispatch`);
+            if (poCreated) summary.push(`1 vendor PO`);
+            if (!summary.length) return alert("Nothing dispatched.");
+            alert(`✅ Dispatched:\n\n• ${summary.join('\n• ')}` + (platingCount ? `\n\n(If "Needs Plating" looks empty, publish the plating_demand firestore rule.)` : ''));
+            setOrderDrafts({});
         } catch(e) {
-            console.error("PO Push Error", e);
-            alert("Failed to push Purchase Order.");
+            console.error("PO/Plating Push Error", e);
+            alert("Failed to dispatch. Check console.");
         }
     };
 
