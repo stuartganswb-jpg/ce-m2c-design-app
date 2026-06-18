@@ -1045,10 +1045,17 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               <div>
                 <h4 style={sectionHeaderStyle}>Logistics, Sourcing & Pricing</h4>
                 
-                <div style={{ display: 'flex', gap: '16px', marginBottom: '24px' }}>
+                <div style={{ display: 'flex', gap: '16px', marginBottom: '16px' }}>
                     <button onClick={() => setEditSpecs({...editSpecs, isInHouse: true})} style={{ flex: 1, padding: '12px', background: editSpecs.isInHouse ? 'var(--ink)' : 'transparent', color: editSpecs.isInHouse ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>In-House</button>
                     <button onClick={() => setEditSpecs({...editSpecs, isInHouse: false})} style={{ flex: 1, padding: '12px', background: !editSpecs.isInHouse ? 'var(--ink)' : 'transparent', color: !editSpecs.isInHouse ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Outsourced</button>
                 </div>
+
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '24px', cursor: 'pointer', background: editSpecs.isStocked ? 'rgba(176,141,87,.08)' : 'transparent', border: `1px solid ${editSpecs.isStocked ? 'var(--brass)' : 'var(--line)'}`, padding: '14px 16px' }}>
+                    <input type="checkbox" checked={!!editSpecs.isStocked} onChange={(e) => setEditSpecs({ ...editSpecs, isStocked: e.target.checked })} style={{ width: '16px', height: '16px', marginTop: '2px', cursor: 'pointer', flexShrink: 0 }} />
+                    <span style={{ fontSize: '0.9rem', color: 'var(--ink)' }}>Stocked finished assembly
+                        <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginTop: '4px' }}>Check for finished assemblies you hold in stock (e.g. a stocked <code>/P</code> collection) rather than finish-to-order. On a CPQ quote this pushes the full finished assembly to NetSuite to consume stock — just like an outsourced finish — instead of the core part plus a finishing work order.</span>
+                    </span>
+                </label>
                 
                 <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
                   {editSpecs.isInHouse ? (

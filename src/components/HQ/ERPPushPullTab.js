@@ -10,6 +10,10 @@ const BRAND_NETSUITE_MAP = {
     'leyla': { subsidiary: "5", location: "18" }
 };
 
+// A finish's code is the assembly suffix (base + CODE → base/CODE). Some finish docs carry the
+// identifier in `name` with `code` blank, so fall back to name (matches PickPack's finishCodeOf).
+const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
+
 const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const [approvedJobs, setApprovedJobs] = useState([]);
   const [syncedJobs, setSyncedJobs] = useState([]);
@@ -18,6 +22,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const [libraryParts, setLibraryParts] = useState([]);
   const [cpqFlows, setCpqFlows] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]); // hq_outsource_finishes — an outsourced finish makes the line push the finished assembly (base/CODE) to consume plated stock
+  const [globalFinishes, setGlobalFinishes] = useState([]); // system/master_finishes — in-house finishes; needed to resolve the code for STOCKED finished assemblies
   const [isPushing, setIsPushing] = useState(false);
   const [syncLog, setSyncLog] = useState([]);
 
@@ -45,7 +50,11 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
         setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    return () => { unsubJobs(); unsubParts(); unsubFlows(); unsubFinishes(); };
+    const unsubInFinishes = onSnapshot(doc(db, "system", "master_finishes"), (snap) => {
+        setGlobalFinishes(snap.exists() && snap.data().finishes ? snap.data().finishes : []);
+    });
+
+    return () => { unsubJobs(); unsubParts(); unsubFlows(); unsubFinishes(); unsubInFinishes(); };
   }, [activeBrand]);
 
   const addLog = (msg, type = 'info') => {
@@ -117,28 +126,36 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               result.unresolved.push({ stepTitle: step?.title || stepId, partId: targetPartId });
               return;
           }
-          // If the customer picked an OUTSOURCED finish on this step, the demand must land on the finished
-          // plated assembly (base/CODE, e.g. H1-138BF/EP1) so NetSuite consumes the outsourced finished stock —
-          // not the bare base. In-house finishes (phosphate /P etc.) stay on the base: the floor makes + finishes
-          // it. Pricing stays on the base part so the quote total is unchanged (the rollup line absorbs any
-          // balance); only the pushed ITEM id changes. If the finished assembly isn't in the library / isn't
-          // NetSuite-mapped, we keep the base and flag it (can't push an item with no internal id).
+          // The demand lands on the finished assembly (base/CODE, e.g. H1-138BF/EP1 or H1-138BF/P) instead of the
+          // bare base when the selected finish is either (a) OUTSOURCED — always consumes finished stock — or
+          // (b) IN-HOUSE but the finished assembly is flagged "Stocked" in the library (held in stock, not
+          // finished-to-order). Otherwise (in-house finish-to-order) the line stays on the base and the floor
+          // makes + finishes it. Reading the Stocked flag off the FINISHED part means the same /P code is
+          // finish-to-order for most parts and stocked only where it's been checked. Pricing stays on the base
+          // part so the quote total is unchanged (rollup absorbs the balance); only the pushed ITEM id changes.
+          // If the finished assembly isn't in the library / NetSuite-mapped, we keep the base and flag it.
           let nsId = masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED';
           let finishedErpId = '';
           let finishUnmapped = '';
           const finishId = job.cpqData.configuration?.[`${stepId}__finish`];
           if (finishId) {
               const outFinish = outsourceFinishes.find(f => f.id === finishId);
-              const finishCode = outFinish ? String(outFinish.code || outFinish.name || '').toUpperCase() : '';
+              const finishObj = outFinish || globalFinishes.find(f => f.id === finishId); // outsourced or in-house
+              const finishCode = finishCodeOf(finishObj);
               if (finishCode) {
                   const baseErp = String(masterPart.legacyErpId || masterPart.itemId || '').toUpperCase();
-                  finishedErpId = `${baseErp}/${finishCode}`;
-                  const finishedPart = libraryParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === finishedErpId);
-                  if (finishedPart && finishedPart.netSuiteInternalId) {
-                      nsId = finishedPart.netSuiteInternalId; // push the plated finished assembly → consumes outsourced stock
-                  } else {
-                      finishUnmapped = finishedErpId; // outsourced finish selected but the finished SKU has no NS id
+                  const candidateErpId = `${baseErp}/${finishCode}`;
+                  const finishedPart = libraryParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === candidateErpId);
+                  const isStocked = !!finishedPart?.manufacturingSpecs?.isStocked;
+                  if (outFinish || isStocked) { // consume the finished assembly (outsourced, or stocked in-house)
+                      finishedErpId = candidateErpId;
+                      if (finishedPart && finishedPart.netSuiteInternalId) {
+                          nsId = finishedPart.netSuiteInternalId;
+                      } else {
+                          finishUnmapped = candidateErpId; // finished SKU has no NS id → fall back to base + warn
+                      }
                   }
+                  // else: in-house finish-to-order → keep nsId = base; the floor makes + finishes it
               }
           }
           result.lines.push({
@@ -146,8 +163,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               masterPart,
               qty: parseInt(qty) || 1,
               nsId,
-              finishedErpId,   // non-empty when this line is pushing an outsourced finished assembly
-              finishUnmapped,  // non-empty when an outsourced finished SKU couldn't be NS-resolved (fell back to base)
+              finishedErpId,   // non-empty when this line pushes a finished assembly (outsourced or stocked in-house)
+              finishUnmapped,  // non-empty when a finished SKU couldn't be NS-resolved (fell back to base)
               partCategory: masterPart.manufacturingSpecs?.partHandling || '',
               projection: job.cpqData.dimensions?.[stepId]?.length || ''
           });
@@ -179,13 +196,13 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           return;
       }
 
-      // Outsourced-finish lines whose finished assembly (base/CODE) isn't in the library / NetSuite-mapped:
-      // they'll fall back to pushing the BASE item, which would consume raw instead of the plated finished stock.
-      // Warn before pushing so the user can sync/map the finished SKU first.
+      // Finished-assembly lines (outsourced finish, or stocked in-house) whose finished SKU (base/CODE) isn't in
+      // the library / NetSuite-mapped: they fall back to pushing the BASE item, which consumes raw / triggers a
+      // finishing WO instead of consuming the finished stock. Warn before pushing so the user can sync it first.
       const finishFallbacks = linesToPush.filter(l => l.finishUnmapped).map(l => l.finishUnmapped);
       if (finishFallbacks.length) {
-          addLog(`⚠️ Outsourced finished item(s) not NetSuite-mapped — will push the BASE instead of the plated assembly: ${finishFallbacks.join(', ')}`, 'warn');
-          if (!window.confirm(`These outsourced finished assemblies aren't synced to NetSuite yet:\n\n${finishFallbacks.map(f => `• ${f}`).join('\n')}\n\nIf you continue, those lines push the BASE item (consumes raw, not the plated stock). Sync/map them in the Library first for correct consumption.\n\nPush anyway?`)) return;
+          addLog(`⚠️ Finished assembly(ies) not NetSuite-mapped — will push the BASE instead of the finished item: ${finishFallbacks.join(', ')}`, 'warn');
+          if (!window.confirm(`These finished assemblies aren't synced to NetSuite yet:\n\n${finishFallbacks.map(f => `• ${f}`).join('\n')}\n\nIf you continue, those lines push the BASE item (consumes raw / makes a finishing WO, not the finished stock). Sync/map them in the Library first for correct consumption.\n\nPush anyway?`)) return;
       }
 
       if (!window.confirm(`Push Quote ${job.jobId || job.id} to NetSuite? This will create a live Quote/Estimate.`)) return;
@@ -218,7 +235,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       rate: parseFloat(itemRate.toFixed(2)), 
                       price: { id: "-1" },
                       description: line.finishedErpId
-                          ? `${line.masterPart.itemName} → ${line.finishedErpId} (outsourced finish, CPQ)`
+                          ? `${line.masterPart.itemName} → ${line.finishedErpId} (finished assembly, CPQ)`
                           : `${line.masterPart.itemName} (Mapped from CPQ)`,
                       custcol_part_category: line.partCategory
                   };
