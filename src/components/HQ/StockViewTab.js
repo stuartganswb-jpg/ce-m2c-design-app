@@ -401,10 +401,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const basePart = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === pl.baseErp);
                 const baseAvail = nsStock[pl.baseErp]?.available || 0;
 
-                // (a) Plated demand → PickPack "Needs Plating".
+                // (a) Plated demand → PickPack "Needs Plating". Generate a plating WO# so the job/label has a
+                // reference to give the plating company (the label was blank without it).
                 const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}-${i}`;
+                const woNum = `PLW-${activeBrand.toUpperCase()}-${(Date.now() + i).toString().slice(-6)}`;
                 await setDoc(doc(db, "plating_demand", demandId), {
-                    id: demandId, brandId: activeBrand, status: 'open',
+                    id: demandId, brandId: activeBrand, status: 'open', woNum,
                     baseItemId: basePart?.id || null, baseErpId: pl.baseErp, targetErpId: pl.erp,
                     finishCode: pl.finishCode, finishName: pl.finishName, qty: pl.qty,
                     source: 'stockview', createdBy: currentUser?.name || 'Unknown', createdAt: Date.now()
@@ -582,7 +584,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     if (activeBuilder === 'PO' && activeVendor) {
         displayItems = baseFilteredItems.filter(p => p.manufacturingSpecs?.vendorName === activeVendor && !p.manufacturingSpecs?.isInHouse);
     } else if (activeBuilder === 'WO') {
-        displayItems = baseFilteredItems.filter(p => p.manufacturingSpecs?.isInHouse !== false); 
+        // Only in-house items flagged STOCKED get replenishment WOs here. In-house NOT-stocked items are
+        // made-to-order straight from the sales order, so they never appear in the planning queue.
+        displayItems = baseFilteredItems.filter(p => p.manufacturingSpecs?.isInHouse !== false && p.manufacturingSpecs?.isStocked);
     }
 
     return (

@@ -606,14 +606,16 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           try {
               if (onHand >= qty) {
                   // Base in stock → plating to-do for PickPack (operator pulls + plates from there).
+                  // Generate a plating WO# so the job/label has a reference for the plating company.
                   const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}`;
+                  const woNum = `PLW-${activeBrand.toUpperCase()}-${Date.now().toString().slice(-6)}`;
                   await setDoc(doc(db, "plating_demand", demandId), {
-                      id: demandId, brandId: activeBrand, status: 'open',
+                      id: demandId, brandId: activeBrand, status: 'open', woNum,
                       baseItemId: basePart.id, baseErpId: baseErp.toUpperCase(), targetErpId: erp.toUpperCase(),
                       finishCode: suffix, finishName: outFinish.name || '',
                       qty, source: 'library-wo', createdBy: currentUser?.name || 'Unknown', createdAt: Date.now()
                   });
-                  alert(`✅ ${baseErp} in stock (${onHand} on hand). Sent ${qty}x → PickPack Plating ("Needs Plating") to pull + plate into ${erp}.`);
+                  alert(`✅ ${baseErp} in stock (${onHand} on hand). Sent ${qty}x → PickPack Plating ("Needs Plating", WO ${woNum}) to pull + plate into ${erp}.`);
               } else {
                   // Base short → shop-floor WO to build the base; plate it after.
                   const woId = await createStockBuildWO(basePart, qty);
