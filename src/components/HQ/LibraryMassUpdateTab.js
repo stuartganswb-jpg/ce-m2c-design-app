@@ -104,6 +104,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         watchList: { active: false, value: "NONE" },
         project: { active: false, value: "" },
         isInHouse: { active: false, value: true },
+        isStocked: { active: false, value: true },
         partHandling: { active: false, value: "" },
         collection: { active: false, value: "" },
         vendorName: { active: false, value: "" },
@@ -324,7 +325,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         const headers = [
             "ID (DO NOT EDIT)", "Legacy ERP ID", "Item ID", "NetSuite Internal ID", "Item Name", "Brand", "Part Class", "Routing Type",
             "Product Type (Category)", "Collection", "Watchlist", "UOM", "Part Handling", "Outsource Action", "Bracket Projection", "Bracket Type / Mount",
-            "Weight", "Base Price", "Cost", "Reorder Pt (ROP)", "Lead Time (Days)", "Vendor Name", "Vendor SKU", "Bin Location", "Is In-House (TRUE/FALSE)",
+            "Weight", "Base Price", "Cost", "Reorder Pt (ROP)", "Lead Time (Days)", "Vendor Name", "Vendor SKU", "Bin Location", "Is In-House (TRUE/FALSE)", "Is Stocked (TRUE/FALSE)",
             "Backplate Orientation", "Is Return Bracket (TRUE/FALSE)", "Backplate Length", "Backplate Width", "Backplate Height", "Bracket Arm Thickness",
             "Client Customer ID", "Client SKU", "Client Cost", "Client Sales Price"
         ];
@@ -377,6 +378,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 specs.vendorId || "",
                 specs.binLocation || "",
                 specs.isInHouse !== false ? "TRUE" : "FALSE",
+                specs.isStocked ? "TRUE" : "FALSE",
                 cust.bpOrientation || "",
                 cust.isReturnBracket ? "TRUE" : "FALSE",
                 specs.parametric?.length || "",
@@ -483,9 +485,14 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 const bph = getVal("Backplate Height"); if(bph !== null && bph !== "") { payload["manufacturingSpecs.parametric.height"] = bph === "" ? "" : parseFloat(bph); }
                 const arm = getVal("Bracket Arm Thickness"); if(arm !== null && arm !== "") { payload["manufacturingSpecs.customData.armThickness"] = arm; }
                 
-                const isInHouse = getVal("Is In-House (TRUE/FALSE)"); 
-                if(isInHouse !== null) { 
+                const isInHouse = getVal("Is In-House (TRUE/FALSE)");
+                if(isInHouse !== null) {
                     payload["manufacturingSpecs.isInHouse"] = isInHouse.toUpperCase() === 'TRUE';
+                }
+
+                const isStocked = getVal("Is Stocked (TRUE/FALSE)");
+                if(isStocked !== null && isStocked !== "") {
+                    payload["manufacturingSpecs.isStocked"] = isStocked.toUpperCase() === 'TRUE';
                 }
 
                 const col = getVal("Collection");
@@ -1205,6 +1212,17 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <select disabled={!updates.isInHouse.active} value={updates.isInHouse.value.toString()} onChange={(e) => handleUpdateChange('isInHouse', 'value', e.target.value === 'true')} style={{ ...fieldStyle, opacity: updates.isInHouse.active ? 1 : 0.5 }}>
                                 <option value="true">Manufactured In-House</option>
                                 <option value="false">Outsourced / Purchased</option>
+                            </select>
+                        </div>
+
+                        <div style={{ background: updates.isStocked.active ? theme.paper : 'transparent', border: `1px solid ${updates.isStocked.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.isStocked.active} onChange={(e) => handleUpdateChange('isStocked', 'active', e.target.checked)} />
+                                Set Stocked Finished Assembly
+                            </label>
+                            <select disabled={!updates.isStocked.active} value={updates.isStocked.value.toString()} onChange={(e) => handleUpdateChange('isStocked', 'value', e.target.value === 'true')} style={{ ...fieldStyle, opacity: updates.isStocked.active ? 1 : 0.5 }}>
+                                <option value="true">Stocked (CPQ pushes the finished assembly)</option>
+                                <option value="false">Finish-to-order (push base + finishing WO)</option>
                             </select>
                         </div>
 
