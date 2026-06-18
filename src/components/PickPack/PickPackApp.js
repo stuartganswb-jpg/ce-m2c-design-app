@@ -73,6 +73,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [platingQty, setPlatingQty] = useState("");
     const [platingDestScan, setPlatingDestScan] = useState("");
     const [platingMemo, setPlatingMemo] = useState("");
+    const [platingWO, setPlatingWO] = useState(""); // work order # (from HQ RTG) — printed on the plating label
     const [platingStaged, setPlatingStaged] = useState([]); // open (staged) plating-shipment lines
 
     // Counting Filter State
@@ -465,6 +466,25 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
         }
     };
 
+    // Spool a 2"x4" Zebra label for a plating pull (item / qty / work order + WO barcode). Matches the app's
+    // existing ZPL-spool pattern (console.log) — no physical printer is wired anywhere in the app yet.
+    const printPlatingLabel = ({ erpId, itemName, qty, woNum, platingBin }) => {
+        const wo = (woNum || '').trim();
+        const name = String(itemName || '').slice(0, 40);
+        const zpl = `^XA
+^PW406
+^CI28
+^FO20,28^A0N,38,38^FDPLATING WIP^FS
+^FO20,78^A0N,30,30^FD${erpId}^FS
+^FO20,116^A0N,24,24^FB366,2,0,L^FD${name}^FS
+^FO20,190^A0N,34,34^FDQty: ${qty}^FS
+^FO20,238^A0N,34,34^FDWO: ${wo || '—'}^FS
+^FO20,286^A0N,26,26^FDBin: ${platingBin}^FS
+${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
+^XZ`;
+        console.log("Sending ZPL to Zebra Printer (2x4 plating label):", zpl);
+    };
+
     // --- NETSUITE PLATING PULL (Phase 2: move raw stock into WIP-Plating status) ---
     // NetSuite REST has no inventorystatuschange record, so we move the qty with a STATUS-AWARE inventory
     // adjustment: two offsetting lines — -qty out of Good(1)@source bin and +qty into WIP-Plating(13)@plating
@@ -529,12 +549,13 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             await addDoc(collection(db, "plating_shipments"), {
                 brandId: activeBrand, status: 'staged',
                 itemId: item.id, netSuiteInternalId: item.netSuiteInternalId, erpId: item.erpId, itemName: item.itemName || '',
-                qty, fromBin, platingBin, operator: operator?.name || 'Unknown', createdAt: serverTimestamp()
+                qty, fromBin, platingBin, woNum: (platingWO || '').trim(), operator: operator?.name || 'Unknown', createdAt: serverTimestamp()
             }).catch(err => console.warn("plating_shipments log failed (is the firestore rule published?)", err)); // non-fatal: the NetSuite move already succeeded
 
-            alert(`✅ Pulled ${qty} × ${item.erpId} to plating WIP — moved ${fromBin} → ${platingBin}, status WIP-Plating. Removed from Available.`);
+            printPlatingLabel({ erpId: item.erpId, itemName: item.itemName, qty, woNum: platingWO, platingBin });
+            alert(`✅ Pulled ${qty} × ${item.erpId} to plating WIP — moved ${fromBin} → ${platingBin}, status WIP-Plating. Removed from Available.\n\n🖨️ 2×4 plating label spooled${(platingWO || '').trim() ? ` (WO ${(platingWO || '').trim()})` : ''}.`);
             writeLog(`Plating pull: ${qty} ${item.erpId} ${fromBin} -> ${platingBin} (WIP-Plating).${platingMemo.trim() ? ` Memo: ${platingMemo.trim()}` : ''}`, 'wms');
-            setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo("");
+            setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO("");
             pullNetSuiteStock();
         } catch (e) {
             console.error("Plating status-change push failed:", e);
@@ -1282,6 +1303,11 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                     </div>
 
                                     <div style={{ marginBottom: '24px' }}>
+                                        <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Work Order # — scan the RTG label</label>
+                                        <input value={platingWO} onChange={e => setPlatingWO(e.target.value)} placeholder="WO # from HQ / RTG — printed on the plating label" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', color: theme.ink, border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                    </div>
+
+                                    <div style={{ marginBottom: '24px' }}>
                                         <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Note{operator?.name ? ` — recorded as ${operator.name}` : ''}</label>
                                         <textarea value={platingMemo} onChange={e => setPlatingMemo(e.target.value)} placeholder="Optional note. Pushed to the NetSuite status-change memo with your name." rows={2} style={{ width: '100%', padding: '12px', fontFamily: theme.sans, fontSize: '0.9rem', color: theme.ink, border: `1px solid ${theme.line}`, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
                                     </div>
@@ -1349,7 +1375,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{item.binLocation}</td>
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
-                                                <button onClick={() => { setPlatingBase(item); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Pull →</button>
+                                                <button onClick={() => { setPlatingBase(item); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Pull →</button>
                                             </td>
                                         </tr>
                                     ))}
