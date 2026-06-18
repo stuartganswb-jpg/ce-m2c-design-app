@@ -339,21 +339,20 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         setIsSyncing(false);
     };
 
-    const calculateSuggestedPOQty = (available, rop, moq, leadTime) => {
-        if (available > rop) return 0;
-        const dynamicRateOfSale = 1.5; 
-        const leadTimeBuffer = leadTime ? (leadTime * dynamicRateOfSale) : 10; 
-        let suggested = (rop - available) + leadTimeBuffer;
-        if (moq && suggested < moq) suggested = moq; 
-        return Math.ceil(suggested);
-    };
-
-    const calculateSuggestedWOQty = (available, rop, moq, leadTime, committed, backorder) => {
-        if (available > rop && backorder <= 0 && committed <= available) return 0;
-        const productionBuffer = leadTime ? (leadTime * 1.2) : 5; 
-        let suggested = (rop - available) + backorder + committed + productionBuffer;
-        if (moq && suggested < moq) suggested = moq;
-        return Math.max(0, Math.ceil(suggested));
+    // Suggested order/build qty = GREATER OF: top-up-to-ROP (ROP − available) and cover-demand
+    // ((committed + backorder, incl. variant rollup) − available − on-order), then rounded UP to MOQ.
+    // Same formula for PO and WO; the builder just shows different item sets.
+    const suggestedQtyFor = (item) => {
+        const avail = item.stock?.available || 0;
+        const onOrder = item.stock?.onOrder || 0;
+        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0);
+        const rop = item.rop || 0;
+        const moq = item.moq || 0;
+        const topUp = Math.max(0, rop - avail);
+        const coverDemand = Math.max(0, demand - avail - onOrder);
+        let qty = Math.max(topUp, coverDemand);
+        if (moq > 0 && qty > 0) qty = Math.ceil(qty / moq) * moq;
+        return qty;
     };
 
     const handleOrderQtyChange = (partId, qty) => {
@@ -703,10 +702,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                                 {displayItems.map(item => {
-                                    const suggested = activeBuilder === 'PO' 
-                                        ? calculateSuggestedPOQty(item.stock.available, item.rop, item.moq, item.leadTime)
-                                        : calculateSuggestedWOQty(item.stock.available, item.rop, item.moq, item.leadTime, item.stock.aggregatedCommitted, item.stock.aggregatedBackorder);
-                                    
+                                    const suggested = suggestedQtyFor(item);
+
                                     const currentDraft = orderDrafts[item.id] !== undefined ? orderDrafts[item.id] : "";
                                     
                                     return (
@@ -752,8 +749,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
 
                     {/* DYNAMIC PUSH TO FIREBASE BUTTON */}
                     {(activeBuilder === 'WO' || activeVendor) && (
-                        <div style={{ padding: '24px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
-                            <button 
+                        <div style={{ padding: '24px', borderTop: '1px solid var(--line)', background: 'var(--paper)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            <button
+                                onClick={() => { const d = { ...orderDrafts }; let n = 0; displayItems.forEach(it => { const s = suggestedQtyFor(it); if (s > 0) { d[it.id] = s; n++; } }); setOrderDrafts(d); if (!n) alert("Nothing to suggest — every shown item is above ROP and has no open demand."); }}
+                                style={{ width: '100%', padding: '14px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}
+                            >
+                                ↧ Fill All With Suggested
+                            </button>
+                            <button
                                 onClick={activeBuilder === 'PO' ? pushPOsToDispatch : pushWOsToDispatch}
                                 style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}
                             >
