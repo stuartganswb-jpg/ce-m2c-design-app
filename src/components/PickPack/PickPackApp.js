@@ -599,15 +599,27 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
         const total = lines.reduce((s, l) => s + rateOf(l) * (parseInt(l.qty) || 0), 0);
         const pcs = lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0);
         const shipId = `PLT-${activeBrand.toUpperCase()}-${Date.now()}`;
+        let vendorSub = null;
 
         try {
             setIsSyncing(true);
+            // Resolve the vendor's own (primary) subsidiary from NetSuite — a PO must post to the vendor's subsidiary.
+            try {
+                const vr = await fetch(FIREBASE_FUNCTION_URL, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q: `SELECT subsidiary FROM vendor WHERE id = 83361` } })
+                });
+                const vb = await vr.json().catch(() => ({}));
+                if (vr.ok && vb.items && vb.items.length) vendorSub = String(vb.items[0].subsidiary);
+            } catch (_) { /* fall back to letting NetSuite derive the subsidiary */ }
+
             // 1) NetSuite PO to the plater — one summary line at the total plating cost.
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
                 method: 'POST',
                 payload: {
-                    entity: { id: "83361" }, // Dayton Grey vendor (subsidiary auto-derives from the vendor record)
+                    entity: { id: "83361" }, // Dayton Grey vendor
+                    ...(vendorSub ? { subsidiary: { id: vendorSub } } : {}),
                     memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
                     item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] } // "Weekly Plating Shipment" service item
                 }
@@ -641,7 +653,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
             pullNetSuiteStock();
         } catch (e) {
             console.error("Plating shipment push failed:", e);
-            alert("❌ NetSuite rejected the plating PO:\n\n" + (e.message || e) + "\n\nSubsidiary now auto-derives from the Dayton Grey vendor. If it says subsidiary is REQUIRED, tell me Dayton Grey's subsidiary id. Other fields to watch: entity / item / rate / location.");
+            alert("❌ NetSuite rejected the plating PO:\n\n" + (e.message || e) + `\n\n(posted with vendor subsidiary: ${vendorSub || 'auto'}). If 'item' is still rejected, item 61947 isn't on that subsidiary — tell me which leaf subsidiary the PO should use. If 'subsidiary' is rejected, that vendor-subsidiary value is wrong.`);
         } finally {
             setIsSyncing(false);
         }
