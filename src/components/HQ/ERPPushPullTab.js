@@ -16,7 +16,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const [activeJob, setActiveJob] = useState(null);
   
   const [libraryParts, setLibraryParts] = useState([]);
-  const [cpqFlows, setCpqFlows] = useState([]); 
+  const [cpqFlows, setCpqFlows] = useState([]);
+  const [outsourceFinishes, setOutsourceFinishes] = useState([]); // hq_outsource_finishes — an outsourced finish makes the line push the finished assembly (base/CODE) to consume plated stock
   const [isPushing, setIsPushing] = useState(false);
   const [syncLog, setSyncLog] = useState([]);
 
@@ -40,7 +41,11 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
         setCpqFlows(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    return () => { unsubJobs(); unsubParts(); unsubFlows(); };
+    const unsubFinishes = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => {
+        setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return () => { unsubJobs(); unsubParts(); unsubFlows(); unsubFinishes(); };
   }, [activeBrand]);
 
   const addLog = (msg, type = 'info') => {
@@ -112,11 +117,37 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               result.unresolved.push({ stepTitle: step?.title || stepId, partId: targetPartId });
               return;
           }
+          // If the customer picked an OUTSOURCED finish on this step, the demand must land on the finished
+          // plated assembly (base/CODE, e.g. H1-138BF/EP1) so NetSuite consumes the outsourced finished stock —
+          // not the bare base. In-house finishes (phosphate /P etc.) stay on the base: the floor makes + finishes
+          // it. Pricing stays on the base part so the quote total is unchanged (the rollup line absorbs any
+          // balance); only the pushed ITEM id changes. If the finished assembly isn't in the library / isn't
+          // NetSuite-mapped, we keep the base and flag it (can't push an item with no internal id).
+          let nsId = masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED';
+          let finishedErpId = '';
+          let finishUnmapped = '';
+          const finishId = job.cpqData.configuration?.[`${stepId}__finish`];
+          if (finishId) {
+              const outFinish = outsourceFinishes.find(f => f.id === finishId);
+              const finishCode = outFinish ? String(outFinish.code || outFinish.name || '').toUpperCase() : '';
+              if (finishCode) {
+                  const baseErp = String(masterPart.legacyErpId || masterPart.itemId || '').toUpperCase();
+                  finishedErpId = `${baseErp}/${finishCode}`;
+                  const finishedPart = libraryParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === finishedErpId);
+                  if (finishedPart && finishedPart.netSuiteInternalId) {
+                      nsId = finishedPart.netSuiteInternalId; // push the plated finished assembly → consumes outsourced stock
+                  } else {
+                      finishUnmapped = finishedErpId; // outsourced finish selected but the finished SKU has no NS id
+                  }
+              }
+          }
           result.lines.push({
               stepId,
               masterPart,
               qty: parseInt(qty) || 1,
-              nsId: masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED',
+              nsId,
+              finishedErpId,   // non-empty when this line is pushing an outsourced finished assembly
+              finishUnmapped,  // non-empty when an outsourced finished SKU couldn't be NS-resolved (fell back to base)
               partCategory: masterPart.manufacturingSpecs?.partHandling || '',
               projection: job.cpqData.dimensions?.[stepId]?.length || ''
           });
@@ -148,8 +179,17 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           return;
       }
 
+      // Outsourced-finish lines whose finished assembly (base/CODE) isn't in the library / NetSuite-mapped:
+      // they'll fall back to pushing the BASE item, which would consume raw instead of the plated finished stock.
+      // Warn before pushing so the user can sync/map the finished SKU first.
+      const finishFallbacks = linesToPush.filter(l => l.finishUnmapped).map(l => l.finishUnmapped);
+      if (finishFallbacks.length) {
+          addLog(`⚠️ Outsourced finished item(s) not NetSuite-mapped — will push the BASE instead of the plated assembly: ${finishFallbacks.join(', ')}`, 'warn');
+          if (!window.confirm(`These outsourced finished assemblies aren't synced to NetSuite yet:\n\n${finishFallbacks.map(f => `• ${f}`).join('\n')}\n\nIf you continue, those lines push the BASE item (consumes raw, not the plated stock). Sync/map them in the Library first for correct consumption.\n\nPush anyway?`)) return;
+      }
+
       if (!window.confirm(`Push Quote ${job.jobId || job.id} to NetSuite? This will create a live Quote/Estimate.`)) return;
-      
+
       setIsPushing(true);
       addLog(`Initiating NetSuite Cloud Proxy for Job: ${job.jobId || job.id}`, 'info');
 
@@ -176,8 +216,10 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       item: { id: line.nsId.toString() }, 
                       quantity: line.qty,
                       rate: parseFloat(itemRate.toFixed(2)), 
-                      price: { id: "-1" }, 
-                      description: `${line.masterPart.itemName} (Mapped from CPQ)`,
+                      price: { id: "-1" },
+                      description: line.finishedErpId
+                          ? `${line.masterPart.itemName} → ${line.finishedErpId} (outsourced finish, CPQ)`
+                          : `${line.masterPart.itemName} (Mapped from CPQ)`,
                       custcol_part_category: line.partCategory
                   };
 
@@ -416,7 +458,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                                     {getJobLineItems(activeJob).map((line, idx) => (
                                         <tr key={idx}>
                                             <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', color: line.nsId === 'UNMAPPED' || line.nsId === 'PENDING' ? '#d9534f' : 'var(--ink)', fontFamily: 'var(--mono)' }}>{line.nsId}</td>
-                                            <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', color: 'var(--ink)' }}>{line.masterPart.itemName}</td>
+                                            <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', color: 'var(--ink)' }}>{line.masterPart.itemName}{line.finishedErpId ? <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--brass)' }}> → {line.finishedErpId}</span> : null}{line.finishUnmapped ? <span style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', color: '#d9534f' }}> ⚠ {line.finishUnmapped} not synced — pushing base</span> : null}</td>
                                             <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontWeight: 500, color: 'var(--ink)' }}>{line.qty}</td>
                                         </tr>
                                     ))}
