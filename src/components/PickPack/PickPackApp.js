@@ -1817,10 +1817,16 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                                     {g.lines.map(l => {
                                                         const tgt = l.targetErpId || (l.finishCode ? `${l.erpId}/${String(l.finishCode).toUpperCase()}` : '');
+                                                        // Preflight: does the plated assembly exist in the brand library (synced from NS), and what bin?
+                                                        const tgtPart = tgt ? hqParts.find(p => erpOf(p) === tgt.toUpperCase()) : null;
+                                                        const tgtBin = tgtPart ? binOf(tgtPart) : '';
                                                         return (
                                                             <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderTop: `1px solid ${theme.line}`, paddingTop: '8px' }}>
                                                                 <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
                                                                     {l.erpId} → <span style={{ color: theme.brass }}>{tgt || '— no finish on line'}</span> · {l.qty} pcs{l.wipReversed ? ' · ✓ back in Good' : ''}
+                                                                    {tgt && (tgtPart
+                                                                        ? <span style={{ color: theme.inkSoft }}> · → {tgtBin && tgtBin !== 'UNASSIGNED' ? `bin ${tgtBin}` : <span style={{ color: '#c0392b' }}>no bin ⚠</span>}</span>
+                                                                        : <span style={{ color: '#c0392b' }}> · ⚠ assembly not in library — sync from NetSuite first</span>)}
                                                                 </div>
                                                                 <button onClick={() => pushPlatingBuildBack(l)} disabled={isSyncing || !tgt} style={{ padding: '10px 16px', background: !tgt ? theme.paper2 : '#5e7d54', color: !tgt ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : (!tgt ? 'not-allowed' : 'pointer'), fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                                                                     {isSyncing ? '…' : (tgt ? `Build ${tgt}` : 'No finish')}
