@@ -609,9 +609,10 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
                 method: 'POST',
                 payload: {
                     entity: { id: "83361" }, // Dayton Grey vendor
-                    location: { id: nsConfig.location }, // on a PO, subsidiary is DERIVED from the location — setting it directly is rejected
+                    subsidiary: { id: nsConfig.subsidiary }, // CE=2 on the header — mirrors the WORKING inventory adjustment (header sub + line location)
                     memo: `Weekly Plating Shipment ${shipId} — ${lines.length} items, ${pcs} pcs`,
-                    item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)) }] } // "Weekly Plating Shipment" service item
+                    // location on the LINE (like the adjustment), not the header
+                    item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), location: { id: nsConfig.location } }] } // "Weekly Plating Shipment" service item
                 }
             };
             const response = await fetch(FIREBASE_FUNCTION_URL, {
@@ -643,7 +644,7 @@ ${wo ? `^FO20,332^BY2,2,90^BCN,90,Y,N,N^FD${wo}^FS` : ''}
             pullNetSuiteStock();
         } catch (e) {
             console.error("Plating shipment push failed:", e);
-            alert("❌ NetSuite rejected the plating PO:\n\n" + (e.message || e) + `\n\n(posted with location ${nsConfig.location}; subsidiary derives from it). If it still names a field, paste it.`);
+            alert("❌ NetSuite rejected the plating PO:\n\n" + (e.message || e) + `\n\n(subsidiary ${nsConfig.subsidiary} header + location ${nsConfig.location} on the line — same shape as the working inventory adjustment). If it still names a field, paste it.`);
         } finally {
             setIsSyncing(false);
         }
