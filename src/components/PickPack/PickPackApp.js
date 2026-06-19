@@ -165,6 +165,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [searchQuery, setSearchQuery] = useState("");
     const [typeFilter, setTypeFilter] = useState("");
     const [collectionFilter, setCollectionFilter] = useState("");
+    const [watchlistFilter, setWatchlistFilter] = useState("");
     const [globalLists, setGlobalLists] = useState({});
 
     // Fetch Global Lists & HQ Parts for cycle counting
@@ -1066,6 +1067,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const collectionsOf = (specs) => (Array.isArray(specs.collections) ? specs.collections : (specs.customData?.collection && specs.customData.collection !== 'N/A' ? [specs.customData.collection] : [])).map(c => String(c).toUpperCase());
     const dynamicCollections = Array.from(new Set(hqParts.flatMap(p => collectionsOf(p.manufacturingSpecs || {})).filter(Boolean))).sort();
 
+    // Effective watchlist for a part: explicit watchList wins, else the NS-synced customData.watchlist (mirrors HQ).
+    const watchlistOf = (specs) => String((specs.watchList || (specs.customData?.watchlist && specs.customData.watchlist !== 'N/A' ? specs.customData.watchlist : '')) || '').toUpperCase();
+    const dynamicWatchlists = Array.from(new Set(hqParts.map(p => watchlistOf(p.manufacturingSpecs || {})).filter(Boolean))).sort();
+
     const baseFilteredItems = hqParts.filter(part => {
         const term = searchQuery.toLowerCase();
         const specs = part.manufacturingSpecs || {};
@@ -1078,10 +1083,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             || (specs.binLocation || "").toLowerCase().includes(term);
         const matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase();
         const matchesCollection = collectionFilter === "" || collectionsOf(specs).includes(collectionFilter.toUpperCase());
+        const matchesWatchlist = watchlistFilter === "" || watchlistOf(specs) === watchlistFilter.toUpperCase();
 
         const isInventory = part.partClass === "Inventory"; // count stock whether we make it (in-house) or buy it (outsourced)
 
-        return matchesSearch && matchesType && matchesCollection && isInventory;
+        return matchesSearch && matchesType && matchesCollection && matchesWatchlist && isInventory;
     }).map(part => {
         const erpId = (part.legacyErpId || part.itemId || "").toUpperCase();
         return {
@@ -1379,8 +1385,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <option value="">All Collections</option>
                                 {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
+                            <select value={watchlistFilter} onChange={(e) => setWatchlistFilter(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', background: theme.paper2, minWidth: '150px' }}>
+                                <option value="">All Watchlists</option>
+                                {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
+                            </select>
                             <input placeholder="Search name, SKU, item id, or bin…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', flex: 1, minWidth: '180px' }} />
-                            {(typeFilter || collectionFilter || searchQuery) && <button onClick={() => { setTypeFilter(''); setCollectionFilter(''); setSearchQuery(''); }} style={{ padding: '12px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>}
+                            {(typeFilter || collectionFilter || watchlistFilter || searchQuery) && <button onClick={() => { setTypeFilter(''); setCollectionFilter(''); setWatchlistFilter(''); setSearchQuery(''); }} style={{ padding: '12px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>}
                             <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '12px 20px', background: isSyncing ? theme.paper : theme.ink, color: isSyncing ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>
                                 {isSyncing ? 'Syncing...' : 'Pull Live Stock'}
                             </button>
@@ -1546,8 +1556,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <option value="">All Collections</option>
                                 {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
+                            <select value={watchlistFilter} onChange={(e) => setWatchlistFilter(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', background: theme.paper2, minWidth: '150px' }}>
+                                <option value="">All Watchlists</option>
+                                {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
+                            </select>
                             <input placeholder="Search a raw item to convert…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', flex: 1, minWidth: '180px' }} />
-                            {(typeFilter || collectionFilter || searchQuery) && <button onClick={() => { setTypeFilter(''); setCollectionFilter(''); setSearchQuery(''); }} style={{ padding: '12px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>}
+                            {(typeFilter || collectionFilter || watchlistFilter || searchQuery) && <button onClick={() => { setTypeFilter(''); setCollectionFilter(''); setWatchlistFilter(''); setSearchQuery(''); }} style={{ padding: '12px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>}
                             <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '12px 20px', background: isSyncing ? theme.paper : theme.ink, color: isSyncing ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>
                                 {isSyncing ? 'Syncing...' : 'Pull Live Stock'}
                             </button>
@@ -1653,8 +1667,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <option value="">All Collections</option>
                                 {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
+                            <select value={watchlistFilter} onChange={(e) => setWatchlistFilter(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', background: theme.paper2, minWidth: '150px' }}>
+                                <option value="">All Watchlists</option>
+                                {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
+                            </select>
                             <input placeholder="Search an item to move…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', flex: 1, minWidth: '180px' }} />
-                            {(typeFilter || collectionFilter || searchQuery) && <button onClick={() => { setTypeFilter(''); setCollectionFilter(''); setSearchQuery(''); }} style={{ padding: '12px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>}
+                            {(typeFilter || collectionFilter || watchlistFilter || searchQuery) && <button onClick={() => { setTypeFilter(''); setCollectionFilter(''); setWatchlistFilter(''); setSearchQuery(''); }} style={{ padding: '12px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>}
                             <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '12px 20px', background: isSyncing ? theme.paper : theme.ink, color: isSyncing ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>
                                 {isSyncing ? 'Syncing...' : 'Pull Live Stock'}
                             </button>
@@ -1934,8 +1952,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <option value="">All Collections</option>
                                 {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
+                            <select value={watchlistFilter} onChange={(e) => setWatchlistFilter(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', background: theme.paper2, minWidth: '150px' }}>
+                                <option value="">All Watchlists</option>
+                                {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
+                            </select>
                             <input placeholder="Search an item to pull for plating…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, outline: 'none', flex: 1, minWidth: '180px' }} />
-                            {(typeFilter || collectionFilter || searchQuery) && <button onClick={() => { setTypeFilter(''); setCollectionFilter(''); setSearchQuery(''); }} style={{ padding: '12px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>}
+                            {(typeFilter || collectionFilter || watchlistFilter || searchQuery) && <button onClick={() => { setTypeFilter(''); setCollectionFilter(''); setWatchlistFilter(''); setSearchQuery(''); }} style={{ padding: '12px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>}
                             <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '12px 20px', background: isSyncing ? theme.paper : theme.ink, color: isSyncing ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>
                                 {isSyncing ? 'Syncing...' : 'Pull Live Stock'}
                             </button>
