@@ -19,7 +19,7 @@ const stripUndefined = (v) => {
 // CONSTANTS FOR GLOBAL PERMISSIONS
 const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'admin'];
 const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'OS COMMS', 'ASSET GALLERY', 'MANAGEMENT', 'DAILY SUMMARY'];
-const PICK_TABS = ['QUEUE', 'PACKING', 'GALLERY', 'MESSAGING']; // 🚀 ADDED PICK AND PACK TABS
+const PICK_TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'GALLERY', 'MESSAGING']; // mirrors PickPackApp TABS
 
 // NetSuite plumbing (mirror of ERPPushPullTab) for creating a flow's rollup item.
 const BRAND_NETSUITE_MAP = {
