@@ -102,6 +102,16 @@ const erpOf = (p) => String(p?.legacyErpId || p?.itemId || '').toUpperCase();
 // identifier in `name` rather than `code`, so fall back to name — that's the suffix the assembly uses.
 const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
 
+// Initial-stock plating WO# for MANUAL pulls (no HQ demand yet): IS_ + today's MMDDYY (e.g. IS_061926).
+// Demand-routed pulls keep their own WO# (PLW-…); this only seeds the field when starting a manual pull.
+const isStockWoNumber = () => {
+    const d = new Date();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const yy = String(d.getFullYear()).slice(-2);
+    return `IS_${mm}${dd}${yy}`;
+};
+
 const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [operator, setOperator] = useState(null);
     const [pinInput, setPinInput] = useState("");
@@ -1984,7 +1994,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{item.binLocation}</td>
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
-                                                <button onClick={() => { setPlatingBase(item); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(""); setPlatingDemandId(null); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Pull →</button>
+                                                <button onClick={() => { setPlatingBase(item); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(isStockWoNumber()); setPlatingDemandId(null); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Pull →</button>
                                             </td>
                                         </tr>
                                     ))}
