@@ -13,7 +13,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [lastSyncTime, setLastSyncTime] = useState("");
     const [vendors, setVendors] = useState([]);
     const [outsourceFinishes, setOutsourceFinishes] = useState([]); // hq_outsource_finishes — detect EP (plated) lines for plating-flow dispatch
-    
+    const [platingLines, setPlatingLines] = useState([]); // in-progress plating (staged/shipped/received) → WIP-Plating column + popup
+    const [wipModal, setWipModal] = useState(null);       // { erpId, itemName, lines } when the WIP popup is open
+    const [poModal, setPoModal] = useState(null);         // { erpId, itemName, loading, lines, error } for the On-Order popup
+
     // BUILDER STATE
     const [activeBuilder, setActiveBuilder] = useState("PO"); // 'PO' or 'WO'
     const [activeVendor, setActiveVendor] = useState("");
@@ -80,7 +83,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         });
 
-        return () => { unsubParts(); unsubLists(); unsubCollections(); unsubOutsource(); };
+        // In-progress plating lines (out for plating) → feeds the WIP-Plating column + popup. 'built' = done.
+        const unsubPlating = onSnapshot(collection(db, "plating_shipments"), snap => {
+            setPlatingLines(
+                snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                    .filter(s => s.brandId === activeBrand && ['staged', 'shipped', 'received'].includes(s.status))
+            );
+        });
+
+        return () => { unsubParts(); unsubLists(); unsubCollections(); unsubOutsource(); unsubPlating(); };
     }, [activeBrand]);
 
     // --- ALIGNED DYNAMIC DICTIONARY LISTS ---
@@ -520,6 +531,46 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
     };
 
+    // In-progress plating, grouped by the RAW item's ERP id → WIP-Plating column total + popup detail.
+    const STAGE_LABEL = { staged: 'Staged', shipped: 'At plater', received: 'Received' };
+    const wipByErp = {};
+    platingLines.forEach(l => {
+        const erp = (l.erpId || '').toUpperCase();
+        if (!erp) return;
+        if (!wipByErp[erp]) wipByErp[erp] = { qty: 0, lines: [] };
+        wipByErp[erp].qty += parseInt(l.qty) || 0;
+        wipByErp[erp].lines.push(l);
+    });
+
+    // On-Order popup: pull the open PO lines for an item live from NetSuite (authoritative PO data).
+    const openPoModal = async (item) => {
+        const erp = (item.legacyErpId || item.itemId || '').toUpperCase();
+        setPoModal({ erpId: erp, itemName: item.itemName || erp, loading: true, lines: [], error: null });
+        try {
+            const q = `
+                SELECT t.tranid AS po_number, t.id AS po_id, TO_CHAR(t.trandate, 'YYYY-MM-DD') AS trandate,
+                       BUILTIN.DF(t.entity) AS vendor, tl.quantity AS qty,
+                       tl.quantityshiprecv AS received, tl.rate AS rate
+                FROM transaction t
+                JOIN transactionline tl ON tl.transaction = t.id
+                JOIN item i ON i.id = tl.item
+                WHERE t.type = 'PurchOrd'
+                  AND UPPER(i.itemid) = '${erp.replace(/'/g, "''")}'
+                  AND NVL(tl.quantity, 0) <> NVL(tl.quantityshiprecv, 0)
+                ORDER BY t.trandate DESC
+            `;
+            const r = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } })
+            });
+            const b = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
+            setPoModal(m => (m && m.erpId === erp) ? { ...m, loading: false, lines: b.items || [] } : m);
+        } catch (e) {
+            setPoModal(m => (m && m.erpId === erp) ? { ...m, loading: false, error: e.message || String(e) } : m);
+        }
+    };
+
     // --- AGGREGATING DEMAND FROM VARIANTS TO ROOT ITEM ---
     const enrichedInventory = hqParts.map(part => {
         const erpId = (part.legacyErpId || part.itemId).toUpperCase();
@@ -544,11 +595,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const moq = parseInt(specs.moq) || 0;
         const leadTime = parseInt(specs.leadTime) || 0;
 
-        return { 
-            ...part, 
-            stock: { ...stock, aggregatedCommitted, aggregatedBackorder }, 
-            rop, moq, leadTime, 
-            isLowStock: stock.available <= rop && rop > 0 
+        return {
+            ...part,
+            stock: { ...stock, aggregatedCommitted, aggregatedBackorder },
+            wip: wipByErp[erpId] || { qty: 0, lines: [] }, // in-progress plating for this item
+            rop, moq, leadTime,
+            isLowStock: stock.available <= rop && rop > 0
         };
     });
 
@@ -591,7 +643,82 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
-            
+
+            {/* WIP-PLATING POPUP — work orders / finishes currently out for plating for this item */}
+            {wipModal && (
+                <div onClick={() => setWipModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '32px', width: '640px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+                            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>Out for Plating</h2>
+                            <button onClick={() => setWipModal(null)} style={{ background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                        </div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>{wipModal.itemName} · {wipModal.erpId} · {wipModal.lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)} pcs in progress</div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                            <thead style={{ borderBottom: '2px solid var(--ink)' }}>
+                                <tr>
+                                    {['Finish', 'Work Order', 'Qty', 'Stage'].map((h, i) => <th key={h} style={{ padding: '10px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', textAlign: i >= 2 ? 'center' : 'left' }}>{h}</th>)}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {[...wipModal.lines].sort((a, b) => String(a.finishCode || '').localeCompare(String(b.finishCode || ''))).map(l => (
+                                    <tr key={l.id} style={{ borderBottom: '1px solid var(--line)' }}>
+                                        <td style={{ padding: '12px 8px', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>
+                                            <span style={{ fontFamily: 'var(--mono)', color: 'var(--brass)' }}>{l.finishCode || '—'}</span>{l.finishName ? ` · ${l.finishName}` : ''}
+                                            {l.targetErpId ? <div style={{ fontSize: '10px', color: 'var(--ink-soft)' }}>→ {l.targetErpId}</div> : null}
+                                        </td>
+                                        <td style={{ padding: '12px 8px', fontFamily: 'var(--mono)', fontSize: '0.85rem' }}>{l.woNum || '—'}</td>
+                                        <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '1rem' }}>{parseInt(l.qty) || 0}</td>
+                                        <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)' }}>{STAGE_LABEL[l.status] || l.status}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* ON-ORDER POPUP — open purchase orders for this item, pulled live from NetSuite */}
+            {poModal && (
+                <div onClick={() => setPoModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '32px', width: '720px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+                            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>Open Purchase Orders</h2>
+                            <button onClick={() => setPoModal(null)} style={{ background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                        </div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>{poModal.itemName} · {poModal.erpId}</div>
+                        {poModal.loading && <div style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Loading purchase orders from NetSuite…</div>}
+                        {poModal.error && <div style={{ padding: '16px', background: '#fdf2f2', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '11px', whiteSpace: 'pre-wrap' }}>{poModal.error}</div>}
+                        {!poModal.loading && !poModal.error && poModal.lines.length === 0 && <div style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No open purchase orders found for this item.</div>}
+                        {!poModal.loading && !poModal.error && poModal.lines.length > 0 && (
+                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                <thead style={{ borderBottom: '2px solid var(--ink)' }}>
+                                    <tr>
+                                        {['PO #', 'Vendor', 'Ordered', 'Received', 'Open', 'Rate', 'Date'].map((h, i) => <th key={h} style={{ padding: '10px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', textAlign: i >= 2 && i <= 5 ? 'center' : 'left' }}>{h}</th>)}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {poModal.lines.map((l, idx) => {
+                                        const ordered = parseFloat(l.qty) || 0;
+                                        const received = parseFloat(l.received) || 0;
+                                        return (
+                                            <tr key={(l.po_id || idx) + '-' + idx} style={{ borderBottom: '1px solid var(--line)' }}>
+                                                <td style={{ padding: '12px 8px', fontFamily: 'var(--mono)', fontSize: '0.85rem', color: 'var(--brass)' }}>{l.po_number || l.po_id || '—'}</td>
+                                                <td style={{ padding: '12px 8px', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>{l.vendor || '—'}</td>
+                                                <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)' }}>{ordered}</td>
+                                                <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)', color: 'var(--ink-soft)' }}>{received}</td>
+                                                <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontWeight: 600 }}>{ordered - received}</td>
+                                                <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>{l.rate != null && l.rate !== '' ? `$${parseFloat(l.rate).toFixed(2)}` : '—'}</td>
+                                                <td style={{ padding: '12px 8px', fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{l.trandate || '—'}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* HEADER & FILTER BAR */}
             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -679,6 +806,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Bin</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>On Hand</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Avail</th>
+                                    <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>WIP Plating</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Agg. Commit</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>On Order</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Agg. BO</th>
@@ -686,8 +814,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 </tr>
                             </thead>
                             <tbody>
-                                {displayItems.length === 0 && <tr><td colSpan="9" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>No inventory items matched.</td></tr>}
-                                {activeBuilder === 'PO' && activeVendor && <tr><td colSpan="9" style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
+                                {displayItems.length === 0 && <tr><td colSpan="10" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>No inventory items matched.</td></tr>}
+                                {activeBuilder === 'PO' && activeVendor && <tr><td colSpan="10" style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
                                 {!(activeBuilder === 'PO' && activeVendor) && displayItems.map(item => (
                                     <tr key={item.id} style={{ borderBottom: '1px solid var(--line)', background: item.isLowStock ? '#fdf2f2' : '#fff' }}>
                                         <td style={{ padding: '16px 20px', fontFamily: 'var(--mono)', fontSize: '11px', color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>
@@ -713,8 +841,17 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>{item.manufacturingSpecs?.binLocation || '-'}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink)' }}>{item.stock.onHand}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', fontWeight: 500, color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>{item.stock.available}</td>
+                                        <td
+                                            onClick={item.wip.qty > 0 ? () => setWipModal({ erpId: item.legacyErpId || item.itemId, itemName: item.itemName, lines: item.wip.lines }) : undefined}
+                                            title={item.wip.qty > 0 ? 'View work orders out for plating' : ''}
+                                            style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', fontWeight: item.wip.qty > 0 ? 600 : 400, color: item.wip.qty > 0 ? 'var(--brass)' : 'var(--ink-soft)', cursor: item.wip.qty > 0 ? 'pointer' : 'default', textDecoration: item.wip.qty > 0 ? 'underline' : 'none' }}
+                                        >{item.wip.qty || '-'}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink-soft)' }}>{item.stock.aggregatedCommitted}</td>
-                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink-soft)' }}>{item.stock.onOrder}</td>
+                                        <td
+                                            onClick={item.stock.onOrder > 0 ? () => openPoModal(item) : undefined}
+                                            title={item.stock.onOrder > 0 ? 'View open purchase orders' : ''}
+                                            style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', fontWeight: item.stock.onOrder > 0 ? 600 : 400, color: item.stock.onOrder > 0 ? 'var(--brass)' : 'var(--ink-soft)', cursor: item.stock.onOrder > 0 ? 'pointer' : 'default', textDecoration: item.stock.onOrder > 0 ? 'underline' : 'none' }}
+                                        >{item.stock.onOrder}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.aggregatedBackorder > 0 ? '#d9534f' : 'var(--ink-soft)' }}>{item.stock.aggregatedBackorder}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', color: 'var(--ink-soft)' }}>{item.rop || '-'}</td>
                                     </tr>
