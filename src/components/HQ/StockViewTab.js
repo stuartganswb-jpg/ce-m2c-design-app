@@ -374,6 +374,22 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         return qty;
     };
 
+    // Recommended Production (finishing): for STOCKED finished assemblies with a paint size, take the same
+    // ROP/demand shortfall and round it UP to the paint machine's per-section capacity, so it's always a
+    // runnable batch unit (S=70, M=35, L=22 per section → e.g. an L part recommends 22/44/66…).
+    const PAINT_SECTION = { S: 70, M: 35, L: 22 };
+    const recommendedProductionFor = (item) => {
+        const specs = item.manufacturingSpecs || {};
+        const cap = PAINT_SECTION[(specs.paintSize || '').toUpperCase()];
+        if (!specs.isStocked || !cap) return null; // only stocked, paint-sized assemblies get a recommendation
+        const avail = item.stock?.available || 0;
+        const onOrder = item.stock?.onOrder || 0;
+        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0);
+        const shortfall = Math.max(item.rop - avail, demand - avail - onOrder);
+        if (shortfall <= 0) return 0; // at/above ROP and demand covered → nothing to run
+        return Math.ceil(shortfall / cap) * cap;
+    };
+
     const handleOrderQtyChange = (partId, qty) => {
         setOrderDrafts(prev => ({ ...prev, [partId]: qty === "" ? "" : Math.max(0, parseInt(qty) || 0) }));
     };
@@ -811,11 +827,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>On Order</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Agg. BO</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>ROP</th>
+                                    <th title="Recommended production batch for stocked, paint-sized finished assemblies — ROP/demand shortfall rounded up to the paint machine's per-section unit." style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Rec. Prod.</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {displayItems.length === 0 && <tr><td colSpan="10" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>No inventory items matched.</td></tr>}
-                                {activeBuilder === 'PO' && activeVendor && <tr><td colSpan="10" style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
+                                {displayItems.length === 0 && <tr><td colSpan="11" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>No inventory items matched.</td></tr>}
+                                {activeBuilder === 'PO' && activeVendor && <tr><td colSpan="11" style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
                                 {!(activeBuilder === 'PO' && activeVendor) && displayItems.map(item => (
                                     <tr key={item.id} style={{ borderBottom: '1px solid var(--line)', background: item.isLowStock ? '#fdf2f2' : '#fff' }}>
                                         <td style={{ padding: '16px 20px', fontFamily: 'var(--mono)', fontSize: '11px', color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>
@@ -854,6 +871,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         >{item.stock.onOrder}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.aggregatedBackorder > 0 ? '#d9534f' : 'var(--ink-soft)' }}>{item.stock.aggregatedBackorder}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', color: 'var(--ink-soft)' }}>{item.rop || '-'}</td>
+                                        {(() => {
+                                            const rec = recommendedProductionFor(item);
+                                            const show = rec != null && rec > 0;
+                                            return (
+                                                <td title={rec != null ? `Paint size ${(item.manufacturingSpecs?.paintSize || '').toUpperCase()} · batch unit ${PAINT_SECTION[(item.manufacturingSpecs?.paintSize || '').toUpperCase()]}/section` : 'Set Stocked + Paint Size on the item to get a recommendation'} style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', fontWeight: show ? 600 : 400, color: show ? 'var(--brass)' : 'var(--ink-soft)' }}>{rec == null ? '-' : rec}</td>
+                                            );
+                                        })()}
                                     </tr>
                                 ))}
                             </tbody>

@@ -1135,6 +1135,14 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                         <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                         <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                         <div><label style={labelStyle}>Reorder Pt (ROP)</label><input name="reorderPoint" type="number" value={editSpecs.reorderPoint || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                        <div><label style={labelStyle}>Paint Size</label>
+                            <select name="paintSize" value={editSpecs.paintSize || ""} onChange={handleSpecChange} style={{ ...fieldStyle, background: '#fff' }}>
+                                <option value="">—</option>
+                                <option value="S">S — 70 / section</option>
+                                <option value="M">M — 35 / section</option>
+                                <option value="L">L — 22 / section</option>
+                            </select>
+                        </div>
                     </div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
