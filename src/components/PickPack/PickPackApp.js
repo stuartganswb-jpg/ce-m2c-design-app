@@ -269,22 +269,9 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             if (erpIds.length > 0) {
                 const chunkSize = 500;
                 let allResults = [];
-                
-                for (let i = 0; i < erpIds.length; i += chunkSize) {
-                    const chunk = erpIds.slice(i, i + chunkSize);
-                    const idList = chunk.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
+                let allBinResults = [];   // per-bin on-hand rows (one per item+bin) for the COUNT tab
 
-                    const q = `
-                        SELECT 
-                            Item.itemid AS legacy_id,
-                            SUM(AggregateItemLocation.quantityonhand) AS onhand
-                        FROM Item
-                        LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id
-                        WHERE Item.itemid IN (${idList})
-                        AND AggregateItemLocation.location = ${locationId}
-                        GROUP BY Item.itemid
-                    `;
-                    
+                const runQuery = async (q) => {
                     const response = await fetch(FIREBASE_FUNCTION_URL, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -294,17 +281,65 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                             payload: { q }
                         })
                     });
-                    
                     const result = await response.json();
                     if (!response.ok) throw new Error(JSON.stringify(result));
-                    if (result.items) allResults = allResults.concat(result.items);
+                    return result.items || [];
+                };
+
+                for (let i = 0; i < erpIds.length; i += chunkSize) {
+                    const chunk = erpIds.slice(i, i + chunkSize);
+                    const idList = chunk.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
+
+                    // 1) Combined on-hand per item (unchanged source — keeps CONVERT/TRANSFER/PLATING totals correct).
+                    const q = `
+                        SELECT
+                            Item.itemid AS legacy_id,
+                            SUM(AggregateItemLocation.quantityonhand) AS onhand
+                        FROM Item
+                        LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id
+                        WHERE Item.itemid IN (${idList})
+                        AND AggregateItemLocation.location = ${locationId}
+                        GROUP BY Item.itemid
+                    `;
+                    allResults = allResults.concat(await runQuery(q));
+
+                    // 2) Per-bin on-hand (one row per item+bin) so a count can adjust ONLY the entered bin.
+                    //    Modeled on StockViewTab's proven InventoryBalance/Bin join. Best-effort: a failure here
+                    //    must not break the main pull — the COUNT tab then falls back to combined-total behavior.
+                    try {
+                        const qBins = `
+                            SELECT
+                                Item.itemid AS legacy_id,
+                                Bin.binnumber AS bin_number,
+                                SUM(InventoryBalance.quantityonhand) AS onhand
+                            FROM Item
+                            LEFT JOIN InventoryBalance ON InventoryBalance.item = Item.id
+                            LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
+                            WHERE Item.itemid IN (${idList})
+                            AND InventoryBalance.location = ${locationId}
+                            GROUP BY Item.itemid, Bin.binnumber
+                        `;
+                        allBinResults = allBinResults.concat(await runQuery(qBins));
+                    } catch (binErr) {
+                        console.warn("Per-bin stock pull failed (count tab will use combined totals):", binErr);
+                    }
                 }
-                
+
                 const stockMap = {};
                 allResults.forEach(row => {
-                    if (row.legacy_id) stockMap[row.legacy_id.toUpperCase()] = { onHand: parseInt(row.onhand) || 0 };
+                    if (row.legacy_id) stockMap[row.legacy_id.toUpperCase()] = { onHand: parseInt(row.onhand) || 0, bins: [] };
                 });
-                
+                // Attach the per-bin breakdown. Only rows with an actual bin name count; null-bin rows
+                // (non-bin-managed stock) are ignored here and handled by the total-on-hand fallback.
+                allBinResults.forEach(row => {
+                    if (!row.legacy_id) return;
+                    const id = row.legacy_id.toUpperCase();
+                    const binName = (row.bin_number || '').trim();
+                    if (!binName) return;
+                    if (!stockMap[id]) stockMap[id] = { onHand: 0, bins: [] };
+                    stockMap[id].bins.push({ bin: binName.toUpperCase(), qty: parseInt(row.onhand) || 0 });
+                });
+
                 setNsStock(stockMap);
             }
         } catch (error) {
@@ -360,23 +395,36 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     // --- NETSUITE INVENTORY ADJUSTMENT (PUSH) ---
     const pushInventoryAdjustment = async () => {
         const skipped = [];
-        const adjustments = baseFilteredItems.map(item => {
-            if (physicalCounts[item.id] === undefined) return null;
-            const delta = physicalCounts[item.id] - item.onHand;
+        // One delta per counted (item, bin): the variance is measured against THAT bin's on-hand, so a
+        // count only ever moves the bin it was entered against — never the item's combined cross-bin total.
+        const rowDeltas = countRows.map(row => {
+            if (physicalCounts[row.rowKey] === undefined) return null;
+            const delta = physicalCounts[row.rowKey] - row.binOnHand;
             if (delta === 0) return null;
             // Don't send a Firestore doc id as a NetSuite item ref — skip unmapped items (they'd 400).
-            if (!item.netSuiteInternalId) { skipped.push(item.itemName || item.erpId || item.id); return null; }
-            const storedBin = (item.binLocation || '').trim();
-            const effBin = ((binEdits[item.id] ?? item.binLocation) || '').trim().toUpperCase();
+            if (!row.netSuiteInternalId) { skipped.push(row.itemName || row.erpId || row.id); return null; }
+            const storedBin = (row.binLocation || '').trim().toUpperCase();
+            const effBin = (row.isExistingBin ? row.countBin : ((binEdits[row.rowKey] ?? row.countBin) || '')).trim().toUpperCase();
             return {
-                internalId: item.netSuiteInternalId,
-                docId: item.id,
+                internalId: row.netSuiteInternalId,
+                docId: row.id,
                 binNumber: effBin,
-                // operator typed a different bin than the item's stored one → create it in NetSuite + write it back
-                binChanged: effBin !== '' && effBin.toUpperCase() !== storedBin.toUpperCase(),
+                // Only a brand-new bin assignment (new/unbinned row) needs creating in NetSuite + writing back
+                // to the item's home bin. Counting an existing bin must never reassign the item's home bin.
+                binChanged: !row.isExistingBin && effBin !== '' && effBin !== storedBin,
                 adjustQtyBy: delta
             };
         }).filter(Boolean);
+
+        // Group bins of the same item into ONE adjustment line (canonical NetSuite shape: a single line per
+        // item carrying a per-bin assignment for each counted bin) — avoids duplicate item lines in one push.
+        const byItem = {};
+        rowDeltas.forEach(d => {
+            if (!byItem[d.internalId]) byItem[d.internalId] = { internalId: d.internalId, docId: d.docId, bins: [], total: 0 };
+            byItem[d.internalId].bins.push({ binNumber: d.binNumber, qty: d.adjustQtyBy });
+            byItem[d.internalId].total += d.adjustQtyBy;
+        });
+        const adjustments = Object.values(byItem);
 
         if (adjustments.length === 0) {
             return alert(skipped.length
@@ -392,9 +440,9 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
             // Create any newly-assigned bins in NetSuite (idempotent) and write the bin back onto the item
             // so the CONVERT / plating flows pick it up. Done before the adjustment so the bin resolves.
-            const newBins = [...new Set(adjustments.filter(a => a.binChanged).map(a => a.binNumber))];
+            const newBins = [...new Set(rowDeltas.filter(a => a.binChanged).map(a => a.binNumber))];
             for (const bin of newBins) { await ensureBinExists(bin, nsConfig.location); }
-            await Promise.all(adjustments.filter(a => a.binChanged).map(a =>
+            await Promise.all(rowDeltas.filter(a => a.binChanged).map(a =>
                 updateDoc(doc(db, "Approved_Designs", a.docId), { "manufacturingSpecs.binLocation": a.binNumber }).catch(() => {})
             ));
 
@@ -413,13 +461,13 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
                         items: adjustments.map(adj => ({
                             item: { id: adj.internalId },
                             location: { id: nsConfig.location }, // location is a LINE field on REST adjustments
-                            adjustQtyBy: adj.adjustQtyBy,
-                            // Bin-tracked item: the detail qty and the bin assignment must reconcile to the
-                            // line's signed adjustQtyBy. Bin referenced by refName (its bin number string).
+                            adjustQtyBy: adj.total,
+                            // Bin-tracked item: the detail qty and the per-bin assignments must reconcile to the
+                            // line's signed adjustQtyBy. One assignment per counted bin (refName = bin number).
                             inventoryDetail: {
-                                quantity: adj.adjustQtyBy,
+                                quantity: adj.total,
                                 inventoryAssignment: {
-                                    items: [{ binNumber: { refName: adj.binNumber }, quantity: adj.adjustQtyBy }]
+                                    items: adj.bins.map(b => ({ binNumber: { refName: b.binNumber }, quantity: b.qty }))
                                 }
                             }
                         }))
@@ -1110,6 +1158,30 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         };
     });
 
+    // COUNT tab rows: expand each inventory item into one row PER BIN that holds stock, so a physical
+    // count adjusts ONLY the entered bin instead of the item's combined cross-bin total. Items with no
+    // per-bin breakdown (non-bin-managed, or the per-bin pull was unavailable) fall back to a single row
+    // whose O.H. is the combined total — i.e. the original behavior, so nothing regresses for them.
+    const countRows = baseFilteredItems.flatMap(item => {
+        const bins = (nsStock[item.erpId]?.bins || []).filter(b => b.bin);
+        if (bins.length > 0) {
+            return bins.map(b => ({
+                ...item,
+                rowKey: `${item.id}::${b.bin}`,
+                countBin: b.bin,        // fixed, real bin (read-only in the UI)
+                binOnHand: b.qty,       // on-hand in THIS bin — the basis for the delta
+                isExistingBin: true
+            }));
+        }
+        return [{
+            ...item,
+            rowKey: `${item.id}::__nobins__`,
+            countBin: item.binLocation, // editable; 'UNASSIGNED' or the item's stored home bin
+            binOnHand: item.onHand,     // no bin breakdown → use combined total (original behavior)
+            isExistingBin: false
+        }];
+    });
+
     // CONVERT derived: resolve target assembly (by /P convention or manual pick) + readiness gates
     const convTarget = (convertTargetId && hqParts.find(p => p.id === convertTargetId))
         || (convertBase && hqParts.find(p => erpOf(p) === `${convertBase.erpId}/P`))
@@ -1339,22 +1411,22 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             <tr>
                                                 <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>Item</th>
                                                 <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Bin</th>
-                                                <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>System O.H.</th>
+                                                <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Bin O.H.</th>
                                                 <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Physical</th>
                                                 <th style={{ padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Net Delta</th>
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {baseFilteredItems.filter(item => physicalCounts[item.id] !== undefined).map(item => {
-                                                const delta = physicalCounts[item.id] - item.onHand;
-                                                const effBin = ((binEdits[item.id] ?? item.binLocation) || '').trim().toUpperCase();
-                                                const binIsNew = effBin !== '' && effBin.toUpperCase() !== (item.binLocation || '').trim().toUpperCase();
+                                            {countRows.filter(row => physicalCounts[row.rowKey] !== undefined).map(row => {
+                                                const delta = physicalCounts[row.rowKey] - row.binOnHand;
+                                                const effBin = (row.isExistingBin ? row.countBin : (binEdits[row.rowKey] ?? row.countBin) || '').trim().toUpperCase();
+                                                const binIsNew = !row.isExistingBin && effBin !== '' && effBin.toUpperCase() !== (row.binLocation || '').trim().toUpperCase();
                                                 return (
-                                                    <tr key={item.id} style={{ borderBottom: `1px solid ${theme.line}` }}>
-                                                        <td style={{ padding: '15px 10px', fontFamily: theme.sans, fontSize: '0.9rem' }}>{item.itemName}</td>
+                                                    <tr key={row.rowKey} style={{ borderBottom: `1px solid ${theme.line}` }}>
+                                                        <td style={{ padding: '15px 10px', fontFamily: theme.sans, fontSize: '0.9rem' }}>{row.itemName}</td>
                                                         <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '0.85rem', textAlign: 'center', color: binIsNew ? theme.brass : theme.inkSoft }}>{effBin || '—'}{binIsNew ? ' (new)' : ''}</td>
-                                                        <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '1.1rem', textAlign: 'center' }}>{item.onHand}</td>
-                                                        <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '1.1rem', textAlign: 'center' }}>{physicalCounts[item.id]}</td>
+                                                        <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '1.1rem', textAlign: 'center' }}>{row.binOnHand}</td>
+                                                        <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '1.1rem', textAlign: 'center' }}>{physicalCounts[row.rowKey]}</td>
                                                         <td style={{ padding: '15px 10px', fontFamily: theme.mono, fontSize: '1.1rem', textAlign: 'center', color: delta < 0 ? '#d9534f' : delta > 0 ? '#7dbb81' : theme.inkSoft }}>
                                                             {delta > 0 ? `+${delta}` : delta}
                                                         </td>
@@ -1412,34 +1484,38 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <thead style={{ background: theme.paper2, position: 'sticky', top: 0, zIndex: 10 }}>
                                     <tr>
                                         <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>ERP ID / Item</th>
-                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Bin Location</th>
-                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>System O.H.</th>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Bin</th>
+                                        <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Bin O.H.</th>
                                         <th style={{ padding: '16px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', textAlign: 'center' }}>Physical Count</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {baseFilteredItems.map(item => (
-                                        <tr key={item.id} style={{ borderBottom: `1px solid ${theme.line}`, background: physicalCounts[item.id] !== undefined ? '#f8fdf8' : '#fff' }}>
+                                    {countRows.map(row => (
+                                        <tr key={row.rowKey} style={{ borderBottom: `1px solid ${theme.line}`, background: physicalCounts[row.rowKey] !== undefined ? '#f8fdf8' : '#fff' }}>
                                             <td style={{ padding: '16px' }}>
-                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{item.erpId}</div>
-                                                <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{item.itemName}</div>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{row.erpId}</div>
+                                                <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{row.itemName}</div>
                                             </td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
-                                                <input value={binEdits[item.id] ?? item.binLocation} onChange={e => setBinEdits(prev => ({ ...prev, [item.id]: e.target.value }))} placeholder="bin…" style={{ width: '130px', padding: '8px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass, background: 'transparent', border: (binEdits[item.id] !== undefined && (binEdits[item.id] || '').toUpperCase() !== (item.binLocation || '').toUpperCase()) ? `2px solid ${theme.brass}` : `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                                {row.isExistingBin ? (
+                                                    <span style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{row.countBin}</span>
+                                                ) : (
+                                                    <input value={binEdits[row.rowKey] ?? row.countBin} onChange={e => setBinEdits(prev => ({ ...prev, [row.rowKey]: e.target.value }))} placeholder="bin…" style={{ width: '130px', padding: '8px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass, background: 'transparent', border: (binEdits[row.rowKey] !== undefined && (binEdits[row.rowKey] || '').toUpperCase() !== (row.countBin || '').toUpperCase()) ? `2px solid ${theme.brass}` : `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                                )}
                                             </td>
-                                            <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
+                                            <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{row.binOnHand}</td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
                                                 <input
                                                     type="number"
                                                     placeholder="-"
-                                                    value={physicalCounts[item.id] !== undefined ? physicalCounts[item.id] : ''} 
-                                                    onChange={(e) => setPhysicalCounts(prev => ({ ...prev, [item.id]: e.target.value === "" ? undefined : Math.max(0, parseInt(e.target.value) || 0) }))}
-                                                    style={{ width: '100px', padding: '12px', textAlign: 'center', fontSize: '1.2rem', fontFamily: theme.mono, border: physicalCounts[item.id] !== undefined ? `2px solid ${theme.brass}` : `1px solid ${theme.line}`, outline: 'none' }}
+                                                    value={physicalCounts[row.rowKey] !== undefined ? physicalCounts[row.rowKey] : ''}
+                                                    onChange={(e) => setPhysicalCounts(prev => ({ ...prev, [row.rowKey]: e.target.value === "" ? undefined : Math.max(0, parseInt(e.target.value) || 0) }))}
+                                                    style={{ width: '100px', padding: '12px', textAlign: 'center', fontSize: '1.2rem', fontFamily: theme.mono, border: physicalCounts[row.rowKey] !== undefined ? `2px solid ${theme.brass}` : `1px solid ${theme.line}`, outline: 'none' }}
                                                 />
                                             </td>
                                         </tr>
                                     ))}
-                                    {baseFilteredItems.length === 0 && (
+                                    {countRows.length === 0 && (
                                         <tr>
                                             <td colSpan="4" style={{ padding: '40px', textAlign: 'center', color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No inventory items matched your filter.</td>
                                         </tr>
@@ -1451,7 +1527,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         {/* BOTTOM ACTION BAR */}
                         <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, textTransform: 'uppercase' }}>
-                                Items Counted: {Object.keys(physicalCounts).filter(k => physicalCounts[k] !== undefined).length}
+                                Bins Counted: {Object.keys(physicalCounts).filter(k => physicalCounts[k] !== undefined).length}
                             </div>
                             <button 
                                 onClick={() => setShowSynapsis(true)} 
