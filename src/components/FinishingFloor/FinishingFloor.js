@@ -102,15 +102,20 @@ const FinishingFloor = () => {
   // alone can't always identify it. Resolve the authoritative directory record we already subscribe
   // to and treat the check as ADDITIVE — it can only grant more access, never downgrade what the
   // token role already allows. Other roles stay gated by fin_config/permissions.
+  // Normalize role strings to alpha-only lowercase so 'SUPERADMIN', 'super admin', 'super_admin'
+  // all collapse to 'superadmin' (and 'Admin' -> 'admin'). Match the directory record case-
+  // insensitively by pin/id/name. The check is additive: it only ever grants more access.
+  const normRole = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
   const tokenRole = (user?.role || 'operator').toLowerCase();
+  const uname = (user?.name || '').toLowerCase();
   const meRecord = users.find(u =>
     (user?.pin && String(u.pin) === String(user.pin)) ||
     (user?.id && String(u.id) === String(user.id)) ||
-    (user?.name && u.name === user.name)
+    (uname && String(u.name || '').toLowerCase() === uname)
   ) || {};
   const dirRole = (meRecord.role || '').toLowerCase();
   const isSuperAdmin = user?.superAdmin === true || meRecord.superAdmin === true ||
-    ['admin', 'superadmin'].includes(tokenRole) || ['admin', 'superadmin'].includes(dirRole);
+    ['admin', 'superadmin'].includes(normRole(tokenRole)) || ['admin', 'superadmin'].includes(normRole(dirRole));
   const safeUserRole = tokenRole;
   const myTabs = isSuperAdmin ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
