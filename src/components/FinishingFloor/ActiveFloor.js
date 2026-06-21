@@ -4,82 +4,94 @@ import { doc, updateDoc } from "firebase/firestore";
 import { resolveRecipe } from '../Shared/finishingTime';
 
 const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
-const btnStyle = { padding: '12px 16px', border: 'none', borderRadius: '2px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' };
 const inputStyle = { padding: '10px', border: '1px solid var(--line)', borderRadius: '2px', width: '100%', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' };
 
-// --- NATIVE SCADA SIMULATOR ---
-const DigitalTwinSCADA = ({ machineState, setMachineState, redWO, blueWO, activeWOs }) => {
-    
-    // Check if ANY task is actively running (preventing shuffle)
-    const isAnyStationRunning = activeWOs.some(w => 
-        (w.machineAssigned === 'RED' || w.machineAssigned === 'BLUE') &&
-        (w.tasks?.spinSpray?.status === 'Running' || w.tasks?.spinBake?.status === 'Running')
-    );
+// What a sled is doing right now, derived from its WO's current-step task state (set by operator
+// PIN actions). This is what makes the twin "live".
+const ACTIVITY = {
+    IDLE: { label: 'Empty', running: false },
+    SETUP: { label: 'Setting up', running: true },
+    SPRAY: { label: 'Spraying', running: true },
+    CURE: { label: 'Curing', running: true },
+    WAIT_SPRAY: { label: 'Ready to spray', running: false },
+    WAIT_OVEN: { label: 'Ready for oven', running: false },
+    STAGED: { label: 'Staged', running: false },
+};
+const sledActivity = (wo) => {
+    if (!wo) return { code: 'IDLE', ...ACTIVITY.IDLE };
+    const t = wo.tasks || {};
+    if (t.spinBake?.status === 'Running') return { code: 'CURE', ...ACTIVITY.CURE };
+    if (t.spinSpray?.status === 'Running') return { code: 'SPRAY', ...ACTIVITY.SPRAY };
+    if (t.spinSetup?.status === 'Running') return { code: 'SETUP', ...ACTIVITY.SETUP };
+    if (t.spinSpray?.status === 'Complete' && t.spinBake?.status !== 'Complete') return { code: 'WAIT_OVEN', ...ACTIVITY.WAIT_OVEN };
+    if (t.spinSetup?.status === 'Complete' && t.spinSpray?.status !== 'Complete') return { code: 'WAIT_SPRAY', ...ACTIVITY.WAIT_SPRAY };
+    return { code: 'STAGED', ...ACTIVITY.STAGED };
+};
+// Where the (single, track-mounted) oven is, derived from production: slid LEFT over the pole rack
+// when poles are baking, otherwise over whichever sled is curing, else parked off the sleds.
+const ovenOverOf = (redWO, blueWO, activeWOs) => {
+    if (activeWOs.some(w => w.tasks?.poleBake?.status === 'Running')) return 'POLES';
+    if (redWO?.tasks?.spinBake?.status === 'Running') return 'RED';
+    if (blueWO?.tasks?.spinBake?.status === 'Running') return 'BLUE';
+    return 'PARKED';
+};
 
-    const handleMoveOven = (pos) => {
-        if (machineState.isOvenRunning) return alert("Cannot move oven while curing in process!");
-        setMachineState({ ...machineState, ovenPos: pos });
-    };
+// --- LIVE DIGITAL TWIN (production-driven) ---
+// Fixed RED + BLUE sleds; the oven slides over the curing sled or off-left for poles. Everything is
+// derived from the work orders' task state, so it animates as operators enter PINs for each step.
+const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs }) => {
+    const ovenOver = ovenOverOf(redWO, blueWO, activeWOs);
+    const redAct = sledActivity(redWO);
+    const blueAct = sledActivity(blueWO);
+    const ovenRunning = ovenOver !== 'PARKED';
+    const ovenLeft = { POLES: '1%', RED: '34%', BLUE: '56%', PARKED: '80%' }[ovenOver];
+    const ovenLabel = { POLES: 'Curing poles', RED: 'Curing RED', BLUE: 'Curing BLUE', PARKED: 'Parked' }[ovenOver];
 
-    const handleCycleTrack = () => {
-        if (isAnyStationRunning) return alert("Cannot cycle track while a station is running a task!");
-        setMachineState({ 
-            ...machineState, 
-            redSledAt: machineState.redSledAt === 'RIGHT' ? 'LEFT' : 'RIGHT',
-            blueSledAt: machineState.blueSledAt === 'RIGHT' ? 'LEFT' : 'RIGHT'
-        });
+    const Sled = ({ color, wo, act, under }) => {
+        const accent = color === 'RED' ? 'var(--ink)' : 'var(--brass)';
+        return (
+            <div style={{ position: 'absolute', top: '36px', left: color === 'RED' ? '37%' : '59%', width: '13%', height: '86px', background: '#fff', border: `2px solid ${accent}`, borderRadius: '2px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '4px', zIndex: 10, boxShadow: act.running ? '0 0 0 3px rgba(176,141,87,0.30)' : (under ? '0 0 0 2px rgba(176,141,87,0.18)' : '0 4px 12px rgba(0,0,0,0.05)') }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: accent, fontWeight: 600 }}>{color}</span>
+                <span style={{ fontSize: '0.72rem', color: 'var(--ink)', marginTop: '3px' }}>{act.label}</span>
+                {wo && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '2px' }}>{wo.id}</span>}
+            </div>
+        );
     };
 
     return (
         <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', marginBottom: '30px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '24px' }}>
-                <h3 style={{ margin: 0, color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Live Digital Twin: Track & Oven</h3>
-                
-                <div style={{ display: 'flex', gap: '12px' }}>
-                    <button 
-                        onClick={() => handleMoveOven('POLES')} 
-                        disabled={machineState.isOvenRunning || machineState.ovenPos === 'POLES'} 
-                        style={{ padding: '8px 16px', background: machineState.ovenPos === 'POLES' ? 'var(--brass)' : 'var(--paper-2)', color: machineState.ovenPos === 'POLES' ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: machineState.isOvenRunning ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
-                        ◀ Move Oven to Poles
-                    </button>
-                    <button 
-                        onClick={() => handleMoveOven('SPINDLE')} 
-                        disabled={machineState.isOvenRunning || machineState.ovenPos === 'SPINDLE'} 
-                        style={{ padding: '8px 16px', background: machineState.ovenPos === 'SPINDLE' ? 'var(--brass)' : 'var(--paper-2)', color: machineState.ovenPos === 'SPINDLE' ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: machineState.isOvenRunning ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
-                        Move Oven to Station 2 ▶
-                    </button>
-                </div>
+                <h3 style={{ margin: 0, color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Live Digital Twin: Sleds & Oven</h3>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: ovenRunning ? 'var(--brass)' : 'var(--ink-soft)', border: '1px solid var(--line)', padding: '5px 10px', borderRadius: '2px' }}>
+                    ● Live · {ovenLabel}
+                </span>
             </div>
-            
-            <div style={{ position: 'relative', height: '140px', background: 'var(--paper)', border: '1px solid var(--line)', display: 'flex', alignItems: 'center' }}>
-                {/* POLE RACK */}
-                <div style={{ position: 'absolute', left: '2%', width: '15%', height: '100px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly', padding: '5px', background: '#fff' }}>
-                    <div style={{ height: '2px', background: 'var(--line)', width: '100%' }}></div>
-                    <div style={{ height: '2px', background: 'var(--line)', width: '100%' }}></div>
-                    <span style={{ color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', marginTop: '5px' }}>Pole Rack</span>
+
+            <div style={{ position: 'relative', height: '160px', background: 'var(--paper)', border: '1px solid var(--line)', overflow: 'hidden' }}>
+                {/* POLE RACK (far left — where the oven slides for long poles) */}
+                <div style={{ position: 'absolute', left: '2%', top: '30px', width: '14%', height: '100px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly', padding: '5px', background: '#fff' }}>
+                    <div style={{ height: '2px', background: 'var(--line)' }} />
+                    <div style={{ height: '2px', background: 'var(--line)' }} />
+                    <span style={{ color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center' }}>Pole Rack</span>
                 </div>
 
-                <div style={{ position: 'absolute', left: '25%', right: '5%', height: '40px', border: '1px dashed var(--line)', background: 'var(--paper-2)' }}></div>
-                
-                <div style={{ position: 'absolute', left: '27%', bottom: '15px', color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Station 2 (Setup / Dry)</div>
-                <div style={{ position: 'absolute', right: '5%', bottom: '15px', color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Station 1 (Setup / Spray)</div>
+                {/* spindle track the sleds sit on */}
+                <div style={{ position: 'absolute', left: '34%', right: '4%', top: '78px', height: '4px', background: 'var(--line)' }} />
 
-                {/* Sled Rendering based on Track Position */}
-                <div style={{ position: 'absolute', top: '30px', left: machineState.redSledAt === 'LEFT' ? '30%' : '80%', width: '60px', height: '80px', background: '#fff', border: '2px solid var(--ink)', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>RED</div>
-                <div style={{ position: 'absolute', top: '30px', left: machineState.blueSledAt === 'LEFT' ? '30%' : '80%', width: '60px', height: '80px', background: '#fff', border: '2px solid var(--brass)', transition: 'left 1.5s ease-in-out', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--brass)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>BLUE</div>
+                <Sled color="RED" wo={redWO} act={redAct} under={ovenOver === 'RED'} />
+                <Sled color="BLUE" wo={blueWO} act={blueAct} under={ovenOver === 'BLUE'} />
 
-                {/* Mobile Oven Rendering */}
-                <div style={{ position: 'absolute', top: '10px', left: machineState.ovenPos === 'POLES' ? '1%' : '23%', width: '22%', height: '120px', background: machineState.isOvenRunning ? 'var(--paper-2)' : 'rgba(250,248,244,0.5)', border: '2px solid var(--brass)', boxShadow: machineState.isOvenRunning ? 'inset 0 0 20px rgba(176,141,87,0.3)' : 'none', transition: 'left 2s ease-in-out', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', paddingTop: '10px', zIndex: 20 }}>
-                    <span style={{ color: '#fff', background: 'var(--brass)', padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Curing Oven</span>
+                {/* the single track-mounted oven, sliding to its production-derived position */}
+                <div style={{ position: 'absolute', top: '8px', left: ovenLeft, width: '18%', height: '144px', background: ovenRunning ? 'rgba(176,141,87,0.10)' : 'rgba(250,248,244,0.55)', border: '2px solid var(--brass)', boxShadow: ovenRunning ? 'inset 0 0 24px rgba(176,141,87,0.35)' : 'none', transition: 'left 1.6s ease-in-out', display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '8px', zIndex: 20 }}>
+                    <span style={{ color: '#fff', background: 'var(--brass)', padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Oven</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{ovenRunning ? 'Curing' : 'Idle'}</span>
                 </div>
             </div>
 
-            <button 
-                onClick={handleCycleTrack} 
-                disabled={isAnyStationRunning}
-                style={{ width: '100%', padding: '16px', marginTop: '24px', background: isAnyStationRunning ? 'var(--paper)' : 'var(--ink)', color: isAnyStationRunning ? 'var(--ink-soft)' : '#fff', border: isAnyStationRunning ? '1px solid var(--line)' : 'none', cursor: isAnyStationRunning ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
-                {isAnyStationRunning ? "Track Locked (Tasks Running)" : "Cycle Track (Swap Stations)"}
-            </button>
+            <div style={{ marginTop: '18px', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em', lineHeight: 1.6 }}>
+                RED: {redAct.label}{redWO ? ` (${redWO.id})` : ''} · BLUE: {blueAct.label}{blueWO ? ` (${blueWO.id})` : ''} · Oven {ovenLabel}.
+                Updates live as operators run each step — one sled cures while the other is set up; the oven slides left for poles.
+            </div>
         </div>
     );
 };
@@ -98,25 +110,25 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
     handPoleMins: sysConfig?.handPoleMins || 10, poleMins: sysConfig?.poleMins || 5
   };
 
-  // --- DIGITAL TWIN MACHINE STATE ---
-  const [machineState, setMachineState] = useState({
-      redSledAt: 'RIGHT',  
-      blueSledAt: 'LEFT',  
-      ovenPos: 'SPINDLE',  
-      isOvenRunning: false
-  });
-
   // --- SLED ASSIGNMENT ENGINE ---
   const spinningWOs = [...activeWOs].filter(w => w.tasks?.spinSetup && w.tasks.spinBake?.status !== 'Complete').sort((a,b) => a.id.localeCompare(b.id));
-  
+
   const redWO = activeWOs.find(w => w.machineAssigned === 'RED') || (spinningWOs.find(w => !w.machineAssigned) || null);
   const blueWO = activeWOs.find(w => w.machineAssigned === 'BLUE') || (spinningWOs.find(w => !w.machineAssigned && w.id !== redWO?.id) || null);
 
   if (redWO && !redWO.machineAssigned) updateDoc(doc(db,"fin_workorders", redWO.id), { machineAssigned: 'RED' });
   if (blueWO && !blueWO.machineAssigned) updateDoc(doc(db,"fin_workorders", blueWO.id), { machineAssigned: 'BLUE' });
 
-  const isAnyOvenRunning = activeWOs.some(w => w.tasks?.spinBake?.status === 'Running' || w.tasks?.poleBake?.status === 'Running');
-  if (machineState.isOvenRunning !== isAnyOvenRunning) setMachineState({...machineState, isOvenRunning: isAnyOvenRunning});
+  // Machine state is DERIVED from production (no manual toggles): the oven sits over whichever sled is
+  // curing, or slides left for poles. A curing sled is "at the oven" (LEFT); otherwise it's at the
+  // spray/setup side (RIGHT). This drives both the twin graphic and the task-card stations live.
+  const ovenOver = ovenOverOf(redWO, blueWO, activeWOs);
+  const machineState = {
+      redSledAt: ovenOver === 'RED' ? 'LEFT' : 'RIGHT',
+      blueSledAt: ovenOver === 'BLUE' ? 'LEFT' : 'RIGHT',
+      ovenPos: ovenOver === 'POLES' ? 'POLES' : 'SPINDLE',
+      isOvenRunning: ovenOver !== 'PARKED',
+  };
 
   const getSledLocation = (sledColor) => sledColor === 'RED' ? machineState.redSledAt : machineState.blueSledAt;
 
@@ -175,7 +187,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       
       {/* LEFT: PIPELINE */}
       <div>
-        <DigitalTwinSCADA machineState={machineState} setMachineState={setMachineState} redWO={redWO} blueWO={blueWO} activeWOs={activeWOs} />
+        <DigitalTwinSCADA redWO={redWO} blueWO={blueWO} activeWOs={activeWOs} />
 
         {redlineWOs.length > 0 && (
             <div style={{ background: '#fdf2f2', border: '1px solid #d9534f', padding: '24px', marginBottom: '30px', borderRadius: '2px' }}>
