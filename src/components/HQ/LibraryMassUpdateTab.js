@@ -105,6 +105,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         project: { active: false, value: "" },
         isInHouse: { active: false, value: true },
         isStocked: { active: false, value: true },
+        paintSize: { active: false, value: "S" },
         partHandling: { active: false, value: "" },
         collection: { active: false, value: "" },
         vendorName: { active: false, value: "" },
@@ -325,7 +326,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         const headers = [
             "ID (DO NOT EDIT)", "Legacy ERP ID", "Item ID", "NetSuite Internal ID", "Item Name", "Brand", "Part Class", "Routing Type",
             "Product Type (Category)", "Collection", "Watchlist", "UOM", "Part Handling", "Outsource Action", "Bracket Projection", "Bracket Type / Mount",
-            "Weight", "Base Price", "Cost", "Reorder Pt (ROP)", "Lead Time (Days)", "Vendor Name", "Vendor SKU", "Bin Location", "Is In-House (TRUE/FALSE)", "Is Stocked (TRUE/FALSE)",
+            "Weight", "Base Price", "Cost", "Reorder Pt (ROP)", "Lead Time (Days)", "Vendor Name", "Vendor SKU", "Bin Location", "Is In-House (TRUE/FALSE)", "Is Stocked (TRUE/FALSE)", "Paint Size (S/M/L)",
             "Backplate Orientation", "Is Return Bracket (TRUE/FALSE)", "Backplate Length", "Backplate Width", "Backplate Height", "Bracket Arm Thickness",
             "Client Customer ID", "Client SKU", "Client Cost", "Client Sales Price"
         ];
@@ -379,6 +380,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 specs.binLocation || "",
                 specs.isInHouse !== false ? "TRUE" : "FALSE",
                 specs.isStocked ? "TRUE" : "FALSE",
+                (specs.paintSize || "").toUpperCase(),
                 cust.bpOrientation || "",
                 cust.isReturnBracket ? "TRUE" : "FALSE",
                 specs.parametric?.length || "",
@@ -493,6 +495,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 const isStocked = getVal("Is Stocked (TRUE/FALSE)");
                 if(isStocked !== null && isStocked !== "") {
                     payload["manufacturingSpecs.isStocked"] = isStocked.toUpperCase() === 'TRUE';
+                }
+
+                const paintSize = getVal("Paint Size (S/M/L)");
+                if(paintSize !== null) {
+                    const ps = (paintSize || "").trim().toUpperCase();
+                    payload["manufacturingSpecs.paintSize"] = ['S','M','L'].includes(ps) ? ps : "";
                 }
 
                 const col = getVal("Collection");
@@ -1223,6 +1231,18 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             <select disabled={!updates.isStocked.active} value={updates.isStocked.value.toString()} onChange={(e) => handleUpdateChange('isStocked', 'value', e.target.value === 'true')} style={{ ...fieldStyle, opacity: updates.isStocked.active ? 1 : 0.5 }}>
                                 <option value="true">Stocked (CPQ pushes the finished assembly)</option>
                                 <option value="false">Finish-to-order (push base + finishing WO)</option>
+                            </select>
+                        </div>
+
+                        <div style={{ background: updates.paintSize.active ? theme.paper : 'transparent', border: `1px solid ${updates.paintSize.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.paintSize.active} onChange={(e) => handleUpdateChange('paintSize', 'active', e.target.checked)} />
+                                Set Paint Size
+                            </label>
+                            <select disabled={!updates.paintSize.active} value={updates.paintSize.value} onChange={(e) => handleUpdateChange('paintSize', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.paintSize.active ? 1 : 0.5 }}>
+                                <option value="S">S — 70 / section</option>
+                                <option value="M">M — 35 / section</option>
+                                <option value="L">L — 22 / section</option>
                             </select>
                         </div>
 
