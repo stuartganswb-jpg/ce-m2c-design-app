@@ -11,7 +11,7 @@ import { matrixKey, WILDCARD, estimateWorkOrderMins } from '../Shared/finishingT
 //      (fin_config/timeMatrix). The scheduler resolves every WO's duration from this table.
 const SIZES = ['S', 'M', 'L'];
 
-const ProductionTimes = ({ sysConfig = {}, timeMatrix = {}, recipes = {}, workOrders = [], writeLog, user }) => {
+const ProductionTimes = ({ sysConfig = {}, timeMatrix = {}, recipes = {}, workOrders = [], prodTypes = [], writeLog, user }) => {
     const canEdit = ['admin', 'floor_manager', 'paint_manager'].includes(user?.role);
 
     // --- 1) Global timers (restored) ---
@@ -38,15 +38,17 @@ const ProductionTimes = ({ sysConfig = {}, timeMatrix = {}, recipes = {}, workOr
     const [def, setDef] = useState(timeMatrix?.default ?? '');
     const [draft, setDraft] = useState({ recipe: WILDCARD, size: 'S', type: '', mins: '' });
 
-    // Product types seen on live work orders (WO-level + per-part), for the type picker.
-    const knownTypes = useMemo(() => {
-        const s = new Set();
+    // Product-type options: the HQ master dictionary (system/master_lists.prodTypes) is the source
+    // of truth, unioned with any types already seen on live work orders so nothing in the field is
+    // unselectable. Uppercased + de-duped to match how productType is stored.
+    const typeOptions = useMemo(() => {
+        const s = new Set((prodTypes || []).map(t => String(t).toUpperCase()).filter(Boolean));
         workOrders.forEach(wo => {
             if (wo.productType) s.add(String(wo.productType).toUpperCase());
             (wo.partsList || []).forEach(p => { if (p.productType) s.add(String(p.productType).toUpperCase()); });
         });
         return [...s].sort();
-    }, [workOrders]);
+    }, [prodTypes, workOrders]);
 
     const recipeCodes = useMemo(() => Object.keys(recipes || {}).sort(), [recipes]);
 
@@ -165,8 +167,10 @@ const ProductionTimes = ({ sysConfig = {}, timeMatrix = {}, recipes = {}, workOr
                     </div>
                     <div>
                         <label style={labelStyle}>Product Type</label>
-                        <input list="known-types" value={draft.type} onChange={e => setDraft({ ...draft, type: e.target.value.toUpperCase() })} placeholder="Any (blank = any)" style={inputStyle} />
-                        <datalist id="known-types">{knownTypes.map(t => <option key={t} value={t} />)}</datalist>
+                        <select value={draft.type} onChange={e => setDraft({ ...draft, type: e.target.value })} style={{ ...inputStyle, background: '#fff' }}>
+                            <option value="">Any type</option>
+                            {typeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
                     </div>
                     <div>
                         <label style={labelStyle}>Min / Part</label>

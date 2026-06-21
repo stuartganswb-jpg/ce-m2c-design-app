@@ -36,6 +36,7 @@ const FinishingFloor = () => {
   const [logs, setLogs] = useState([]);
   const [sysConfig, setSysConfig] = useState({ setupSecs: 30, smallPartsBatchSize: 70, smallPartsBatchMinutes: 6, poleMinutesPerPiece: 3, potLifeMins: 180, recoatWindowMins: 90, activeFloorDailyCapacity: 200 });
   const [timeMatrix, setTimeMatrix] = useState({});
+  const [prodTypes, setProdTypes] = useState([]); // HQ master dictionary (system/master_lists.prodTypes)
   const [now, setNow] = useState(Date.now());
   const [mixModal, setMixModal] = useState(null); 
   const [qcModal, setQcModal] = useState(null); 
@@ -56,7 +57,8 @@ const FinishingFloor = () => {
       onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(query(collection(db, "hq_logs"), orderBy("t", "desc"), limit(50)), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(doc(db, "fin_config", "settings"), (docSnap) => { if (docSnap.exists()) setSysConfig(prev => ({ ...prev, ...docSnap.data() })); }),
-      onSnapshot(doc(db, "fin_config", "timeMatrix"), (docSnap) => setTimeMatrix(docSnap.exists() ? docSnap.data() : {}))
+      onSnapshot(doc(db, "fin_config", "timeMatrix"), (docSnap) => setTimeMatrix(docSnap.exists() ? docSnap.data() : {})),
+      onSnapshot(doc(db, "system", "master_lists"), (docSnap) => setProdTypes(docSnap.exists() ? (docSnap.data().prodTypes || []) : []))
     ];
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
@@ -96,10 +98,13 @@ const FinishingFloor = () => {
     }
   };
 
-  const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';
-  // A super admin (role or flag, matching HQ AdminTab) always sees every tab, so newly added
-  // tabs aren't silently locked out until granted. Other roles are gated by fin_config/permissions.
-  const isSuperAdmin = user?.superAdmin === true || ['admin', 'superadmin'].includes(safeUserRole);
+  // Resolve the operator's authoritative hq_users record — the login token can omit the canonical
+  // role / superAdmin flag, so trust the directory we already subscribe to. A super admin (by flag
+  // or role, the same test HQ uses) always sees every tab, so new tabs aren't locked out before
+  // they're granted; every other role is gated by fin_config/permissions.
+  const meRecord = users.find(u => (user?.pin && u.pin === user?.pin) || (user?.name && u.name === user?.name)) || user || {};
+  const safeUserRole = (meRecord.role || user?.role || 'operator').toLowerCase();
+  const isSuperAdmin = meRecord.superAdmin === true || user?.superAdmin === true || ['admin', 'superadmin'].includes(safeUserRole);
   const myTabs = isSuperAdmin ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
   const handleLogout = () => {
@@ -149,7 +154,7 @@ const FinishingFloor = () => {
           {activeTab === 'SETUP QUEUE' && <SetupQueue workOrders={workOrders} recipes={recipes} writeLog={writeLog} sysConfig={sysConfig} />}
           {activeTab === 'ACTIVE FLOOR' && <ActiveFloor workOrders={workOrders} recipes={recipes} activePots={activePots} sysConfig={sysConfig} setMixModal={setMixModal} now={now} user={user} setQcModal={setQcModal} users={users} />}
           {activeTab === 'FINISH RECIPES' && <Recipes recipes={recipes} paintProfiles={paintProfiles} supplies={supplies} writeLog={writeLog} user={user} />}
-          {activeTab === 'PRODUCTION TIMES' && <ProductionTimes sysConfig={sysConfig} timeMatrix={timeMatrix} recipes={recipes} workOrders={workOrders} writeLog={writeLog} user={user} />}
+          {activeTab === 'PRODUCTION TIMES' && <ProductionTimes sysConfig={sysConfig} timeMatrix={timeMatrix} recipes={recipes} workOrders={workOrders} prodTypes={prodTypes} writeLog={writeLog} user={user} />}
           {activeTab === 'SUPPLIES' && <Supplies supplies={supplies} writeLog={writeLog} user={user} />}
           {activeTab === 'DAILY SUMMARY' && <Summary workOrders={workOrders} />}
           
