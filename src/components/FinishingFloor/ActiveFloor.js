@@ -27,30 +27,39 @@ const sledActivity = (wo) => {
     if (t.spinSetup?.status === 'Complete' && t.spinSpray?.status !== 'Complete') return { code: 'WAIT_SPRAY', ...ACTIVITY.WAIT_SPRAY };
     return { code: 'STAGED', ...ACTIVITY.STAGED };
 };
-// Where the (single, track-mounted) oven is, derived from production: slid LEFT over the pole rack
-// when poles are baking, otherwise over whichever sled is curing, else parked off the sleds.
-const ovenOverOf = (redWO, blueWO, activeWOs) => {
-    if (activeWOs.some(w => w.tasks?.poleBake?.status === 'Running')) return 'POLES';
-    if (redWO?.tasks?.spinBake?.status === 'Running') return 'RED';
-    if (blueWO?.tasks?.spinBake?.status === 'Running') return 'BLUE';
-    return 'PARKED';
+// A sled is "at the oven (left) spot" when it is curing or waiting for the oven; otherwise it is at
+// the setup/spray (right) spot. The two sleds shuffle between those two fixed positions.
+const atOvenSpot = (act) => act.code === 'CURE' || act.code === 'WAIT_OVEN';
+
+// Derive the live machine layout from production: which sled is at the oven (left) vs setup/spray
+// (right) spot, and where the single left-mounted oven sits — over the left sled (curing) or slid
+// further left for poles. The oven never moves to the right sled; the SLEDS move to the oven.
+const computeLayout = (redWO, blueWO, activeWOs) => {
+    const redAct = sledActivity(redWO);
+    const blueAct = sledActivity(blueWO);
+    let redPos = 'LEFT', bluePos = 'RIGHT';
+    if (atOvenSpot(blueAct) && !atOvenSpot(redAct)) { redPos = 'RIGHT'; bluePos = 'LEFT'; }
+    const polesBaking = activeWOs.some(w => w.tasks?.poleBake?.status === 'Running');
+    const leftAct = redPos === 'LEFT' ? redAct : blueAct;
+    const ovenMode = polesBaking ? 'POLES' : 'SLED';       // SLED = over the left sled spot
+    const ovenRunning = leftAct.code === 'CURE' || polesBaking;
+    return { redAct, blueAct, redPos, bluePos, ovenMode, polesBaking, ovenRunning };
 };
 
 // --- LIVE DIGITAL TWIN (production-driven) ---
-// Fixed RED + BLUE sleds; the oven slides over the curing sled or off-left for poles. Everything is
-// derived from the work orders' task state, so it animates as operators enter PINs for each step.
+// The oven is fixed on the LEFT over the cure spot; the two sleds shuffle between the left (under-
+// oven) spot and the right (setup/spray) spot. The oven only slides further left, over the pole
+// rack, when poles bake. All derived from task state, so it animates as operators run each step.
 const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs }) => {
-    const ovenOver = ovenOverOf(redWO, blueWO, activeWOs);
-    const redAct = sledActivity(redWO);
-    const blueAct = sledActivity(blueWO);
-    const ovenRunning = ovenOver !== 'PARKED';
-    const ovenLeft = { POLES: '1%', RED: '34%', BLUE: '56%', PARKED: '80%' }[ovenOver];
-    const ovenLabel = { POLES: 'Curing poles', RED: 'Curing RED', BLUE: 'Curing BLUE', PARKED: 'Parked' }[ovenOver];
+    const { redAct, blueAct, redPos, bluePos, ovenMode, polesBaking, ovenRunning } = computeLayout(redWO, blueWO, activeWOs);
+    const spotLeft = (pos) => pos === 'LEFT' ? '36%' : '58%';   // left = oven/cure, right = setup/spray
+    const ovenLeft = ovenMode === 'POLES' ? '2%' : '33%';       // over pole rack vs over the left sled
+    const ovenLabel = polesBaking ? 'Slid left · poles' : (ovenRunning ? 'Curing left sled' : 'Over left sled');
 
-    const Sled = ({ color, wo, act, under }) => {
+    const Sled = ({ color, wo, act, pos }) => {
         const accent = color === 'RED' ? 'var(--ink)' : 'var(--brass)';
         return (
-            <div style={{ position: 'absolute', top: '36px', left: color === 'RED' ? '37%' : '59%', width: '13%', height: '86px', background: '#fff', border: `2px solid ${accent}`, borderRadius: '2px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '4px', zIndex: 10, boxShadow: act.running ? '0 0 0 3px rgba(176,141,87,0.30)' : (under ? '0 0 0 2px rgba(176,141,87,0.18)' : '0 4px 12px rgba(0,0,0,0.05)') }}>
+            <div style={{ position: 'absolute', top: '42px', left: spotLeft(pos), width: '14%', height: '88px', background: '#fff', border: `2px solid ${accent}`, borderRadius: '2px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '4px', zIndex: 10, transition: 'left 1.5s ease-in-out', boxShadow: act.running ? '0 0 0 3px rgba(176,141,87,0.30)' : '0 4px 12px rgba(0,0,0,0.06)' }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: accent, fontWeight: 600 }}>{color}</span>
                 <span style={{ fontSize: '0.72rem', color: 'var(--ink)', marginTop: '3px' }}>{act.label}</span>
                 {wo && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '2px' }}>{wo.id}</span>}
@@ -67,30 +76,30 @@ const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs }) => {
                 </span>
             </div>
 
-            <div style={{ position: 'relative', height: '160px', background: 'var(--paper)', border: '1px solid var(--line)', overflow: 'hidden' }}>
-                {/* POLE RACK (far left — where the oven slides for long poles) */}
-                <div style={{ position: 'absolute', left: '2%', top: '30px', width: '14%', height: '100px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly', padding: '5px', background: '#fff' }}>
-                    <div style={{ height: '2px', background: 'var(--line)' }} />
-                    <div style={{ height: '2px', background: 'var(--line)' }} />
-                    <span style={{ color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center' }}>Pole Rack</span>
+            <div style={{ position: 'relative', height: '170px', background: 'var(--paper)', border: '1px solid var(--line)', overflow: 'hidden' }}>
+                {/* spindle track the sleds shuffle along */}
+                <div style={{ position: 'absolute', left: '34%', right: '4%', top: '86px', height: '4px', background: 'var(--line)' }} />
+
+                {/* POLE RACK (far left — the oven slides over here for poles) */}
+                <div style={{ position: 'absolute', left: '2%', top: '34px', width: '28%', height: '104px', border: `1px solid ${polesBaking ? 'var(--brass)' : 'var(--line)'}`, background: polesBaking ? 'rgba(176,141,87,0.06)' : '#fff', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ width: '80%', height: '2px', background: 'var(--line)' }} />
+                    <div style={{ width: '80%', height: '2px', background: 'var(--line)' }} />
+                    <span style={{ color: polesBaking ? 'var(--brass)' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{polesBaking ? 'Poles curing' : 'Pole Rack'}</span>
                 </div>
 
-                {/* spindle track the sleds sit on */}
-                <div style={{ position: 'absolute', left: '34%', right: '4%', top: '78px', height: '4px', background: 'var(--line)' }} />
-
-                <Sled color="RED" wo={redWO} act={redAct} under={ovenOver === 'RED'} />
-                <Sled color="BLUE" wo={blueWO} act={blueAct} under={ovenOver === 'BLUE'} />
-
-                {/* the single track-mounted oven, sliding to its production-derived position */}
-                <div style={{ position: 'absolute', top: '8px', left: ovenLeft, width: '18%', height: '144px', background: ovenRunning ? 'rgba(176,141,87,0.10)' : 'rgba(250,248,244,0.55)', border: '2px solid var(--brass)', boxShadow: ovenRunning ? 'inset 0 0 24px rgba(176,141,87,0.35)' : 'none', transition: 'left 1.6s ease-in-out', display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '8px', zIndex: 20 }}>
+                {/* OVEN — fixed over the left sled spot (a translucent hood the sled sits inside); slides
+                    further left over the pole rack for poles. Behind the sleds so they show "inside" it. */}
+                <div style={{ position: 'absolute', top: '12px', left: ovenLeft, width: '22%', height: '150px', background: ovenRunning ? 'rgba(176,141,87,0.12)' : 'rgba(176,141,87,0.04)', border: '2px solid var(--brass)', boxShadow: ovenRunning ? 'inset 0 0 26px rgba(176,141,87,0.35)' : 'none', transition: 'left 1.6s ease-in-out', zIndex: 6, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: '8px' }}>
                     <span style={{ color: '#fff', background: 'var(--brass)', padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Oven</span>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{ovenRunning ? 'Curing' : 'Idle'}</span>
                 </div>
+
+                <Sled color="RED" wo={redWO} act={redAct} pos={redPos} />
+                <Sled color="BLUE" wo={blueWO} act={blueAct} pos={bluePos} />
             </div>
 
             <div style={{ marginTop: '18px', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em', lineHeight: 1.6 }}>
                 RED: {redAct.label}{redWO ? ` (${redWO.id})` : ''} · BLUE: {blueAct.label}{blueWO ? ` (${blueWO.id})` : ''} · Oven {ovenLabel}.
-                Updates live as operators run each step — one sled cures while the other is set up; the oven slides left for poles.
+                Sleds shuffle — the cured sled moves right to setup/spray, the next moves left under the oven; the oven slides left for poles.
             </div>
         </div>
     );
@@ -119,15 +128,16 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   if (redWO && !redWO.machineAssigned) updateDoc(doc(db,"fin_workorders", redWO.id), { machineAssigned: 'RED' });
   if (blueWO && !blueWO.machineAssigned) updateDoc(doc(db,"fin_workorders", blueWO.id), { machineAssigned: 'BLUE' });
 
-  // Machine state is DERIVED from production (no manual toggles): the oven sits over whichever sled is
-  // curing, or slides left for poles. A curing sled is "at the oven" (LEFT); otherwise it's at the
-  // spray/setup side (RIGHT). This drives both the twin graphic and the task-card stations live.
-  const ovenOver = ovenOverOf(redWO, blueWO, activeWOs);
+  // Machine state is DERIVED from production (no manual toggles): the sled that is curing / waiting
+  // for the oven sits at the left (oven) spot; the other is at the right (setup/spray) spot, and they
+  // shuffle as steps complete. Same computeLayout that drives the twin, so graphic + task-card
+  // stations stay in lockstep. ovenPos POLES when poles are baking.
+  const layout = computeLayout(redWO, blueWO, activeWOs);
   const machineState = {
-      redSledAt: ovenOver === 'RED' ? 'LEFT' : 'RIGHT',
-      blueSledAt: ovenOver === 'BLUE' ? 'LEFT' : 'RIGHT',
-      ovenPos: ovenOver === 'POLES' ? 'POLES' : 'SPINDLE',
-      isOvenRunning: ovenOver !== 'PARKED',
+      redSledAt: layout.redPos,
+      blueSledAt: layout.bluePos,
+      ovenPos: layout.ovenMode === 'POLES' ? 'POLES' : 'SPINDLE',
+      isOvenRunning: layout.ovenRunning,
   };
 
   const getSledLocation = (sledColor) => sledColor === 'RED' ? machineState.redSledAt : machineState.blueSledAt;
