@@ -12,7 +12,10 @@ import { matrixKey, WILDCARD, estimateWorkOrderMins } from '../Shared/finishingT
 const SIZES = ['S', 'M', 'L'];
 
 const ProductionTimes = ({ sysConfig = {}, timeMatrix = {}, recipes = {}, workOrders = [], prodTypes = [], writeLog, user }) => {
-    const canEdit = ['admin', 'floor_manager', 'paint_manager'].includes(user?.role);
+    // Normalize the role (alpha-only) so SUPERADMIN / super_admin / Floor Manager all match,
+    // and honor the superAdmin flag. Super admin always has edit access.
+    const role = String(user?.role || '').toLowerCase().replace(/[^a-z]/g, '');
+    const canEdit = user?.superAdmin === true || ['superadmin', 'admin', 'floormanager', 'paintmanager'].includes(role);
 
     // --- 1) Global timers (restored) ---
     const [config, setConfig] = useState({
