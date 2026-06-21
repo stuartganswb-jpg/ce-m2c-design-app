@@ -380,8 +380,20 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   const handleSaveUser = async () => {
       if(!adminForm.uName || !adminForm.uPin) return alert("Name and PIN are required.");
+      // Super admin is a protected, hidden status — the role dropdown can't represent it. When
+      // editing an existing user, carry forward the superAdmin flag and never downgrade a super
+      // admin's role through this editor (only the Super Admin → Master PIN flow changes it).
+      const existing = { ...(users.find(u => u.id === adminForm.oldId || u.pin === adminForm.uPin) || {}) };
+      delete existing.id; // drop the synthetic doc-id field; it isn't stored data
+      const wasSuperAdmin = existing.superAdmin === true || String(existing.role || '').toLowerCase().replace(/[^a-z]/g, '') === 'superadmin';
       if (adminForm.oldId && adminForm.oldId !== adminForm.uPin) await deleteDoc(doc(db, "hq_users", adminForm.oldId));
-      await setDoc(doc(db, "hq_users", adminForm.uPin), { name: adminForm.uName, pin: adminForm.uPin, role: adminForm.uRole });
+      await setDoc(doc(db, "hq_users", adminForm.uPin), {
+          ...existing,
+          name: adminForm.uName,
+          pin: adminForm.uPin,
+          role: wasSuperAdmin ? (existing.role || 'superadmin') : adminForm.uRole,
+          ...(wasSuperAdmin ? { superAdmin: true } : {}),
+      });
       setAdminForm({ uName: '', uPin: '', uRole: dynamicRoles[0] || 'operator', oldId: '' });
   };
   const handleDeleteUser = async (u) => { if(!window.confirm(`Terminate ${u.name}?`)) return; await deleteDoc(doc(db, "hq_users", u.id)); };
