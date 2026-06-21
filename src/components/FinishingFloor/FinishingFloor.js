@@ -35,7 +35,7 @@ const FinishingFloor = () => {
   const [users, setUsers] = useState([]);
   const [logs, setLogs] = useState([]);
   const [sysConfig, setSysConfig] = useState({ setupSecs: 30, smallPartsBatchSize: 70, smallPartsBatchMinutes: 6, poleMinutesPerPiece: 3, potLifeMins: 180, recoatWindowMins: 90, activeFloorDailyCapacity: 200 });
-  const [timeMatrix, setTimeMatrix] = useState({});
+  const [capacityMatrix, setCapacityMatrix] = useState({});
   const [prodTypes, setProdTypes] = useState([]); // HQ master dictionary (system/master_lists.prodTypes)
   const [now, setNow] = useState(Date.now());
   const [mixModal, setMixModal] = useState(null); 
@@ -57,7 +57,7 @@ const FinishingFloor = () => {
       onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(query(collection(db, "hq_logs"), orderBy("t", "desc"), limit(50)), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(doc(db, "fin_config", "settings"), (docSnap) => { if (docSnap.exists()) setSysConfig(prev => ({ ...prev, ...docSnap.data() })); }),
-      onSnapshot(doc(db, "fin_config", "timeMatrix"), (docSnap) => setTimeMatrix(docSnap.exists() ? docSnap.data() : {})),
+      onSnapshot(doc(db, "fin_config", "capacityMatrix"), (docSnap) => setCapacityMatrix(docSnap.exists() ? docSnap.data() : {})),
       onSnapshot(doc(db, "system", "master_lists"), (docSnap) => setProdTypes(docSnap.exists() ? (docSnap.data().prodTypes || []) : []))
     ];
     return () => unsubs.forEach(unsub => unsub());
@@ -151,11 +151,6 @@ const FinishingFloor = () => {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
           <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Operator: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{user.name}</strong></span>
-          {/* TEMP DIAGNOSTIC — remove after super-admin access is confirmed. Reports how this login
-              resolves for tab gating so we can see why a role is/ isn't granted. */}
-          <span title="temporary access diagnostic" style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: isSuperAdmin ? '#3a7d44' : '#d9534f', border: `1px solid ${isSuperAdmin ? '#3a7d44' : '#d9534f'}`, padding: '4px 8px', borderRadius: '2px' }}>
-            token:{tokenRole || '—'} · dir:{dirRole || (meRecord && Object.keys(meRecord).length ? '—' : 'no-match')} · super:{isSuperAdmin ? 'YES' : 'no'}
-          </span>
           <button onClick={handleLogout} style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Return to Hub</button>
         </div>
       </header>
@@ -171,7 +166,7 @@ const FinishingFloor = () => {
           {activeTab === 'SETUP QUEUE' && <SetupQueue workOrders={workOrders} recipes={recipes} writeLog={writeLog} sysConfig={sysConfig} />}
           {activeTab === 'ACTIVE FLOOR' && <ActiveFloor workOrders={workOrders} recipes={recipes} activePots={activePots} sysConfig={sysConfig} setMixModal={setMixModal} now={now} user={user} setQcModal={setQcModal} users={users} />}
           {activeTab === 'FINISH RECIPES' && <Recipes recipes={recipes} paintProfiles={paintProfiles} supplies={supplies} writeLog={writeLog} user={user} />}
-          {activeTab === 'PRODUCTION TIMES' && <ProductionTimes sysConfig={sysConfig} timeMatrix={timeMatrix} recipes={recipes} workOrders={workOrders} prodTypes={prodTypes} writeLog={writeLog} user={user} />}
+          {activeTab === 'PRODUCTION TIMES' && <ProductionTimes sysConfig={sysConfig} capacityMatrix={capacityMatrix} recipes={recipes} workOrders={workOrders} prodTypes={prodTypes} writeLog={writeLog} user={user} />}
           {activeTab === 'SUPPLIES' && <Supplies supplies={supplies} writeLog={writeLog} user={user} />}
           {activeTab === 'DAILY SUMMARY' && <Summary workOrders={workOrders} />}
           

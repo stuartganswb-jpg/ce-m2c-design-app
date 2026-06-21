@@ -1,74 +1,100 @@
-// Finishing time model — the rebuilt "time matrix".
+// Finishing capacity + time model.
 //
-// A finishing work order's duration is driven by three attributes that already live on
-// every part: the finish RECIPE, the PAINT SIZE (S/M/L), and the PRODUCT TYPE (pole, ring,
-// finial, bracket, …). This module stores one editable table of MINUTES-PER-PART keyed by
-// (recipe × paintSize × productType) and resolves a work order's estimate from it.
+// CAPACITY MATRIX (fin_config/capacityMatrix): how many of a part fill ONE spray-machine sled,
+// keyed by PAINT SIZE × PRODUCT TYPE. Capacity is physical, so recipe is NOT a key. Size gives the
+// baseline (S=70, M=35, L=22 parts/sled); a product-type entry refines it (e.g. bracket-M = 40).
+// A part's "footprint" = 1/capacity (its fraction of a sled). A sled — same recipe only — packs
+// mixed sizes/types until their footprints sum to 1.
 //
-// Storage: Firestore doc `fin_config/timeMatrix`
-//   { rules: { "RECIPE|SIZE|TYPE": minutesPerPart, ... }, default: minutesPerPart }
-// Each of the three key segments may be the wildcard "*" to mean "any". Lookups try the most
-// specific rule first and fall back through progressively generic ones, then the table default.
-// Nothing is stored per item, so the matrix never goes stale and new items inherit automatically.
+// TIME comes from the AI Production Timers (fin_config/settings) × the recipe's steps × the batch
+// count — capacity (this file) and per-step time (the timers) never overlap:
+//   batches      = ceil(Σ qty / capacity)
+//   machine/batch = spinSetup (load once)
+//                 + Σ sprayed steps (spinPaint + oven)   // each step gets its own bake
+//                 + Σ hand steps    (~2 × spinSetup)      // pull off the machine + put back on
+//   hand labor   = parts × handSmallMins                 // if the recipe has any Hand Applied step
 
 export const WILDCARD = '*';
-const norm = (v) => (v == null ? WILDCARD : String(v).trim().toUpperCase()) || WILDCARD;
+export const SIZE_CAPACITY = { S: 70, M: 35, L: 22 }; // baseline pieces-per-sled by size
 
-// Canonical key for a (recipe, size, type) triple. Empty/missing segments become the wildcard.
-export function matrixKey(recipe, size, type) {
-  return `${norm(recipe)}|${norm(size)}|${norm(type)}`;
+const normSize = (v) => { const s = String(v || '').trim().toUpperCase(); return ['S', 'M', 'L'].includes(s) ? s : ''; };
+const normType = (v) => String(v || '').trim().toUpperCase() || WILDCARD;
+
+// Canonical capacity-rule key: "SIZE|TYPE" (type may be the wildcard).
+export function capacityKey(size, type) {
+  return `${normSize(size) || WILDCARD}|${normType(type)}`;
 }
 
-// Resolve minutes-per-part for one (recipe, size, type), trying most-specific → most-generic.
-// Returns null when nothing (not even a default) matches, so callers can flag "unpriced".
-export function lookupMinsPerPart(matrix, recipe, size, type) {
+// Pieces-per-sled for one size × type. Resolution order:
+//   exact size|type  →  size|* (any type)  →  size baseline (S/M/L)  →  matrix default  →  null.
+export function lookupCapacity(matrix, size, type) {
   const rules = (matrix && matrix.rules) || {};
-  const R = norm(recipe), S = norm(size), T = norm(type);
-  // Specificity order: drop recipe before type before size (size is the strongest signal of
-  // how many parts fit a sled section, so it's the last dimension we generalize away).
-  const candidates = [
-    [R, S, T],
-    [WILDCARD, S, T],
-    [R, S, WILDCARD],
-    [WILDCARD, S, WILDCARD],
-    [R, WILDCARD, T],
-    [WILDCARD, WILDCARD, T],
-    [R, WILDCARD, WILDCARD],
-    [WILDCARD, WILDCARD, WILDCARD],
-  ];
-  for (const [r, s, t] of candidates) {
-    const val = rules[`${r}|${s}|${t}`];
-    if (val != null && val !== '') return Number(val);
+  const S = normSize(size), T = normType(type);
+  if (S) {
+    for (const k of [`${S}|${T}`, `${S}|${WILDCARD}`]) {
+      const v = rules[k];
+      if (v != null && v !== '' && Number(v) > 0) return Number(v);
+    }
+    if (SIZE_CAPACITY[S]) return SIZE_CAPACITY[S];
   }
-  return (matrix && matrix.default != null && matrix.default !== '') ? Number(matrix.default) : null;
+  return (matrix && Number(matrix.default) > 0) ? Number(matrix.default) : null;
 }
 
-// Estimate total finishing minutes for a work order.
-//   • Custom WO: sum each partsList line's (minsPerPart × qty) — lines carry their own size+type.
-//   • Stock/simple WO: WO-level (paintSize × productType) × totalParts.
-// `resolved` is false if any contributing part had no matching matrix cell (estimate is partial).
-export function estimateWorkOrderMins(wo, matrix) {
-  if (!wo) return { mins: 0, parts: 0, resolved: false };
-  const recipe = wo.recipe;
-
-  const list = Array.isArray(wo.partsList)
-    ? wo.partsList.filter(p => p && (Number(p.qty) || 0) > 0)
-    : [];
-  const lineKeyed = list.some(p => p.productType || p.paintSize);
-
-  if (lineKeyed) {
-    let mins = 0, parts = 0, resolved = true;
-    list.forEach(p => {
-      const qty = Number(p.qty) || 0;
-      const per = lookupMinsPerPart(matrix, recipe, p.paintSize, p.productType);
-      if (per == null) resolved = false;
-      mins += (per || 0) * qty;
-      parts += qty;
-    });
-    return { mins, parts, resolved };
+// Normalize a work order to [{ size, type, qty }] part lines. Custom WOs carry per-part keys on
+// each partsList line; stock/simple WOs use the WO-level size + type × totalParts.
+export function workOrderPartLines(wo) {
+  if (!wo) return [];
+  const list = Array.isArray(wo.partsList) ? wo.partsList.filter(p => p && (Number(p.qty) || 0) > 0) : [];
+  if (list.some(p => p.paintSize || p.productType)) {
+    return list.map(p => ({ size: p.paintSize, type: p.productType, qty: Number(p.qty) || 0 }));
   }
-
   const qty = Number(wo.totalParts) || 0;
-  const per = lookupMinsPerPart(matrix, recipe, wo.paintSize, wo.productType);
-  return { mins: (per || 0) * qty, parts: qty, resolved: per != null };
+  return qty > 0 ? [{ size: wo.paintSize, type: wo.productType, qty }] : [];
+}
+
+// Sum the sled-footprint + part count for a set of part lines (already pooled by the caller —
+// same-recipe parts share sleds). `resolved` is false if any line had no capacity to resolve.
+export function packFootprint(lines, matrix) {
+  let footprint = 0, parts = 0, resolved = true;
+  (lines || []).forEach(l => {
+    const qty = Number(l.qty) || 0;
+    parts += qty;
+    const cap = lookupCapacity(matrix, l.size, l.type);
+    if (!cap) { resolved = false; return; }
+    footprint += qty / cap;
+  });
+  return { footprint, parts, resolved };
+}
+
+// Sled count from a footprint sum (≥1 sled whenever there are parts).
+export function sledsFromFootprint(footprint, parts) {
+  if ((parts || 0) <= 0) return 0;
+  return Math.max(1, Math.ceil(footprint - 1e-9));
+}
+
+// Per-sled MACHINE minutes for a recipe (load + each sprayed step's spray+bake + hand off/on).
+// Excludes per-part hand labor, which the caller adds once per part.
+export function batchMachineMins(recipe, timers = {}) {
+  const spinSetup = Number(timers.spinSetupMins) || 10;
+  const spinPaint = Number(timers.spinPaintMins) || 3;
+  const oven = Number(timers.ovenMins) || 10;
+  const steps = (recipe && Array.isArray(recipe.steps)) ? recipe.steps : [];
+  let mins = spinSetup; // load the sled once
+  steps.forEach(s => {
+    if (s.app === 'Sprayed') mins += spinPaint + oven;   // each sprayed step its own bake
+    else if (s.app === 'Hand Applied') mins += 2 * spinSetup; // off the machine + back on
+  });
+  return mins;
+}
+
+// Estimate sleds + total finishing minutes for ONE work order on its own. The planner pools by
+// recipe across WOs for tighter sled packing; this standalone version is for per-WO display.
+export function estimateWorkOrder(wo, recipesById = {}, matrix = {}, timers = {}) {
+  const { footprint, parts, resolved } = packFootprint(workOrderPartLines(wo), matrix);
+  const batches = sledsFromFootprint(footprint, parts);
+  const recipe = recipesById[wo && wo.recipe];
+  const hasHand = !!(recipe && Array.isArray(recipe.steps) && recipe.steps.some(s => s.app === 'Hand Applied'));
+  const handMins = hasHand ? parts * (Number(timers.handSmallMins) || 1.35) : 0;
+  const mins = batches * batchMachineMins(recipe, timers) + handMins;
+  return { batches, parts, mins, resolved: resolved && !!recipe };
 }
