@@ -120,7 +120,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   };
 
   // --- SLED ASSIGNMENT ENGINE ---
-  const spinningWOs = [...activeWOs].filter(w => w.tasks?.spinSetup && w.tasks.spinBake?.status !== 'Complete').sort((a,b) => a.id.localeCompare(b.id));
+  const spinningWOs = [...activeWOs].filter(w => w.tasks?.spinSetup && w.tasks.spinBake?.status !== 'Complete')
+    .sort((a, b) => ((a.scheduleSeq ?? 1e9) - (b.scheduleSeq ?? 1e9)) || a.id.localeCompare(b.id));
 
   const redWO = activeWOs.find(w => w.machineAssigned === 'RED') || (spinningWOs.find(w => !w.machineAssigned) || null);
   const blueWO = activeWOs.find(w => w.machineAssigned === 'BLUE') || (spinningWOs.find(w => !w.machineAssigned && w.id !== redWO?.id) || null);

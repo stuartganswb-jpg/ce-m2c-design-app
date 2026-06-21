@@ -1,4 +1,6 @@
 import React, { useMemo } from 'react';
+import { db } from '../../firebase';
+import { doc, writeBatch } from 'firebase/firestore';
 import { buildFinishingPlan } from '../Shared/finishingTime';
 
 // SCHEDULE PLANNER — the "what runs next" analysis below the Setup Queue.
@@ -13,10 +15,32 @@ const SchedulePlanner = ({ workOrders = [], recipes = {}, capacityMatrix = {}, s
         [workOrders, recipes, capacityMatrix, sysConfig]
     );
 
-    const { batches, customBatches, stockBatches, poleBatches, totalSleds, totalParts,
+    const { batches, customBatches, stockBatches, poleBatches, totalSleds, totalParts, setupCount,
         sledOvenMins, poleOvenMins, ovenTotalMins, poleCount, poleRacks, handOverlapMins, dailyMins, days } = plan;
     const overCapacity = ovenTotalMins > dailyMins;
     const unpriced = batches.filter(b => !b.resolved).length + poleBatches.filter(b => !b.resolved).length;
+
+    // Commit the run order onto each ready WO (scheduleSeq), so the Setup Queue and Active Floor run
+    // batches in the planned sequence. Idempotent — safe to re-run; it just refreshes the order.
+    const readyBatches = [...customBatches.filter(b => b.ready), ...stockBatches, ...poleBatches];
+    const commitWoCount = readyBatches.reduce((n, b) => n + (b.wos ? b.wos.length : 0), 0);
+    const commitSchedule = async () => {
+        if (commitWoCount === 0) return alert('Nothing ready to commit — custom orders must be scan-matched in Pick/Pack first.');
+        if (!window.confirm(`Commit this run order?\n\n${readyBatches.length} batches · ${commitWoCount} work orders.\nThe Setup Queue and Active Floor will follow this sequence.`)) return;
+        try {
+            const wb = writeBatch(db);
+            readyBatches.forEach(b => (b.wos || []).forEach(wo => {
+                wb.update(doc(db, 'fin_workorders', wo.id), {
+                    scheduleSeq: b.seq, scheduleBatch: b.recipe, scheduleKind: b.kind, scheduledAt: Date.now(),
+                });
+            }));
+            await wb.commit();
+            alert(`Committed ${commitWoCount} work order${commitWoCount === 1 ? '' : 's'} in planned order.`);
+        } catch (e) {
+            console.error('commitSchedule failed', e);
+            alert('Commit failed — check permissions / console.');
+        }
+    };
 
     const stat = (label, value, sub) => (
         <div>
@@ -40,12 +64,16 @@ const SchedulePlanner = ({ workOrders = [], recipes = {}, capacityMatrix = {}, s
     };
 
     const batchRow = (b, idx) => (
-        <div key={b.kind + b.recipe + idx} style={{ display: 'grid', gridTemplateColumns: '34px 1.5fr 1.2fr 1.1fr 1.1fr', gap: '16px', alignItems: 'center', padding: '14px 18px', background: b.resolved ? 'var(--paper)' : '#fdf2f2', border: '1px solid var(--line)', borderLeft: `3px solid ${b.kind === 'custom' ? 'var(--brass)' : 'var(--ink-soft)'}`, borderRadius: '2px' }}>
-            <div style={{ fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink-soft)' }}>{idx + 1}</div>
+        <div key={b.kind + b.recipe + idx} style={{ display: 'grid', gridTemplateColumns: '46px 1.5fr 1.2fr 1.1fr 1.1fr', gap: '16px', alignItems: 'center', padding: '14px 18px', background: !b.ready ? '#fbfaf7' : (b.resolved ? 'var(--paper)' : '#fdf2f2'), border: '1px solid var(--line)', borderLeft: `3px solid ${!b.ready ? 'var(--line)' : (b.kind === 'custom' ? 'var(--brass)' : 'var(--ink-soft)')}`, borderRadius: '2px', opacity: b.ready ? 1 : 0.72 }}>
+            <div style={{ textAlign: 'center' }}>
+                {b.ready
+                    ? <span style={{ fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink-soft)' }}>{b.seq}</span>
+                    : <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', border: '1px solid var(--line)', borderRadius: '2px', padding: '3px 5px' }}>set up</span>}
+            </div>
             <div>
                 <div style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '1rem' }}>{titleOf(b)}</div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>
-                    {b.recipe}{b.reqDate ? ` · due ${b.reqDate}` : ''}{b.kind === 'stock' && b.woCount > 1 ? ` · ${b.woCount} WOs pooled` : ''}
+                    {b.recipe}{b.reqDate ? ` · due ${b.reqDate}` : ''}{b.kind === 'stock' && b.woCount > 1 ? ` · ${b.woCount} WOs pooled` : ''}{!b.ready ? ' · awaiting fab & scan-match' : ''}
                 </div>
             </div>
             <div>
@@ -67,8 +95,8 @@ const SchedulePlanner = ({ workOrders = [], recipes = {}, capacityMatrix = {}, s
 
     // Pole batches have a different shape (poles/racks, no sleds/size mix), so they render their own row.
     const poleRow = (b, idx) => (
-        <div key={'pole' + b.recipe + idx} style={{ display: 'grid', gridTemplateColumns: '34px 1.5fr 1.2fr 1.1fr 1.1fr', gap: '16px', alignItems: 'center', padding: '14px 18px', background: b.resolved ? 'var(--paper)' : '#fdf2f2', border: '1px solid var(--line)', borderLeft: '3px solid #6b7a8f', borderRadius: '2px' }}>
-            <div style={{ fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink-soft)' }}>{idx + 1}</div>
+        <div key={'pole' + b.recipe + idx} style={{ display: 'grid', gridTemplateColumns: '46px 1.5fr 1.2fr 1.1fr 1.1fr', gap: '16px', alignItems: 'center', padding: '14px 18px', background: b.resolved ? 'var(--paper)' : '#fdf2f2', border: '1px solid var(--line)', borderLeft: '3px solid #6b7a8f', borderRadius: '2px' }}>
+            <div style={{ textAlign: 'center', fontFamily: 'var(--serif)', fontSize: '1.3rem', color: 'var(--ink-soft)' }}>{b.seq}</div>
             <div>
                 <div style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '1rem' }}>{b.recipe}</div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>
@@ -97,16 +125,21 @@ const SchedulePlanner = ({ workOrders = [], recipes = {}, capacityMatrix = {}, s
                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Analyzed from the queue above — by recipe, due date & resources</span>
                     <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Finishing Schedule</h3>
                 </div>
-                {unpriced > 0 && (
-                    <span title="These jobs need a paint size + product type (capacity) and a matching recipe with steps — set on the Production Times tab / the item." style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', border: '1px solid #d9534f', padding: '6px 10px', borderRadius: '2px' }}>
-                        {unpriced} unpriced — need size + recipe
-                    </span>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    {unpriced > 0 && (
+                        <span title="These jobs need a paint size + product type (capacity) and a matching recipe with steps — set on the Production Times tab / the item." style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', border: '1px solid #d9534f', padding: '6px 10px', borderRadius: '2px' }}>
+                            {unpriced} unpriced — need size + recipe
+                        </span>
+                    )}
+                    <button onClick={commitSchedule} disabled={commitWoCount === 0} title="Write this run order onto the work orders so the Setup Queue and Active Floor follow the sequence." style={{ padding: '10px 18px', background: commitWoCount === 0 ? 'var(--paper-2)' : 'var(--ink)', color: commitWoCount === 0 ? 'var(--ink-soft)' : '#fff', border: commitWoCount === 0 ? '1px solid var(--line)' : 'none', cursor: commitWoCount === 0 ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', borderRadius: '2px' }}>
+                        Commit Schedule
+                    </button>
+                </div>
             </div>
 
             {/* totals */}
             <div style={{ display: 'flex', gap: '36px', flexWrap: 'wrap', marginBottom: '24px' }}>
-                {stat('Custom Orders', customBatches.length)}
+                {stat('Custom Orders', customBatches.length, setupCount > 0 ? `${setupCount} in set up` : 'all scheduled')}
                 {stat('Stock Batches', stockBatches.length)}
                 {stat('Sleds', totalSleds, `${totalParts} small parts`)}
                 {stat('Poles', poleCount, poleCount > 0 ? `${poleRacks} rack${poleRacks === 1 ? '' : 's'} · share oven` : 'none queued')}

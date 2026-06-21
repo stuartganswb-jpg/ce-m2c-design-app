@@ -107,6 +107,12 @@ const sizeMixOf = (lines) => lines.reduce((m, l) => {
 }, { S: 0, M: 0, L: 0 });
 const isCustomWO = (w) => (w.orderType || '') === 'sales' || !!w.salesOrderId;
 
+// Is a WO actually READY to schedule onto the floor? A sales/custom order is ready only once Pick/Pack
+// has scan-matched its two halves (stagingStatus 'MATCHED'); stock builds + stock poles skip that
+// staging and are immediately schedulable. Not-ready sales orders still SHOW in the plan, tagged
+// "In Set Up", but don't count toward the runnable schedule.
+const isReadyWO = (w) => w.stagingStatus === 'MATCHED' || ((w.orderType || '') !== 'sales' && !w.salesOrderId);
+
 // Resolve a recipe by key, tolerant of the "CODE - Name" display string RTG stamps onto a WO's
 // `recipe` field (the Recipes tab keys docs by CODE only). Tries the exact key, then the code
 // before the first " - ". Shared by the planner and ActiveFloor so step lookups agree.
@@ -179,34 +185,52 @@ export function buildFinishingPlan(workOrders = [], recipes = {}, matrix = {}, t
   const customWOs = sledWOs.filter(isCustomWO);
   const stockWOs = sledWOs.filter(w => !isCustomWO(w));
 
-  // Custom small parts: one batch per order, earliest due date first.
+  // Custom small parts: one batch per order. Scan-matched (ready) first, then by due date; not-yet-
+  // matched orders stay visible tagged "In Set Up".
   const customBatches = customWOs
-    .map(wo => priceBatch(wo.recipe || '(no recipe)', [wo], 'custom', recipes, matrix, timers))
-    .sort((a, b) => (a.reqDate || '9999-12-31') < (b.reqDate || '9999-12-31') ? -1
-      : (a.reqDate || '9999-12-31') > (b.reqDate || '9999-12-31') ? 1 : 0);
+    .map(wo => {
+      const b = priceBatch(wo.recipe || '(no recipe)', [wo], 'custom', recipes, matrix, timers);
+      b.ready = isReadyWO(wo);
+      b.status = b.ready ? 'SCHEDULED' : 'IN SET UP';
+      return b;
+    })
+    .sort((a, b) => {
+      if (a.ready !== b.ready) return a.ready ? -1 : 1;
+      return (a.reqDate || '9999-12-31') < (b.reqDate || '9999-12-31') ? -1
+        : (a.reqDate || '9999-12-31') > (b.reqDate || '9999-12-31') ? 1 : 0;
+    });
 
-  // Stock small parts: pooled per recipe, largest first (better sled fill).
+  // Stock small parts: pooled per recipe, largest first. Always ready (skip pick/pack staging).
   const stockGroups = {};
   stockWOs.forEach(wo => { const r = wo.recipe || '(no recipe)'; (stockGroups[r] = stockGroups[r] || []).push(wo); });
   const stockBatches = Object.entries(stockGroups)
-    .map(([r, wos]) => priceBatch(r, wos, 'stock', recipes, matrix, timers))
+    .map(([r, wos]) => { const b = priceBatch(r, wos, 'stock', recipes, matrix, timers); b.ready = true; b.status = 'SCHEDULED'; return b; })
     .sort((a, b) => b.parts - a.parts);
 
-  // Poles (stocked, from Stock View): pooled per recipe, racked 8 at a time. Immediately schedulable
-  // — no custom-fab gate, since custom poles never reach finishing.
+  // Poles (stocked, from Stock View): pooled per recipe, racked 8 at a time. Always ready —
+  // no custom-fab gate, since custom poles never reach finishing.
   const poleGroups = {};
   plannable.forEach(wo => { if (poleQtyOf(wo) > 0) { const r = wo.recipe || '(no recipe)'; (poleGroups[r] = poleGroups[r] || []).push(wo); } });
   const poleBatches = Object.entries(poleGroups)
-    .map(([r, wos]) => pricePoleBatch(r, wos, recipes, timers))
+    .map(([r, wos]) => { const b = pricePoleBatch(r, wos, recipes, timers); b.ready = true; b.status = 'SCHEDULED'; return b; })
     .sort((a, b) => b.poles - a.poles);
+
+  // The runnable schedule = READY batches only. "In Set Up" customs still display, but don't count
+  // toward sleds/oven/time or take a run-sequence slot.
+  const sledScheduled = [...customBatches.filter(b => b.ready), ...stockBatches];
+  const setupBatches = customBatches.filter(b => !b.ready);
+  let seq = 0;
+  [...sledScheduled, ...poleBatches].forEach(b => { b.seq = ++seq; });
+  setupBatches.forEach(b => { b.seq = null; });
 
   const batches = [...customBatches, ...stockBatches];
   const sum = (arr, k) => arr.reduce((s, b) => s + b[k], 0);
-  const totalMachineMins = sum(batches, 'machineMins');
-  const sledOvenMins = sum(batches, 'ovenMins');  // sled bakes only
-  const totalSleds = sum(batches, 'sleds');
-  const totalParts = sum(batches, 'parts');
-  const smallHandMins = sum(batches, 'handMins'); // small-part hand finish
+  const totalMachineMins = sum(sledScheduled, 'machineMins');
+  const sledOvenMins = sum(sledScheduled, 'ovenMins');  // sled bakes only (ready work)
+  const totalSleds = sum(sledScheduled, 'sleds');
+  const totalParts = sum(sledScheduled, 'parts');
+  const smallHandMins = sum(sledScheduled, 'handMins'); // small-part hand finish (ready work)
+  const setupCount = setupBatches.length;
 
   // Poles share the ONE oven with the sleds (the bottleneck); small-part hand-finish is done during
   // the pole-oven window (sleds can't cure then anyway).
@@ -228,7 +252,7 @@ export function buildFinishingPlan(workOrders = [], recipes = {}, matrix = {}, t
 
   return {
     batches, customBatches, stockBatches, poleBatches,
-    totalMachineMins, totalSleds, totalParts,
+    totalMachineMins, totalSleds, totalParts, setupCount,
     sledOvenMins, poleOvenMins, ovenTotalMins,
     poleCount, poleRacks, poleSprayMins, smallHandMins, poleHandMins, totalHandMins, handOverlapMins,
     dailyMins, wallMins, days: wallMins / dailyMins,

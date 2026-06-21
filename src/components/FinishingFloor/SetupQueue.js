@@ -109,7 +109,13 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
   };
 
   let pendingOrders = workOrders.filter(w => w.currentPhase === "Setup" || w.currentPhase === "setup");
-  pendingOrders.sort((a, b) => new Date(a.reqDate) - new Date(b.reqDate));
+  // Follow the committed run order (scheduleSeq, set by the Schedule's "Commit" button) when present;
+  // fall back to required date for anything not yet committed.
+  pendingOrders.sort((a, b) => {
+    const sa = a.scheduleSeq ?? Infinity, sb = b.scheduleSeq ?? Infinity;
+    if (sa !== sb) return sa - sb;
+    return new Date(a.reqDate) - new Date(b.reqDate);
+  });
 
   if (aiOptimized) {
       pendingOrders = pendingOrders.sort((a, b) => {
