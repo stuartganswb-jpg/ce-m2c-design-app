@@ -138,6 +138,34 @@ function priceBatch(recipeCode, wos, kind, recipes, matrix, timers) {
   };
 }
 
+export const POLE_RACK = 8; // poles cure 8 per rack
+
+// A WO whose part is a POLE. Stocked poles (ordered via Stock View) carry a POLE productType; manual
+// pole orders use type:'Poles'. Custom poles are fabricated on the Shop floor and never reach
+// finishing, so finishing pole work is the STOCKED poles only.
+const isPoleWO = (wo) => /pole/i.test(String(wo.productType || '')) || wo.type === 'Poles';
+// Poles a WO contributes to the pole rack: a pole WO's whole qty, else its explicit pole field.
+const poleQtyOf = (wo) => isPoleWO(wo) ? (Number(wo.totalParts) || 0) : (Number(wo.poles?.qty) || Number(wo.totalPoles) || 0);
+
+// Price a pole batch (same-recipe poles pooled), racked 8 at a time. Poles spray on the pole rack and
+// bake in the shared oven (one rack load per sprayed step), then hand-finish.
+function pricePoleBatch(recipeCode, wos, recipes, timers) {
+  const recipe = resolveRecipe(recipes, recipeCode);
+  const poles = wos.reduce((s, w) => s + poleQtyOf(w), 0);
+  const racks = poles > 0 ? Math.ceil(poles / POLE_RACK) : 0;
+  const sprayedSteps = recipe && Array.isArray(recipe.steps) ? recipe.steps.filter(s => s.app === 'Sprayed').length : 0;
+  const hasHand = !!(recipe && Array.isArray(recipe.steps) && recipe.steps.some(s => s.app === 'Hand Applied'));
+  const sprayMins = poles * (Number(timers.poleMins) || 5) * sprayedSteps;
+  const ovenMins = racks * sprayedSteps * (Number(timers.ovenMins) || 10);
+  const handMins = hasHand ? poles * (Number(timers.handPoleMins) || 10) : 0;
+  const dates = wos.map(w => w.reqDate).filter(Boolean).sort();
+  return {
+    kind: 'pole', recipe: recipeCode, wos, woCount: wos.length, poles, racks,
+    sprayedSteps, hasHand, reqDate: dates[0] || null, sprayMins, ovenMins, handMins,
+    resolved: !!recipe,
+  };
+}
+
 // Build a sequenced finishing plan. Stock and custom are scheduled DIFFERENTLY (sleds only ever hold
 // one recipe either way):
 //   • CUSTOM — a sales order is a mix of different part sizes in one finish. Each custom WO is its own
@@ -147,21 +175,30 @@ function priceBatch(recipeCode, wos, kind, recipes, matrix, timers) {
 // Pure function. opts.dailyMins = a shift's oven minutes (capacity denominator).
 export function buildFinishingPlan(workOrders = [], recipes = {}, matrix = {}, timers = {}, opts = {}) {
   const plannable = workOrders.filter(w => PLANNABLE_PHASES.includes(w.currentPhase));
-  const customWOs = plannable.filter(isCustomWO);
-  const stockWOs = plannable.filter(w => !isCustomWO(w));
+  const sledWOs = plannable.filter(w => !isPoleWO(w));   // small parts (sleds)
+  const customWOs = sledWOs.filter(isCustomWO);
+  const stockWOs = sledWOs.filter(w => !isCustomWO(w));
 
-  // Custom: one batch per order, earliest due date first.
+  // Custom small parts: one batch per order, earliest due date first.
   const customBatches = customWOs
     .map(wo => priceBatch(wo.recipe || '(no recipe)', [wo], 'custom', recipes, matrix, timers))
     .sort((a, b) => (a.reqDate || '9999-12-31') < (b.reqDate || '9999-12-31') ? -1
       : (a.reqDate || '9999-12-31') > (b.reqDate || '9999-12-31') ? 1 : 0);
 
-  // Stock: pooled per recipe, largest first (better sled fill).
+  // Stock small parts: pooled per recipe, largest first (better sled fill).
   const stockGroups = {};
   stockWOs.forEach(wo => { const r = wo.recipe || '(no recipe)'; (stockGroups[r] = stockGroups[r] || []).push(wo); });
   const stockBatches = Object.entries(stockGroups)
     .map(([r, wos]) => priceBatch(r, wos, 'stock', recipes, matrix, timers))
     .sort((a, b) => b.parts - a.parts);
+
+  // Poles (stocked, from Stock View): pooled per recipe, racked 8 at a time. Immediately schedulable
+  // — no custom-fab gate, since custom poles never reach finishing.
+  const poleGroups = {};
+  plannable.forEach(wo => { if (poleQtyOf(wo) > 0) { const r = wo.recipe || '(no recipe)'; (poleGroups[r] = poleGroups[r] || []).push(wo); } });
+  const poleBatches = Object.entries(poleGroups)
+    .map(([r, wos]) => pricePoleBatch(r, wos, recipes, timers))
+    .sort((a, b) => b.poles - a.poles);
 
   const batches = [...customBatches, ...stockBatches];
   const sum = (arr, k) => arr.reduce((s, b) => s + b[k], 0);
@@ -171,24 +208,13 @@ export function buildFinishingPlan(workOrders = [], recipes = {}, matrix = {}, t
   const totalParts = sum(batches, 'parts');
   const smallHandMins = sum(batches, 'handMins'); // small-part hand finish
 
-  // --- Poles share the ONE oven with the sleds (the bottleneck), and small-part hand-finishing is
-  // done during the pole-oven window (sleds can't cure then anyway). Pole qty lives on the finishing
-  // WO's `poles.qty` (manual intake) / `totalPoles` / a `type:'Poles'` WO. ---
-  const poleMin = Number(timers.poleMins) || 5;
-  const handPoleMin = Number(timers.handPoleMins) || 10;
-  const ovenMin = Number(timers.ovenMins) || 10;
-  let poleCount = 0, poleSprayMins = 0, poleOvenMins = 0, poleHandMins = 0;
-  plannable.forEach(wo => {
-    const poles = Number(wo.poles?.qty) || Number(wo.totalPoles) || (wo.type === 'Poles' ? Number(wo.totalParts) : 0) || 0;
-    if (poles <= 0) return;
-    const recipe = resolveRecipe(recipes, wo.recipe);
-    const sprayed = recipe && Array.isArray(recipe.steps) ? recipe.steps.filter(s => s.app === 'Sprayed').length : 0;
-    const hasHand = !!(recipe && Array.isArray(recipe.steps) && recipe.steps.some(s => s.app === 'Hand Applied'));
-    poleCount += poles;
-    poleSprayMins += poles * poleMin * sprayed;
-    poleOvenMins += sprayed * ovenMin;              // one pole-rack load per sprayed step
-    if (hasHand) poleHandMins += poles * handPoleMin;
-  });
+  // Poles share the ONE oven with the sleds (the bottleneck); small-part hand-finish is done during
+  // the pole-oven window (sleds can't cure then anyway).
+  const poleCount = sum(poleBatches, 'poles');
+  const poleRacks = sum(poleBatches, 'racks');
+  const poleSprayMins = sum(poleBatches, 'sprayMins');
+  const poleOvenMins = sum(poleBatches, 'ovenMins');
+  const poleHandMins = sum(poleBatches, 'handMins');
 
   const ovenTotalMins = sledOvenMins + poleOvenMins;        // serialized through the single oven
   const totalHandMins = smallHandMins + poleHandMins;
@@ -201,10 +227,10 @@ export function buildFinishingPlan(workOrders = [], recipes = {}, matrix = {}, t
   const wallMins = ovenTotalMins + handBeyondMins;
 
   return {
-    batches, customBatches, stockBatches,
+    batches, customBatches, stockBatches, poleBatches,
     totalMachineMins, totalSleds, totalParts,
     sledOvenMins, poleOvenMins, ovenTotalMins,
-    poleCount, poleSprayMins, smallHandMins, poleHandMins, totalHandMins, handOverlapMins,
+    poleCount, poleRacks, poleSprayMins, smallHandMins, poleHandMins, totalHandMins, handOverlapMins,
     dailyMins, wallMins, days: wallMins / dailyMins,
   };
 }
