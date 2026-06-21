@@ -6,6 +6,7 @@ import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import SetupQueue from './SetupQueue';
 import ActiveFloor from './ActiveFloor';
+import ProductionTimes from './ProductionTimes';
 import Recipes from './Recipes';
 import Supplies from './Supplies';
 import Summary from './Summary';
@@ -15,8 +16,9 @@ import { MixModal, QcModal } from './Modals';
 import FloorAssetViewer from './FloorAssetViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 
-// REMOVED 'MANAGEMENT' FROM THIS ARRAY
-const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY'];
+// REMOVED 'MANAGEMENT' FROM THIS ARRAY (user/permission admin now lives in the HQ Admin tab).
+// PRODUCTION TIMES is the focused finishing-config tab: production timers + the time matrix.
+const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY'];
 
 const FinishingFloor = () => {
   const navigate = useNavigate();
@@ -33,6 +35,7 @@ const FinishingFloor = () => {
   const [users, setUsers] = useState([]);
   const [logs, setLogs] = useState([]);
   const [sysConfig, setSysConfig] = useState({ setupSecs: 30, smallPartsBatchSize: 70, smallPartsBatchMinutes: 6, poleMinutesPerPiece: 3, potLifeMins: 180, recoatWindowMins: 90, activeFloorDailyCapacity: 200 });
+  const [timeMatrix, setTimeMatrix] = useState({});
   const [now, setNow] = useState(Date.now());
   const [mixModal, setMixModal] = useState(null); 
   const [qcModal, setQcModal] = useState(null); 
@@ -52,7 +55,8 @@ const FinishingFloor = () => {
       onSnapshot(collection(db, "fin_supplies"), (snap) => setSupplies(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(query(collection(db, "hq_logs"), orderBy("t", "desc"), limit(50)), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
-      onSnapshot(doc(db, "fin_config", "settings"), (docSnap) => { if (docSnap.exists()) setSysConfig(prev => ({ ...prev, ...docSnap.data() })); })
+      onSnapshot(doc(db, "fin_config", "settings"), (docSnap) => { if (docSnap.exists()) setSysConfig(prev => ({ ...prev, ...docSnap.data() })); }),
+      onSnapshot(doc(db, "fin_config", "timeMatrix"), (docSnap) => setTimeMatrix(docSnap.exists() ? docSnap.data() : {}))
     ];
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
@@ -142,6 +146,7 @@ const FinishingFloor = () => {
           {activeTab === 'SETUP QUEUE' && <SetupQueue workOrders={workOrders} recipes={recipes} writeLog={writeLog} sysConfig={sysConfig} />}
           {activeTab === 'ACTIVE FLOOR' && <ActiveFloor workOrders={workOrders} recipes={recipes} activePots={activePots} sysConfig={sysConfig} setMixModal={setMixModal} now={now} user={user} setQcModal={setQcModal} users={users} />}
           {activeTab === 'FINISH RECIPES' && <Recipes recipes={recipes} paintProfiles={paintProfiles} supplies={supplies} writeLog={writeLog} user={user} />}
+          {activeTab === 'PRODUCTION TIMES' && <ProductionTimes sysConfig={sysConfig} timeMatrix={timeMatrix} recipes={recipes} workOrders={workOrders} writeLog={writeLog} user={user} />}
           {activeTab === 'SUPPLIES' && <Supplies supplies={supplies} writeLog={writeLog} user={user} />}
           {activeTab === 'DAILY SUMMARY' && <Summary workOrders={workOrders} />}
           

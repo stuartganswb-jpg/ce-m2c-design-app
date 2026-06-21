@@ -530,6 +530,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     totalParts: Number(qty),
                     reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
                     type: "Stock Build",
+                    // Scheduler keys for the finishing time matrix (recipe × paintSize × productType).
+                    // Carried downstream by RTGDispatch.pushToFinishing onto the fin_workorder.
+                    paintSize: (part.manufacturingSpecs?.paintSize || '').toUpperCase() || null,
+                    productType: (part.manufacturingSpecs?.productType || part.productType || '').toUpperCase() || null,
                     routingType: part.routingType || 'Standard',
                     needsPhosphating: isPhosphate,
                     isPlatingDemand: isPlating,

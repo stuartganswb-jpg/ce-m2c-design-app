@@ -294,6 +294,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             clientSku: cp?.clientSku || '',
             qty: Number(line.qty) || 1,
             binLocation: part?.manufacturingSpecs?.binLocation || 'UNASSIGNED',
+            // Scheduler keys (recipe lives on the WO; size + type live per part). The finishing
+            // time matrix resolves minutes-per-part from (recipe × paintSize × productType).
+            paintSize: (part?.manufacturingSpecs?.paintSize || '').toUpperCase() || null,
+            productType: (part?.manufacturingSpecs?.productType || part?.productType || '').toUpperCase() || null,
             assetUrl: (line.partId && assetMap.get(line.partId)) || null
         };
     });
@@ -359,6 +363,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 const cpqSpecs = {};
                 smallLines.forEach(l => { cpqSpecs[cleanLineName(l.name)] = `Qty: ${l.qty}`; });
                 const totalParts = smallLines.reduce((s, l) => s + (Number(l.qty) || 0), 0) || smallLines.length;
+                // WO-level size breakdown (for the planner's section packing + a single display chip).
+                // Per-part minutes still resolve off each partsList line; this is the rollup.
+                const paintSizes = partsList.reduce((acc, p) => {
+                    if (p.paintSize && ['S', 'M', 'L'].includes(p.paintSize)) acc[p.paintSize] += (Number(p.qty) || 0);
+                    return acc;
+                }, { S: 0, M: 0, L: 0 });
+                const hasSize = (paintSizes.S + paintSizes.M + paintSizes.L) > 0;
+                const paintSize = hasSize
+                    ? Object.keys(paintSizes).sort((a, b) => paintSizes[b] - paintSizes[a]).find(k => paintSizes[k] > 0)
+                    : null;
 
                 await setDoc(doc(db, "fin_workorders", finId), {
                     id: finId, woNum: finId, displayId: finId,
@@ -370,6 +384,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     type: job.cpqData?.cartItems?.[0]?.assemblyName || "Mixed",
                     recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : (so.recipe || "PENDING-RECIPE"),
                     totalParts,
+                    paintSize, paintSizes: hasSize ? paintSizes : null,
                     dimensions: { length: Number(so.length) || 0, width: Number(so.width) || 0, height: Number(so.height) || 0 },
                     cpqSpecs,
                     imageUrl: drawingUrl,
@@ -554,6 +569,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 reqDate: hqOrder.reqDate || "",
                 type: hqOrder.type || "Mixed",
                 totalParts: Number(hqOrder.totalParts) || 1,
+                // Scheduler keys. A stock build is one finished assembly -> one size + one product
+                // type, so the whole quantity packs into that size and resolves one matrix cell.
+                paintSize: (hqOrder.paintSize || '').toUpperCase() || null,
+                productType: (hqOrder.productType || '').toUpperCase() || null,
+                paintSizes: (hqOrder.paintSize && ['S', 'M', 'L'].includes((hqOrder.paintSize || '').toUpperCase()))
+                    ? { S: 0, M: 0, L: 0, [(hqOrder.paintSize).toUpperCase()]: Number(hqOrder.totalParts) || 0 }
+                    : null,
                 note: hqOrder.memo || originalJob?.sidemark || "",
                 cpqSpecs: cpqSpecs,
                 imageUrl: svgUri || originalJob?.finalImageUrl || null,
