@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { finishingDb as db } from '../../firebase'; 
+import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc } from "firebase/firestore";
+import { resolveRecipe } from '../Shared/finishingTime';
 
 const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
 const btnStyle = { padding: '12px 16px', border: 'none', borderRadius: '2px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' };
@@ -136,7 +137,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
 
   const colorGroups = {};
   activeWOs.forEach(wo => {
-      const r = recipes[wo.recipe];
+      const r = resolveRecipe(recipes, wo.recipe);
       if (!r || !r.steps || r.steps.length <= wo.currentStepIndex) return;
       const step = r.steps[wo.currentStepIndex];
       if (!colorGroups[step.color]) colorGroups[step.color] = [];

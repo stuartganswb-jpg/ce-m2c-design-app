@@ -107,9 +107,19 @@ const sizeMixOf = (lines) => lines.reduce((m, l) => {
 }, { S: 0, M: 0, L: 0 });
 const isCustomWO = (w) => (w.orderType || '') === 'sales' || !!w.salesOrderId;
 
+// Resolve a recipe by key, tolerant of the "CODE - Name" display string RTG stamps onto a WO's
+// `recipe` field (the Recipes tab keys docs by CODE only). Tries the exact key, then the code
+// before the first " - ". Shared by the planner and ActiveFloor so step lookups agree.
+export function resolveRecipe(recipes, key) {
+  if (!recipes || !key) return null;
+  if (recipes[key]) return recipes[key];
+  const code = String(key).split(' - ')[0].trim();
+  return (code && recipes[code]) || null;
+}
+
 // Price one batch (WOs that share a recipe + a sled pool) from capacity + timers.
 function priceBatch(recipeCode, wos, kind, recipes, matrix, timers) {
-  const recipe = recipes[recipeCode];
+  const recipe = resolveRecipe(recipes, recipeCode);
   const lines = wos.flatMap(workOrderPartLines);
   const { footprint, parts, resolved } = packFootprint(lines, matrix);
   const sleds = sledsFromFootprint(footprint, parts);
