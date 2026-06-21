@@ -166,17 +166,45 @@ export function buildFinishingPlan(workOrders = [], recipes = {}, matrix = {}, t
   const batches = [...customBatches, ...stockBatches];
   const sum = (arr, k) => arr.reduce((s, b) => s + b[k], 0);
   const totalMachineMins = sum(batches, 'machineMins');
-  const totalOvenMins = sum(batches, 'ovenMins');
+  const sledOvenMins = sum(batches, 'ovenMins');  // sled bakes only
   const totalSleds = sum(batches, 'sleds');
   const totalParts = sum(batches, 'parts');
+  const smallHandMins = sum(batches, 'handMins'); // small-part hand finish
+
+  // --- Poles share the ONE oven with the sleds (the bottleneck), and small-part hand-finishing is
+  // done during the pole-oven window (sleds can't cure then anyway). Pole qty lives on the finishing
+  // WO's `poles.qty` (manual intake) / `totalPoles` / a `type:'Poles'` WO. ---
+  const poleMin = Number(timers.poleMins) || 5;
+  const handPoleMin = Number(timers.handPoleMins) || 10;
+  const ovenMin = Number(timers.ovenMins) || 10;
+  let poleCount = 0, poleSprayMins = 0, poleOvenMins = 0, poleHandMins = 0;
+  plannable.forEach(wo => {
+    const poles = Number(wo.poles?.qty) || Number(wo.totalPoles) || (wo.type === 'Poles' ? Number(wo.totalParts) : 0) || 0;
+    if (poles <= 0) return;
+    const recipe = resolveRecipe(recipes, wo.recipe);
+    const sprayed = recipe && Array.isArray(recipe.steps) ? recipe.steps.filter(s => s.app === 'Sprayed').length : 0;
+    const hasHand = !!(recipe && Array.isArray(recipe.steps) && recipe.steps.some(s => s.app === 'Hand Applied'));
+    poleCount += poles;
+    poleSprayMins += poles * poleMin * sprayed;
+    poleOvenMins += sprayed * ovenMin;              // one pole-rack load per sprayed step
+    if (hasHand) poleHandMins += poles * handPoleMin;
+  });
+
+  const ovenTotalMins = sledOvenMins + poleOvenMins;        // serialized through the single oven
+  const totalHandMins = smallHandMins + poleHandMins;
+  const handOverlapMins = Math.min(totalHandMins, poleOvenMins); // hand-finish hidden in pole-oven window
+  const handBeyondMins = Math.max(0, totalHandMins - poleOvenMins);
+
   const dailyMins = Number(opts.dailyMins) || Number(timers.activeFloorDailyMinutes) || 480;
-  // Wall-clock is gated by the shared oven (one bake at a time) — both sleds funnel bakes through it,
-  // so total oven minutes is the floor on elapsed time, never less than that. Refined in a later pass.
-  const wallMins = Math.max(totalOvenMins, totalMachineMins / 2);
+  // Wall-clock: the oven is the spine (sled + pole bakes serialized); sled setup/spray pipelines under
+  // it, and hand-finish overlaps the pole-oven window — only hand beyond that window adds on.
+  const wallMins = ovenTotalMins + handBeyondMins;
 
   return {
     batches, customBatches, stockBatches,
-    totalMachineMins, totalOvenMins, totalSleds, totalParts,
+    totalMachineMins, totalSleds, totalParts,
+    sledOvenMins, poleOvenMins, ovenTotalMins,
+    poleCount, poleSprayMins, smallHandMins, poleHandMins, totalHandMins, handOverlapMins,
     dailyMins, wallMins, days: wallMins / dailyMins,
   };
 }

@@ -13,8 +13,9 @@ const SchedulePlanner = ({ workOrders = [], recipes = {}, capacityMatrix = {}, s
         [workOrders, recipes, capacityMatrix, sysConfig]
     );
 
-    const { batches, customBatches, stockBatches, totalSleds, totalParts, totalMachineMins, totalOvenMins, dailyMins, days } = plan;
-    const overCapacity = totalOvenMins > dailyMins;
+    const { batches, customBatches, stockBatches, totalSleds, totalParts,
+        sledOvenMins, poleOvenMins, ovenTotalMins, poleCount, handOverlapMins, dailyMins, days } = plan;
+    const overCapacity = ovenTotalMins > dailyMins;
     const unpriced = batches.filter(b => !b.resolved).length;
 
     const stat = (label, value, sub) => (
@@ -83,24 +84,25 @@ const SchedulePlanner = ({ workOrders = [], recipes = {}, capacityMatrix = {}, s
             </div>
 
             {/* totals */}
-            <div style={{ display: 'flex', gap: '40px', flexWrap: 'wrap', marginBottom: '24px' }}>
+            <div style={{ display: 'flex', gap: '36px', flexWrap: 'wrap', marginBottom: '24px' }}>
                 {stat('Custom Orders', customBatches.length)}
                 {stat('Stock Batches', stockBatches.length)}
-                {stat('Sleds', totalSleds)}
-                {stat('Parts', totalParts)}
-                {stat('Machine Time', fmtH(totalMachineMins), `${Math.round(totalMachineMins)} min, 2 sleds`)}
-                {stat('Oven Load', fmtH(totalOvenMins), 'shared bottleneck')}
+                {stat('Sleds', totalSleds, `${totalParts} small parts`)}
+                {stat('Poles', poleCount, poleCount > 0 ? 'share the oven' : 'none queued')}
+                {stat('Oven Load', fmtH(ovenTotalMins), `sled ${Math.round(sledOvenMins)} + pole ${Math.round(poleOvenMins)} min`)}
+                {stat('Hand Overlap', fmtH(handOverlapMins), 'hidden in pole bakes')}
                 {stat('Est. Days', days.toFixed(1), `vs ${Math.round(dailyMins)} min/shift`)}
             </div>
 
-            {/* oven-vs-capacity meter */}
+            {/* oven-vs-capacity meter (sled bakes + pole bakes share the one oven) */}
             <div style={{ marginBottom: '28px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '6px' }}>
-                    <span>Oven load vs one shift</span>
-                    <span style={{ color: overCapacity ? '#d9534f' : 'var(--ink-soft)' }}>{Math.round(totalOvenMins)} / {Math.round(dailyMins)} min{overCapacity ? ' • over one shift' : ''}</span>
+                    <span>Oven load vs one shift (sled + pole bakes)</span>
+                    <span style={{ color: overCapacity ? '#d9534f' : 'var(--ink-soft)' }}>{Math.round(ovenTotalMins)} / {Math.round(dailyMins)} min{overCapacity ? ' • over one shift' : ''}</span>
                 </div>
-                <div style={{ height: '8px', background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: '2px', overflow: 'hidden' }}>
-                    <div style={{ width: `${Math.min(100, (totalOvenMins / dailyMins) * 100)}%`, height: '100%', background: overCapacity ? '#d9534f' : 'var(--brass)' }} />
+                <div style={{ display: 'flex', height: '8px', background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: '2px', overflow: 'hidden' }}>
+                    <div title="sled bakes" style={{ width: `${Math.min(100, (sledOvenMins / dailyMins) * 100)}%`, height: '100%', background: overCapacity ? '#d9534f' : 'var(--brass)' }} />
+                    <div title="pole bakes" style={{ width: `${Math.min(100 - Math.min(100, (sledOvenMins / dailyMins) * 100), (poleOvenMins / dailyMins) * 100)}%`, height: '100%', background: 'var(--ink-soft)' }} />
                 </div>
             </div>
 
@@ -129,7 +131,8 @@ const SchedulePlanner = ({ workOrders = [], recipes = {}, capacityMatrix = {}, s
 
             <div style={{ marginTop: '20px', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', lineHeight: 1.6, textTransform: 'uppercase', letterSpacing: '.05em' }}>
                 Custom (gold) = a mix of sizes in one finish, run by due date · stock (grey) = bulk of one item, pooled per recipe to
-                fill sleds. Oven is the shared bottleneck. Next: pole-oven contention + hand-finish scheduled into that window, and a RED/BLUE sled timeline.
+                fill sleds. The one oven is shared by sled + pole bakes (the bottleneck); small-part hand-finishing is overlapped into the
+                pole-oven window, so only hand beyond it adds to the estimate. Poles are read from each WO's pole qty.
             </div>
         </div>
     );
