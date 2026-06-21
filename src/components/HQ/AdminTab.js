@@ -18,7 +18,9 @@ const stripUndefined = (v) => {
 
 // CONSTANTS FOR GLOBAL PERMISSIONS
 const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'admin'];
-const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'OS COMMS', 'ASSET GALLERY', 'MANAGEMENT', 'DAILY SUMMARY'];
+// Mirrors the Finishing app's TABS (FinishingFloor.js). 'MANAGEMENT' was retired (its user/perms
+// admin moved here to HQ); 'PRODUCTION TIMES' is the finishing timers + time-matrix config tab.
+const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY'];
 const PICK_TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'GALLERY', 'MESSAGING']; // mirrors PickPackApp TABS
 
 // NetSuite plumbing (mirror of ERPPushPullTab) for creating a flow's rollup item.

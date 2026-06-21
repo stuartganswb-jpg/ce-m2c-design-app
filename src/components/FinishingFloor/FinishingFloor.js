@@ -97,7 +97,10 @@ const FinishingFloor = () => {
   };
 
   const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';
-  const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
+  // A super admin (role or flag, matching HQ AdminTab) always sees every tab, so newly added
+  // tabs aren't silently locked out until granted. Other roles are gated by fin_config/permissions.
+  const isSuperAdmin = user?.superAdmin === true || ['admin', 'superadmin'].includes(safeUserRole);
+  const myTabs = isSuperAdmin ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
   const handleLogout = () => {
     localStorage.removeItem('hq_session');
