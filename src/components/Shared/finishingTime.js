@@ -107,68 +107,66 @@ const sizeMixOf = (lines) => lines.reduce((m, l) => {
 }, { S: 0, M: 0, L: 0 });
 const isCustomWO = (w) => (w.orderType || '') === 'sales' || !!w.salesOrderId;
 
-// Build a sequenced finishing plan from work orders. Sleds only ever hold ONE recipe, so we group
-// by recipe, pack each recipe's pooled parts into sleds by footprint, price the batch from the
-// timers × recipe steps, and sequence custom (date-driven) ahead of stock filler. Pure function.
+// Price one batch (WOs that share a recipe + a sled pool) from capacity + timers.
+function priceBatch(recipeCode, wos, kind, recipes, matrix, timers) {
+  const recipe = recipes[recipeCode];
+  const lines = wos.flatMap(workOrderPartLines);
+  const { footprint, parts, resolved } = packFootprint(lines, matrix);
+  const sleds = sledsFromFootprint(footprint, parts);
+  const mix = sizeMixOf(lines);
+  const sprayedSteps = recipe && Array.isArray(recipe.steps) ? recipe.steps.filter(s => s.app === 'Sprayed').length : 0;
+  const hasHand = !!(recipe && Array.isArray(recipe.steps) && recipe.steps.some(s => s.app === 'Hand Applied'));
+  const handMins = hasHand ? parts * (Number(timers.handSmallMins) || 1.35) : 0;
+  const machineMins = sleds * batchMachineMins(recipe, timers) + handMins;
+  const ovenMins = sleds * sprayedSteps * (Number(timers.ovenMins) || 10);
+  const dates = wos.map(w => w.reqDate).filter(Boolean).sort();
+  return {
+    kind, recipe: recipeCode, wos, woCount: wos.length, parts, sleds, footprint,
+    sizeMix: mix, distinctSizes: ['S', 'M', 'L'].filter(s => mix[s] > 0).length,
+    sprayedSteps, hasHand, reqDate: dates[0] || null,
+    machineMins, handMins, ovenMins, resolved: resolved && !!recipe,
+  };
+}
+
+// Build a sequenced finishing plan. Stock and custom are scheduled DIFFERENTLY (sleds only ever hold
+// one recipe either way):
+//   • CUSTOM — a sales order is a mix of different part sizes in one finish. Each custom WO is its own
+//     batch, sequenced by due date (the customer commitment).
+//   • STOCK — bulk qty of one item in one finish. Pooled by recipe into filler batches that run after
+//     the dated custom work / top off the machine when there's headroom.
+// Pure function. opts.dailyMins = a shift's oven minutes (capacity denominator).
 export function buildFinishingPlan(workOrders = [], recipes = {}, matrix = {}, timers = {}, opts = {}) {
   const plannable = workOrders.filter(w => PLANNABLE_PHASES.includes(w.currentPhase));
+  const customWOs = plannable.filter(isCustomWO);
+  const stockWOs = plannable.filter(w => !isCustomWO(w));
 
-  const groups = {};
-  plannable.forEach(wo => {
-    const r = wo.recipe || '(no recipe)';
-    (groups[r] = groups[r] || { recipe: r, wos: [] }).wos.push(wo);
-  });
+  // Custom: one batch per order, earliest due date first.
+  const customBatches = customWOs
+    .map(wo => priceBatch(wo.recipe || '(no recipe)', [wo], 'custom', recipes, matrix, timers))
+    .sort((a, b) => (a.reqDate || '9999-12-31') < (b.reqDate || '9999-12-31') ? -1
+      : (a.reqDate || '9999-12-31') > (b.reqDate || '9999-12-31') ? 1 : 0);
 
-  const ovenPerStep = Number(timers.ovenMins) || 10;
+  // Stock: pooled per recipe, largest first (better sled fill).
+  const stockGroups = {};
+  stockWOs.forEach(wo => { const r = wo.recipe || '(no recipe)'; (stockGroups[r] = stockGroups[r] || []).push(wo); });
+  const stockBatches = Object.entries(stockGroups)
+    .map(([r, wos]) => priceBatch(r, wos, 'stock', recipes, matrix, timers))
+    .sort((a, b) => b.parts - a.parts);
 
-  const batches = Object.values(groups).map(g => {
-    const recipe = recipes[g.recipe];
-    const lines = g.wos.flatMap(workOrderPartLines);
-    const { footprint, parts, resolved } = packFootprint(lines, matrix);
-    const sleds = sledsFromFootprint(footprint, parts);
-    const sprayedSteps = recipe && Array.isArray(recipe.steps) ? recipe.steps.filter(s => s.app === 'Sprayed').length : 0;
-    const hasHand = !!(recipe && Array.isArray(recipe.steps) && recipe.steps.some(s => s.app === 'Hand Applied'));
-    const handMins = hasHand ? parts * (Number(timers.handSmallMins) || 1.35) : 0;
-    const machineMins = sleds * batchMachineMins(recipe, timers) + handMins;
-    const ovenMins = sleds * sprayedSteps * ovenPerStep;     // oven demand = the shared bottleneck
-    const dates = g.wos.map(w => w.reqDate).filter(Boolean).sort();
-    return {
-      recipe: g.recipe,
-      wos: g.wos,
-      woCount: g.wos.length,
-      parts,
-      sleds,
-      footprint,
-      sizeMix: sizeMixOf(lines),
-      sprayedSteps,
-      hasHand,
-      hasCustom: g.wos.some(isCustomWO),
-      hasStock: g.wos.some(w => !isCustomWO(w)),
-      reqDate: dates[0] || null,
-      machineMins,
-      handMins,
-      ovenMins,
-      resolved: resolved && !!recipe,
-    };
-  });
-
-  // Sequence: custom batches first (earliest due date wins), stock filler after, unpriced last.
-  batches.sort((a, b) => {
-    if (a.hasCustom !== b.hasCustom) return a.hasCustom ? -1 : 1;
-    if (a.reqDate && b.reqDate) return a.reqDate < b.reqDate ? -1 : (a.reqDate > b.reqDate ? 1 : 0);
-    if (a.reqDate) return -1;
-    if (b.reqDate) return 1;
-    return b.parts - a.parts;
-  });
-
-  const totalMachineMins = batches.reduce((s, b) => s + b.machineMins, 0);
-  const totalOvenMins = batches.reduce((s, b) => s + b.ovenMins, 0);
-  const totalSleds = batches.reduce((s, b) => s + b.sleds, 0);
-  const totalParts = batches.reduce((s, b) => s + b.parts, 0);
+  const batches = [...customBatches, ...stockBatches];
+  const sum = (arr, k) => arr.reduce((s, b) => s + b[k], 0);
+  const totalMachineMins = sum(batches, 'machineMins');
+  const totalOvenMins = sum(batches, 'ovenMins');
+  const totalSleds = sum(batches, 'sleds');
+  const totalParts = sum(batches, 'parts');
   const dailyMins = Number(opts.dailyMins) || Number(timers.activeFloorDailyMinutes) || 480;
   // Wall-clock is gated by the shared oven (one bake at a time) — both sleds funnel bakes through it,
   // so total oven minutes is the floor on elapsed time, never less than that. Refined in a later pass.
   const wallMins = Math.max(totalOvenMins, totalMachineMins / 2);
 
-  return { batches, totalMachineMins, totalOvenMins, totalSleds, totalParts, dailyMins, wallMins, days: wallMins / dailyMins };
+  return {
+    batches, customBatches, stockBatches,
+    totalMachineMins, totalOvenMins, totalSleds, totalParts,
+    dailyMins, wallMins, days: wallMins / dailyMins,
+  };
 }
