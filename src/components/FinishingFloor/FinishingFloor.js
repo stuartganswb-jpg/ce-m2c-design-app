@@ -98,13 +98,20 @@ const FinishingFloor = () => {
     }
   };
 
-  // Resolve the operator's authoritative hq_users record — the login token can omit the canonical
-  // role / superAdmin flag, so trust the directory we already subscribe to. A super admin (by flag
-  // or role, the same test HQ uses) always sees every tab, so new tabs aren't locked out before
-  // they're granted; every other role is gated by fin_config/permissions.
-  const meRecord = users.find(u => (user?.pin && u.pin === user?.pin) || (user?.name && u.name === user?.name)) || user || {};
-  const safeUserRole = (meRecord.role || user?.role || 'operator').toLowerCase();
-  const isSuperAdmin = meRecord.superAdmin === true || user?.superAdmin === true || ['admin', 'superadmin'].includes(safeUserRole);
+  // Tab gating. Super admin = a flag on the hq_users record (not a matrix role), so the login token
+  // alone can't always identify it. Resolve the authoritative directory record we already subscribe
+  // to and treat the check as ADDITIVE — it can only grant more access, never downgrade what the
+  // token role already allows. Other roles stay gated by fin_config/permissions.
+  const tokenRole = (user?.role || 'operator').toLowerCase();
+  const meRecord = users.find(u =>
+    (user?.pin && String(u.pin) === String(user.pin)) ||
+    (user?.id && String(u.id) === String(user.id)) ||
+    (user?.name && u.name === user.name)
+  ) || {};
+  const dirRole = (meRecord.role || '').toLowerCase();
+  const isSuperAdmin = user?.superAdmin === true || meRecord.superAdmin === true ||
+    ['admin', 'superadmin'].includes(tokenRole) || ['admin', 'superadmin'].includes(dirRole);
+  const safeUserRole = tokenRole;
   const myTabs = isSuperAdmin ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
 
   const handleLogout = () => {
@@ -139,6 +146,11 @@ const FinishingFloor = () => {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
           <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Operator: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{user.name}</strong></span>
+          {/* TEMP DIAGNOSTIC — remove after super-admin access is confirmed. Reports how this login
+              resolves for tab gating so we can see why a role is/ isn't granted. */}
+          <span title="temporary access diagnostic" style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: isSuperAdmin ? '#3a7d44' : '#d9534f', border: `1px solid ${isSuperAdmin ? '#3a7d44' : '#d9534f'}`, padding: '4px 8px', borderRadius: '2px' }}>
+            token:{tokenRole || '—'} · dir:{dirRole || (meRecord && Object.keys(meRecord).length ? '—' : 'no-match')} · super:{isSuperAdmin ? 'YES' : 'no'}
+          </span>
           <button onClick={handleLogout} style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Return to Hub</button>
         </div>
       </header>
