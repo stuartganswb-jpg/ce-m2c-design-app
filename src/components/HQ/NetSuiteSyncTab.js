@@ -480,13 +480,19 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
                 if (existingAppRecord) {
                     const existingSpecs = existingAppRecord.manufacturingSpecs || {};
-                    // App is master for curated tags: deep-merge customData so every App-set key
-                    // (isReturnBracket, bracketType, collection, cpq tags, …) SURVIVES the pull
-                    // instead of being wiped by the 3-key rebuild above. NetSuite only fills
-                    // customData keys the App hasn't set. (Other specs still refresh from NS.)
+                    // 🔒 App is master for the curated FILTER fields on an EXISTING item — a NetSuite
+                    // re-import must not overwrite what was curated in the app:
+                    //   • productType (Category): keep the app's value; only let NS fill it when the app
+                    //     left it blank / Uncategorized.
+                    //   • watchList + collections: already preserved — newSpecs doesn't carry them, and
+                    //     customData is deep-merged App-wins below. (Other specs still refresh from NS.)
+                    const keepProductType = (existingSpecs.productType && String(existingSpecs.productType).toUpperCase() !== 'UNCATEGORIZED')
+                        ? existingSpecs.productType
+                        : (newSpecs.productType || existingSpecs.productType || 'Uncategorized');
                     payload.manufacturingSpecs = {
                         ...existingSpecs,
                         ...newSpecs,
+                        productType: keepProductType,
                         customData: { ...(newSpecs.customData || {}), ...(existingSpecs.customData || {}) }
                     };
                 } else {
