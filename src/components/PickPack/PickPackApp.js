@@ -22,18 +22,9 @@ const BRAND_NETSUITE_MAP = {
 };
 
 // --- LABEL PRINTING (device-aware) -------------------------------------------------------------
-// PCs print 2x4 labels in LANDSCAPE via the browser print dialog, honoring whatever printer settings
-// the PC already has. Tablets ZPL-autoprint (wired up later — currently logs the ZPL). A station can
-// pin its mode with localStorage 'labelPrintMode' = 'pc' | 'tablet' if auto-detection guesses wrong.
-const detectPrintMode = () => {
-    try { const o = (localStorage.getItem('labelPrintMode') || '').toLowerCase(); if (o === 'pc' || o === 'tablet') return o; } catch (e) { /* localStorage unavailable */ }
-    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
-    const touch = ((typeof navigator !== 'undefined' && navigator.maxTouchPoints) || 0) > 1;
-    const iPad = /iPad/.test(ua) || (/Macintosh/.test(ua) && touch); // iPadOS 13+ reports as a Mac
-    const androidTablet = /Android/.test(ua) && !/Mobile/.test(ua);
-    const otherTablet = /Tablet|PlayBook|Silk|Kindle|Nexus (7|9|10)/.test(ua);
-    return (iPad || androidTablet || otherTablet) ? 'tablet' : 'pc';
-};
+// Label routing: ZPL labels auto-print to a Zebra (e.g. ZP505, 2×4) via the Zebra BrowserPrint local
+// agent when it's reachable; otherwise we fall back to the browser print dialog (the HTML label). A
+// station can FORCE the dialog (skip the Zebra attempt) with localStorage 'labelPrintMode' = 'html'.
 
 const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -83,16 +74,97 @@ html,body{margin:0;padding:0;}
     } catch (e) { console.warn('printHtmlLabel error:', e); return false; }
 };
 
-// Route a label to the right device. Returns the mode used.
-const emitLabel = (zpl, htmlSpec) => {
-    const mode = detectPrintMode();
-    if (mode === 'tablet') {
-        // TODO: real ZPL autoprint (Zebra BrowserPrint SDK / local print bridge). Stub until set up.
-        console.log("[label] tablet ZPL (autoprint pending):", zpl);
-    } else {
-        printHtmlLabel(htmlSpec); // PC: browser print dialog, landscape 2x4, PC's own printer settings
+// Auto-print raw ZPL to a Zebra via the Zebra BrowserPrint local agent (USB/network printer, no dialog).
+// Tries the HTTPS agent first (required when the app is served over HTTPS), then HTTP for localhost/dev.
+// Each attempt is short-timed so a missing agent fails fast. Returns true only when a printer accepted it.
+const printZplBrowserPrint = async (zpl) => {
+    if (!zpl) return false;
+    const bases = ['https://localhost:9101', 'https://127.0.0.1:9101', 'http://localhost:9100', 'http://127.0.0.1:9100'];
+    for (const base of bases) {
+        try {
+            const ac = new AbortController();
+            const t = setTimeout(() => ac.abort(), 1500);
+            const dRes = await fetch(base + '/default', { method: 'GET', signal: ac.signal });
+            clearTimeout(t);
+            if (!dRes.ok) continue;
+            const device = await dRes.json();
+            const wRes = await fetch(base + '/write', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ device, data: zpl })
+            });
+            if (wRes.ok) return true;
+        } catch (e) { /* agent not reachable on this base — try the next */ }
     }
-    return mode;
+    return false;
+};
+
+// Route a label: auto-print ZPL to the Zebra (BrowserPrint) when available, else the browser print
+// dialog. Set localStorage 'labelPrintMode' = 'html' to force the dialog and skip the Zebra attempt.
+const emitLabel = (zpl, htmlSpec) => {
+    let forced = '';
+    try { forced = (localStorage.getItem('labelPrintMode') || '').toLowerCase(); } catch (e) { /* localStorage unavailable */ }
+    if (forced === 'html' || forced === 'pc') { printHtmlLabel(htmlSpec); return 'html'; }
+    (async () => { const printed = await printZplBrowserPrint(zpl); if (!printed) printHtmlLabel(htmlSpec); })();
+    return 'zebra';
+};
+
+// Render a full-size (US Letter) packing list and send it to the browser print dialog (laser printer).
+const printPackingList = ({ shipId, brand, vendor, poLabel, dateStr, operator, lines = [], pcs, total, finishSummary }) => {
+    const rows = lines.map((l, i) => `<tr>
+<td class="c">${i + 1}</td>
+<td>${esc(l.erpId || '')}</td>
+<td>${esc(l.itemName || '')}</td>
+<td class="c">${esc(l.finishCode || '')}</td>
+<td>${esc(l.targetErpId || '')}</td>
+<td class="c">${esc(l.platingBin || '')}</td>
+<td class="c">${esc(l.woNum || '')}</td>
+<td class="r">${parseInt(l.qty) || 0}</td>
+</tr>`).join('');
+    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Packing List ${esc(shipId)}</title><style>
+@page{size:Letter portrait;margin:0.5in;}
+*{box-sizing:border-box;} html,body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;color:#000;}
+.head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #000;padding-bottom:10px;}
+.head h1{margin:0;font-size:22pt;letter-spacing:.5px;} .head .sub{font-size:10pt;color:#333;margin-top:2px;}
+.bc{text-align:right;} .bc svg{width:2.4in;height:0.5in;} .bc .t{font-size:8pt;letter-spacing:2px;text-align:right;}
+.meta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 24px;margin:16px 0 18px;font-size:10.5pt;}
+.meta .k{color:#666;font-size:8pt;text-transform:uppercase;letter-spacing:.06em;} .meta .v{font-weight:700;}
+table{width:100%;border-collapse:collapse;font-size:10pt;} th,td{border:1px solid #999;padding:6px 8px;text-align:left;}
+th{background:#eee;font-size:8.5pt;text-transform:uppercase;letter-spacing:.05em;} td.c{text-align:center;} td.r,th.r{text-align:right;}
+tfoot td{font-weight:800;background:#f4f4f4;} .sign{margin-top:30px;display:flex;gap:40px;font-size:10pt;}
+.sign div{flex:1;border-top:1px solid #000;padding-top:6px;color:#444;}
+</style></head><body>
+<div class="head">
+  <div><h1>PLATING PACKING LIST</h1><div class="sub">${esc(brand || '')} → ${esc(vendor || 'Plater')} &nbsp;·&nbsp; ${esc(dateStr || '')}</div></div>
+  <div class="bc">${code128BSvg(shipId)}<div class="t">${esc(shipId)}</div></div>
+</div>
+<div class="meta">
+  <div><div class="k">Shipment</div><div class="v">${esc(shipId)}</div></div>
+  <div><div class="k">NetSuite PO</div><div class="v">${esc(poLabel || '—')}</div></div>
+  <div><div class="k">Plater</div><div class="v">${esc(vendor || '—')}</div></div>
+  <div><div class="k">Finish(es)</div><div class="v">${esc(finishSummary || '—')}</div></div>
+  <div><div class="k">Lines / Pieces</div><div class="v">${lines.length} / ${pcs}</div></div>
+  <div><div class="k">Prepared by</div><div class="v">${esc(operator || '—')}</div></div>
+</div>
+<table>
+<thead><tr><th>#</th><th>Item</th><th>Description</th><th>Finish</th><th>Returns As</th><th>Bin</th><th>WO#</th><th class="r">Qty</th></tr></thead>
+<tbody>${rows}</tbody>
+<tfoot><tr><td colspan="7" class="r">Total pieces</td><td class="r">${pcs}</td></tr></tfoot>
+</table>
+<div class="sign"><div>Shipped by / date</div><div>Received by plater / date</div></div>
+</body></html>`;
+    try {
+        const iframe = document.createElement('iframe');
+        iframe.setAttribute('aria-hidden', 'true');
+        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+        document.body.appendChild(iframe);
+        const cw = iframe.contentWindow;
+        cw.document.open(); cw.document.write(doc); cw.document.close();
+        const cleanup = () => { try { if (iframe.parentNode) document.body.removeChild(iframe); } catch (e) { /* already gone */ } };
+        cw.onafterprint = cleanup;
+        setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { console.warn('Packing list print failed:', e); } }, 300);
+        setTimeout(cleanup, 60000);
+        return true;
+    } catch (e) { console.warn('printPackingList error:', e); return false; }
 };
 
 // Bin / ERP-id helpers (raw items carry binLocation top-level after mapping; library docs nest it under manufacturingSpecs).
@@ -866,8 +938,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 status: 'shipped', shipmentId: shipId, nsPoId, nsPoTran, platingRate: rateOf(l), shippedAt: serverTimestamp()
             }).catch(() => {})));
 
-            // 4) Pallet/shipment label.
+            // 4) Pallet/shipment label (Zebra) + an 8.5×11 laser packing list for the plater.
             printShipmentLabel({ shipId, vendor: vendorName, pcs, lineCount: lines.length, total, finishes: finishSummary });
+            printPackingList({
+                shipId, brand: activeBrand, vendor: vendorName, poLabel: nsPoLabel,
+                dateStr: new Date().toLocaleDateString(), operator: operator?.name || 'Unknown',
+                lines, pcs, total, finishSummary
+            });
 
             alert(`✅ Plating shipment ${shipId} created — NetSuite ${nsPoLabel} ("Weekly Plating Shipment" $${total.toFixed(2)}), ${lines.length} line${lines.length === 1 ? '' : 's'} / ${pcs} pcs shipped, label spooled.`);
             writeLog(`Plating shipment ${shipId}: NS PO ${nsPoLabel}, $${total.toFixed(2)}, ${lines.length} lines / ${pcs} pcs.`, 'wms');
