@@ -854,8 +854,16 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         if (!lines.length) return alert("No staged plating lines to ship.");
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
-        // plating $/ea defaults to the item's outsourced Base Cost (manufacturingSpecs.cost) unless overridden
-        const rateOf = (l) => { const v = shipCosts[l.id]; return v !== undefined ? (parseFloat(v) || 0) : (parseFloat(hqParts.find(p => p.id === l.itemId)?.manufacturingSpecs?.cost) || 0); };
+        // plating $/ea = the PLATED/outsource item's Base Cost (where the plating-service cost lives),
+        // keyed by targetErpId (e.g. H1-138BF/EP3). Falls back to the raw part's cost only if the plated
+        // item isn't synced; a manual override in the ship modal always wins.
+        const rateOf = (l) => {
+            const v = shipCosts[l.id];
+            if (v !== undefined) return parseFloat(v) || 0;
+            const tgt = String(l.targetErpId || '').toUpperCase();
+            const tgtPart = tgt ? hqParts.find(p => erpOf(p) === tgt) : null;
+            return parseFloat((tgtPart || hqParts.find(p => p.id === l.itemId))?.manufacturingSpecs?.cost) || 0;
+        };
         const total = lines.reduce((s, l) => s + rateOf(l) * (parseInt(l.qty) || 0), 0);
         const pcs = lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0);
         const shipId = `PLT-${activeBrand.toUpperCase()}-${Date.now()}`;
@@ -1313,8 +1321,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         return valid.length ? valid : outsourceFinishes;
     })();
 
-    // Plating shipment cost helpers: $/ea defaults to the item's outsourced Base Cost (manufacturingSpecs.cost).
-    const platingBaseCost = (l) => parseFloat(hqParts.find(p => p.id === l.itemId)?.manufacturingSpecs?.cost) || 0;
+    // Plating shipment cost helpers: $/ea = the PLATED/outsource item's Base Cost (the plating-service
+    // cost), keyed by targetErpId (e.g. H1-138BF/EP3); falls back to the raw part only if it isn't synced.
+    const platingBaseCost = (l) => {
+        const tgt = String(l.targetErpId || '').toUpperCase();
+        const tgtPart = tgt ? hqParts.find(p => erpOf(p) === tgt) : null;
+        return parseFloat((tgtPart || hqParts.find(p => p.id === l.itemId))?.manufacturingSpecs?.cost) || 0;
+    };
     const platingRateFor = (l) => { const v = shipCosts[l.id]; return v !== undefined ? (parseFloat(v) || 0) : platingBaseCost(l); };
 
     const safeUserRole = operator?.role ? operator.role.toLowerCase() : 'operator';
