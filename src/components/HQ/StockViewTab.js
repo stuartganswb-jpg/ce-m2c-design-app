@@ -563,6 +563,18 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         wipByErp[erp].lines.push(l);
     });
 
+    // The finished PLATED assembly is built back only on plating completion, so its in-flight qty sits in
+    // app-managed plating WIP that NetSuite never counts as "on order". Roll the in-flight plating up by
+    // TARGET (the plated assembly erpId) so we can show that as an app-only on-order on the finished item.
+    const platingOnOrderByTarget = {};
+    platingLines.forEach(l => {
+        const tgt = (l.targetErpId || '').toUpperCase();
+        if (!tgt) return;
+        if (!platingOnOrderByTarget[tgt]) platingOnOrderByTarget[tgt] = { qty: 0, lines: [] };
+        platingOnOrderByTarget[tgt].qty += parseInt(l.qty) || 0;
+        platingOnOrderByTarget[tgt].lines.push(l);
+    });
+
     // On-Order popup: pull the open PO lines for an item live from NetSuite (authoritative PO data).
     const openPoModal = async (item) => {
         const erp = (item.legacyErpId || item.itemId || '').toUpperCase();
@@ -816,6 +828,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     <div style={{ padding: '24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Global Inventory Health</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', border: '1px solid #d9534f', padding: '4px 8px' }}>Highlighted = At or Below ROP</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#7c4dff', border: '1px solid #7c4dff', padding: '4px 8px', marginLeft: '8px' }}>Purple On-Order = in-app plating WIP (no NetSuite PO)</span>
                     </div>
                     
                     <div style={{ overflowY: 'auto', maxHeight: '75vh', background: '#fff' }}>
@@ -879,11 +892,22 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', fontWeight: item.wip.qty > 0 ? 600 : 400, color: item.wip.qty > 0 ? 'var(--brass)' : 'var(--ink-soft)', cursor: item.wip.qty > 0 ? 'pointer' : 'default', textDecoration: item.wip.qty > 0 ? 'underline' : 'none' }}
                                         >{item.wip.qty || '-'}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink-soft)' }}>{item.stock.aggregatedCommitted}</td>
-                                        <td
-                                            onClick={item.stock.onOrder > 0 ? () => openPoModal(item) : undefined}
-                                            title={item.stock.onOrder > 0 ? 'View open purchase orders' : ''}
-                                            style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', fontWeight: item.stock.onOrder > 0 ? 600 : 400, color: item.stock.onOrder > 0 ? 'var(--brass)' : 'var(--ink-soft)', cursor: item.stock.onOrder > 0 ? 'pointer' : 'default', textDecoration: item.stock.onOrder > 0 ? 'underline' : 'none' }}
-                                        >{item.stock.onOrder}</td>
+                                        {(() => {
+                                            const ns = item.stock.onOrder || 0;
+                                            const app = platingOnOrderByTarget[(item.legacyErpId || item.itemId || '').toUpperCase()]?.qty || 0;
+                                            const hasNs = ns > 0;
+                                            return (
+                                                <td
+                                                    onClick={hasNs ? () => openPoModal(item) : undefined}
+                                                    title={app > 0 ? `${app} in plating WIP — app PO only, not a NetSuite PO${hasNs ? ` · plus ${ns} on a NetSuite PO` : ''}` : (hasNs ? 'View open purchase orders' : '')}
+                                                    style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', cursor: hasNs ? 'pointer' : 'default' }}
+                                                >
+                                                    {hasNs && <span style={{ fontWeight: 600, color: 'var(--brass)', textDecoration: 'underline' }}>{ns}</span>}
+                                                    {app > 0 && <span style={{ color: '#7c4dff', fontWeight: 700 }}>{hasNs ? ' + ' : ''}{app}<sup style={{ fontSize: '8px', marginLeft: '1px' }}>app</sup></span>}
+                                                    {!hasNs && app === 0 && <span style={{ color: 'var(--ink-soft)' }}>0</span>}
+                                                </td>
+                                            );
+                                        })()}
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.aggregatedBackorder > 0 ? '#d9534f' : 'var(--ink-soft)' }}>{item.stock.aggregatedBackorder}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', color: 'var(--ink-soft)' }}>{item.rop || '-'}</td>
                                         {(() => {
