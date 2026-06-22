@@ -243,6 +243,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [showShipModal, setShowShipModal] = useState(false);
     const [shipCosts, setShipCosts] = useState({}); // {plating_shipments docId: plating $/ea string}
     const [platingFees, setPlatingFees] = useState({}); // system/plating_fees.rules — { PRODUCTTYPE: { fee, unit } }
+    const [expandedShip, setExpandedShip] = useState({}); // out-at-plater shipments: collapsed by default
 
     // Counting Filter State
     const [searchQuery, setSearchQuery] = useState("");
@@ -2023,30 +2024,40 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                         {/* RETURNED FROM PLATER — RECEIVE (Phase 4a) */}
                         {platingShipped.length > 0 && (() => {
-                            const groups = Object.values(platingShipped.reduce((a, l) => { (a[l.shipmentId] = a[l.shipmentId] || { shipmentId: l.shipmentId, nsPoId: l.nsPoId, lines: [] }).lines.push(l); return a; }, {}));
+                            const groups = Object.values(platingShipped.reduce((a, l) => { (a[l.shipmentId] = a[l.shipmentId] || { shipmentId: l.shipmentId, nsPoId: l.nsPoId, nsPoTran: l.nsPoTran, lines: [] }).lines.push(l); return a; }, {}));
                             return (
                                 <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px' }}>
-                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>Out at plater — {groups.length} shipment{groups.length === 1 ? '' : 's'} awaiting receive</div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                        {groups.map(g => (
-                                            <div key={g.shipmentId} style={{ border: `1px solid ${theme.line}`, padding: '14px' }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', gap: '12px' }}>
-                                                    <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>{g.shipmentId} · {g.lines.length} line{g.lines.length === 1 ? '' : 's'} · {g.lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)} pcs · NS PO {g.nsPoId || '—'}</div>
-                                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>Out at plater — {groups.length} shipment{groups.length === 1 ? '' : 's'} awaiting receive · click a row to expand</div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                        {groups.map(g => {
+                                            const open = !!expandedShip[g.shipmentId];
+                                            const poUrl = g.nsPoId ? `https://3728153.app.netsuite.com/app/accounting/transactions/purchord.nl?id=${g.nsPoId}&whence=` : null;
+                                            const poText = g.nsPoTran || g.nsPoId || '—';
+                                            return (
+                                            <div key={g.shipmentId} style={{ border: `1px solid ${theme.line}` }}>
+                                                <div onClick={() => setExpandedShip(p => ({ ...p, [g.shipmentId]: !p[g.shipmentId] }))} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '12px 14px', cursor: 'pointer', background: open ? theme.paper2 : '#fff' }}>
+                                                    <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                        <span style={{ color: theme.inkSoft }}>{open ? '▾' : '▸'}</span>
+                                                        <span>{g.shipmentId} · {g.lines.length} line{g.lines.length === 1 ? '' : 's'} · {g.lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)} pcs · NS PO {poUrl ? <a href={poUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: theme.brass, textDecoration: 'underline' }}>{poText}</a> : poText}</span>
+                                                    </div>
+                                                    <div style={{ display: 'flex', gap: '8px' }} onClick={e => e.stopPropagation()}>
                                                         <button onClick={() => resetPlatingShipment(g.shipmentId, g.lines.map(l => l.id))} disabled={isSyncing} style={{ padding: '10px 12px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Reset</button>
                                                         <button onClick={() => pushPlatingReceive(g.shipmentId, g.nsPoId, g.lines.map(l => l.id))} disabled={isSyncing} style={{ padding: '10px 16px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Receive PO → Item Receipt</button>
                                                     </div>
                                                 </div>
-                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                                    {g.lines.map(l => (
-                                                        <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>
-                                                            <span>{l.erpId} — {l.itemName}</span>
-                                                            <span>{l.qty} @ {l.platingBin}</span>
-                                                        </div>
-                                                    ))}
-                                                </div>
+                                                {open && (
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '0 14px 14px' }}>
+                                                        {g.lines.map(l => (
+                                                            <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>
+                                                                <span>{l.erpId} — {l.itemName}</span>
+                                                                <span>{l.qty} @ {l.platingBin}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
                                             </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             );
