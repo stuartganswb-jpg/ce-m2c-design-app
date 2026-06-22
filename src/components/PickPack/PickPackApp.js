@@ -659,9 +659,9 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
     };
 
     // --- NETSUITE PLATING PULL (Phase 2: move raw stock into WIP-Plating status) ---
-    // NetSuite REST has no inventorystatuschange record, so we move the qty with a STATUS-AWARE inventory
-    // adjustment: two offsetting lines — -qty out of Good(1)@source bin and +qty into WIP-Plating(13)@plating
-    // bin. Net on-hand unchanged; available drops (WIP-Plating is non-available). Logs a staged shipment line.
+    // Posts a BIN TRANSFER that moves the qty Good(1)@source bin → WIP-Plating(13)@plating bin in one
+    // transaction (from/to bin + from/to status). Unlike an inventory adjustment it creates no GL
+    // adjustment records (accounting's request). Net on-hand unchanged; available drops. Logs a staged line.
     const pushPlatingPull = async () => {
         const item = platingBase;
         const qty = parseInt(platingQty) || 0;
@@ -687,34 +687,33 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
             const goodId = "1";  // "Good" available status (from) — user-confirmed internal id
             const wipId = "13";  // "WIP-Plating" non-available status (to) — user-confirmed internal id
             await ensureBinExists(platingBin, nsConfig.location);
+            // Bin Transfer (NOT Inventory Adjustment): moves the qty fromBin→platingBin AND flips status
+            // Good→WIP-Plating in one transaction, without posting the inventory-adjustment GL records that
+            // accounting flags. Net on-hand unchanged; available drops (WIP-Plating is non-available).
             const payload = {
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/binTransfer`,
                 method: 'POST',
                 payload: {
-                    account: { id: "254" }, // Inventory Adjustment account
                     subsidiary: { id: nsConfig.subsidiary },
+                    location: { id: nsConfig.location },
                     memo: memoText,
                     inventory: {
-                        items: [
-                            { // out of Good (available) at the source bin
-                                item: { id: item.netSuiteInternalId },
-                                location: { id: nsConfig.location },
-                                adjustQtyBy: -qty,
-                                inventoryDetail: {
-                                    quantity: -qty,
-                                    inventoryAssignment: { items: [{ binNumber: { refName: fromBin }, inventoryStatus: { id: goodId }, quantity: -qty }] }
-                                }
-                            },
-                            { // into WIP-Plating (non-available) at the plating bin
-                                item: { id: item.netSuiteInternalId },
-                                location: { id: nsConfig.location },
-                                adjustQtyBy: qty,
-                                inventoryDetail: {
-                                    quantity: qty,
-                                    inventoryAssignment: { items: [{ binNumber: { refName: platingBin }, inventoryStatus: { id: wipId }, quantity: qty }] }
+                        items: [{
+                            item: { id: item.netSuiteInternalId },
+                            quantity: qty,
+                            inventoryDetail: {
+                                quantity: qty,
+                                inventoryAssignment: {
+                                    items: [{
+                                        binNumber: { refName: fromBin },          // FROM BIN
+                                        toBinNumber: { refName: platingBin },      // TO BIN
+                                        inventoryStatus: { id: goodId },           // FROM STATUS (Good)
+                                        toInventoryStatus: { id: wipId },          // TO STATUS (WIP-Plating)
+                                        quantity: qty
+                                    }]
                                 }
                             }
-                        ]
+                        }]
                     }
                 }
             };
@@ -743,8 +742,8 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
             setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(""); setPlatingFinish(""); setPlatingDemandId(null);
             pullNetSuiteStock();
         } catch (e) {
-            console.error("Plating status-change push failed:", e);
-            alert("❌ NetSuite rejected the plating pull:\n\n" + (e.message || e) + "\n\nThis posts a status-aware inventory adjustment (Good→WIP-Plating) — if it names a field (inventoryStatus / inventoryDetail / account), paste it and I'll correct the REST shape.");
+            console.error("Plating bin-transfer push failed:", e);
+            alert("❌ NetSuite rejected the plating pull:\n\n" + (e.message || e) + "\n\nThis posts a Bin Transfer (Good→WIP-Plating, fromBin→platingBin) — if it names a field (toBinNumber / toInventoryStatus / inventoryDetail), paste it and I'll correct the REST shape.");
         } finally {
             setIsSyncing(false);
         }
