@@ -420,8 +420,44 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       const updatedCallouts = (activeAssembly.spatialCallouts || []).filter(c => c.id !== id);
       setActiveAssembly(prev => ({ ...prev, spatialCallouts: updatedCallouts }));
       setActiveCalloutId(null);
-      try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: updatedCallouts }); } 
+      try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: updatedCallouts }); }
       catch (err) { console.error(err); }
+  };
+
+  // --- Drag a 2D note box to reposition it (so stacked notes can be pulled apart). The box position is
+  // stored as bx/by on the callout (SVG coords); unset = the original computed offset. We convert the
+  // pointer to SVG coords via the content group's screen CTM so it's correct at any pan/zoom level.
+  const noteContentRef = useRef(null);
+  const noteDragRef = useRef(null);
+  const calloutsRef = useRef([]);
+  calloutsRef.current = activeAssembly?.spatialCallouts || [];
+  const screenToSvg = (clientX, clientY) => {
+      const g = noteContentRef.current;
+      if (!g || !g.ownerSVGElement || !g.getScreenCTM) return null;
+      const pt = g.ownerSVGElement.createSVGPoint(); pt.x = clientX; pt.y = clientY;
+      const ctm = g.getScreenCTM(); if (!ctm) return null;
+      const p = pt.matrixTransform(ctm.inverse());
+      return { x: p.x, y: p.y };
+  };
+  const onNoteDragMove = (e) => {
+      const d = noteDragRef.current; if (!d) return;
+      const p = screenToSvg(e.clientX, e.clientY); if (!p) return;
+      const bx = p.x - d.grabDX, by = p.y - d.grabDY;
+      setActiveAssembly(prev => ({ ...prev, spatialCallouts: (prev.spatialCallouts || []).map(c => c.id === d.id ? { ...c, bx, by } : c) }));
+  };
+  const onNoteDragEnd = async () => {
+      window.removeEventListener('pointermove', onNoteDragMove);
+      const d = noteDragRef.current; noteDragRef.current = null;
+      if (!d) return;
+      try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: calloutsRef.current }); }
+      catch (err) { console.error(err); }
+  };
+  const startNoteDrag = (e, callout, boxX, boxY) => {
+      e.stopPropagation();
+      const p = screenToSvg(e.clientX, e.clientY); if (!p) return;
+      noteDragRef.current = { id: callout.id, grabDX: p.x - boxX, grabDY: p.y - boxY };
+      window.addEventListener('pointermove', onNoteDragMove);
+      window.addEventListener('pointerup', onNoteDragEnd, { once: true });
   };
 
   const activatePanMode = () => {
@@ -835,6 +871,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                 onClick={handle2DViewerClick}  
                             >
                                 <svg viewBox="-300 0 1600 600" style={{ overflow: 'visible' }}>
+                                  <g ref={noteContentRef}>
                                     <rect x="0" y="0" width="1000" height="600" fill="#ffffff" stroke="var(--line)" strokeWidth="1" />
                                     <image href={currentRevisionObj.url} x="0" y="0" width="1000" height="600" preserveAspectRatio="xMidYMid meet" style={{ pointerEvents: 'none' }} />
                                     
@@ -843,26 +880,29 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                         const isActive = activeCalloutId === callout.id;
                                         const isMyPin = callout.user === (currentUser || 'UNKNOWN');
                                         
-                                        const isLeftHalf = callout.x < 500; 
+                                        const isLeftHalf = callout.x < 500;
                                         const boxWidth = 220;
                                         const lineTargetX = callout.x + (isLeftHalf ? 100 : -100);
                                         const lineTargetY = callout.y - 100;
-                                        const foreignObjectX = isLeftHalf ? lineTargetX : lineTargetX - boxWidth; 
-                                        const foreignObjectY = lineTargetY - 50; 
+                                        const defBoxX = isLeftHalf ? lineTargetX : lineTargetX - boxWidth;
+                                        const defBoxY = lineTargetY - 50;
+                                        // Box position: dragged (bx/by) if set, else the original computed offset.
+                                        const boxX = callout.bx != null ? callout.bx : defBoxX;
+                                        const boxY = callout.by != null ? callout.by : defBoxY;
 
                                         return (
                                             <g key={callout.id} data-callout-g style={{ cursor: 'pointer' }}>
-                                                
-                                                <path d={`M ${callout.x} ${callout.y} L ${lineTargetX} ${lineTargetY}`} fill="none" stroke={isActive ? 'var(--brass)' : 'var(--line)'} strokeWidth="1" />
+
+                                                <path d={`M ${callout.x} ${callout.y} L ${boxX + boxWidth / 2} ${boxY + 16}`} fill="none" stroke={isActive ? 'var(--brass)' : 'var(--line)'} strokeWidth="1" />
                                                 <circle cx={callout.x} cy={callout.y} r="4" fill={isActive ? 'var(--brass)' : '#fff'} stroke="var(--ink)" strokeWidth="1" />
-                                                
-                                                <foreignObject x={foreignObjectX} y={foreignObjectY} width={boxWidth} height="200" style={{ overflow: 'visible' }}>
+
+                                                <foreignObject x={boxX} y={boxY} width={boxWidth} height="200" style={{ overflow: 'visible' }}>
                                                     <div 
                                                         onPointerDown={stopPropagation} onMouseDown={stopPropagation} onWheel={stopPropagation}
                                                         style={{ background: '#fff', border: isActive ? '1px solid var(--brass)' : '1px solid var(--line)', padding: '12px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
                                                     >
-                                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                            <span>{callout.user}</span>
+                                                        <div onPointerDown={(e) => startNoteDrag(e, callout, boxX, boxY)} title="Drag to move this note" style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'move', touchAction: 'none' }}>
+                                                            <span>⠿ {callout.user}</span>
                                                             <div style={{ display: 'flex', gap: '10px' }}>
                                                                 {!isActive && isMyPin && <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); setActiveCalloutId(callout.id); activateEditMode(); }} style={{ background: 'none', border: 'none', color: 'var(--brass)', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>EDIT</button>}
                                                                 {isMyPin && <button onPointerDown={stopPropagation} onMouseDown={stopPropagation} onClick={(e) => { e.stopPropagation(); removeCallout(callout.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', padding: 0, fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', fontWeight: 'bold' }}>REMOVE</button>}
@@ -892,6 +932,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                             </g>
                                         );
                                     })}
+                                  </g>
                                 </svg>
                             </UncontrolledReactSVGPanZoom>
                         )}
