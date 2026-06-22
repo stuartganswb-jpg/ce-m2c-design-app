@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
-import { collection, onSnapshot, query, where, doc, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, updateDoc, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
 import { loadGLBScene, snapshotPNG } from '../Shared/componentExport';
 
@@ -46,6 +46,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [reassignOpen, setReassignOpen] = useState(false);   // BOM pin → existing library part remap
   const [reassignSearch, setReassignSearch] = useState("");
+  const [mismatchScan, setMismatchScan] = useState(null);    // cross-assembly placeholder-vs-real audit
+  const [scanningMismatches, setScanningMismatches] = useState(false);
 
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '' }); 
 
@@ -314,6 +316,42 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       } catch (e) { console.error('reassign failed', e); alert('Reassign failed — check console.'); }
   };
 
+  // Scan ALL assemblies for BOM pins pointing at a PENDING/NEEDS_SPECS placeholder whose name matches
+  // an existing REAL library part (the CAD-node carryover pattern) — so they can be cleaned up too.
+  const isPlaceholderPart = (p) => !p || p.manufacturingSpecs?.status === 'NEEDS_SPECS' || !p.legacyErpId || p.legacyErpId === 'PENDING';
+  const runMismatchScan = async () => {
+      setScanningMismatches(true);
+      try {
+          const realParts = libraryParts.filter(p => !isPlaceholderPart(p));
+          const snap = await getDocs(collection(db, "assembly_pins"));
+          const results = [];
+          snap.docs.forEach(d => {
+              const pin = { id: d.id, ...d.data() };
+              const linked = libraryParts.find(p => p.id === pin.partId || p.itemId === pin.partId || p.legacyErpId === pin.partId);
+              if (!isPlaceholderPart(linked)) return; // pin already points at a real, specced part — fine
+              const nm = String(pin.partName || (linked && linked.itemName) || '').toUpperCase();
+              if (!nm) return;
+              const base = nm.replace(/[ _-]?V\d+$/i, '').trim();
+              const match = realParts.find(p => (!linked || p.id !== linked.id) && ((p.itemName || '').toUpperCase() === nm || (base && (p.itemName || '').toUpperCase() === base)));
+              if (match) results.push({ pin, linkedName: pin.partName || (linked && linked.itemName) || pin.partId, match });
+          });
+          results.sort((a, b) => String(a.pin.assemblyId || '').localeCompare(String(b.pin.assemblyId || '')));
+          setMismatchScan(results);
+      } catch (e) { console.error('mismatch scan failed', e); alert('Scan failed — check console.'); }
+      finally { setScanningMismatches(false); }
+  };
+  // One-click fix from the scan: re-point a pin to the suggested real part.
+  const linkPinToPart = async (pin, part) => {
+      try {
+          await updateDoc(doc(db, "assembly_pins", pin.id), {
+              partId: part.itemId || part.id, partName: part.itemName,
+              legacyErpId: part.legacyErpId || 'N/A', specs: part.manufacturingSpecs || {},
+              isExistingLibraryPart: true, status: 'SPECS_LOCKED'
+          });
+          setMismatchScan(prev => (prev || []).filter(r => r.pin.id !== pin.id));
+      } catch (e) { console.error('link failed', e); alert('Link failed — check console.'); }
+  };
+
   const handleSpecChange = (e) => setEditSpecs({ ...editSpecs, [e.target.name]: e.target.value });
   const handleAssemblySpecChange = (e) => setAssemblyDetails({ ...assemblyDetails, [e.target.name]: e.target.value });
   const handleParametricChange = (e) => setEditSpecs({ ...editSpecs, parametric: { ...editSpecs.parametric, [e.target.name]: e.target.type === 'checkbox' ? e.target.checked : e.target.value } });
@@ -519,7 +557,49 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
-      
+
+      {mismatchScan !== null && (
+        <div onClick={() => setMismatchScan(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '760px', maxHeight: '82vh', borderRadius: '2px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.18)' }}>
+            <div style={{ padding: '22px 28px', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Part Mismatches</h3>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                  {mismatchScan.length} BOM pin{mismatchScan.length === 1 ? '' : 's'} on a placeholder that matches a real part
+                </span>
+              </div>
+              <button onClick={() => setMismatchScan(null)} style={{ background: 'none', border: 'none', fontSize: '1.6rem', color: 'var(--ink-soft)', cursor: 'pointer' }}>×</button>
+            </div>
+            <div style={{ padding: '16px 28px', overflowY: 'auto' }}>
+              {mismatchScan.length === 0 ? (
+                <div style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>No mismatches found — every BOM pin links to a real part. ✓</div>
+              ) : mismatchScan.map(r => {
+                const asmName = assemblies.find(a => a.itemId === r.pin.assemblyId)?.itemName || r.pin.assemblyId;
+                const matchErp = r.match.legacyErpId && r.match.legacyErpId !== 'PENDING' ? r.match.legacyErpId : (r.match.itemId || r.match.id);
+                return (
+                  <div key={r.pin.id} style={{ display: 'grid', gridTemplateColumns: '1.3fr 1.3fr auto', gap: '14px', alignItems: 'center', padding: '12px 0', borderBottom: '1px solid var(--line)' }}>
+                    <div>
+                      <div style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.9rem' }}>{r.linkedName}</div>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>placeholder · in {asmName}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>→ {r.match.itemName}</div>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', textTransform: 'uppercase' }}>{matchErp}</div>
+                    </div>
+                    <button onClick={() => linkPinToPart(r.pin, r.match)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Link →</button>
+                  </div>
+                );
+              })}
+            </div>
+            {mismatchScan.length > 0 && (
+              <div style={{ padding: '14px 28px', borderTop: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                "Link" re-points the pin to the real part. Delete the leftover placeholder parts from the Master Library afterward.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: '16px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
           
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -563,6 +643,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               )}
 
               <input placeholder="Search Name, ERP ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '200px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }} />
+
+              <button onClick={runMismatchScan} disabled={scanningMismatches} title="Scan every assembly for BOM components linked to a placeholder part that matches a real library part." style={{ padding: '10px 14px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--ink)', cursor: scanningMismatches ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                  {scanningMismatches ? 'Scanning…' : '⚲ Find Part Mismatches'}
+              </button>
 
               <select value={selectedAssemblyId} onChange={(e) => { setSelectedAssemblyId(e.target.value); setActiveComponent(null); }} style={{ padding: '10px 16px', border: '2px solid var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem', minWidth: '300px', outline: 'none', background: '#fff', marginLeft: 'auto', fontWeight: 500 }}>
                   <option value="" disabled>-- Select Assembly to Edit --</option>

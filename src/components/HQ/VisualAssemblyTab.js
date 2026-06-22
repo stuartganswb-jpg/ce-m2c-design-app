@@ -378,6 +378,24 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     if (newPartType === 'Inventory' && !newPartRouting) return alert("Please select an Inventory Category.");
     if (!pendingPin) return;
 
+    // Duplicate-name guard: the typed name is often a raw CAD node like "H1-1EC_V61". If a real
+    // library part already matches it (by name/ERP, or its base with a trailing _V## version suffix
+    // stripped), offer to LINK to that part instead of minting a duplicate placeholder.
+    const typedName = newPartName.trim().toUpperCase();
+    const baseName = typedName.replace(/[ _-]?V\d+$/i, '').trim();
+    const candidate = (libraryParts || []).find(p => {
+      const nm = (p.itemName || '').toUpperCase();
+      const erp = (p.legacyErpId || '').toUpperCase();
+      const erpReal = erp && erp !== 'PENDING';
+      return nm === typedName || (baseName && nm === baseName) || (erpReal && (erp === typedName || erp === baseName));
+    });
+    if (candidate) {
+      const erpLabel = candidate.legacyErpId && candidate.legacyErpId !== 'PENDING' ? candidate.legacyErpId : (candidate.itemId || candidate.id);
+      if (window.confirm(`A library part already exists that matches "${newPartName.trim()}":\n\n  ${candidate.itemName}  (${erpLabel})\n\nLink this pin to the existing part instead of creating a duplicate?\n\nOK = link to existing\nCancel = create a new part anyway`)) {
+        return saveExistingLibraryPart(candidate);
+      }
+    }
+
     try {
       const newMasterId = `${activeBrand.toUpperCase()}-${newPartType === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
       
