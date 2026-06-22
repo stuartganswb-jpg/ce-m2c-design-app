@@ -877,13 +877,21 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             // working manual PO. Item 61947 IS already the internal id of "Weekly Plating Shipment" (Service).
             // The single summary line carries the actual plated parts as a TEXT reference in its description (like the
             // CPQ push) so the PO itself shows what's on the pallet — item, qty, finish/WO — without separate item lines.
-            const lineDetail = lines.map(l => {
+            const detailLines = lines.map(l => {
                 const wo = l.woNum ? ` · WO# ${l.woNum}` : '';
                 const tgt = l.targetErpId ? ` → ${l.targetErpId}` : '';
                 const finx = l.finishCode ? ` · FINISH ${l.finishCode}` : '';
                 return `• ${l.itemName || 'Item'} [${l.erpId || ''}${tgt}]${finx} — qty ${parseInt(l.qty) || 0}${wo}`;
-            }).join('\n');
-            const lineDescription = `Weekly Plating Shipment (${shipId})${finishSummary ? ` — finish ${finishSummary}` : ''} — ${lines.length} item${lines.length === 1 ? '' : 's'}, ${pcs} pcs:\n${lineDetail}`;
+            });
+            // NetSuite caps a transaction line `description` at 4000 chars. Keep the header + as many
+            // detail lines as fit, and point to the printed packing list for the rest (it has them all).
+            const descHeader = `Weekly Plating Shipment (${shipId})${finishSummary ? ` — finish ${finishSummary}` : ''} — ${lines.length} item${lines.length === 1 ? '' : 's'}, ${pcs} pcs:`;
+            let descBody = '', shownLines = 0;
+            for (const dl of detailLines) {
+                if (descHeader.length + descBody.length + dl.length + 2 > 3850) break;
+                descBody += `\n${dl}`; shownLines++;
+            }
+            const lineDescription = descHeader + descBody + (shownLines < detailLines.length ? `\n…+${detailLines.length - shownLines} more line${detailLines.length - shownLines === 1 ? '' : 's'} — see packing list ${shipId}` : '');
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
                 method: 'POST',
