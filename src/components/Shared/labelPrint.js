@@ -1,5 +1,5 @@
-// Shared 2"x4" label printing (item + bin) via the browser print dialog (renders thumbnails + a
-// scannable Code 128-B barcode with no external lib). Pick the 2x4 Zebra (or any printer) in the dialog.
+// Shared 2"x4" label printing (item + bin), single or batched, via the browser print dialog (renders
+// thumbnails + a scannable Code 128-B barcode with no external lib). Pick the 2x4 Zebra (or any printer).
 
 const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -19,9 +19,37 @@ export const code128BSvg = (text) => {
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${x} ${H}" preserveAspectRatio="none" fill="#000">${rects}</svg>`;
 };
 
-// Render an HTML doc to a hidden iframe and open the print dialog (only the label prints; @page sizes it).
-const printDoc = (title, css, bodyHtml) => {
-    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${css}</style></head><body>${bodyHtml}</body></html>`;
+const PAGE_CSS = `@page{size:4in 2in;margin:0;} html,body{margin:0;padding:0;}
+.l{width:4in;height:2in;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:#000;page-break-after:always;overflow:hidden;}
+.l:last-child{page-break-after:auto;}`;
+const ITEM_CSS = `${PAGE_CSS}
+.l{padding:0.12in 0.16in;display:flex;gap:0.14in;align-items:center;}
+.img{width:1.45in;height:1.45in;flex:0 0 auto;border:1px solid #ccc;object-fit:contain;background:#fff;}
+.r{flex:1;display:flex;flex-direction:column;min-width:0;height:100%;justify-content:center;}
+.id{font-size:26pt;font-weight:800;line-height:1.0;letter-spacing:.3px;word-break:break-all;}
+.nm{font-size:11pt;font-weight:600;line-height:1.15;margin-top:3pt;max-height:0.46in;overflow:hidden;}
+.bc{margin-top:auto;} .bc svg{width:100%;height:0.4in;display:block;} .bct{font-size:8pt;letter-spacing:2px;text-align:center;}`;
+const BIN_CSS = `${PAGE_CSS}
+.l{padding:0.1in 0.18in;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+.k{font-size:10pt;font-weight:700;letter-spacing:4px;color:#444;}
+.b{font-weight:900;line-height:1.02;letter-spacing:1px;margin:2pt 0 4pt;text-align:center;word-break:break-all;}
+.bc{width:100%;} .bc svg{width:100%;height:0.6in;display:block;} .bct{font-size:9pt;letter-spacing:3px;text-align:center;margin-top:1pt;}`;
+
+const itemLabelInner = ({ itemId, itemName, imageUrl }) => {
+    const id = String(itemId || '');
+    const img = imageUrl ? `<img class="img" src="${esc(imageUrl)}" alt=""/>` : '';
+    return `<div class="l">${img}<div class="r"><div class="id">${esc(id)}</div><div class="nm">${esc(itemName || '')}</div><div class="bc">${code128BSvg(id)}<div class="bct">${esc(id)}</div></div></div></div>`;
+};
+const binLabelInner = (bin) => {
+    const b = String(bin || '');
+    const fs = b.length <= 7 ? 46 : b.length <= 11 ? 32 : b.length <= 16 ? 22 : 16; // shrink long bin names to fit
+    return `<div class="l"><div class="k">BIN</div><div class="b" style="font-size:${fs}pt">${esc(b)}</div><div class="bc">${code128BSvg(b)}<div class="bct">${esc(b)}</div></div></div>`;
+};
+
+// Render label bodies to a hidden iframe and open the print dialog (each label is its own 4x2 page).
+const printDoc = (title, css, bodies) => {
+    if (!bodies || !bodies.length) return false;
+    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${css}</style></head><body>${bodies.join('')}</body></html>`;
     try {
         const iframe = document.createElement('iframe');
         iframe.setAttribute('aria-hidden', 'true');
@@ -31,36 +59,13 @@ const printDoc = (title, css, bodyHtml) => {
         cw.document.open(); cw.document.write(doc); cw.document.close();
         const cleanup = () => { try { if (iframe.parentNode) document.body.removeChild(iframe); } catch (e) { /* gone */ } };
         cw.onafterprint = cleanup;
-        setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { console.warn('label print failed:', e); } }, 300);
-        setTimeout(cleanup, 60000);
+        setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { console.warn('label print failed:', e); } }, 400);
+        setTimeout(cleanup, 120000);
         return true;
     } catch (e) { console.warn('printDoc error:', e); return false; }
 };
 
-// 2x4 ITEM label: thumbnail (if any) + item # (large) + name + a scannable barcode of the item #.
-export const printItemLabel = ({ itemId, itemName, imageUrl }) => {
-    const id = String(itemId || '');
-    const css = `@page{size:4in 2in;margin:0;} html,body{margin:0;padding:0;}
-.l{width:4in;height:2in;box-sizing:border-box;padding:0.12in 0.16in;font-family:Arial,Helvetica,sans-serif;color:#000;display:flex;gap:0.14in;align-items:center;}
-.img{width:1.45in;height:1.45in;flex:0 0 auto;border:1px solid #ccc;object-fit:contain;background:#fff;}
-.r{flex:1;display:flex;flex-direction:column;min-width:0;height:100%;justify-content:center;}
-.id{font-size:26pt;font-weight:800;line-height:1.0;letter-spacing:.3px;word-break:break-all;}
-.nm{font-size:11pt;font-weight:600;line-height:1.15;margin-top:3pt;max-height:0.46in;overflow:hidden;}
-.bc{margin-top:auto;} .bc svg{width:100%;height:0.4in;display:block;} .bct{font-size:8pt;letter-spacing:2px;text-align:center;}`;
-    const img = imageUrl ? `<img class="img" src="${esc(imageUrl)}" alt=""/>` : '';
-    const body = `<div class="l">${img}<div class="r"><div class="id">${esc(id)}</div><div class="nm">${esc(itemName || '')}</div><div class="bc">${code128BSvg(id)}<div class="bct">${esc(id)}</div></div></div></div>`;
-    return printDoc(`Item ${id}`, css, body);
-};
-
-// 2x4 BIN label: big bin # (auto-sized to fit) + a large scannable barcode — readable/scannable from afar.
-export const printBinLabel = ({ bin }) => {
-    const b = String(bin || '');
-    const fs = b.length <= 7 ? 46 : b.length <= 11 ? 32 : b.length <= 16 ? 22 : 16; // shrink long bin names to fit
-    const css = `@page{size:4in 2in;margin:0;} html,body{margin:0;padding:0;}
-.l{width:4in;height:2in;box-sizing:border-box;padding:0.1in 0.18in;font-family:Arial,Helvetica,sans-serif;color:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;}
-.k{font-size:10pt;font-weight:700;letter-spacing:4px;color:#444;}
-.b{font-size:${fs}pt;font-weight:900;line-height:1.02;letter-spacing:1px;margin:2pt 0 4pt;text-align:center;word-break:break-all;}
-.bc{width:100%;} .bc svg{width:100%;height:0.6in;display:block;} .bct{font-size:9pt;letter-spacing:3px;text-align:center;margin-top:1pt;}`;
-    const body = `<div class="l"><div class="k">BIN</div><div class="b">${esc(b)}</div><div class="bc">${code128BSvg(b)}<div class="bct">${esc(b)}</div></div></div>`;
-    return printDoc(`Bin ${b}`, css, body);
-};
+export const printItemLabel = (item) => printDoc(`Item ${item?.itemId || ''}`, ITEM_CSS, [itemLabelInner(item)]);
+export const printBinLabel = ({ bin }) => printDoc(`Bin ${bin || ''}`, BIN_CSS, [binLabelInner(bin)]);
+export const printItemLabels = (items = []) => printDoc(`Item labels (${items.length})`, ITEM_CSS, items.map(itemLabelInner));
+export const printBinLabels = (bins = []) => printDoc(`Bin labels (${bins.length})`, BIN_CSS, bins.map(binLabelInner));

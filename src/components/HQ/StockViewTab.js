@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, doc, setDoc } from "firebase/firestore";
-import { printItemLabel, printBinLabel } from '../Shared/labelPrint';
+import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
@@ -15,6 +15,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [vendors, setVendors] = useState([]);
     const [outsourceFinishes, setOutsourceFinishes] = useState([]); // hq_outsource_finishes — detect EP (plated) lines for plating-flow dispatch
     const [platingLines, setPlatingLines] = useState([]); // in-progress plating (staged/shipped/received) → WIP-Plating column + popup
+    const [labelTool, setLabelTool] = useState(false);    // bin/range label printing modal
+    const [labelBin, setLabelBin] = useState('');
+    const [labelSearch, setLabelSearch] = useState('');
+    const [labelMode, setLabelMode] = useState('bins');   // 'bins' | 'items'
     const [wipModal, setWipModal] = useState(null);       // { erpId, itemName, lines } when the WIP popup is open
     const [poModal, setPoModal] = useState(null);         // { erpId, itemName, loading, lines, error } for the On-Order popup
 
@@ -678,6 +682,53 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
 
             {/* WIP-PLATING POPUP — work orders / finishes currently out for plating for this item */}
+            {labelTool && (() => {
+                const allBins = Array.from(new Set(hqParts.map(p => (p.manufacturingSpecs?.binLocation || '').toUpperCase()).filter(Boolean))).sort();
+                const term = labelSearch.trim().toUpperCase();
+                const matchItems = (labelMode === 'items' && term) ? hqParts.filter(p => {
+                    const erp = (p.legacyErpId || p.itemId || '').toUpperCase();
+                    return erp.includes(term) || (p.itemName || '').toUpperCase().includes(term);
+                }).slice(0, 300) : [];
+                const matchBins = (labelMode === 'bins' && term) ? allBins.filter(b => b.includes(term)) : [];
+                const count = labelMode === 'items' ? matchItems.length : matchBins.length;
+                const doBatch = () => {
+                    if (labelMode === 'items' && matchItems.length) printItemLabels(matchItems.map(p => ({ itemId: p.legacyErpId || p.itemId, itemName: p.itemName, imageUrl: p.finalImageUrl || p.manufacturingSpecs?.imageUrl || p.imageUrl || '' })));
+                    else if (labelMode === 'bins' && matchBins.length) printBinLabels(matchBins);
+                };
+                const fld = { padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.95rem', width: '100%', boxSizing: 'border-box' };
+                return (
+                    <div onClick={() => setLabelTool(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '32px', width: '560px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>Print Labels</h2>
+                                <button onClick={() => setLabelTool(false)} style={{ background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                            </div>
+                            <div style={{ marginBottom: '28px' }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Single bin label</div>
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <input list="all-bins" value={labelBin} onChange={e => setLabelBin(e.target.value.toUpperCase())} placeholder="Enter or pick a bin…" style={fld} />
+                                    <datalist id="all-bins">{allBins.map(b => <option key={b} value={b} />)}</datalist>
+                                    <button onClick={() => labelBin.trim() && printBinLabel({ bin: labelBin.trim() })} disabled={!labelBin.trim()} style={{ padding: '0 18px', background: labelBin.trim() ? 'var(--ink)' : 'var(--paper-2)', color: labelBin.trim() ? '#fff' : 'var(--ink-soft)', border: labelBin.trim() ? 'none' : '1px solid var(--line)', cursor: labelBin.trim() ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Print</button>
+                                </div>
+                            </div>
+                            <div style={{ borderTop: '1px solid var(--line)', paddingTop: '20px' }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Batch — search a range, print all matches</div>
+                                <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                                    {['bins', 'items'].map(m => (
+                                        <button key={m} onClick={() => setLabelMode(m)} style={{ flex: 1, padding: '8px', background: labelMode === m ? 'var(--ink)' : '#fff', color: labelMode === m ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{m}</button>
+                                    ))}
+                                </div>
+                                <input value={labelSearch} onChange={e => setLabelSearch(e.target.value)} placeholder={labelMode === 'items' ? 'Item # or name (e.g. H1-75)…' : 'Bin text (e.g. PRD)…'} style={{ ...fld, marginBottom: '12px' }} />
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{!term ? 'Type to search' : `${count} ${labelMode} match${count === 1 ? '' : 'es'}`}{labelMode === 'items' && matchItems.length >= 300 ? ' (capped at 300)' : ''}</span>
+                                    <button onClick={doBatch} disabled={count === 0} style={{ padding: '12px 20px', background: count ? 'var(--brass)' : 'var(--paper-2)', color: count ? '#fff' : 'var(--ink-soft)', border: count ? 'none' : '1px solid var(--line)', cursor: count ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Print {count || ''} {labelMode === 'items' ? 'item' : 'bin'} label{count === 1 ? '' : 's'}</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
             {wipModal && (
                 <div onClick={() => setWipModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '32px', width: '640px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
@@ -689,7 +740,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                             <thead style={{ borderBottom: '2px solid var(--ink)' }}>
                                 <tr>
-                                    {['Finish', 'Work Order', 'Qty', 'Stage'].map((h, i) => <th key={h} style={{ padding: '10px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', textAlign: i >= 2 ? 'center' : 'left' }}>{h}</th>)}
+                                    {['Finish', 'Work Order', 'Plater PO', 'Qty', 'Stage'].map((h, i) => <th key={h} style={{ padding: '10px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', textAlign: i >= 3 ? 'center' : 'left' }}>{h}</th>)}
                                 </tr>
                             </thead>
                             <tbody>
@@ -700,6 +751,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             {l.targetErpId ? <div style={{ fontSize: '10px', color: 'var(--ink-soft)' }}>→ {l.targetErpId}</div> : null}
                                         </td>
                                         <td style={{ padding: '12px 8px', fontFamily: 'var(--mono)', fontSize: '0.85rem' }}>{l.woNum || '—'}</td>
+                                        <td style={{ padding: '12px 8px', fontFamily: 'var(--mono)', fontSize: '0.85rem' }}>
+                                            {l.nsPoId ? <a href={`https://3728153.app.netsuite.com/app/accounting/transactions/purchord.nl?id=${l.nsPoId}&whence=`} target="_blank" rel="noreferrer" style={{ color: 'var(--brass)', textDecoration: 'underline' }}>{l.nsPoTran || l.nsPoId}</a> : (l.shipmentId ? <span style={{ color: 'var(--ink-soft)' }} title={l.shipmentId}>not shipped</span> : '—')}
+                                        </td>
                                         <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '1rem' }}>{parseInt(l.qty) || 0}</td>
                                         <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)' }}>{STAGE_LABEL[l.status] || l.status}</td>
                                     </tr>
@@ -829,6 +883,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Global Inventory Health</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', border: '1px solid #d9534f', padding: '4px 8px' }}>Highlighted = At or Below ROP</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#7c4dff', border: '1px solid #7c4dff', padding: '4px 8px', marginLeft: '8px' }}>Purple On-Order = in-app plating WIP (no NetSuite PO)</span>
+                        <button onClick={() => setLabelTool(true)} style={{ marginLeft: 'auto', padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🏷 Print Labels</button>
                     </div>
                     
                     <div style={{ overflowY: 'auto', maxHeight: '75vh', background: '#fff' }}>
@@ -893,17 +948,18 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         >{item.wip.qty || '-'}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink-soft)' }}>{item.stock.aggregatedCommitted}</td>
                                         {(() => {
+                                            const itemErp = (item.legacyErpId || item.itemId || '').toUpperCase();
                                             const ns = item.stock.onOrder || 0;
-                                            const app = platingOnOrderByTarget[(item.legacyErpId || item.itemId || '').toUpperCase()]?.qty || 0;
+                                            const app = platingOnOrderByTarget[itemErp]?.qty || 0;
                                             const hasNs = ns > 0;
                                             return (
                                                 <td
                                                     onClick={hasNs ? () => openPoModal(item) : undefined}
-                                                    title={app > 0 ? `${app} in plating WIP — app PO only, not a NetSuite PO${hasNs ? ` · plus ${ns} on a NetSuite PO` : ''}` : (hasNs ? 'View open purchase orders' : '')}
+                                                    title={hasNs ? 'View open purchase orders' : ''}
                                                     style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', cursor: hasNs ? 'pointer' : 'default' }}
                                                 >
                                                     {hasNs && <span style={{ fontWeight: 600, color: 'var(--brass)', textDecoration: 'underline' }}>{ns}</span>}
-                                                    {app > 0 && <span style={{ color: '#7c4dff', fontWeight: 700 }}>{hasNs ? ' + ' : ''}{app}<sup style={{ fontSize: '8px', marginLeft: '1px' }}>app</sup></span>}
+                                                    {app > 0 && <span onClick={(e) => { e.stopPropagation(); setWipModal({ erpId: itemErp, itemName: item.itemName, lines: platingOnOrderByTarget[itemErp].lines }); }} title="In-app plating WIP — click for the related plater PO(s)" style={{ color: '#7c4dff', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>{hasNs ? ' + ' : ''}{app}</span>}
                                                     {!hasNs && app === 0 && <span style={{ color: 'var(--ink-soft)' }}>0</span>}
                                                 </td>
                                             );
