@@ -321,8 +321,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           else rules[t] = { fee, unit: v.unit || 'ea' };
       });
       await setDoc(doc(db, "system", "plating_fees"), { rules }, { merge: false });
+      // Keep the master product-type dictionary aligned: a type that has a plating fee must also be
+      // assignable to items in the library. Add any fee-type not already present (case-insensitive).
+      const existing = globalLists.prodTypes || [];
+      const existingUpper = new Set(existing.map(t => String(t).toUpperCase()));
+      const toAdd = Object.keys(rules).filter(t => !existingUpper.has(t.toUpperCase()));
+      if (toAdd.length) await setDoc(doc(db, "system", "master_lists"), { prodTypes: [...existing, ...toAdd] }, { merge: true });
       setFeeEdits({});
-      alert("Plating fees saved.");
+      alert(`Plating fees saved.${toAdd.length ? `\n\nAlso added to the master Product Type list (now assignable to items): ${toAdd.join(', ')}.` : ''}`);
   };
 
   const handleAddCrmList = async (listKey) => {
