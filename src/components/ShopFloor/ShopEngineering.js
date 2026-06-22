@@ -5,15 +5,73 @@ import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { saveProgramPrint, resolvePrintUrl } from '../Shared/programPrints';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection as oldCol, getDocs as oldGetDocs } from 'firebase/firestore';
+import { unzipSync, strFromU8 } from 'fflate';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
 const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
+
+// Seed max tool-life (hours) by Fusion tool type on import; the machinist tunes per tool afterward.
+const DEFAULT_TOOL_LIFE_HRS = { 'drill': 8, 'spot drill': 12, 'center drill': 12, 'reamer': 10, 'tap right hand': 6, 'tap left hand': 6, 'flat end mill': 10, 'bull nose end mill': 10, 'ball end mill': 10, 'slot mill': 8, 'tapered mill': 8, 'dovetail mill': 8, 'chamfer mill': 15, 'face mill': 20, 'turning general': 8, 'turning threading': 6, 'turning boring': 8, 'probe': 0, 'holder': 0 };
+const defaultToolLife = (type) => { const v = DEFAULT_TOOL_LIFE_HRS[String(type || '').toLowerCase()]; return v === undefined ? 8 : v; };
 
 const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, programsMap, machines, categories, setupCodes, tooling, materials, writeLog, handleDelete, safeUserRole, printMap = new Map() }) => {
     
     const [routingForm, setRoutingForm] = useState({ id: null, partId: '', isRawMat: false, matProfile: '', matLength: '', ops: [] });
     const [progForm, setProgForm] = useState({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} });
     const [toolForm, setToolForm] = useState({ item: '', desc: '', machine: '', max: '', qty: '', reorder: '', toolNum: '' });
+    const [importCat, setImportCat] = useState('');     // machine category/pool the .tools file imports into
+    const [importBusy, setImportBusy] = useState(false);
+
+    // A tool's pool = its machine's category, so interchangeable machines (VF2/VF4 = Vertical Mills)
+    // share one tool inventory. Falls back to the machine name when no category.
+    const poolOf = (machineName) => (machines.find(m => m.name === machineName)?.category) || machineName || '';
+
+    // Import a Fusion 360 .tools library (zip of tools.json) into shop_tooling, keyed by pool + guid so
+    // re-imports update in place and the operator's stock/max-life edits are preserved.
+    const handleToolLibraryImport = async (file) => {
+        if (!file) return;
+        const pool = importCat;
+        if (!pool) return alert("Pick the machine pool / category this library is for first (e.g. Vertical Mills, Lathes).");
+        setImportBusy(true);
+        try {
+            const buf = new Uint8Array(await file.arrayBuffer());
+            const entries = unzipSync(buf);
+            const jsonName = Object.keys(entries).find(k => k.toLowerCase().endsWith('tools.json'));
+            if (!jsonName) throw new Error("No tools.json inside the .tools file.");
+            const data = (JSON.parse(strFromU8(entries[jsonName])) || {}).data || [];
+            if (!data.length) throw new Error("No tools found in the library.");
+            const existingByGuid = {}; tooling.forEach(t => { if (t.guid) existingByGuid[t.guid] = t; });
+            const usedNames = new Set(tooling.filter(t => (t.pool || poolOf(t.machine)) === pool && !data.some(x => x.guid === t.guid)).map(t => t.name));
+            const batch = writeBatch(db);
+            let added = 0, updated = 0;
+            data.forEach((t, i) => {
+                const guid = t.guid || cleanId(pool, t.description || `tool${i}`);
+                const num = t['post-process'] ? t['post-process'].number : null;
+                const desc = String(t.description || t.type || 'Tool').trim();
+                let name = `${desc}${Number.isFinite(num) && num > 0 ? ` (T${num})` : ''}`;
+                const base = name; let n = 2; while (usedNames.has(name)) name = `${base} #${n++}`;
+                usedNames.add(name);
+                const g = t.geometry || {};
+                const descriptive = {
+                    name, desc, type: t.type || '', pool, machineCategory: pool,
+                    toolNum: Number.isFinite(num) ? num : null, guid,
+                    vendor: t.vendor || '', productId: t['product-id'] || '', productLink: t['product-link'] || '',
+                    diameter: g.DC != null ? g.DC : null, flutes: g.NOF != null ? g.NOF : null, unit: t.unit || 'inches',
+                };
+                const existing = existingByGuid[guid];
+                const id = existing ? existing.id : cleanId(pool, guid);
+                const payload = existing ? descriptive : { ...descriptive, maxHours: defaultToolLife(t.type), currentHours: 0, qty: 0, reorder: 1, benchedHours: null, needsChange: false };
+                batch.set(doc(shopDb.collection("tooling"), id), payload, { merge: true });
+                if (existing) updated++; else added++;
+            });
+            await batch.commit();
+            writeLog(`Imported tool library into ${pool}: ${added} new, ${updated} updated`, 'inventory');
+            alert(`✅ Imported into "${pool}": ${added} new tool${added === 1 ? '' : 's'}, ${updated} updated.${added ? `\n\nSet stock qty and tune max-life on the new tools below.` : ''}`);
+        } catch (e) {
+            console.error('tool import failed', e);
+            alert("Import failed: " + (e.message || e) + "\n\nMake sure it's a Fusion 360 .tools file.");
+        } finally { setImportBusy(false); }
+    };
     const [matForm, setMatForm] = useState({ type: '', thick: '', width: '' });
     
     const [adminForm, setAdminForm] = useState({ catName: '', catType: 'Manual', macName: '', macCat: '', scName: '' });
@@ -142,9 +200,9 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
 
     const handleToolAction = async (action, tool) => {
         const refDoc = doc(shopDb.collection("tooling"), tool.id);
-        if (action === 'replace') { await updateDoc(refDoc, { currentHours: 0, qty: increment(-1) }); writeLog(`Replaced tool ${tool.name}`, 'inventory'); }
-        if (action === 'bench') { await updateDoc(refDoc, { benchedHours: tool.currentHours, currentHours: 0, qty: increment(-1) }); writeLog(`Benched tool ${tool.name}`, 'inventory'); }
-        if (action === 'swap') { await updateDoc(refDoc, { currentHours: tool.benchedHours, benchedHours: tool.currentHours }); writeLog(`Swapped tool ${tool.name}`, 'inventory'); }
+        if (action === 'replace') { await updateDoc(refDoc, { currentHours: 0, qty: increment(-1), needsChange: false }); writeLog(`Replaced tool ${tool.name}`, 'inventory'); }
+        if (action === 'bench') { await updateDoc(refDoc, { benchedHours: tool.currentHours, currentHours: 0, qty: increment(-1), needsChange: false }); writeLog(`Benched tool ${tool.name}`, 'inventory'); }
+        if (action === 'swap') { await updateDoc(refDoc, { currentHours: tool.benchedHours, benchedHours: tool.currentHours, needsChange: false }); writeLog(`Swapped tool ${tool.name}`, 'inventory'); }
         if (action === 'discard') { await updateDoc(refDoc, { benchedHours: null }); writeLog(`Discarded tool ${tool.name}`, 'inventory'); }
     };
 
@@ -467,12 +525,12 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                             <div style={{ marginTop: '24px', background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px' }}>
                                 <h4 style={sectionHeaderStyle}>Assign Cutting Tools</h4>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                    {tooling.filter(t => progForm.machines.includes(t.machine)).map(t => (
+                                    {tooling.filter(t => { const pools = new Set((progForm.machines || []).map(poolOf)); return pools.has(t.pool || poolOf(t.machine)); }).map(t => (
                                         <div key={t.id} style={{ display: 'flex', gap: '16px', alignItems: 'center', background: 'var(--paper-2)', padding: '12px 16px', border: '1px solid var(--line)' }}>
                                             <input type="checkbox" checked={progForm.toolTimes[t.name] !== undefined} onChange={e => { const newTools = {...progForm.toolTimes}; if(e.target.checked) newTools[t.name] = ''; else delete newTools[t.name]; setProgForm({...progForm, toolTimes: newTools}); }} style={{ cursor: 'pointer' }} />
                                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 'bold', width: '30px' }}>T{t.toolNum || '-'}</span>
                                             <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500, color: 'var(--ink)', width: '200px' }}>{t.name}</span>
-                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', width: '100px' }}>({t.machine})</span>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', width: '100px' }}>({t.pool || t.machine})</span>
                                             {progForm.toolTimes[t.name] !== undefined && <input type="number" placeholder="Mins per cycle" value={progForm.toolTimes[t.name]} onChange={e => setProgForm({...progForm, toolTimes: {...progForm.toolTimes, [t.name]: parseFloat(e.target.value)||0}})} style={{ padding: '8px', width: '120px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />}
                                         </div>
                                     ))}
@@ -533,6 +591,23 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                     {['admin', 'programmer'].includes(safeUserRole) && <button onClick={syncLegacyMaterials} style={{ ...btnStyle, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)' }}>Sync Legacy Materials</button>}
                 </div>
 
+                {['admin', 'programmer'].includes(safeUserRole) && (
+                    <div style={{ background: 'var(--paper-2)', border: '1px solid var(--brass)', padding: '24px', borderRadius: '2px', marginBottom: '30px' }}>
+                        <h3 style={{ ...sectionHeaderStyle, marginTop: 0 }}>Import Fusion 360 Tool Library (.tools)</h3>
+                        <p style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginTop: 0, marginBottom: '16px', lineHeight: 1.5 }}>Upload a Fusion <strong>.tools</strong> file. Tools import into the chosen machine pool — interchangeable machines that share a category (e.g. VF2/VF4 = Vertical Mills) share one tool inventory, so nothing is double-counted. Re-importing updates by tool; your stock & max-life edits are kept.</p>
+                        <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <select value={importCat} onChange={e => setImportCat(e.target.value)} style={{ ...fieldStyle, width: 'auto', minWidth: '220px' }}>
+                                <option value="">Pool / machine category…</option>
+                                {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                            </select>
+                            <label style={{ ...btnStyle, cursor: importBusy || !importCat ? 'not-allowed' : 'pointer', opacity: importBusy || !importCat ? 0.55 : 1, display: 'inline-block' }}>
+                                {importBusy ? 'Importing…' : 'Choose .tools file'}
+                                <input type="file" accept=".tools,.zip" disabled={importBusy || !importCat} onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; handleToolLibraryImport(f); }} style={{ display: 'none' }} />
+                            </label>
+                        </div>
+                    </div>
+                )}
+
                 {['admin', 'programmer', 'purchasing'].includes(safeUserRole) && (
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginBottom: '40px' }}>
                         <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px' }}>
@@ -590,6 +665,7 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px', marginBottom: '40px' }}>
                     {tooling.map(t => {
                         const lifePct = Math.min((t.currentHours / t.maxHours) * 100, 100);
+                        const warn = t.maxHours > 0 && (t.needsChange || t.currentHours >= t.maxHours * 0.9);
                         return (
                         <div key={t.id} style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                             {['admin'].includes(safeUserRole) && <button onClick={() => handleDelete('tooling', t.id)} style={{ float: 'right', background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>×</button>}
@@ -597,8 +673,8 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                 {t.toolNum && <div style={{ background: 'var(--ink)', color: '#fff', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 'bold', borderRadius: '2px' }}>T{t.toolNum}</div>}
                                 <div>
-                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)', paddingRight: '20px' }}>{t.name}</div>
-                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>{t.machine}</div>
+                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)', paddingRight: '20px' }}>{t.name}{warn && <span style={{ marginLeft: '8px', background: '#d9534f', color: '#fff', fontFamily: 'var(--mono)', fontSize: '8px', padding: '2px 6px', borderRadius: '2px', textTransform: 'uppercase', letterSpacing: '.05em' }}>Change soon</span>}</div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>{t.pool || t.machine}{t.vendor ? ` · ${t.vendor}${t.productId ? ` ${t.productId}` : ''}` : ''}</div>
                                 </div>
                             </div>
                             

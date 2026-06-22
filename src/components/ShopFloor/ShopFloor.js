@@ -131,6 +131,8 @@ const ShopFloor = () => {
     };
     
     const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
+    // A tool's pool = its machine's category (interchangeable machines share one tool inventory).
+    const poolOf = (machineName) => machineCategoryMap[machineName] || machineName;
     const handleDelete = async (col, id) => { if(window.confirm("Delete record?")) { await deleteDoc(doc(shopDb.collection(col), id)); writeLog(`Deleted from ${col}`, 'admin'); } };
     
     const handleLogout = () => {
@@ -302,10 +304,22 @@ const ShopFloor = () => {
 
         if(statusType === 'GOOD') {
             if(prog.toolTimes) {
+                const pool = poolOf(task.mach);
                 for (let [toolName, minsPerPiece] of Object.entries(prog.toolTimes)) {
-                    const machineToolId = cleanId(task.mach, toolName);
-                    const totalMinsToDeduct = minsPerPiece * totalPartsRun;
-                    await setDoc(doc(shopDb.collection("tooling"), machineToolId), { currentHours: increment(totalMinsToDeduct / 60) }, { merge: true });
+                    const hrsToAdd = (minsPerPiece * totalPartsRun) / 60;
+                    // Resolve the POOLED tool record by name (so VF2/VF4 hit the same tool); fall back to the
+                    // legacy machine-keyed id for tools registered before the pool model.
+                    const toolRec = tooling.find(t => t.name === toolName && (t.pool || poolOf(t.machine)) === pool);
+                    const toolId = toolRec ? toolRec.id : cleanId(task.mach, toolName);
+                    await setDoc(doc(shopDb.collection("tooling"), toolId), { currentHours: increment(hrsToAdd) }, { merge: true });
+                    // Change-before-breakage: fire once when this run pushes the tool past 90% of its life.
+                    if (toolRec && toolRec.maxHours > 0) {
+                        const before = toolRec.currentHours || 0, after = before + hrsToAdd, thresh = toolRec.maxHours * 0.9;
+                        if (after >= thresh && before < thresh) {
+                            await setDoc(doc(shopDb.collection("tooling"), toolId), { needsChange: true }, { merge: true });
+                            await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `🔧 TOOL CHANGE DUE: ${toolName} (${pool}) at ${Math.round((after / toolRec.maxHours) * 100)}% of life (${after.toFixed(1)}/${toolRec.maxHours}h). Change before it breaks.`, t: serverTimestamp(), readBy: [], isSystem: true });
+                        }
+                    }
                 }
             }
             const routing = routingsMap[task.routingId];
