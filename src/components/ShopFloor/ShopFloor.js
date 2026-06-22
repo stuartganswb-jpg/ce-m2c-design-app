@@ -62,7 +62,10 @@ const ShopFloor = () => {
     const [qcForm, setQcForm] = useState({ good: 0, scrap: 0, failReason: 'Out of Tolerance', failNotes: '', failImg: null });
     const [shiftLogQty, setShiftLogQty] = useState(0);
 
-    const safeUserRole = user?.role ? user.role.toLowerCase() : 'operator';
+    // Treat a super admin (role or flag) as 'admin' everywhere on the Shop Floor, so admin-gated
+    // controls (tool import, add tool/material, deletes, AI optimize…) show for them, not just on tabs.
+    const rawRole = user?.role ? user.role.toLowerCase().replace(/[^a-z]/g, '') : 'operator';
+    const safeUserRole = (rawRole === 'superadmin' || user?.superAdmin === true) ? 'admin' : rawRole;
     
     // PERMISSIONS BYPASS: Admins ALWAYS see all tabs
     const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
