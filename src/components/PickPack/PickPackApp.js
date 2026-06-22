@@ -192,7 +192,9 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
 
         const unsubPlating = onSnapshot(collection(db, "plating_shipments"), (snap) => {
             const all = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => s.brandId === activeBrand);
-            setPlatingStaged(all.filter(s => s.status === 'staged'));
+            // Staged list sorted alphabetically by item (then finish) so it's easy to scan/find a line.
+            const byErp = (a, b) => String(a.erpId || '').localeCompare(String(b.erpId || '')) || String(a.targetErpId || a.finishCode || '').localeCompare(String(b.targetErpId || b.finishCode || ''));
+            setPlatingStaged(all.filter(s => s.status === 'staged').sort(byErp));
             setPlatingShipped(all.filter(s => s.status === 'shipped'));
             setPlatingReceived(all.filter(s => s.status === 'received'));
         });
