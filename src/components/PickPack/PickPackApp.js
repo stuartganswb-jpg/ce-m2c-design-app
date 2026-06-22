@@ -1206,7 +1206,17 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const platFrom = (platingSrcScan || '').trim();
     const platTo = (platingDestScan || '').trim();
     const platSrcKnown = !!platingBase && binOf(platingBase) !== 'UNASSIGNED' && platFrom.toUpperCase() === binOf(platingBase).toUpperCase();
-    const platReady = !!platingBase && !!platingBase.netSuiteInternalId && !!platingFinish && platQtyNum > 0 && platQtyNum <= platingBase.onHand && platFrom !== '' && platTo !== '' && platFrom.toUpperCase() !== platTo.toUpperCase();
+    // A plating pull flips status Good→WIP-Plating, so NetSuite ON-HAND never drops — only available does.
+    // Compute available = on-hand − what's already in WIP (staged/shipped/received, live from Firestore), so
+    // the number reflects committed pulls immediately (84 → 72 → 60 …) without waiting on a NetSuite re-pull.
+    const platingWipByErp = [...platingStaged, ...platingShipped, ...platingReceived].reduce((acc, l) => {
+        const k = String(l.erpId || '').toUpperCase();
+        acc[k] = (acc[k] || 0) + (parseInt(l.qty) || 0);
+        return acc;
+    }, {});
+    const platBaseWip = platingBase ? (platingWipByErp[String(platingBase.erpId || '').toUpperCase()] || 0) : 0;
+    const platAvail = platingBase ? Math.max(0, (platingBase.onHand || 0) - platBaseWip) : 0;
+    const platReady = !!platingBase && !!platingBase.netSuiteInternalId && !!platingFinish && platQtyNum > 0 && platQtyNum <= platAvail && platFrom !== '' && platTo !== '' && platFrom.toUpperCase() !== platTo.toUpperCase();
     // Finishes valid for THIS part/brand = those whose plated assembly (base/CODE) exists in the active-brand
     // library (hqParts is brand-scoped, so EP* resolve on CE, MEP* on M2C). Falls back to all finishes if none
     // of the targets are synced yet, so the operator is never stuck — the build-back still validates the assembly.
@@ -1839,7 +1849,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: theme.paper, marginBottom: '24px' }}>
                                         <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{platingBase.erpId}</div>
                                         <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{platingBase.itemName}</div>
-                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '6px' }}>home bin {binOf(platingBase)} · {platingBase.onHand} on hand</div>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '6px' }}>home bin {binOf(platingBase)} · {platAvail} available{platBaseWip > 0 ? ` (${platingBase.onHand} on hand · ${platBaseWip} in plating WIP)` : ` · ${platingBase.onHand} on hand`}</div>
                                     </div>
 
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
@@ -1850,7 +1860,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         </div>
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Quantity</label>
-                                            <input type="number" min="1" max={platingBase.onHand} value={platingQty} onChange={e => setPlatingQty(e.target.value)} placeholder="0" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `2px solid ${platQtyNum > 0 && platQtyNum <= platingBase.onHand ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <input type="number" min="1" max={platAvail} value={platingQty} onChange={e => setPlatingQty(e.target.value)} placeholder="0" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `2px solid ${platQtyNum > 0 && platQtyNum <= platAvail ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
                                         </div>
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan / enter plating bin</label>
@@ -1900,6 +1910,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             <span>{l.erpId}{l.targetErpId ? ` → ${l.targetErpId}` : (l.finishCode ? `/${l.finishCode}` : ' · ⚠ no finish')} — {l.itemName}{l.woNum ? ` · WO ${l.woNum}` : ''}</span>
                                             <span style={{ display: 'flex', alignItems: 'center', gap: '10px', whiteSpace: 'nowrap' }}>
                                                 <span style={{ color: theme.brass }}>{l.qty} → {l.platingBin}</span>
+                                                <button onClick={() => printPlatingLabel({ erpId: l.erpId, itemName: l.itemName, qty: l.qty, woNum: l.woNum, platingBin: l.platingBin, finishCode: l.finishCode, finishName: l.finishName, targetErpId: l.targetErpId })} title="Reprint this plating label" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', lineHeight: 1, padding: '3px 7px' }}>🖨</button>
                                                 <button onClick={() => cancelPlatingPull(l)} disabled={isSyncing} title="Cancel this pull — return to Good and remove the staged line" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '11px', lineHeight: 1, padding: '3px 7px' }}>✕</button>
                                             </span>
                                         </div>
