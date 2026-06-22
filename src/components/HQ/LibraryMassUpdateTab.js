@@ -990,16 +990,16 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </select>
                             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ ...fieldStyle, flex: '1 1 130px', padding: '8px' }}>
                                 <option value="">All Categories</option>
-                                {(globalLists.prodTypes || []).map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                                {dynamicProdTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
                             </select>
                             <select value={collectionFilter} onChange={(e) => setCollectionFilter(e.target.value)} style={{ ...fieldStyle, flex: '1 1 130px', padding: '8px' }}>
                                 <option value="">All Collections</option>
-                                {(globalLists.collections && globalLists.collections.length ? globalLists.collections : collectionsData.map(c => c.name).filter(Boolean)).map(c => <option key={c} value={c}>{c}</option>)}
+                                {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                             <select value={watchlistFilter} onChange={(e) => setWatchlistFilter(e.target.value)} style={{ ...fieldStyle, flex: '1 1 130px', padding: '8px' }}>
                                 <option value="">All Watchlists</option>
                                 <option value="NONE">None / Unassigned</option>
-                                {(globalLists.watchLists || []).map(w => <option key={w} value={w}>{w}</option>)}
+                                {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
                             </select>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', alignItems: 'center' }}>
