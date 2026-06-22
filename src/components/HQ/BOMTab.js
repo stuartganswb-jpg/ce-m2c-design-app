@@ -44,6 +44,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [activeComponent, setActiveComponent] = useState(null);
   const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [], collections: [], clientPricing: [], sharedBrands: [], bomRevision: "" });
   const [isSaving, setIsSaving] = useState(false);
+  const [reassignOpen, setReassignOpen] = useState(false);   // BOM pin → existing library part remap
+  const [reassignSearch, setReassignSearch] = useState("");
 
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '' }); 
 
@@ -289,6 +291,27 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           tempName: bomItem.masterPart.itemName, 
           tempLegacyId: bomItem.masterPart.legacyErpId === "PENDING" ? "" : bomItem.masterPart.legacyErpId
       });
+  };
+
+  // Re-point this BOM pin to an EXISTING library part (fixes CAD-node carryovers like "H1-1EC_V61"
+  // that were saved as a new placeholder instead of the real part). Only the pin's link changes —
+  // its position/cluster/thumbnail stay. The leftover placeholder part should then be deleted.
+  const reassignComponentPart = async (part) => {
+      if (!activeComponent?.id) return;
+      const label = part.legacyErpId && part.legacyErpId !== 'PENDING' ? part.legacyErpId : (part.itemId || part.id);
+      if (!window.confirm(`Re-point this BOM component to "${part.itemName}" (${label})?\n\nThe pin keeps its position; only the linked library part changes. Remember to delete the leftover placeholder part from the library afterward.`)) return;
+      try {
+          await updateDoc(doc(db, "assembly_pins", activeComponent.id), {
+              partId: part.itemId || part.id,
+              partName: part.itemName,
+              legacyErpId: part.legacyErpId || 'N/A',
+              specs: part.manufacturingSpecs || {},
+              isExistingLibraryPart: true,
+              status: 'SPECS_LOCKED'
+          });
+          setActiveComponent(null); setReassignOpen(false); setReassignSearch("");
+          alert(`Reassigned to ${part.itemName}.`);
+      } catch (e) { console.error('reassign failed', e); alert('Reassign failed — check console.'); }
   };
 
   const handleSpecChange = (e) => setEditSpecs({ ...editSpecs, [e.target.name]: e.target.value });
@@ -931,6 +954,51 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                     </div>
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
+                        {/* Re-point this BOM pin to the correct existing library part (CAD-node carryover fix) */}
+                        <div style={{ background: '#fff', border: '1px solid var(--brass)', padding: '20px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                    <h4 style={{ ...sectionHeaderStyle, margin: 0 }}>Linked Library Part</h4>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                        {activeComponent.masterPart?.itemName} · {activeComponent.masterPart?.legacyErpId && activeComponent.masterPart.legacyErpId !== 'PENDING' ? activeComponent.masterPart.legacyErpId : activeComponent.partId}
+                                    </span>
+                                </div>
+                                <button onClick={() => { setReassignOpen(o => !o); setReassignSearch(""); }} style={{ padding: '8px 14px', background: reassignOpen ? 'var(--paper-2)' : 'var(--ink)', color: reassignOpen ? 'var(--ink)' : '#fff', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                    {reassignOpen ? 'Cancel' : '⇄ Reassign to existing part'}
+                                </button>
+                            </div>
+                            {reassignOpen && (() => {
+                                const term = reassignSearch.trim().toLowerCase();
+                                const matches = term.length < 2 ? [] : libraryParts
+                                    .filter(p => p.id !== activeComponent.partId && p.itemId !== activeComponent.partId)
+                                    .filter(p => (p.itemName || '').toLowerCase().includes(term) || (p.legacyErpId || '').toLowerCase().includes(term) || (p.itemId || '').toLowerCase().includes(term))
+                                    .slice(0, 30);
+                                return (
+                                    <div style={{ marginTop: '16px' }}>
+                                        <input autoFocus value={reassignSearch} onChange={e => setReassignSearch(e.target.value)} placeholder="Search Master Library by name or ERP ID…" style={{ ...fieldStyle, marginBottom: '10px' }} />
+                                        <div style={{ maxHeight: '240px', overflowY: 'auto', border: '1px solid var(--line)' }}>
+                                            {term.length < 2 ? (
+                                                <div style={{ padding: '14px', fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Type at least 2 characters to search.</div>
+                                            ) : matches.length === 0 ? (
+                                                <div style={{ padding: '14px', fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No library parts match.</div>
+                                            ) : matches.map(p => (
+                                                <div key={p.id} onClick={() => reassignComponentPart(p)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid var(--line)', cursor: 'pointer' }} onMouseOver={e => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={e => e.currentTarget.style.background = '#fff'}>
+                                                    <div>
+                                                        <div style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.9rem' }}>{p.itemName}</div>
+                                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>{p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : (p.itemId || p.id)} · {p.manufacturingSpecs?.productType || 'NO TYPE'}</div>
+                                                    </div>
+                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', textTransform: 'uppercase' }}>Link →</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <p style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                                            Re-points this BOM pin (keeps its position). Afterward, delete the leftover placeholder part from the library.
+                                        </p>
+                                    </div>
+                                );
+                            })()}
+                        </div>
+
                         <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '24px' }}>
                             <h4 style={sectionHeaderStyle}>CPQ Configuration Mapping</h4>
                             <p style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '20px', lineHeight: '1.5' }}>
