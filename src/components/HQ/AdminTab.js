@@ -72,6 +72,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [crmDiscounts, setCrmDiscounts] = useState([]);
   const [newDiscount, setNewDiscount] = useState({ code: '', description: '', percent: '' });
   const [crmListInput, setCrmListInput] = useState({ salesReps: '', paymentTerms: '' });
+  const [platingFeesDoc, setPlatingFeesDoc] = useState({ rules: {} }); // system/plating_fees
+  const [feeEdits, setFeeEdits] = useState({}); // local edits: { PRODUCTTYPE: { fee:string, unit:'ea'|'ft' } }
+  const [newFeeType, setNewFeeType] = useState('');
 
   const [newStep, setNewStep] = useState({ 
       id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, 
@@ -119,9 +122,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const unsubRules = onSnapshot(doc(db, "system", "cpq_rules"), (docSnap) => { if (docSnap.exists() && docSnap.data().rules) setCpqRules(docSnap.data().rules); });
       const unsubFlows = onSnapshot(collection(db, "cpq_flows"), (snap) => setCpqFlows(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       
-      const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { 
-          if (docSnap.exists()) setGlobalLists(docSnap.data()); 
+      const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
+          if (docSnap.exists()) setGlobalLists(docSnap.data());
       });
+
+      const unsubPlatingFees = onSnapshot(doc(db, "system", "plating_fees"), (docSnap) => setPlatingFeesDoc(docSnap.exists() ? docSnap.data() : { rules: {} }));
 
       // 🚀 LISTEN FOR FLOOR PERMISSIONS
       const unsubShopPerms = onSnapshot(doc(db, "shop_config", "permissions"), (docSnap) => { if (docSnap.exists()) setShopPerms(docSnap.data()); });
@@ -163,7 +168,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
       });
 
-      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubColGlobal(); unsubInhouse(); unsubFloor(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
+      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubPlatingFees(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubColGlobal(); unsubInhouse(); unsubFloor(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -289,6 +294,35 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       if (!window.confirm(`Delete discount code ${code}?`)) return;
       const updated = crmDiscounts.filter(d => d.code !== code);
       await setDoc(doc(db, "system", "crm_discounts"), { list: updated }, { merge: true });
+  };
+
+  // Plating fee schedule (by product type) — the plater PO/packing-list service cost in PickPack.
+  const STD_PLATING_FEES = { 'BACKPLATE': { fee: 10, unit: 'ea' }, 'BRACKET': { fee: 12, unit: 'ea' }, 'FINIAL': { fee: 10, unit: 'ea' }, 'RING': { fee: 3, unit: 'ea' }, 'POLE ROUND': { fee: 20, unit: 'ft' }, 'POLE SQUARE': { fee: 25, unit: 'ft' }, 'SCREW': { fee: 1, unit: 'ea' }, 'SAMPLE CHIP': { fee: 3, unit: 'ea' } };
+  const setFeeField = (type, field, value) => setFeeEdits(prev => {
+      const base = prev[type] || { fee: platingFeesDoc.rules?.[type]?.fee ?? '', unit: platingFeesDoc.rules?.[type]?.unit || 'ea' };
+      return { ...prev, [type]: { ...base, [field]: value } };
+  });
+  const handleLoadStdPlatingFees = () => setFeeEdits(prev => {
+      const next = { ...prev };
+      Object.entries(STD_PLATING_FEES).forEach(([t, v]) => { next[t] = { fee: String(v.fee), unit: v.unit }; });
+      return next;
+  });
+  const handleAddFeeType = () => {
+      const t = newFeeType.trim().toUpperCase();
+      if (!t) return;
+      setFeeEdits(prev => ({ ...prev, [t]: prev[t] || { fee: '', unit: 'ea' } }));
+      setNewFeeType('');
+  };
+  const handleSavePlatingFees = async () => {
+      const rules = { ...(platingFeesDoc.rules || {}) };
+      Object.entries(feeEdits).forEach(([t, v]) => {
+          const fee = parseFloat(v.fee);
+          if (v.fee === '' || isNaN(fee)) delete rules[t];           // blank = remove the fee for this type
+          else rules[t] = { fee, unit: v.unit || 'ea' };
+      });
+      await setDoc(doc(db, "system", "plating_fees"), { rules }, { merge: false });
+      setFeeEdits({});
+      alert("Plating fees saved.");
   };
 
   const handleAddCrmList = async (listKey) => {
@@ -1076,6 +1110,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           <AdminNavButton active={activeSection === "CRM_SETTINGS"} onClick={() => setActiveSection("CRM_SETTINGS")} label="CRM & Sales Config" icon="👥" />
           <AdminNavButton active={activeSection === "FORMS"} onClick={() => setActiveSection("FORMS")} label="Form Templates" icon="📝" />
           <AdminNavButton active={activeSection === "USERS"} onClick={() => setActiveSection("USERS")} label="User Matrix" icon="🔐" />
+          <AdminNavButton active={activeSection === "PLATING_FEES"} onClick={() => setActiveSection("PLATING_FEES")} label="Plating Fees" icon="🧪" />
           
           <button onClick={() => setActiveSection("DANGER")} style={{ padding: '16px 20px', textAlign: 'left', background: activeSection === "DANGER" ? '#fdf2f2' : '#fff', color: '#d9534f', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSection === "DANGER" ? '2px solid #d9534f' : '2px solid transparent', display: 'flex', alignItems: 'center', gap: '12px' }}>
               <span style={{ fontSize: '1.1rem' }}>⚠️</span> Danger Zone
@@ -2040,6 +2075,67 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           )}
 
           {/* --- FORMS & BRANDING VIEW --- */}
+          {activeSection === "PLATING_FEES" && (() => {
+            const allTypes = Array.from(new Set([
+              ...Object.keys(platingFeesDoc.rules || {}),
+              ...Object.keys(feeEdits),
+              ...((globalLists.prodTypes || []).map(t => String(t).toUpperCase())),
+            ])).sort();
+            const feeVal = (t) => (feeEdits[t] !== undefined ? feeEdits[t].fee : (platingFeesDoc.rules?.[t]?.fee ?? ''));
+            const unitVal = (t) => (feeEdits[t] !== undefined ? feeEdits[t].unit : (platingFeesDoc.rules?.[t]?.unit || 'ea'));
+            const dirty = Object.keys(feeEdits).length > 0;
+            const cell = { padding: '10px 14px', borderBottom: '1px solid var(--line)', fontSize: '0.92rem' };
+            const inp = { padding: '8px 10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' };
+            return (
+            <div style={{ padding: '40px', maxWidth: '900px' }}>
+              <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                <div>
+                  <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Plating Fees</h3>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Plating-service cost by product type — used by PickPack's plater PO & packing list. Separate from the NetSuite assembly cost.</span>
+                </div>
+                <button onClick={handleLoadStdPlatingFees} style={{ padding: '8px 14px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Load standard fees</button>
+              </div>
+              <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', overflow: 'hidden', marginBottom: '20px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead style={{ background: 'var(--paper-2)' }}>
+                    <tr>
+                      <th style={{ ...cell, textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Product Type</th>
+                      <th style={{ ...cell, textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', width: '160px' }}>Fee ($)</th>
+                      <th style={{ ...cell, textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', width: '160px' }}>Unit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allTypes.length === 0 ? (
+                      <tr><td colSpan={3} style={{ ...cell, textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No product types yet. Add one below, or "Load standard fees".</td></tr>
+                    ) : allTypes.map(t => (
+                      <tr key={t}>
+                        <td style={{ ...cell, fontWeight: 500, color: 'var(--ink)' }}>{t}</td>
+                        <td style={cell}><input type="number" min="0" step="0.01" value={feeVal(t)} onChange={e => setFeeField(t, 'fee', e.target.value)} placeholder="—" style={{ ...inp, width: '110px', textAlign: 'right' }} /></td>
+                        <td style={cell}>
+                          <select value={unitVal(t)} onChange={e => setFeeField(t, 'unit', e.target.value)} style={{ ...inp, background: '#fff' }}>
+                            <option value="ea">per piece</option>
+                            <option value="ft">per foot</option>
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '24px' }}>
+                <input value={newFeeType} onChange={e => setNewFeeType(e.target.value.toUpperCase())} placeholder="Add a product type (e.g. SCREW)" style={{ ...inp, flex: 1 }} onKeyDown={e => { if (e.key === 'Enter') handleAddFeeType(); }} />
+                <button onClick={handleAddFeeType} style={{ padding: '0 18px', height: '36px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Add Type</button>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button onClick={handleSavePlatingFees} disabled={!dirty} style={{ padding: '12px 24px', background: dirty ? 'var(--ink)' : 'var(--paper-2)', color: dirty ? '#fff' : 'var(--ink-soft)', border: dirty ? 'none' : '1px solid var(--line)', cursor: dirty ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{dirty ? 'Save Plating Fees' : 'Saved'}</button>
+              </div>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '14px', textTransform: 'uppercase', letterSpacing: '.05em', lineHeight: 1.6 }}>
+                Cost per line = fee × qty. Poles are per-foot and their qty is already in feet (from the custom sales order), so the math is the same. Clear a fee to remove that type. Pole Round / Pole Square are their own product types.
+              </p>
+            </div>
+            );
+          })()}
+
           {activeSection === "FORMS" && (
             <div style={{ padding: '40px', maxWidth: '1200px' }}>
               <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '30px' }}>

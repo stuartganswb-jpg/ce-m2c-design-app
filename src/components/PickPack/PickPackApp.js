@@ -242,6 +242,7 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
     const [outsourceFinishes, setOutsourceFinishes] = useState([]); // hq_outsource_finishes (EP1, EP2…) — finish code + NS-synced vendor
     const [showShipModal, setShowShipModal] = useState(false);
     const [shipCosts, setShipCosts] = useState({}); // {plating_shipments docId: plating $/ea string}
+    const [platingFees, setPlatingFees] = useState({}); // system/plating_fees.rules — { PRODUCTTYPE: { fee, unit } }
 
     // Counting Filter State
     const [searchQuery, setSearchQuery] = useState("");
@@ -282,7 +283,10 @@ const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
             setPlatingDemands(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => d.brandId === activeBrand && d.status === 'open'));
         });
 
-        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); };
+        // Plating fee schedule (by product type) — edited in HQ Admin. The plater PO/packing-list cost.
+        const unsubFees = onSnapshot(doc(db, "system", "plating_fees"), (s) => setPlatingFees(s.exists() ? (s.data().rules || {}) : {}));
+
+        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); unsubFees(); };
     }, [activeBrand]);
 
     const attemptLogin = async (e) => {
@@ -854,15 +858,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         if (!lines.length) return alert("No staged plating lines to ship.");
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
-        // plating $/ea = the PLATED/outsource item's Base Cost (where the plating-service cost lives),
-        // keyed by targetErpId (e.g. H1-138BF/EP3). Falls back to the raw part's cost only if the plated
-        // item isn't synced; a manual override in the ship modal always wins.
+        // plating $/unit = the PLATING FEE for the item's product type (HQ Admin → Plating Fees), kept
+        // separate from the NetSuite assembly cost. Per-piece for most types; poles are priced per foot
+        // and their qty is already in feet, so cost = fee × qty either way. Manual ship-modal override wins.
         const rateOf = (l) => {
             const v = shipCosts[l.id];
             if (v !== undefined) return parseFloat(v) || 0;
-            const tgt = String(l.targetErpId || '').toUpperCase();
-            const tgtPart = tgt ? hqParts.find(p => erpOf(p) === tgt) : null;
-            return parseFloat((tgtPart || hqParts.find(p => p.id === l.itemId))?.manufacturingSpecs?.cost) || 0;
+            const pt = String(hqParts.find(p => p.id === l.itemId)?.manufacturingSpecs?.productType || '').toUpperCase();
+            return parseFloat(platingFees[pt]?.fee) || 0;
         };
         const total = lines.reduce((s, l) => s + rateOf(l) * (parseInt(l.qty) || 0), 0);
         const pcs = lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0);
@@ -1321,12 +1324,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         return valid.length ? valid : outsourceFinishes;
     })();
 
-    // Plating shipment cost helpers: $/ea = the PLATED/outsource item's Base Cost (the plating-service
-    // cost), keyed by targetErpId (e.g. H1-138BF/EP3); falls back to the raw part only if it isn't synced.
+    // Plating shipment cost helper: $/unit = the PLATING FEE for the item's product type
+    // (HQ Admin → Plating Fees). Per-piece for most; poles are per-foot with qty already in feet.
     const platingBaseCost = (l) => {
-        const tgt = String(l.targetErpId || '').toUpperCase();
-        const tgtPart = tgt ? hqParts.find(p => erpOf(p) === tgt) : null;
-        return parseFloat((tgtPart || hqParts.find(p => p.id === l.itemId))?.manufacturingSpecs?.cost) || 0;
+        const pt = String(hqParts.find(p => p.id === l.itemId)?.manufacturingSpecs?.productType || '').toUpperCase();
+        return parseFloat(platingFees[pt]?.fee) || 0;
     };
     const platingRateFor = (l) => { const v = shipCosts[l.id]; return v !== undefined ? (parseFloat(v) || 0) : platingBaseCost(l); };
 
