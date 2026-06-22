@@ -1016,7 +1016,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     // to re-ship) + remove the orphaned app PO doc. Does NOT touch the WIP-Plating inventory (that move stays).
     const resetPlatingShipment = async (shipmentId, lineIds) => {
         if (!shipmentId) return;
-        if (!window.confirm(`Reset shipment ${shipmentId}? Its line(s) go back to "staged" so you can re-ship. (The WIP-Plating inventory move stays as-is.)`)) return;
+        const role = String(operator?.role || '').toLowerCase().replace(/[^a-z]/g, '');
+        if (!(operator?.superAdmin === true || role === 'admin' || role === 'superadmin')) return alert("⚠️ Reset is restricted to Admin or higher.");
+        if (!window.confirm(`⚠️ RESET shipment ${shipmentId}?\n\nIts line(s) go back to "staged" so they can be re-shipped. (The WIP-Plating inventory move stays as-is.)\n\nAre you sure?`)) return;
         try {
             setIsSyncing(true);
             await Promise.all((lineIds || []).map(id => updateDoc(doc(db, "plating_shipments", id), {
@@ -1335,6 +1337,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
     const safeUserRole = operator?.role ? operator.role.toLowerCase() : 'operator';
     const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
+    // Admin-or-higher gate (normalize so SUPERADMIN / super_admin match) — used for restricted actions.
+    const isPlatingAdmin = operator?.superAdmin === true || ['admin', 'superadmin'].includes(String(operator?.role || '').toLowerCase().replace(/[^a-z]/g, ''));
 
     if (!operator) {
         return (
@@ -2041,7 +2045,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         <span>{g.shipmentId} · {g.lines.length} line{g.lines.length === 1 ? '' : 's'} · {g.lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)} pcs · NS PO {poUrl ? <a href={poUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: theme.brass, textDecoration: 'underline' }}>{poText}</a> : poText}</span>
                                                     </div>
                                                     <div style={{ display: 'flex', gap: '8px' }} onClick={e => e.stopPropagation()}>
-                                                        <button onClick={() => resetPlatingShipment(g.shipmentId, g.lines.map(l => l.id))} disabled={isSyncing} style={{ padding: '10px 12px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Reset</button>
+                                                        {isPlatingAdmin && <button onClick={() => resetPlatingShipment(g.shipmentId, g.lines.map(l => l.id))} disabled={isSyncing} title="Admin only — sends the shipment back to staged" style={{ padding: '10px 12px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Reset</button>}
                                                         <button onClick={() => pushPlatingReceive(g.shipmentId, g.nsPoId, g.lines.map(l => l.id))} disabled={isSyncing} style={{ padding: '10px 16px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Receive PO → Item Receipt</button>
                                                     </div>
                                                 </div>

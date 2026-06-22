@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, doc, setDoc } from "firebase/firestore";
+import { printItemLabel, printBinLabel } from '../Shared/labelPrint';
 
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
@@ -840,7 +841,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 {!(activeBuilder === 'PO' && activeVendor) && displayItems.map(item => (
                                     <tr key={item.id} style={{ borderBottom: '1px solid var(--line)', background: item.isLowStock ? '#fdf2f2' : '#fff' }}>
                                         <td style={{ padding: '16px 20px', fontFamily: 'var(--mono)', fontSize: '11px', color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>
-                                            {item.legacyErpId || item.itemId}
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                                {item.legacyErpId || item.itemId}
+                                                <button onClick={() => printItemLabel({ itemId: item.legacyErpId || item.itemId, itemName: item.itemName, imageUrl: item.finalImageUrl || item.manufacturingSpecs?.imageUrl || item.imageUrl || '' })} title="Print item label (2×4 — thumbnail + item #)" style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: '2px', cursor: 'pointer', padding: '1px 5px', fontSize: '11px', lineHeight: 1, color: 'var(--ink-soft)' }}>🖨</button>
+                                            </span>
                                             {item.manufacturingSpecs?.isInHouse === false && <span style={{display: 'block', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px', textTransform: 'uppercase'}}>Outsourced</span>}
                                         </td>
                                         
@@ -859,7 +863,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             {item.itemName}
                                         </td>
                                         
-                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>{item.manufacturingSpecs?.binLocation || '-'}</td>
+                                        <td style={{ padding: '16px 20px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
+                                                {item.manufacturingSpecs?.binLocation || '-'}
+                                                {item.manufacturingSpecs?.binLocation && (
+                                                    <button onClick={() => printBinLabel({ bin: item.manufacturingSpecs.binLocation })} title="Print bin label (2×4 — big bin # + scannable barcode)" style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: '2px', cursor: 'pointer', padding: '1px 5px', fontSize: '11px', lineHeight: 1, color: 'var(--ink-soft)' }}>🖨</button>
+                                                )}
+                                            </span>
+                                        </td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: 'var(--ink)' }}>{item.stock.onHand}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', fontWeight: 500, color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>{item.stock.available}</td>
                                         <td
