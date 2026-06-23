@@ -3,6 +3,7 @@ import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
 import { ref, deleteObject } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
+import { printPlatingPackingList } from '../Shared/platingPackingList';
 
 const printStyles = `
   @media print {
@@ -61,6 +62,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [draftDrawings, setDraftDrawings] = useState([]); 
 
   const [expandedSections, setExpandedSections] = useState({ active: true, archive: false });
+  const [platingPOs, setPlatingPOs] = useState([]);          // plating shipments (hq_purchase_orders, kind=plating)
+  const [activePlatingPO, setActivePlatingPO] = useState(null); // shipment detail modal
 
   // --- JOB MODIFICATION STATE ---
   const [showEditJobModal, setShowEditJobModal] = useState(false);
@@ -99,7 +102,12 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
           setDraftDrawings(drawings);
       });
 
-      return () => { unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubCrm(); unsubForms(); unsubLogos(); unsubDrawings(); };
+      // Plating shipments sent to vendors (from the Pick Pack plating tool) — surfaced on the vendor profile.
+      const unsubPlating = onSnapshot(query(collection(db, "hq_purchase_orders"), where("kind", "==", "plating")), (snap) => {
+          setPlatingPOs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      });
+
+      return () => { unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubCrm(); unsubForms(); unsubLogos(); unsubDrawings(); unsubPlating(); };
   }, []);
 
   useEffect(() => {
@@ -246,10 +254,33 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   };
 
   const getCrmArchivedPipeline = (crmId) => {
-      return allBrandJobs.filter(j => 
-          (j.customer?.id === crmId || j.vendorId === crmId) && 
+      return allBrandJobs.filter(j =>
+          (j.customer?.id === crmId || j.vendorId === crmId) &&
           ['COMPLETED', 'SHIPPED', 'CANCELLED', 'TRANSMITTED_TO_ERP'].includes(j.status)
       ).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  };
+
+  // Plating shipments for a vendor — match by stored vendorCrmId, else NetSuite internal id, else name
+  // (covers shipments created before vendorCrmId was stored).
+  const getVendorPlatingShipments = (vendorId) => {
+      const nsId = String(vendorId || '').replace(/^VEND-/, '');
+      const vname = String(crmData[vendorId]?.name || '').toLowerCase();
+      return platingPOs
+          .filter(po => po.vendorCrmId === vendorId || String(po.nsVendorId) === nsId || String(po.vendor || '').toLowerCase() === vname)
+          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  };
+  const reprintPlatingPackingList = (po) => {
+      const pl = po.packingList || {
+          shipId: po.poId || po.shipmentId, brand: po.brand, vendor: po.vendor, poLabel: po.nsPoTran || po.nsPoId || '—',
+          dateStr: po.createdAt?.seconds ? new Date(po.createdAt.seconds * 1000).toLocaleDateString() : '',
+          operator: po.createdBy || '', finishSummary: po.finishSummary || '',
+          lines: (po.items || []).map(it => ({ erpId: it.itemId, itemName: it.description, finishCode: it.finishCode, targetErpId: it.targetErpId, platingBin: it.platingBin, woNum: it.woNum, qty: it.quantity })),
+          pcs: po.pcs, total: po.total
+      };
+      printPlatingPackingList(pl);
+  };
+  const updatePlatingEta = async (poDocId, val) => {
+      try { await updateDoc(doc(db, "hq_purchase_orders", poDocId), { expectedReceiveDate: val || null }); } catch (e) { console.error(e); }
   };
 
   const filterByActiveTab = (job) => {
@@ -708,7 +739,48 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
                                   {/* Right Panel: Active & Archived Pipeline with Collapsibles */}
                                   <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', flex: 1 }}>
-                                      
+
+                                      {/* --- PLATING SHIPMENTS (vendors only) --- */}
+                                      {activeSubTab === 'VENDORS' && (() => {
+                                          const shipments = getVendorPlatingShipments(activeCrmRecord.id);
+                                          return (
+                                          <div style={{ marginBottom: '24px' }}>
+                                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
+                                                  <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Plating Shipments</h4>
+                                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{shipments.length} sent</span>
+                                              </div>
+                                              {shipments.length === 0 ? (
+                                                  <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', padding: '10px' }}>No plating shipments sent to this vendor yet. They appear here when the Pick Pack plating tool ships a pallet.</div>
+                                              ) : (
+                                                  <div style={{ maxHeight: '420px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                                      {shipments.map(po => {
+                                                          const dateStr = po.createdAt?.seconds ? new Date(po.createdAt.seconds * 1000).toLocaleDateString() : (po.packingList?.dateStr || '');
+                                                          return (
+                                                          <div key={po.id} style={{ border: '1px solid var(--line)', padding: '16px', background: 'var(--paper)' }}>
+                                                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                                  <span style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', fontFamily: 'var(--mono)' }}>{po.nsPoTran || po.poId}</span>
+                                                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '4px 8px', border: '1px solid var(--line)', background: '#fff' }}>{(po.status || 'Sent').replace(/_/g, ' ')}</span>
+                                                              </div>
+                                                              <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '8px' }}>
+                                                                  {dateStr} · {po.pcs || 0} pcs / {(po.items || po.packingList?.lines || []).length} lines · ${Number(po.total || 0).toFixed(2)}{po.finishSummary ? ` · ${po.finishSummary}` : ''}
+                                                              </div>
+                                                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px' }}>
+                                                                  <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)' }}>Expected back</label>
+                                                                  <input type="date" value={po.expectedReceiveDate || ''} onChange={e => updatePlatingEta(po.id, e.target.value)} style={{ padding: '6px 8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                                                              </div>
+                                                              <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
+                                                                  <button onClick={() => setActivePlatingPO(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>View Details</button>
+                                                                  <button onClick={() => reprintPlatingPackingList(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Reprint Packing List</button>
+                                                              </div>
+                                                          </div>
+                                                          );
+                                                      })}
+                                                  </div>
+                                              )}
+                                          </div>
+                                          );
+                                      })()}
+
                                       {/* --- ACTIVE PIPELINE COLLAPSIBLE --- */}
                                       <div 
                                           onClick={() => setExpandedSections(prev => ({ ...prev, active: !prev.active }))}
@@ -862,6 +934,51 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       </div>
 
       {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} onClose={() => setCfgQuote(null)} />}
+
+      {activePlatingPO && (() => {
+          const po = activePlatingPO;
+          const lines = po.packingList?.lines || (po.items || []).map(it => ({ erpId: it.itemId, itemName: it.description, finishCode: it.finishCode, targetErpId: it.targetErpId, platingBin: it.platingBin, woNum: it.woNum, qty: it.quantity }));
+          const dateStr = po.createdAt?.seconds ? new Date(po.createdAt.seconds * 1000).toLocaleDateString() : (po.packingList?.dateStr || '');
+          return (
+          <div onClick={() => setActivePlatingPO(null)} style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+              <div onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', borderRadius: '2px', width: '780px', maxHeight: '85vh', overflowY: 'auto', padding: '32px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '20px' }}>
+                      <div>
+                          <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Plating Shipment {po.nsPoTran || po.poId}</h3>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>{po.vendor} · {dateStr} · {(po.status || 'Sent').replace(/_/g, ' ')}</span>
+                      </div>
+                      <button onClick={() => setActivePlatingPO(null)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '20px' }}>
+                      {[['NetSuite PO', po.nsPoTran || po.nsPoId || '—'], ['Ship ID', po.poId || po.shipmentId], ['Finish(es)', po.finishSummary || '—'], ['Pieces', po.pcs || 0], ['Lines', lines.length], ['Plating Total', `$${Number(po.total || 0).toFixed(2)}`], ['Prepared by', po.createdBy || '—'], ['Expected back', po.expectedReceiveDate || '—']].map(([k, v]) => (
+                          <div key={k}><div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)' }}>{k}</div><div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--ink)', marginTop: '2px' }}>{v}</div></div>
+                      ))}
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                      <thead><tr>{['#', 'Item', 'Description', 'Finish', 'Returns As', 'Bin', 'WO#', 'Qty'].map(h => <th key={h} style={{ textAlign: h === 'Qty' ? 'right' : 'left', borderBottom: '1px solid var(--line)', padding: '8px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)' }}>{h}</th>)}</tr></thead>
+                      <tbody>
+                          {lines.map((l, i) => (
+                              <tr key={i}>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', color: 'var(--ink-soft)' }}>{i + 1}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '0.8rem' }}>{l.erpId}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)' }}>{l.itemName}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)' }}>{l.finishCode}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '0.8rem' }}>{l.targetErpId}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)' }}>{l.platingBin}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)' }}>{l.woNum}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', textAlign: 'right' }}>{l.qty}</td>
+                              </tr>
+                          ))}
+                      </tbody>
+                  </table>
+                  <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                      <button onClick={() => reprintPlatingPackingList(po)} style={{ flex: 1, padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>Reprint Packing List</button>
+                      <button onClick={() => setActivePlatingPO(null)} style={{ padding: '12px 24px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Close</button>
+                  </div>
+              </div>
+          </div>
+          );
+      })()}
 
       {showNewCrmModal && (
           <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
