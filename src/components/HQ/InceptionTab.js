@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where, updateDoc, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
-import { UncontrolledReactSVGPanZoom, TOOL_PAN, TOOL_ZOOM_IN, TOOL_ZOOM_OUT, TOOL_NONE } from 'react-svg-pan-zoom'; 
+import { removeImageBackground } from '../Shared/removeBg';
+import { UncontrolledReactSVGPanZoom, TOOL_PAN, TOOL_ZOOM_IN, TOOL_ZOOM_OUT, TOOL_NONE } from 'react-svg-pan-zoom';
 
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
@@ -82,8 +83,9 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   
   const [activeCalloutId, setActiveCalloutId] = useState(null);
   const [activeRevisionId, setActiveRevisionId] = useState(null);
-  
-  const [activeTool, setActiveTool] = useState(TOOL_PAN); 
+  const [stripSwatchBg, setStripSwatchBg] = useState(true);
+
+  const [activeTool, setActiveTool] = useState(TOOL_PAN);
   const [reactSvgPanZoomRef, setReactSvgPanZoomRef] = useState(null);
   
   const [isCanvasMaximized, setIsCanvasMaximized] = useState(false);
@@ -499,8 +501,11 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       const file = e.target.files[0];
       e.target.value = '';
       if (!file || !activeAssembly || !activeRevisionId) return;
+      // Strip a clean/uniform background to transparent (in-browser) unless the user opted out.
+      setUploadProgress(1);
+      const uploadBlob = stripSwatchBg ? await removeImageBackground(file) : file;
       const storageRef = ref(storage, `assemblies/${activeBrand}_${activeAssembly.itemName}_OV_${Date.now()}.png`);
-      const uploadTask = uploadBytesResumable(storageRef, file);
+      const uploadTask = uploadBytesResumable(storageRef, uploadBlob);
       uploadTask.on("state_changed",
           (snap) => setUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
           (err) => { console.error(err); alert("Swatch upload failed."); },
@@ -836,9 +841,15 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                             </div>
 
                             {!isCurrent3D && activeRevisionId && (
-                                <div style={{ position: 'relative' }} title="Drop a paint chip / texture image onto this sketch">
-                                    <input type="file" accept="image/*" onChange={handleOverlayUpload} style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} />
-                                    <button style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--brass)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', pointerEvents: 'none' }}>+ Add Swatch</button>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div style={{ position: 'relative' }} title="Drop a paint chip / texture image onto this sketch">
+                                        <input type="file" accept="image/*" onChange={handleOverlayUpload} style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} />
+                                        <button style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--brass)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', pointerEvents: 'none' }}>+ Add Swatch</button>
+                                    </div>
+                                    <label title="Strip a clean/uniform background to transparent on upload" style={{ display: 'flex', alignItems: 'center', gap: '5px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)', cursor: 'pointer' }}>
+                                        <input type="checkbox" checked={stripSwatchBg} onChange={e => setStripSwatchBg(e.target.checked)} style={{ cursor: 'pointer' }} />
+                                        Remove BG
+                                    </label>
                                 </div>
                             )}
 
