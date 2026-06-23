@@ -487,6 +487,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   };
   const startOverlayDrag = (e, ov, mode) => {
       e.stopPropagation();
+      if (e.cancelable) e.preventDefault();   // stop the browser's native image drag (the "stick")
       const p = screenToSvg(e.clientX, e.clientY); if (!p) return;
       overlayDragRef.current = { id: ov.id, mode, grabDX: p.x - ov.x, grabDY: p.y - ov.y };
       window.addEventListener('pointermove', onOverlayDragMove);
@@ -979,10 +980,17 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                         <g key={ov.id}>
                                             <image href={ov.url} x={ov.x} y={ov.y} width={ov.w} height={ov.h} preserveAspectRatio="none"
                                                 onPointerDown={isAddingCallout ? undefined : (e) => startOverlayDrag(e, ov, 'move')}
-                                                style={{ cursor: isAddingCallout ? 'crosshair' : 'move', touchAction: 'none', pointerEvents: isAddingCallout ? 'none' : 'auto' }} />
+                                                onDragStart={(e) => e.preventDefault()}
+                                                style={{ cursor: isAddingCallout ? 'crosshair' : 'move', touchAction: 'none', pointerEvents: isAddingCallout ? 'none' : 'auto', WebkitUserDrag: 'none', userSelect: 'none' }} />
                                             <rect x={ov.x} y={ov.y} width={ov.w} height={ov.h} fill="none" stroke="var(--brass)" strokeWidth="1" strokeDasharray="5 3" style={{ pointerEvents: 'none' }} />
                                             {!isAddingCallout && (
                                                 <>
+                                                    {/* dedicated move grip (top-left) — reliable grab point */}
+                                                    <g onPointerDown={(e) => startOverlayDrag(e, ov, 'move')} style={{ cursor: 'move', touchAction: 'none' }}>
+                                                        <rect x={ov.x - 1} y={ov.y - 1} width="22" height="20" rx="2" fill="var(--brass)" stroke="#fff" strokeWidth="1.5" />
+                                                        <text x={ov.x + 10} y={ov.y + 13} textAnchor="middle" fontSize="12" fill="#fff" style={{ pointerEvents: 'none', fontFamily: 'var(--mono)' }}>⠿</text>
+                                                    </g>
+                                                    {/* resize grip (bottom-right) */}
                                                     <rect x={ov.x + ov.w - 8} y={ov.y + ov.h - 8} width="16" height="16" fill="var(--brass)" stroke="#fff" strokeWidth="1.5"
                                                         onPointerDown={(e) => startOverlayDrag(e, ov, 'resize')} style={{ cursor: 'nwse-resize', touchAction: 'none' }} />
                                                     <g onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeOverlay(ov.id); }} style={{ cursor: 'pointer' }}>
