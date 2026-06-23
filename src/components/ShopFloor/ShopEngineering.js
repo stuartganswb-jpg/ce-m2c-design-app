@@ -72,7 +72,39 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
             alert("Import failed: " + (e.message || e) + "\n\nMake sure it's a Fusion 360 .tools file.");
         } finally { setImportBusy(false); }
     };
-    const [matForm, setMatForm] = useState({ type: '', thick: '', width: '' });
+    const [matForm, setMatForm] = useState({ type: '', thick: '', width: '', length: '', sticks: '', scrap: '10' });
+
+    // Bulk wipes (admin) — old tools clash with freshly-imported Fusion tools; materials are being re-modeled
+    // with stick length/count. Both batch-delete the loaded docs (counts are small).
+    const clearToolLibrary = async () => {
+        if (!window.confirm(`Delete ALL ${tooling.length} tools from the library? Cannot be undone — re-import your Fusion .tools file after.`)) return;
+        const batch = writeBatch(db);
+        tooling.forEach(t => batch.delete(doc(shopDb.collection("tooling"), t.id)));
+        await batch.commit();
+        writeLog(`Cleared tool library (${tooling.length} tools)`, 'inventory');
+        alert(`✅ Tool library cleared (${tooling.length} removed). Re-import your .tools file.`);
+    };
+    const clearAllMaterials = async () => {
+        if (!window.confirm(`Delete ALL ${materials.length} raw-material profiles? Cannot be undone.`)) return;
+        const batch = writeBatch(db);
+        materials.forEach(m => batch.delete(doc(shopDb.collection("materials"), m.id)));
+        await batch.commit();
+        writeLog(`Cleared raw materials (${materials.length})`, 'admin');
+        alert(`✅ All raw materials cleared (${materials.length} removed).`);
+    };
+    const receiveSticks = async (m) => {
+        const n = parseInt(window.prompt(`Receive how many sticks of ${m.type} (${m.thickness}"×${m.width}")?\nEach adds ${(((m.lengthPerStick || 0) - (m.scrapPerStick || 0)) || 0).toFixed(1)}" usable.`, '12'));
+        if (!n || n <= 0) return;
+        const perStick = Math.max(0, (m.lengthPerStick || 0) - (m.scrapPerStick || 0));
+        await updateDoc(doc(shopDb.collection("materials"), m.id), { totalLength: increment(perStick * n), stickCount: increment(n) });
+        writeLog(`Received ${n} sticks of ${m.type}`, 'inventory');
+    };
+    const scrapMaterial = async (m) => {
+        const inches = parseFloat(window.prompt(`Scrap how many inches of ${m.type} (${m.thickness}"×${m.width}")? Deducted from usable on-hand.`, '10'));
+        if (!inches || inches <= 0) return;
+        await updateDoc(doc(shopDb.collection("materials"), m.id), { totalLength: increment(-Math.abs(inches)) });
+        writeLog(`Scrapped ${inches}" of ${m.type}`, 'inventory');
+    };
     
     const [adminForm, setAdminForm] = useState({ catName: '', catType: 'Manual', macName: '', macCat: '', scName: '' });
 
@@ -632,36 +664,54 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
                             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                                 <h4 style={sectionHeaderStyle}>Register Material Profile</h4>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', marginBottom: '16px' }}>
                                     <div><label style={labelStyle}>Type</label><input type="text" placeholder="e.g. Steel" value={matForm.type} onChange={e => setMatForm({...matForm, type: e.target.value})} style={fieldStyle} /></div>
                                     <div><label style={labelStyle}>Thick (in)</label><input type="number" step="0.01" value={matForm.thick} onChange={e => setMatForm({...matForm, thick: e.target.value})} style={fieldStyle} /></div>
                                     <div><label style={labelStyle}>Width (in)</label><input type="number" step="0.01" value={matForm.width} onChange={e => setMatForm({...matForm, width: e.target.value})} style={fieldStyle} /></div>
+                                    <div><label style={labelStyle}>Length / stick (in)</label><input type="number" step="0.1" placeholder="e.g. 144" value={matForm.length} onChange={e => setMatForm({...matForm, length: e.target.value})} style={fieldStyle} /></div>
+                                    <div><label style={labelStyle}># of sticks</label><input type="number" step="1" placeholder="e.g. 12" value={matForm.sticks} onChange={e => setMatForm({...matForm, sticks: e.target.value})} style={fieldStyle} /></div>
+                                    <div><label style={labelStyle}>Scrap / stick (in)</label><input type="number" step="0.5" value={matForm.scrap} onChange={e => setMatForm({...matForm, scrap: e.target.value})} style={fieldStyle} /></div>
                                 </div>
-                                <button onClick={async () => { if(!matForm.type || !matForm.thick || !matForm.width) return alert("All fields required"); await setDoc(doc(shopDb.collection("materials"), cleanId(matForm.type, `${matForm.thick}x${matForm.width}`)), { type: matForm.type, thickness: matForm.thick, width: matForm.width, totalLength: 0 }); writeLog(`Registered Material`, 'admin'); setMatForm({ type: '', thick: '', width: '' }); }} style={{ width: '100%', ...btnStyle }}>Register Material</button>
+                                {(() => { const len = parseFloat(matForm.length) || 0, n = parseInt(matForm.sticks) || 0, sc = parseFloat(matForm.scrap) || 0; const usable = Math.max(0, len - sc) * n; return (len && n) ? <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '16px' }}>{n} × {len}" − {sc}"/stick scrap = <strong style={{ color: 'var(--ink)' }}>{usable.toFixed(1)}" usable</strong></div> : null; })()}
+                                <button onClick={async () => { if(!matForm.type || !matForm.thick || !matForm.width) return alert("Type, thick and width are required"); const len = parseFloat(matForm.length)||0, n = parseInt(matForm.sticks)||0, sc = parseFloat(matForm.scrap)||0; const usable = Math.max(0, len - sc) * n; await setDoc(doc(shopDb.collection("materials"), cleanId(matForm.type, `${matForm.thick}x${matForm.width}`)), { type: matForm.type, thickness: matForm.thick, width: matForm.width, lengthPerStick: len, stickCount: n, scrapPerStick: sc, totalLength: usable }); writeLog(`Registered Material ${matForm.type} (${n} sticks)`, 'admin'); setMatForm({ type: '', thick: '', width: '', length: '', sticks: '', scrap: '10' }); }} style={{ width: '100%', ...btnStyle }}>Register Material</button>
                             </div>
                         </div>
                     </div>
                 )}
                 
-                <h3 style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px', margin: '0 0 20px 0' }}>Raw Material Stock</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '10px', margin: '0 0 20px 0' }}>
+                    <h3 style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', margin: 0 }}>Raw Material Stock</h3>
+                    {['admin'].includes(safeUserRole) && materials.length > 0 && <button onClick={clearAllMaterials} style={{ background: '#fff', border: '1px solid #d9534f', color: '#d9534f', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Clear All Materials</button>}
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px', marginBottom: '40px' }}>
                     {materials.map(m => {
                         const available = m.totalLength || 0;
+                        const gross = (m.lengthPerStick || 0) * (m.stickCount || 0);
                         return (
                             <div key={m.id} style={{ background: available < 0 ? '#fdf2f2' : '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                                 {['admin'].includes(safeUserRole) && <button onClick={() => handleDelete('materials', m.id)} style={{ float: 'right', background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1.2rem', padding: 0 }}>×</button>}
                                 <div style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{m.type}</div>
                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>Profile: {m.thickness}" × {m.width}"</div>
-                                <div style={{ marginTop: '20px', borderTop: '1px solid var(--line)', paddingTop: '20px', textAlign: 'center' }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px' }}>{m.stickCount || 0} sticks × {m.lengthPerStick || 0}" {m.scrapPerStick ? `· −${m.scrapPerStick}"/stick scrap` : ''}{gross ? ` · ${gross.toFixed(0)}" gross` : ''}</div>
+                                <div style={{ marginTop: '16px', borderTop: '1px solid var(--line)', paddingTop: '16px', textAlign: 'center' }}>
                                     <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: available < 0 ? '#d9534f' : 'var(--ink)', fontWeight: 500 }}>{available.toFixed(1)}"</div>
-                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>On Hand</div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '4px' }}>Usable On Hand</div>
                                 </div>
+                                {['admin', 'operator', 'programmer'].includes(safeUserRole) && (
+                                    <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+                                        <button onClick={() => receiveSticks(m)} style={{ flex: 1, padding: '9px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>+ Receive Sticks</button>
+                                        <button onClick={() => scrapMaterial(m)} style={{ flex: 1, padding: '9px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>− Scrap</button>
+                                    </div>
+                                )}
                             </div>
                         )
                     })}
                 </div>
 
-                <h3 style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px', margin: '0 0 20px 0' }}>Cutting Tools</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '10px', margin: '0 0 20px 0' }}>
+                    <h3 style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', margin: 0 }}>Cutting Tools</h3>
+                    {['admin'].includes(safeUserRole) && tooling.length > 0 && <button onClick={clearToolLibrary} style={{ background: '#fff', border: '1px solid #d9534f', color: '#d9534f', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Clear Tool Library</button>}
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px', marginBottom: '40px' }}>
                     {tooling.map(t => {
                         const lifePct = Math.min((t.currentHours / t.maxHours) * 100, 100);
