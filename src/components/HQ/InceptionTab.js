@@ -460,6 +460,61 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       window.addEventListener('pointerup', onNoteDragEnd, { once: true });
   };
 
+  // --- Image swatch overlays (paint chip / metal texture dropped onto the sketch over a part), per
+  // revision. Stored as spatialOverlays: { id, revisionId, url, x, y, w, h } in SVG coords (same
+  // 1000x600 space as the notes). Drag the swatch to move it, the corner handle to resize.
+  const overlaysRef = useRef([]);
+  overlaysRef.current = activeAssembly?.spatialOverlays || [];
+  const overlayDragRef = useRef(null);
+  const onOverlayDragMove = (e) => {
+      const d = overlayDragRef.current; if (!d) return;
+      const p = screenToSvg(e.clientX, e.clientY); if (!p) return;
+      setActiveAssembly(prev => ({ ...prev, spatialOverlays: (prev.spatialOverlays || []).map(o => {
+          if (o.id !== d.id) return o;
+          if (d.mode === 'resize') return { ...o, w: Math.max(30, p.x - o.x), h: Math.max(20, p.y - o.y) };
+          return { ...o, x: p.x - d.grabDX, y: p.y - d.grabDY };
+      }) }));
+  };
+  const onOverlayDragEnd = async () => {
+      window.removeEventListener('pointermove', onOverlayDragMove);
+      if (!overlayDragRef.current) return;
+      overlayDragRef.current = null;
+      try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialOverlays: overlaysRef.current }); }
+      catch (err) { console.error(err); }
+  };
+  const startOverlayDrag = (e, ov, mode) => {
+      e.stopPropagation();
+      const p = screenToSvg(e.clientX, e.clientY); if (!p) return;
+      overlayDragRef.current = { id: ov.id, mode, grabDX: p.x - ov.x, grabDY: p.y - ov.y };
+      window.addEventListener('pointermove', onOverlayDragMove);
+      window.addEventListener('pointerup', onOverlayDragEnd, { once: true });
+  };
+  const removeOverlay = async (id) => {
+      const updated = (activeAssembly.spatialOverlays || []).filter(o => o.id !== id);
+      setActiveAssembly(prev => ({ ...prev, spatialOverlays: updated }));
+      try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialOverlays: updated }); }
+      catch (err) { console.error(err); }
+  };
+  const handleOverlayUpload = async (e) => {
+      const file = e.target.files[0];
+      e.target.value = '';
+      if (!file || !activeAssembly || !activeRevisionId) return;
+      const storageRef = ref(storage, `assemblies/${activeBrand}_${activeAssembly.itemName}_OV_${Date.now()}.png`);
+      const uploadTask = uploadBytesResumable(storageRef, file);
+      uploadTask.on("state_changed",
+          (snap) => setUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+          (err) => { console.error(err); alert("Swatch upload failed."); },
+          async () => {
+              const url = await getDownloadURL(uploadTask.snapshot.ref);
+              const newOv = { id: `OV-${Date.now()}`, revisionId: activeRevisionId, url, x: 400, y: 230, w: 220, h: 140 };
+              const updated = [...(activeAssembly.spatialOverlays || []), newOv];
+              setActiveAssembly(prev => ({ ...prev, spatialOverlays: updated }));
+              try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialOverlays: updated }); setUploadProgress(0); }
+              catch (err) { console.error(err); }
+          }
+      );
+  };
+
   const activatePanMode = () => {
       setIsAddingCallout(false);
       setIsEditingPins(false);
@@ -503,6 +558,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const currentRevisionObj = activeRevisions.find(r => r.id === activeRevisionId) || activeRevisions[0];
   const isCurrent3D = currentRevisionObj?.is3D || is3DFile(currentRevisionObj?.url);
   const filteredCallouts = (activeAssembly?.spatialCallouts || []).filter(c => c.revisionId === activeRevisionId || (!c.revisionId && activeRevisionId === 'INITIAL'));
+  const filteredOverlays = (activeAssembly?.spatialOverlays || []).filter(o => o.revisionId === activeRevisionId || (!o.revisionId && activeRevisionId === 'INITIAL'));
 
   if (isEditing) {
     const fieldStyle = { width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' };
@@ -778,7 +834,14 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                 <input type="file" accept="image/*,.glb" onChange={handleRevisionUpload} style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} />
                                 <button style={{ padding: '8px 16px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', pointerEvents: 'none' }}>Upload Revision</button>
                             </div>
-                            
+
+                            {!isCurrent3D && activeRevisionId && (
+                                <div style={{ position: 'relative' }} title="Drop a paint chip / texture image onto this sketch">
+                                    <input type="file" accept="image/*" onChange={handleOverlayUpload} style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} />
+                                    <button style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--brass)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', pointerEvents: 'none' }}>+ Add Swatch</button>
+                                </div>
+                            )}
+
                             {isCurrent3D && (
                                 <button onClick={handleCaptureThumbnail} disabled={isCapturing} style={{ padding: '8px 16px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: isCapturing ? 'wait' : 'pointer' }}>
                                     {isCapturing ? 'Saving...' : 'Thumbnail'}
@@ -874,7 +937,21 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                   <g ref={noteContentRef}>
                                     <rect x="0" y="0" width="1000" height="600" fill="#ffffff" stroke="var(--line)" strokeWidth="1" />
                                     <image href={currentRevisionObj.url} x="0" y="0" width="1000" height="600" preserveAspectRatio="xMidYMid meet" style={{ pointerEvents: 'none' }} />
-                                    
+
+                                    {filteredOverlays.map(ov => (
+                                        <g key={ov.id} data-callout-g>
+                                            <image href={ov.url} x={ov.x} y={ov.y} width={ov.w} height={ov.h} preserveAspectRatio="none"
+                                                onPointerDown={(e) => startOverlayDrag(e, ov, 'move')} style={{ cursor: 'move', touchAction: 'none' }} />
+                                            <rect x={ov.x} y={ov.y} width={ov.w} height={ov.h} fill="none" stroke="var(--brass)" strokeWidth="1" strokeDasharray="5 3" style={{ pointerEvents: 'none' }} />
+                                            <rect x={ov.x + ov.w - 8} y={ov.y + ov.h - 8} width="16" height="16" fill="var(--brass)" stroke="#fff" strokeWidth="1.5"
+                                                onPointerDown={(e) => startOverlayDrag(e, ov, 'resize')} style={{ cursor: 'nwse-resize', touchAction: 'none' }} />
+                                            <g onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeOverlay(ov.id); }} style={{ cursor: 'pointer' }}>
+                                                <circle cx={ov.x + ov.w} cy={ov.y} r="10" fill="#d9534f" stroke="#fff" strokeWidth="1.5" />
+                                                <text x={ov.x + ov.w} y={ov.y + 4} textAnchor="middle" fontSize="13" fontWeight="bold" fill="#fff" style={{ pointerEvents: 'none', fontFamily: 'var(--mono)' }}>×</text>
+                                            </g>
+                                        </g>
+                                    ))}
+
                                     {filteredCallouts.map(callout => {
                                         if (callout.is3D) return null; 
                                         const isActive = activeCalloutId === callout.id;
