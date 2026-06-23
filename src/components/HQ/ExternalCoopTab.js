@@ -185,9 +185,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   };
 
   const getFilteredCrmRecords = (isCust) => {
-      const records = Object.values(crmData).filter(r => 
+      const records = Object.values(crmData).filter(r =>
           r.type === (isCust ? 'CUSTOMER' : 'VENDOR') &&
-          (r.brandId === activeBrand || (r.sharedBrands && r.sharedBrands.includes(activeBrand))) // Enforce brand isolation
+          // Customers are brand-isolated; vendors are the central NetSuite-synced supplier DB shared
+          // across all brands (e.g. a plater like Dayton Grey serves CE and M2C alike).
+          (!isCust || r.brandId === activeBrand || (r.sharedBrands && r.sharedBrands.includes(activeBrand)))
       );
       
       let filteredRecords = records;
