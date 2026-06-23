@@ -65,7 +65,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const [expandedGroups, setExpandedGroups] = useState({});
 
   const [isEditing, setIsEditing] = useState(false);
-  const [formData, setFormData] = useState({ itemName: "", legacyErpId: "", collection: "N/A", productType: "", project: "", description: "" });
+  const [formData, setFormData] = useState({ itemName: "", legacyErpId: "", collection: "N/A", productType: "", project: "", description: "", recordType: "PRODUCT" });
   const [imageFile, setImageFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
 
@@ -197,11 +197,11 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       setFormData({
         itemName: assembly.itemName || "", legacyErpId: assembly.legacyErpId === "PENDING" ? "" : (assembly.legacyErpId || ""),
         collection: assembly.collection || "N/A", productType: assembly.productType || (dynamicProductTypes[0] || ""),
-        project: assembly.project || "", description: assembly.description || ""
+        project: assembly.project || "", description: assembly.description || "", recordType: assembly.recordType || "PRODUCT"
       });
       setActiveAssembly(assembly);
     } else {
-      setFormData({ itemName: "", legacyErpId: "", collection: "N/A", productType: dynamicProductTypes[0] || "", project: "", description: "" });
+      setFormData({ itemName: "", legacyErpId: "", collection: "N/A", productType: dynamicProductTypes[0] || "", project: "", description: "", recordType: "PRODUCT" });
       setActiveAssembly(null);
     }
     setImageFile(null); setImageMode("UPLOAD"); setSelectedExistingImage(""); setIsEditing(true);
@@ -272,7 +272,8 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
     const payload = {
       brandId: activeBrand, partClass: "Assembly", itemId: docId,
       itemName: formData.itemName.toUpperCase(), legacyErpId: formData.legacyErpId.toUpperCase() || "PENDING",
-      collection: finalCollection, productType: finalProductType, project: finalProject, 
+      collection: finalCollection, productType: finalProductType, project: finalProject,
+      recordType: formData.recordType || "PRODUCT",
       description: formData.description, finalImageUrl: finalUrl, revisions: updatedRevisions,
       lifecycleStatus: status, spatialCallouts: activeAssembly?.spatialCallouts || [], 
       approvals: activeAssembly?.approvals || { designer: false, technical: false, machinist: false }, 
@@ -573,13 +574,30 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       <div style={{ padding: '40px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh', display: 'flex', justifyContent: 'center' }}>
         <div style={{ background: '#fff', border: '1px solid var(--line)', width: '800px', padding: '40px', boxShadow: '0 4px 24px rgba(0,0,0,0.04)', borderRadius: '2px' }}>
           <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '30px' }}>
-              <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>{activeAssembly ? "Edit Product Metadata" : "New Product Inception"}</h2>
+              <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>{activeAssembly ? `Edit ${formData.recordType === 'PROJECT' ? 'Project' : 'Product'} Metadata` : `New ${formData.recordType === 'PROJECT' ? 'Project' : 'Product'} Inception`}</h2>
           </div>
-          
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            
+
             <div>
-                <label style={labelStyle}>Product Name</label>
+                <label style={labelStyle}>Record Type</label>
+                <div style={{ display: 'flex', border: '1px solid var(--line)', width: 'fit-content' }}>
+                    {['PRODUCT', 'PROJECT'].map(rt => (
+                        <button key={rt} type="button" onClick={() => setFormData({ ...formData, recordType: rt })}
+                            style={{ padding: '10px 32px', cursor: 'pointer', border: 'none', background: formData.recordType === rt ? 'var(--ink)' : '#fff', color: formData.recordType === rt ? '#fff' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                            {rt}
+                        </button>
+                    ))}
+                </div>
+                <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'block', marginTop: '8px' }}>
+                    {formData.recordType === 'PROJECT'
+                        ? 'Project — early concept to communicate & align. Same design tools; not slated for node grouping / BOM / assembly.'
+                        : 'Product — full lifecycle: continues to node grouping, BOM, and assembly.'}
+                </span>
+            </div>
+
+            <div>
+                <label style={labelStyle}>{formData.recordType === 'PROJECT' ? 'Project Name' : 'Product Name'}</label>
                 <input value={formData.itemName} onChange={(e) => setFormData({...formData, itemName: e.target.value})} autoFocus placeholder="e.g. The Harlow Bracket" style={{ ...fieldStyle, fontSize: '1.1rem', fontWeight: 500 }} />
             </div>
             
@@ -734,7 +752,10 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                         </div>
                                         <div style={{ padding: '16px' }}>
                                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }}>{asm.legacyErpId !== "PENDING" && asm.legacyErpId !== "N/A" ? asm.legacyErpId : asm.itemId}</div>
+                                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {asm.recordType === 'PROJECT' && <span style={{ fontSize: '8px', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.05em', color: '#fff', background: 'var(--brass)', padding: '1px 5px' }}>Proj</span>}
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }}>{asm.legacyErpId !== "PENDING" && asm.legacyErpId !== "N/A" ? asm.legacyErpId : asm.itemId}</div>
+                                              </div>
                                               {asm.productType && <div style={{ fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{asm.productType}</div>}
                                           </div>
                                           <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: 'var(--ink)', marginTop: '8px' }}>{asm.itemName}</div>
@@ -758,6 +779,9 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                   <div>
                     <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: '12px' }}>
                         {activeAssembly.itemName}
+                        {activeAssembly.recordType === 'PROJECT'
+                            ? <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', padding: '4px 8px', background: 'var(--brass)' }}>Project</span>
+                            : <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', padding: '4px 8px', background: 'var(--ink)' }}>Product</span>}
                         {activeAssembly.productType && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '4px 8px', background: '#fff' }}>{activeAssembly.productType}</span>}
                     </h3>
                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', marginTop: '8px', color: 'var(--ink-soft)' }}>
