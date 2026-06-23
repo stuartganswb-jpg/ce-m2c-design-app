@@ -42,6 +42,10 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
   const [newAddressInput, setNewAddressInput] = useState({ label: '', street: '' });
   const [newContactInput, setNewContactInput] = useState({ name: '', email: '', department: '' });
+  const [showListSetup, setShowListSetup] = useState(false);
+  const [newTermInput, setNewTermInput] = useState('');
+  const [newRepInput, setNewRepInput] = useState('');
+  const [newDiscountInput, setNewDiscountInput] = useState({ code: '', percent: '' });
   
   const [globalLists, setGlobalLists] = useState({ customers: [], vendors: [], paymentTerms: [], salesReps: [] });
   const [crmDiscounts, setCrmDiscounts] = useState([]);
@@ -66,6 +70,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [expandedSections, setExpandedSections] = useState({ active: true, archive: false });
   const [platingPOs, setPlatingPOs] = useState([]);          // plating shipments (hq_purchase_orders, kind=plating)
   const [activePlatingPO, setActivePlatingPO] = useState(null); // shipment detail modal
+  const [recordingReceipt, setRecordingReceipt] = useState(false);
+  const [receiptDraft, setReceiptDraft] = useState({});         // { lineIndex: qty } being received now
+  const [receiptNote, setReceiptNote] = useState('');
 
   // --- JOB MODIFICATION STATE ---
   const [showEditJobModal, setShowEditJobModal] = useState(false);
@@ -230,6 +237,18 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       window.location.href = `mailto:${emails.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   };
 
+  // Setup/list managers — payment terms, sales reps, discount tiers (the dropdown OPTION lists).
+  const saveMasterListKey = async (key, arr) => { try { await setDoc(doc(db, "system", "master_lists"), { [key]: arr }, { merge: true }); } catch (e) { console.error(e); alert('Save failed: ' + (e.message || e)); } };
+  const addPaymentTerm = () => { const t = newTermInput.trim(); if (!t) return; saveMasterListKey('paymentTerms', [...new Set([...(globalLists.paymentTerms || []), t])]); setNewTermInput(''); };
+  const removePaymentTerm = (t) => saveMasterListKey('paymentTerms', (globalLists.paymentTerms || []).filter(x => x !== t));
+  const addSalesRep = () => { const t = newRepInput.trim(); if (!t) return; saveMasterListKey('salesReps', [...new Set([...(globalLists.salesReps || []), t])]); setNewRepInput(''); };
+  const removeSalesRep = (t) => saveMasterListKey('salesReps', (globalLists.salesReps || []).filter(x => x !== t));
+  const saveDiscounts = async (list) => { try { await setDoc(doc(db, "system", "crm_discounts"), { list }, { merge: true }); } catch (e) { console.error(e); alert('Save failed: ' + (e.message || e)); } };
+  const addDiscountTier = () => { const code = newDiscountInput.code.trim().toUpperCase(); if (!code) return; const percent = parseFloat(newDiscountInput.percent) || 0; saveDiscounts([...crmDiscounts.filter(d => d.code !== code), { code, percent }]); setNewDiscountInput({ code: '', percent: '' }); };
+  const removeDiscountTier = (code) => saveDiscounts(crmDiscounts.filter(d => d.code !== code));
+  // Payment-terms options = curated master list UNION every term already synced from NetSuite onto a record.
+  const paymentTermsOptions = [...new Set([...(globalLists.paymentTerms || []), ...Object.values(crmData).map(r => r.terms)].filter(Boolean))].sort();
+
   const getFilteredCrmRecords = (isCust) => {
       const records = Object.values(crmData).filter(r =>
           r.type === (isCust ? 'CUSTOMER' : 'VENDOR') &&
@@ -319,6 +338,32 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   };
   const updatePlatingEta = async (poDocId, val) => {
       try { await updateDoc(doc(db, "hq_purchase_orders", poDocId), { expectedReceiveDate: val || null }); } catch (e) { console.error(e); }
+  };
+  // Orders arrive in partial shipments — record what came back now, accumulate per-line received qty, and
+  // log each receipt event. Status flows Sent → Partially Received → Received.
+  const recordPlatingReceipt = async (po) => {
+      const items = po.items || [];
+      const draftEntries = items.map((it, idx) => ({ idx, qty: Math.max(0, parseInt(receiptDraft[idx]) || 0) })).filter(e => e.qty > 0);
+      if (!draftEntries.length) return alert("Enter at least one received quantity.");
+      const newItems = items.map((it, idx) => {
+          const e = draftEntries.find(x => x.idx === idx);
+          if (!e) return it;
+          const remaining = (it.quantity || 0) - (it.received || 0);
+          return { ...it, received: (it.received || 0) + Math.min(e.qty, remaining) };
+      });
+      const receipt = {
+          date: new Date().toISOString(), by: currentUser || 'Unknown', note: receiptNote.trim(),
+          lines: draftEntries.map(e => ({ erpId: items[e.idx].itemId, qty: Math.min(e.qty, (items[e.idx].quantity || 0) - (items[e.idx].received || 0)) })).filter(l => l.qty > 0)
+      };
+      const receipts = [...(po.receipts || []), receipt];
+      const allReceived = newItems.every(it => (it.received || 0) >= (it.quantity || 0));
+      const anyReceived = newItems.some(it => (it.received || 0) > 0);
+      const status = allReceived ? 'Received' : (anyReceived ? 'Partially Received' : po.status);
+      try {
+          await updateDoc(doc(db, "hq_purchase_orders", po.id), { items: newItems, receipts, status });
+          setActivePlatingPO({ ...po, items: newItems, receipts, status });
+          setRecordingReceipt(false); setReceiptDraft({}); setReceiptNote('');
+      } catch (e) { console.error(e); alert("Receipt save failed: " + (e.message || e)); }
   };
 
   const filterByActiveTab = (job) => {
@@ -605,7 +650,10 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                       <div style={{ width: '320px', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
                           <div style={{ padding: '20px 24px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
                               <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>{activeSubTab === 'CUSTOMERS' ? 'Customers' : 'Vendors'}</span>
-                              <button onClick={() => setShowNewCrmModal(true)} style={{ background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '6px 12px', cursor: 'pointer' }}>Add New</button>
+                              <div style={{ display: 'flex', gap: '8px' }}>
+                                  <button onClick={() => setShowListSetup(true)} title="Manage payment terms, discount tiers & sales reps" style={{ background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '6px 10px', cursor: 'pointer' }}>⚙ Lists</button>
+                                  <button onClick={() => setShowNewCrmModal(true)} style={{ background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '6px 12px', cursor: 'pointer' }}>Add New</button>
+                              </div>
                           </div>
                           <div style={{ padding: '16px' }}>
                               <input 
@@ -705,7 +753,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                       <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Payment Terms</label>
                                                       <select value={activeCrmRecord.terms || ''} onChange={e => handleUpdateActiveCrmField('terms', e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                                                           <option value="">-- Select Terms --</option>
-                                                          {(globalLists.paymentTerms || []).map(t => <option key={t} value={t}>{t}</option>)}
+                                                          {[...new Set([...paymentTermsOptions, activeCrmRecord.terms].filter(Boolean))].map(t => <option key={t} value={t}>{t}</option>)}
                                                       </select>
                                                   </div>
                                                   <div>
@@ -998,46 +1046,146 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
       {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} onClose={() => setCfgQuote(null)} />}
 
+      {showListSetup && (
+          <div onClick={() => setShowListSetup(false)} style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+              <div onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', borderRadius: '2px', width: '720px', maxHeight: '85vh', overflowY: 'auto', padding: '32px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '8px' }}>
+                      <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Manage Lists</h3>
+                      <button onClick={() => setShowListSetup(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                  </div>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: 0 }}>These populate the dropdowns on each profile. Payment terms also auto-include any term synced from NetSuite on a record.</p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '28px', marginTop: '12px' }}>
+                      <div>
+                          <h4 style={{ margin: '0 0 12px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)' }}>Payment Terms</h4>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
+                              {paymentTermsOptions.length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>None yet.</span>}
+                              {paymentTermsOptions.map(t => (
+                                  <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '4px 10px', fontSize: '0.85rem' }}>{t}{(globalLists.paymentTerms || []).includes(t) && <button onClick={() => removePaymentTerm(t)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '0.95rem', lineHeight: 1, padding: 0 }}>×</button>}</span>
+                              ))}
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                              <input value={newTermInput} onChange={e => setNewTermInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addPaymentTerm(); }} placeholder="e.g. Net 30" style={{ flex: 1, padding: '8px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                              <button onClick={addPaymentTerm} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Add</button>
+                          </div>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--ink-soft)', marginTop: '6px' }}>Terms with no × are auto-pulled from NetSuite and can't be removed here.</p>
+                      </div>
+                      <div>
+                          <h4 style={{ margin: '0 0 12px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)' }}>Sales Reps</h4>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
+                              {(globalLists.salesReps || []).length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>None yet.</span>}
+                              {(globalLists.salesReps || []).map(t => (
+                                  <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '4px 10px', fontSize: '0.85rem' }}>{t}<button onClick={() => removeSalesRep(t)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '0.95rem', lineHeight: 1, padding: 0 }}>×</button></span>
+                              ))}
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                              <input value={newRepInput} onChange={e => setNewRepInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addSalesRep(); }} placeholder="Rep name" style={{ flex: 1, padding: '8px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                              <button onClick={addSalesRep} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Add</button>
+                          </div>
+                      </div>
+                  </div>
+                  <div style={{ marginTop: '28px', borderTop: '1px solid var(--line)', paddingTop: '20px' }}>
+                      <h4 style={{ margin: '0 0 12px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)' }}>Discount Tiers</h4>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
+                          {crmDiscounts.length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>None yet.</span>}
+                          {crmDiscounts.map(d => (
+                              <span key={d.code} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '4px 10px', fontSize: '0.85rem' }}>{d.code} (-{d.percent}%)<button onClick={() => removeDiscountTier(d.code)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '0.95rem', lineHeight: 1, padding: 0 }}>×</button></span>
+                          ))}
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', maxWidth: '420px' }}>
+                          <input value={newDiscountInput.code} onChange={e => setNewDiscountInput({ ...newDiscountInput, code: e.target.value })} placeholder="Tier code (e.g. DEALER)" style={{ flex: 2, padding: '8px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                          <input type="number" value={newDiscountInput.percent} onChange={e => setNewDiscountInput({ ...newDiscountInput, percent: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') addDiscountTier(); }} placeholder="%" style={{ flex: 1, padding: '8px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                          <button onClick={addDiscountTier} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Add</button>
+                      </div>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {activePlatingPO && (() => {
           const po = activePlatingPO;
-          const lines = po.packingList?.lines || (po.items || []).map(it => ({ erpId: it.itemId, itemName: it.description, finishCode: it.finishCode, targetErpId: it.targetErpId, platingBin: it.platingBin, woNum: it.woNum, qty: it.quantity }));
+          const items = (po.items && po.items.length)
+              ? po.items
+              : (po.packingList?.lines || []).map(l => ({ itemId: l.erpId, description: l.itemName, finishCode: l.finishCode, targetErpId: l.targetErpId, quantity: l.qty, received: 0 }));
           const dateStr = po.createdAt?.seconds ? new Date(po.createdAt.seconds * 1000).toLocaleDateString() : (po.packingList?.dateStr || '');
+          const orderedPcs = items.reduce((s, it) => s + (it.quantity || 0), 0);
+          const receivedPcs = items.reduce((s, it) => s + (it.received || 0), 0);
+          const remainingPcs = orderedPcs - receivedPcs;
+          const receipts = po.receipts || [];
+          const closeModal = () => { setActivePlatingPO(null); setRecordingReceipt(false); setReceiptDraft({}); setReceiptNote(''); };
+          const statusColor = po.status === 'Received' ? '#2e7d32' : (po.status === 'Partially Received' ? 'var(--brass)' : 'var(--ink-soft)');
           return (
-          <div onClick={() => setActivePlatingPO(null)} style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-              <div onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', borderRadius: '2px', width: '780px', maxHeight: '85vh', overflowY: 'auto', padding: '32px' }}>
+          <div onClick={closeModal} style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+              <div onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', borderRadius: '2px', width: '900px', maxHeight: '88vh', overflowY: 'auto', padding: '32px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '20px' }}>
                       <div>
                           <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Plating Shipment {po.nsPoTran || po.poId}</h3>
-                          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>{po.vendor} · {dateStr} · {(po.status || 'Sent').replace(/_/g, ' ')}</span>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>{po.vendor} · {dateStr} · <span style={{ color: statusColor, fontWeight: 700 }}>{(po.status || 'Sent').replace(/_/g, ' ')}</span></span>
                       </div>
-                      <button onClick={() => setActivePlatingPO(null)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                      <button onClick={closeModal} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '20px' }}>
-                      {[['NetSuite PO', po.nsPoTran || po.nsPoId || '—'], ['Ship ID', po.poId || po.shipmentId], ['Finish(es)', po.finishSummary || '—'], ['Pieces', po.pcs || 0], ['Lines', lines.length], ['Plating Total', `$${Number(po.total || 0).toFixed(2)}`], ['Prepared by', po.createdBy || '—'], ['Expected back', po.expectedReceiveDate || '—']].map(([k, v]) => (
-                          <div key={k}><div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)' }}>{k}</div><div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--ink)', marginTop: '2px' }}>{v}</div></div>
+                      {[['NetSuite PO', po.nsPoTran || po.nsPoId || '—'], ['Finish(es)', po.finishSummary || '—'], ['Ordered', `${orderedPcs} pcs`], ['Received', `${receivedPcs} pcs`], ['Outstanding', `${remainingPcs} pcs`], ['Plating Total', `$${Number(po.total || 0).toFixed(2)}`], ['Prepared by', po.createdBy || '—'], ['Expected back', po.expectedReceiveDate || '—']].map(([k, v]) => (
+                          <div key={k}><div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)' }}>{k}</div><div style={{ fontSize: '0.95rem', fontWeight: 600, color: k === 'Outstanding' && remainingPcs > 0 ? 'var(--brass)' : 'var(--ink)', marginTop: '2px' }}>{v}</div></div>
                       ))}
                   </div>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                      <thead><tr>{['#', 'Item', 'Description', 'Finish', 'Returns As', 'Bin', 'WO#', 'Qty'].map(h => <th key={h} style={{ textAlign: h === 'Qty' ? 'right' : 'left', borderBottom: '1px solid var(--line)', padding: '8px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)' }}>{h}</th>)}</tr></thead>
+                      <thead><tr>{['#', 'Item', 'Description', 'Finish', 'Returns As', 'Ord', 'Recv', 'Rem', ...(recordingReceipt ? ['Receive Now'] : [])].map(h => <th key={h} style={{ textAlign: ['Ord', 'Recv', 'Rem', 'Receive Now'].includes(h) ? 'right' : 'left', borderBottom: '1px solid var(--line)', padding: '8px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)' }}>{h}</th>)}</tr></thead>
                       <tbody>
-                          {lines.map((l, i) => (
+                          {items.map((it, i) => {
+                              const rem = (it.quantity || 0) - (it.received || 0);
+                              return (
                               <tr key={i}>
                                   <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', color: 'var(--ink-soft)' }}>{i + 1}</td>
-                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '0.8rem' }}>{l.erpId}</td>
-                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)' }}>{l.itemName}</td>
-                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)' }}>{l.finishCode}</td>
-                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '0.8rem' }}>{l.targetErpId}</td>
-                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)' }}>{l.platingBin}</td>
-                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)' }}>{l.woNum}</td>
-                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', textAlign: 'right' }}>{l.qty}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '0.8rem' }}>{it.itemId}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)' }}>{it.description}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)' }}>{it.finishCode}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '0.8rem' }}>{it.targetErpId}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', textAlign: 'right' }}>{it.quantity || 0}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', textAlign: 'right', color: (it.received || 0) > 0 ? 'var(--ink)' : 'var(--ink-soft)' }}>{it.received || 0}</td>
+                                  <td style={{ padding: '8px', borderBottom: '1px solid var(--paper-2)', textAlign: 'right', fontWeight: rem > 0 ? 700 : 400, color: rem > 0 ? 'var(--brass)' : '#2e7d32' }}>{rem}</td>
+                                  {recordingReceipt && (
+                                      <td style={{ padding: '6px 8px', borderBottom: '1px solid var(--paper-2)', textAlign: 'right' }}>
+                                          <input type="number" min="0" max={rem} disabled={rem <= 0} value={receiptDraft[i] ?? ''} onChange={e => setReceiptDraft({ ...receiptDraft, [i]: e.target.value })} style={{ width: '64px', padding: '5px', border: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--sans)', fontSize: '0.85rem', background: rem <= 0 ? 'var(--paper-2)' : '#fff' }} />
+                                      </td>
+                                  )}
                               </tr>
-                          ))}
+                              );
+                          })}
                       </tbody>
                   </table>
+
+                  {receipts.length > 0 && (
+                      <div style={{ marginTop: '20px' }}>
+                          <h4 style={{ margin: '0 0 10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Receipt History</h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                              {receipts.map((r, ri) => (
+                                  <div key={ri} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '8px 12px', fontSize: '0.85rem' }}>
+                                      <span>{new Date(r.date).toLocaleDateString()} · {r.by} · <strong>{(r.lines || []).reduce((s, l) => s + (l.qty || 0), 0)} pcs</strong>{r.note ? ` — ${r.note}` : ''}</span>
+                                      <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{(r.lines || []).length} line(s)</span>
+                                  </div>
+                              ))}
+                          </div>
+                      </div>
+                  )}
+
+                  {recordingReceipt && (
+                      <div style={{ marginTop: '16px' }}>
+                          <input value={receiptNote} onChange={e => setReceiptNote(e.target.value)} placeholder="Receipt note (optional) — e.g. partial, box 1 of 2" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem', boxSizing: 'border-box' }} />
+                      </div>
+                  )}
+
                   <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
-                      <button onClick={() => reprintPlatingPackingList(po)} style={{ flex: 1, padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Reprint Packing List</button>
-                      <button onClick={() => emailPlatingOrder(po)} style={{ flex: 1, padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>✉ Email Order (PDF)</button>
-                      <button onClick={() => setActivePlatingPO(null)} style={{ padding: '12px 24px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Close</button>
+                      {!recordingReceipt ? (
+                          <button onClick={() => { setReceiptDraft(Object.fromEntries(items.map((it, i) => [i, Math.max(0, (it.quantity || 0) - (it.received || 0))]))); setReceiptNote(''); setRecordingReceipt(true); }} disabled={remainingPcs <= 0} style={{ flex: 1.4, padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: remainingPcs <= 0 ? 'var(--paper-2)' : 'var(--brass)', color: remainingPcs <= 0 ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: remainingPcs <= 0 ? 'default' : 'pointer' }}>{remainingPcs <= 0 ? '✓ Fully Received' : '+ Record Receipt'}</button>
+                      ) : (
+                          <>
+                              <button onClick={() => recordPlatingReceipt(po)} style={{ flex: 1.4, padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>Save Receipt</button>
+                              <button onClick={() => { setRecordingReceipt(false); setReceiptDraft({}); setReceiptNote(''); }} style={{ padding: '12px 18px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Cancel</button>
+                          </>
+                      )}
+                      <button onClick={() => reprintPlatingPackingList(po)} style={{ flex: 1, padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Reprint</button>
+                      <button onClick={() => emailPlatingOrder(po)} style={{ flex: 1, padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>✉ Email PDF</button>
+                      <button onClick={closeModal} style={{ padding: '12px 18px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Close</button>
                   </div>
               </div>
           </div>
