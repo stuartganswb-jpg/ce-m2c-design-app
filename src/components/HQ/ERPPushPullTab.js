@@ -5,7 +5,7 @@ import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
 // DYNAMIC BRAND MAPPING DICTIONARY
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
-    'uniquity': { subsidiary: "6", location: "22" },
+    'uniquity': { subsidiary: "6", location: "20" },
     'ce': { subsidiary: "2", location: "17" },
     'leyla': { subsidiary: "5", location: "18" }
 };

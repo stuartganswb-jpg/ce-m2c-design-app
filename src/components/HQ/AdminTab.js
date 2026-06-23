@@ -26,7 +26,7 @@ const PICK_TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING'
 // NetSuite plumbing (mirror of ERPPushPullTab) for creating a flow's rollup item.
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
-    'uniquity': { subsidiary: "6", location: "22" },
+    'uniquity': { subsidiary: "6", location: "20" },
     'ce': { subsidiary: "2", location: "17" },
     'leyla': { subsidiary: "5", location: "18" }
 };
