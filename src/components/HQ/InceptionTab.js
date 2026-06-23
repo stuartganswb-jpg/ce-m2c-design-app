@@ -566,6 +566,12 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const isCurrent3D = currentRevisionObj?.is3D || is3DFile(currentRevisionObj?.url);
   const filteredCallouts = (activeAssembly?.spatialCallouts || []).filter(c => c.revisionId === activeRevisionId || (!c.revisionId && activeRevisionId === 'INITIAL'));
   const filteredOverlays = (activeAssembly?.spatialOverlays || []).filter(o => o.revisionId === activeRevisionId || (!o.revisionId && activeRevisionId === 'INITIAL'));
+  // Collection picker = registered hq_collections (this brand) UNION every collection already in use
+  // across the master library, so nothing currently in use is missing from the dropdown.
+  const availableCollections = [...new Set([
+      ...collectionsData.filter(c => c.brandId === activeBrand).map(c => c.name),
+      ...assemblies.map(a => a.collection),
+  ].filter(n => n && n !== 'N/A'))].sort((a, b) => String(a).localeCompare(String(b)));
 
   if (isEditing) {
     const fieldStyle = { width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' };
@@ -631,7 +637,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                         <select value={formData.collection} onChange={(e) => { if (e.target.value === "ADD_NEW") { setIsAddingNewCollection(true); setFormData({...formData, collection: ""}); } else { setFormData({...formData, collection: e.target.value}); } }} style={fieldStyle}>
                             <option value="ADD_NEW">+ Add New Collection...</option>
                             <option value="N/A">N/A</option>
-                            {collectionsData.filter(c => c.brandId === activeBrand).map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                            {availableCollections.map(name => <option key={name} value={name}>{name}</option>)}
                         </select>
                     ) : (
                         <div style={{ display: 'flex', gap: '12px' }}>
