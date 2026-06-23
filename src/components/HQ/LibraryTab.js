@@ -709,15 +709,21 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
             <div style={{ marginTop: '12px', border: '1px solid var(--line)', background: 'var(--paper-2)', padding: '20px', borderRadius: '2px' }}>
               <p style={{ marginTop: 0, fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Assign each collection to a brand — collections only appear under their own brand across the app. New collections are auto-branded to wherever they're created.</p>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '10px' }}>
-                {[...collectionsData].sort((a, b) => String(a.name).localeCompare(String(b.name))).map(c => (
-                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', background: '#fff', border: '1px solid var(--line)', padding: '10px 14px' }}>
-                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500, color: 'var(--ink)' }}>{c.name}</span>
-                    <select value={c.brandId || ''} onChange={async (e) => { try { await setDoc(doc(db, 'hq_collections', c.id), { brandId: e.target.value }, { merge: true }); } catch (err) { console.error(err); alert('Update failed: ' + (err.message || err)); } }} style={{ padding: '6px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
-                      <option value="">— Unassigned —</option>
-                      {AVAILABLE_BRANDS.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                    </select>
+                {[...collectionsData].sort((a, b) => String(a.name).localeCompare(String(b.name))).map(c => {
+                  const dupCount = collectionsData.filter(x => String(x.name).trim().toUpperCase() === String(c.name).trim().toUpperCase()).length;
+                  return (
+                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', background: '#fff', border: dupCount > 1 ? '1px solid var(--brass)' : '1px solid var(--line)', padding: '10px 14px' }}>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500, color: 'var(--ink)' }}>{c.name}{dupCount > 1 && <span title="Duplicate name — delete the extra to merge" style={{ marginLeft: '8px', fontFamily: 'var(--mono)', fontSize: '8px', color: '#fff', background: 'var(--brass)', padding: '1px 5px', textTransform: 'uppercase' }}>Dup ×{dupCount}</span>}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <select value={c.brandId || ''} onChange={async (e) => { try { await setDoc(doc(db, 'hq_collections', c.id), { brandId: e.target.value }, { merge: true }); } catch (err) { console.error(err); alert('Update failed: ' + (err.message || err)); } }} style={{ padding: '6px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                        <option value="">— Unassigned —</option>
+                        {AVAILABLE_BRANDS.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      </select>
+                      <button title="Delete this collection record (items keep their collection name)" onClick={async () => { if (!window.confirm(`Delete collection record "${c.name}"?${dupCount > 1 ? '\n\nThis is a duplicate — items reference the collection by name, so they stay grouped under the remaining one.' : '\n\nItems will keep the name but it will no longer be a registered collection.'}`)) return; try { await deleteDoc(doc(db, 'hq_collections', c.id)); } catch (err) { console.error(err); alert('Delete failed: ' + (err.message || err)); } }} style={{ background: 'transparent', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0 4px' }}>×</button>
+                    </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
