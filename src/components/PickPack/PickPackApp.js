@@ -6,6 +6,7 @@ import { httpsCallable } from 'firebase/functions';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
+import { printPlatingPackingList } from '../Shared/platingPackingList';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -108,64 +109,6 @@ const emitLabel = (zpl, htmlSpec) => {
     return 'zebra';
 };
 
-// Render a full-size (US Letter) packing list and send it to the browser print dialog (laser printer).
-const printPackingList = ({ shipId, brand, vendor, poLabel, dateStr, operator, lines = [], pcs, total, finishSummary }) => {
-    const rows = lines.map((l, i) => `<tr>
-<td class="c">${i + 1}</td>
-<td>${esc(l.erpId || '')}</td>
-<td>${esc(l.itemName || '')}</td>
-<td class="c">${esc(l.finishCode || '')}</td>
-<td>${esc(l.targetErpId || '')}</td>
-<td class="c">${esc(l.platingBin || '')}</td>
-<td class="c">${esc(l.woNum || '')}</td>
-<td class="r">${parseInt(l.qty) || 0}</td>
-</tr>`).join('');
-    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Packing List ${esc(shipId)}</title><style>
-@page{size:Letter portrait;margin:0.5in;}
-*{box-sizing:border-box;} html,body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;color:#000;}
-.head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #000;padding-bottom:10px;}
-.head h1{margin:0;font-size:22pt;letter-spacing:.5px;} .head .sub{font-size:10pt;color:#333;margin-top:2px;}
-.bc{text-align:right;} .bc svg{width:2.4in;height:0.5in;} .bc .t{font-size:8pt;letter-spacing:2px;text-align:right;}
-.meta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 24px;margin:16px 0 18px;font-size:10.5pt;}
-.meta .k{color:#666;font-size:8pt;text-transform:uppercase;letter-spacing:.06em;} .meta .v{font-weight:700;}
-table{width:100%;border-collapse:collapse;font-size:10pt;} th,td{border:1px solid #999;padding:6px 8px;text-align:left;}
-th{background:#eee;font-size:8.5pt;text-transform:uppercase;letter-spacing:.05em;} td.c{text-align:center;} td.r,th.r{text-align:right;}
-tfoot td{font-weight:800;background:#f4f4f4;} .sign{margin-top:30px;display:flex;gap:40px;font-size:10pt;}
-.sign div{flex:1;border-top:1px solid #000;padding-top:6px;color:#444;}
-</style></head><body>
-<div class="head">
-  <div><h1>PLATING PACKING LIST</h1><div class="sub">${esc(brand || '')} → ${esc(vendor || 'Plater')} &nbsp;·&nbsp; ${esc(dateStr || '')}</div></div>
-  <div class="bc">${code128BSvg(shipId)}<div class="t">${esc(shipId)}</div></div>
-</div>
-<div class="meta">
-  <div><div class="k">Shipment</div><div class="v">${esc(shipId)}</div></div>
-  <div><div class="k">NetSuite PO</div><div class="v">${esc(poLabel || '—')}</div></div>
-  <div><div class="k">Plater</div><div class="v">${esc(vendor || '—')}</div></div>
-  <div><div class="k">Finish(es)</div><div class="v">${esc(finishSummary || '—')}</div></div>
-  <div><div class="k">Lines / Pieces</div><div class="v">${lines.length} / ${pcs}</div></div>
-  <div><div class="k">Prepared by</div><div class="v">${esc(operator || '—')}</div></div>
-</div>
-<table>
-<thead><tr><th>#</th><th>Item</th><th>Description</th><th>Finish</th><th>Returns As</th><th>Bin</th><th>WO#</th><th class="r">Qty</th></tr></thead>
-<tbody>${rows}</tbody>
-<tfoot><tr><td colspan="7" class="r">Total pieces</td><td class="r">${pcs}</td></tr></tfoot>
-</table>
-<div class="sign"><div>Shipped by / date</div><div>Received by plater / date</div></div>
-</body></html>`;
-    try {
-        const iframe = document.createElement('iframe');
-        iframe.setAttribute('aria-hidden', 'true');
-        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
-        document.body.appendChild(iframe);
-        const cw = iframe.contentWindow;
-        cw.document.open(); cw.document.write(doc); cw.document.close();
-        const cleanup = () => { try { if (iframe.parentNode) document.body.removeChild(iframe); } catch (e) { /* already gone */ } };
-        cw.onafterprint = cleanup;
-        setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { console.warn('Packing list print failed:', e); } }, 300);
-        setTimeout(cleanup, 60000);
-        return true;
-    } catch (e) { console.warn('printPackingList error:', e); return false; }
-};
 
 // Bin / ERP-id helpers (raw items carry binLocation top-level after mapping; library docs nest it under manufacturingSpecs).
 const binOf = (p) => (p?.binLocation || p?.manufacturingSpecs?.binLocation || 'UNASSIGNED');
@@ -945,11 +888,21 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             }
             const nsPoLabel = nsPoTran || nsPoId || '(pending sync)';
 
-            // 2) Detailed app-side PO for the plater (only reached after the NS PO succeeded).
+            // 2) Detailed app-side PO for the plater (only reached after the NS PO succeeded). Store a
+            // self-contained `packingList` snapshot + vendorCrmId + expectedReceiveDate so the vendor
+            // screen (External Co-Op) can list it, reprint the exact packing list, and track the ETA.
+            const packingList = {
+                shipId, brand: activeBrand, vendor: vendorName, poLabel: nsPoLabel,
+                dateStr: new Date().toLocaleDateString(), operator: operator?.name || 'Unknown',
+                lines: lines.map(l => ({ erpId: l.erpId || '', itemName: l.itemName || '', finishCode: l.finishCode || '', targetErpId: l.targetErpId || '', platingBin: l.platingBin || '', woNum: l.woNum || '', qty: parseInt(l.qty) || 0 })),
+                pcs, total: Number(total.toFixed(2)), finishSummary
+            };
             await addDoc(collection(db, "hq_purchase_orders"), {
-                poId: shipId, brand: activeBrand, vendor: vendorName, nsVendorId, status: "Sent to Plater", kind: "plating",
+                poId: shipId, brand: activeBrand, vendor: vendorName, nsVendorId, vendorCrmId: `VEND-${nsVendorId}`,
+                status: "Sent to Plater", kind: "plating", finishSummary, expectedReceiveDate: null,
                 nsPoId, nsPoTran, shipmentId: shipId,
                 items: lines.map(l => ({ itemId: l.erpId, description: l.itemName, finishCode: l.finishCode || '', targetErpId: l.targetErpId || '', quantity: parseInt(l.qty) || 0, rate: rateOf(l), woNum: l.woNum || '', platingBin: l.platingBin })),
+                packingList,
                 total: Number(total.toFixed(2)), pcs, createdBy: operator?.name || 'Unknown', createdAt: serverTimestamp()
             }).catch(err => console.warn("app PO log failed", err));
 
@@ -960,11 +913,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
             // 4) Pallet/shipment label (Zebra) + an 8.5×11 laser packing list for the plater.
             printShipmentLabel({ shipId, vendor: vendorName, pcs, lineCount: lines.length, total, finishes: finishSummary });
-            printPackingList({
-                shipId, brand: activeBrand, vendor: vendorName, poLabel: nsPoLabel,
-                dateStr: new Date().toLocaleDateString(), operator: operator?.name || 'Unknown',
-                lines, pcs, total, finishSummary
-            });
+            printPlatingPackingList(packingList);
 
             alert(`✅ Plating shipment ${shipId} created — NetSuite ${nsPoLabel} ("Weekly Plating Shipment" $${total.toFixed(2)}), ${lines.length} line${lines.length === 1 ? '' : 's'} / ${pcs} pcs shipped, label spooled.`);
             writeLog(`Plating shipment ${shipId}: NS PO ${nsPoLabel}, $${total.toFixed(2)}, ${lines.length} lines / ${pcs} pcs.`, 'wms');
