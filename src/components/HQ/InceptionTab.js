@@ -950,16 +950,23 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                     <image href={currentRevisionObj.url} x="0" y="0" width="1000" height="600" preserveAspectRatio="xMidYMid meet" style={{ pointerEvents: 'none' }} />
 
                                     {filteredOverlays.map(ov => (
-                                        <g key={ov.id} data-callout-g>
+                                        // No data-callout-g here: in DROP PIN mode we WANT clicks to fall through the
+                                        // swatch so a pin (with its leader line) can land on top of it.
+                                        <g key={ov.id}>
                                             <image href={ov.url} x={ov.x} y={ov.y} width={ov.w} height={ov.h} preserveAspectRatio="none"
-                                                onPointerDown={(e) => startOverlayDrag(e, ov, 'move')} style={{ cursor: 'move', touchAction: 'none' }} />
+                                                onPointerDown={isAddingCallout ? undefined : (e) => startOverlayDrag(e, ov, 'move')}
+                                                style={{ cursor: isAddingCallout ? 'crosshair' : 'move', touchAction: 'none', pointerEvents: isAddingCallout ? 'none' : 'auto' }} />
                                             <rect x={ov.x} y={ov.y} width={ov.w} height={ov.h} fill="none" stroke="var(--brass)" strokeWidth="1" strokeDasharray="5 3" style={{ pointerEvents: 'none' }} />
-                                            <rect x={ov.x + ov.w - 8} y={ov.y + ov.h - 8} width="16" height="16" fill="var(--brass)" stroke="#fff" strokeWidth="1.5"
-                                                onPointerDown={(e) => startOverlayDrag(e, ov, 'resize')} style={{ cursor: 'nwse-resize', touchAction: 'none' }} />
-                                            <g onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeOverlay(ov.id); }} style={{ cursor: 'pointer' }}>
-                                                <circle cx={ov.x + ov.w} cy={ov.y} r="10" fill="#d9534f" stroke="#fff" strokeWidth="1.5" />
-                                                <text x={ov.x + ov.w} y={ov.y + 4} textAnchor="middle" fontSize="13" fontWeight="bold" fill="#fff" style={{ pointerEvents: 'none', fontFamily: 'var(--mono)' }}>×</text>
-                                            </g>
+                                            {!isAddingCallout && (
+                                                <>
+                                                    <rect x={ov.x + ov.w - 8} y={ov.y + ov.h - 8} width="16" height="16" fill="var(--brass)" stroke="#fff" strokeWidth="1.5"
+                                                        onPointerDown={(e) => startOverlayDrag(e, ov, 'resize')} style={{ cursor: 'nwse-resize', touchAction: 'none' }} />
+                                                    <g onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); removeOverlay(ov.id); }} style={{ cursor: 'pointer' }}>
+                                                        <circle cx={ov.x + ov.w} cy={ov.y} r="10" fill="#d9534f" stroke="#fff" strokeWidth="1.5" />
+                                                        <text x={ov.x + ov.w} y={ov.y + 4} textAnchor="middle" fontSize="13" fontWeight="bold" fill="#fff" style={{ pointerEvents: 'none', fontFamily: 'var(--mono)' }}>×</text>
+                                                    </g>
+                                                </>
+                                            )}
                                         </g>
                                     ))}
 
