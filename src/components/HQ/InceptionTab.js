@@ -262,7 +262,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
             }
           );
         });
-    } else if (imageMode === "LIBRARY" && selectedExistingImage && !activeAssembly) {
+    } else if (imageMode === "LIBRARY" && selectedExistingImage) {
         const libImg = imageLibrary.find(img => img.url === selectedExistingImage);
         if (libImg && libImg.is3D) {
             finalCad = selectedExistingImage;
@@ -288,6 +288,11 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
     if (finalCad) {
         payload.manufacturingSpecs = activeAssembly?.manufacturingSpecs || {};
         payload.manufacturingSpecs.cadUrl = finalCad;
+    }
+
+    // If this save added a new model/image revision, make it the current working revision (badge + default).
+    if (updatedRevisions.length > (activeAssembly?.revisions || []).length) {
+        payload.finalRevisionId = updatedRevisions[updatedRevisions.length - 1].id;
     }
 
     if (!activeAssembly) payload.createdAt = serverTimestamp();
@@ -386,6 +391,22 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
             } catch (err) { console.error(err); alert("Upload save failed: " + (err.message || err)); }
         }
     );
+  };
+
+  // Re-promote any past revision to the WORKING model — lets you roll back to an earlier .glb (its url is
+  // still in revisions[]). Sets cadUrl (3D) / finalImageUrl (2D) + finalRevisionId on the same doc.
+  const promoteRevisionToWorking = async (rev) => {
+      if (!rev || !activeAssembly) return;
+      const is3DRev = rev.is3D || is3DFile(rev.url);
+      if (!window.confirm(`Set "${rev.name}" as the CURRENT working ${is3DRev ? 'model' : 'image'} for ${activeAssembly.itemName}?\n\nVisual Assembly & BOM will use it; existing BOM pins and the CPQ flow stay linked.`)) return;
+      const payload = { finalRevisionId: rev.id };
+      if (is3DRev) payload.manufacturingSpecs = { ...(activeAssembly.manufacturingSpecs || {}), cadUrl: rev.url };
+      else payload.finalImageUrl = rev.url;
+      try {
+          await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), payload);
+          setActiveAssembly(prev => ({ ...prev, ...payload }));
+          alert(`✅ "${rev.name}" is now the working ${is3DRev ? 'model' : 'image'}.`);
+      } catch (e) { console.error(e); alert("Failed to set working model: " + (e.message || e)); }
   };
 
   const toggleApproval = async (role) => {
@@ -699,10 +720,10 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                 <textarea value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})} rows={3} style={{ ...fieldStyle, resize: 'vertical' }} />
             </div>
             
-            {!activeAssembly && (
+            {(
                 <div style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                      <label style={{ ...labelStyle, marginBottom: 0 }}>Initial Sketch / 3D Model (.GLB)</label>
+                      <label style={{ ...labelStyle, marginBottom: 0 }}>{activeAssembly ? 'Sketch / 3D Model (.GLB) — upload replaces the working model' : 'Initial Sketch / 3D Model (.GLB)'}</label>
                       <div style={{ display: 'flex', gap: '8px' }}>
                           <button onClick={() => setImageMode("UPLOAD")} style={{ padding: '8px 12px', background: imageMode === "UPLOAD" ? 'var(--ink)' : '#fff', color: imageMode === "UPLOAD" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', letterSpacing: '.1em' }}>Upload New</button>
                           <button onClick={() => setImageMode("LIBRARY")} style={{ padding: '8px 12px', background: imageMode === "LIBRARY" ? 'var(--ink)' : '#fff', color: imageMode === "LIBRARY" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', letterSpacing: '.1em' }}>Reuse Existing</button>
@@ -868,6 +889,11 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                                 <select value={activeRevisionId || ''} onChange={(e) => setActiveRevisionId(e.target.value)} style={{ padding: '6px', fontSize: '0.85rem', fontFamily: 'var(--sans)', border: '1px solid var(--line)', outline: 'none', background: '#fff' }}>
                                     {activeRevisions.map(rev => ( <option key={rev.id} value={rev.id}>{rev.id === activeAssembly.finalRevisionId ? '★ ' : ''}{rev.name}</option> ))}
                                 </select>
+                            )}
+                            {currentRevisionObj && currentRevisionObj.id !== 'INITIAL' && (
+                                currentRevisionObj.id === activeAssembly.finalRevisionId
+                                    ? <span title="This revision is the current working model used by Visual Assembly & BOM" style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#fff', background: 'var(--brass)', padding: '4px 8px' }}>★ Working model</span>
+                                    : <button onClick={() => promoteRevisionToWorking(currentRevisionObj)} title="Roll back to this revision — make it the model Visual Assembly & BOM use" style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', background: '#fff', border: '1px solid var(--brass)', padding: '4px 8px', cursor: 'pointer' }}>Set as working model</button>
                             )}
                         </div>
 
