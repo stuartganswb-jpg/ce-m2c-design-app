@@ -1280,12 +1280,17 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         ? hqParts.filter(p => p.id !== convertBase?.id && (erpOf(p).includes(convertTargetSearch.trim().toUpperCase()) || (p.itemName || '').toLowerCase().includes(convertTargetSearch.trim().toLowerCase()))).slice(0, 8)
         : [];
 
-    // BIN TRANSFER derived: readiness gates
+    // BIN TRANSFER derived: readiness gates. Validate against the LIVE per-bin stock (nsStock[...].bins),
+    // not the item's stored home bin — that home bin can be stale (no on-hand there), and NetSuite rejects
+    // a transfer out of a bin the item doesn't actually occupy ("Invalid binnumber reference key").
     const xferQtyNum = parseInt(transferQty) || 0;
     const xferFrom = (transferSrcScan || '').trim();
     const xferTo = (transferDestScan || '').trim();
-    const xferSrcKnown = !!transferBase && binOf(transferBase) !== 'UNASSIGNED' && xferFrom.toUpperCase() === binOf(transferBase).toUpperCase();
-    const xferReady = !!transferBase && !!transferBase.netSuiteInternalId && xferQtyNum > 0 && xferQtyNum <= transferBase.onHand && xferFrom !== '' && xferTo !== '' && xferFrom.toUpperCase() !== xferTo.toUpperCase();
+    const xferBins = transferBase ? (nsStock[transferBase.erpId]?.bins || []).filter(b => b.bin) : [];
+    const xferSrcBin = xferBins.find(b => b.bin.toUpperCase() === xferFrom.toUpperCase());
+    const xferSrcQty = xferSrcBin ? xferSrcBin.qty : 0;     // on-hand of THIS item in the scanned source bin
+    const xferSrcKnown = !!transferBase && xferFrom !== '' && !!xferSrcBin;
+    const xferReady = !!transferBase && !!transferBase.netSuiteInternalId && xferQtyNum > 0 && xferQtyNum <= xferSrcQty && xferFrom !== '' && xferTo !== '' && xferFrom.toUpperCase() !== xferTo.toUpperCase();
 
     // PLATING WIP derived: readiness gates
     const platQtyNum = parseInt(platingQty) || 0;
@@ -1808,19 +1813,19 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: theme.paper, marginBottom: '24px' }}>
                                         <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{transferBase.erpId}</div>
                                         <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{transferBase.itemName}</div>
-                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '6px' }}>home bin {binOf(transferBase)} · {transferBase.onHand} on hand (location)</div>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '6px' }}>{xferBins.length ? `Stock by bin: ${xferBins.slice().sort((a, b) => b.qty - a.qty).map(b => `${b.bin} (${b.qty})`).join('  ·  ')}` : `${transferBase.onHand} on hand (location)`}</div>
                                     </div>
 
                                     {/* FROM / QTY / TO */}
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan source bin</label>
-                                            <input value={transferSrcScan} onChange={e => setTransferSrcScan(e.target.value)} placeholder={binOf(transferBase)} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${xferSrcKnown ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
-                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: xferSrcKnown ? '#7dbb81' : theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>{xferSrcKnown ? '✓ home bin' : `home: ${binOf(transferBase)}`}</div>
+                                            <input value={transferSrcScan} onChange={e => setTransferSrcScan(e.target.value)} placeholder={xferBins.slice().sort((a, b) => b.qty - a.qty)[0]?.bin || binOf(transferBase)} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${xferSrcKnown ? '#7dbb81' : (xferFrom ? '#d9534f' : theme.line)}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: xferSrcKnown ? '#7dbb81' : (xferFrom ? '#d9534f' : theme.inkSoft), marginTop: '4px', textAlign: 'center' }}>{xferSrcKnown ? `✓ ${xferSrcQty} in bin` : (xferFrom ? '⚠ item not in this bin' : 'pick a bin with stock')}</div>
                                         </div>
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Quantity</label>
-                                            <input type="number" min="1" max={transferBase.onHand} value={transferQty} onChange={e => setTransferQty(e.target.value)} placeholder="0" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `2px solid ${xferQtyNum > 0 && xferQtyNum <= transferBase.onHand ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <input type="number" min="1" max={xferSrcQty || undefined} value={transferQty} onChange={e => setTransferQty(e.target.value)} placeholder="0" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `2px solid ${xferQtyNum > 0 && xferQtyNum <= xferSrcQty ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
                                         </div>
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan / enter dest bin</label>
@@ -1887,7 +1892,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{item.binLocation}</td>
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
-                                                <button onClick={() => { setTransferBase(item); setTransferSrcScan(""); setTransferQty(""); setTransferDestScan(""); setTransferMemo(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Transfer →</button>
+                                                <button onClick={() => { const top = (nsStock[item.erpId]?.bins || []).filter(b => b.bin).slice().sort((a, b) => b.qty - a.qty)[0]; setTransferBase(item); setTransferSrcScan(top ? top.bin : ""); setTransferQty(""); setTransferDestScan(""); setTransferMemo(""); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Transfer →</button>
                                             </td>
                                         </tr>
                                     ))}
