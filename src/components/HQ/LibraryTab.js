@@ -34,7 +34,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [customSchema, setCustomSchema] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]); // hq_outsource_finishes — detect/route outsourced finished assemblies in the WO tool
-  const [collectionsData, setCollectionsData] = useState([]); 
+  const [collectionsData, setCollectionsData] = useState([]);
+  const [showCollMgr, setShowCollMgr] = useState(false);
   const [liveVendors, setLiveVendors] = useState([]); 
   const [liveCustomers, setLiveCustomers] = useState([]); 
   
@@ -699,8 +700,32 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         </div>
       </div>
 
+      {isAdmin && (
+        <div style={{ marginBottom: '20px' }}>
+          <button onClick={() => setShowCollMgr(v => !v)} style={{ background: 'transparent', border: '1px solid var(--line)', padding: '8px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', color: 'var(--ink-soft)' }}>
+            {showCollMgr ? '▾' : '▸'} Manage Collection Brands ({collectionsData.length})
+          </button>
+          {showCollMgr && (
+            <div style={{ marginTop: '12px', border: '1px solid var(--line)', background: 'var(--paper-2)', padding: '20px', borderRadius: '2px' }}>
+              <p style={{ marginTop: 0, fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Assign each collection to a brand — collections only appear under their own brand across the app. New collections are auto-branded to wherever they're created.</p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '10px' }}>
+                {[...collectionsData].sort((a, b) => String(a.name).localeCompare(String(b.name))).map(c => (
+                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', background: '#fff', border: '1px solid var(--line)', padding: '10px 14px' }}>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500, color: 'var(--ink)' }}>{c.name}</span>
+                    <select value={c.brandId || ''} onChange={async (e) => { try { await setDoc(doc(db, 'hq_collections', c.id), { brandId: e.target.value }, { merge: true }); } catch (err) { console.error(err); alert('Update failed: ' + (err.message || err)); } }} style={{ padding: '6px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                      <option value="">— Unassigned —</option>
+                      {AVAILABLE_BRANDS.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
-        
+
         <div style={{ flex: activePart ? 1 : 1, display: 'grid', gridTemplateColumns: activePart ? 'repeat(auto-fill, minmax(200px, 1fr))' : 'repeat(auto-fill, minmax(250px, 1fr))', gap: '16px', alignContent: 'start' }}>
           {filteredInventory.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', padding: '24px', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>No {partClassFilter === 'ALL' ? 'records' : partClassFilter} found in this category.</div>}
           {filteredInventory.map(part => {

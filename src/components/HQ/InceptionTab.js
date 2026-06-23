@@ -566,11 +566,10 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const isCurrent3D = currentRevisionObj?.is3D || is3DFile(currentRevisionObj?.url);
   const filteredCallouts = (activeAssembly?.spatialCallouts || []).filter(c => c.revisionId === activeRevisionId || (!c.revisionId && activeRevisionId === 'INITIAL'));
   const filteredOverlays = (activeAssembly?.spatialOverlays || []).filter(o => o.revisionId === activeRevisionId || (!o.revisionId && activeRevisionId === 'INITIAL'));
-  // Collection picker mirrors the Master Library (LibraryTab): ALL registered hq_collections (no brand
-  // filter — some are registered under a blank/other brand) UNION every collection already in use on
-  // this brand's items, plus the current item's own value so editing never loses its selection.
+  // Collection picker, filtered to THIS brand: collections registered to the active brand, plus any
+  // already in use on this brand's items, plus the current item's own value so editing keeps it.
   const availableCollections = [...new Set([
-      ...collectionsData.map(c => c.name),
+      ...collectionsData.filter(c => c.brandId === activeBrand).map(c => c.name),
       ...assemblies.map(a => a.collection),
       activeAssembly?.collection,
   ].filter(n => n && n !== 'N/A'))].sort((a, b) => String(a).localeCompare(String(b)));
