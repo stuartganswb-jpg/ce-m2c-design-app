@@ -38,6 +38,12 @@ const BRANDS = [
   { id: 'leyla', name: 'Leyla Gans LLC', focus: 'Fine Jewelry', color: '#C5A880' } 
 ];
 
+// Display-only label overrides. Keys stay as the canonical tab id (used in role permissions and
+// activeTab logic) — only the visible button text changes.
+const TAB_LABELS = {
+  '1. Inception & Validation': '1. Product & Project Inception',
+};
+
 const TABS = [
   '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update',
   '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
@@ -296,7 +302,7 @@ function HQ() {
               onMouseOver={(e) => { if (!isActive) e.currentTarget.style.opacity = 1; }}
               onMouseOut={(e) => { if (!isActive) e.currentTarget.style.opacity = 0.7; }}
             >
-              {tab}
+              {TAB_LABELS[tab] || tab}
             </button>
           );
         })}
