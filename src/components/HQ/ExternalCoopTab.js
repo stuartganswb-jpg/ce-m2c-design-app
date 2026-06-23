@@ -4,6 +4,7 @@ import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, deleteDoc
 import { ref, deleteObject } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
+import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 
 const printStyles = `
   @media print {
@@ -40,6 +41,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   });
 
   const [newAddressInput, setNewAddressInput] = useState({ label: '', street: '' });
+  const [newContactInput, setNewContactInput] = useState({ name: '', email: '', department: '' });
   
   const [globalLists, setGlobalLists] = useState({ customers: [], vendors: [], paymentTerms: [], salesReps: [] });
   const [crmDiscounts, setCrmDiscounts] = useState([]);
@@ -188,8 +190,44 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       if (!activeCrmRecord) return;
       const updated = { ...activeCrmRecord, [field]: value };
       setActiveCrmRecord(updated);
-      try { await updateDoc(doc(db, "crm_records", activeCrmRecord.id), { [field]: value }); } 
+      try { await updateDoc(doc(db, "crm_records", activeCrmRecord.id), { [field]: value }); }
       catch (e) { console.error(e); }
+  };
+
+  const addCrmContact = async () => {
+      if (!activeCrmRecord) return;
+      const c = newContactInput;
+      if (!c.name.trim() && !c.email.trim()) return alert("Enter at least a contact name or email.");
+      const contacts = [...(activeCrmRecord.contacts || []), { name: c.name.trim(), email: c.email.trim(), department: c.department.trim() }];
+      setActiveCrmRecord(prev => ({ ...prev, contacts }));
+      setNewContactInput({ name: '', email: '', department: '' });
+      try { await updateDoc(doc(db, "crm_records", activeCrmRecord.id), { contacts }); } catch (e) { console.error(e); }
+  };
+  const removeCrmContact = async (idx) => {
+      if (!activeCrmRecord) return;
+      const contacts = (activeCrmRecord.contacts || []).filter((_, i) => i !== idx);
+      setActiveCrmRecord(prev => ({ ...prev, contacts }));
+      try { await updateDoc(doc(db, "crm_records", activeCrmRecord.id), { contacts }); } catch (e) { console.error(e); }
+  };
+
+  // Generate the order PDF (downloads), then open a pre-addressed email to the vendor's contacts so the
+  // operator attaches it. No server-side mail exists, so sending is via the operator's mail client.
+  const emailPlatingOrder = async (po) => {
+      const pl = po.packingList || {
+          shipId: po.poId || po.shipmentId, brand: po.brand, vendor: po.vendor, poLabel: po.nsPoTran || po.nsPoId || '-',
+          dateStr: po.createdAt?.seconds ? new Date(po.createdAt.seconds * 1000).toLocaleDateString() : '',
+          operator: po.createdBy || '', finishSummary: po.finishSummary || '',
+          lines: (po.items || []).map(it => ({ erpId: it.itemId, itemName: it.description, finishCode: it.finishCode, targetErpId: it.targetErpId, platingBin: it.platingBin, woNum: it.woNum, qty: it.quantity })),
+          pcs: po.pcs, total: po.total
+      };
+      let fname;
+      try { fname = await downloadPlatingOrderPdf({ ...pl, expectedReceiveDate: po.expectedReceiveDate }); }
+      catch (e) { console.error(e); return alert("Could not build the order PDF: " + (e.message || e)); }
+      const emails = [...new Set([activeCrmRecord?.email, ...(activeCrmRecord?.contacts || []).map(c => c.email)].filter(Boolean))];
+      const subject = `Plating Order ${pl.poLabel || pl.shipId}${pl.brand ? ` — ${String(pl.brand).toUpperCase()}` : ''}`;
+      const body = `Hello,\r\n\r\nPlease find attached our plating order ${pl.shipId} (${(pl.lines || []).length} line(s) / ${pl.pcs || 0} pcs).\r\n\r\nFinish(es): ${pl.finishSummary || '-'}\r\nNetSuite PO: ${pl.poLabel || '-'}\r\n\r\nThank you.`;
+      alert(`📄 Order PDF "${fname}" downloaded. Your email is opening to ${emails.length ? emails.join(', ') : 'the vendor'} — attach that PDF before sending.`);
+      window.location.href = `mailto:${emails.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   };
 
   const getFilteredCrmRecords = (isCust) => {
@@ -684,6 +722,30 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                               </div>
 
                                               <div style={{ borderTop: '1px solid var(--line)', paddingTop: '20px' }}>
+                                                  <h4 style={{ margin: '0 0 16px', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Additional Contacts</h4>
+                                                  {(activeCrmRecord.contacts || []).length === 0 ? (
+                                                      <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No additional contacts yet — add accounting, production, etc. below.</span>
+                                                  ) : (
+                                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
+                                                          {(activeCrmRecord.contacts || []).map((c, idx) => (
+                                                              <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr auto', gap: '10px', alignItems: 'center', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '10px 12px' }}>
+                                                                  <span style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--ink)' }}>{c.name || '—'}</span>
+                                                                  <a href={`mailto:${c.email}`} style={{ fontSize: '0.85rem', color: 'var(--brass)', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.email || '—'}</a>
+                                                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)' }}>{c.department || '—'}</span>
+                                                                  <button onClick={() => removeCrmContact(idx)} title="Remove contact" style={{ background: 'transparent', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>×</button>
+                                                              </div>
+                                                          ))}
+                                                      </div>
+                                                  )}
+                                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr auto', gap: '10px', alignItems: 'center' }}>
+                                                      <input value={newContactInput.name} onChange={e => setNewContactInput({ ...newContactInput, name: e.target.value })} placeholder="Contact name" style={{ padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                                                      <input value={newContactInput.email} onChange={e => setNewContactInput({ ...newContactInput, email: e.target.value })} placeholder="Email" onKeyDown={e => { if (e.key === 'Enter') addCrmContact(); }} style={{ padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                                                      <input value={newContactInput.department} onChange={e => setNewContactInput({ ...newContactInput, department: e.target.value })} placeholder="Department" onKeyDown={e => { if (e.key === 'Enter') addCrmContact(); }} style={{ padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                                                      <button onClick={addCrmContact} style={{ padding: '9px 18px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Add</button>
+                                                  </div>
+                                              </div>
+
+                                              <div style={{ borderTop: '1px solid var(--line)', paddingTop: '20px' }}>
                                                   <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Billing Address</label>
                                                   <textarea value={activeCrmRecord.billingAddress || ''} onChange={e => handleUpdateActiveCrmField('billingAddress', e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', resize: 'vertical', minHeight: '80px', outline: 'none', fontFamily: 'var(--sans)' }} />
                                               </div>
@@ -770,7 +832,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                               </div>
                                                               <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
                                                                   <button onClick={() => setActivePlatingPO(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>View Details</button>
-                                                                  <button onClick={() => reprintPlatingPackingList(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Reprint Packing List</button>
+                                                                  <button onClick={() => reprintPlatingPackingList(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Reprint</button>
+                                                                  <button onClick={() => emailPlatingOrder(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>✉ Email Order (PDF)</button>
                                                               </div>
                                                           </div>
                                                           );
@@ -972,7 +1035,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                       </tbody>
                   </table>
                   <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
-                      <button onClick={() => reprintPlatingPackingList(po)} style={{ flex: 1, padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>Reprint Packing List</button>
+                      <button onClick={() => reprintPlatingPackingList(po)} style={{ flex: 1, padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Reprint Packing List</button>
+                      <button onClick={() => emailPlatingOrder(po)} style={{ flex: 1, padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>✉ Email Order (PDF)</button>
                       <button onClick={() => setActivePlatingPO(null)} style={{ padding: '12px 24px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Close</button>
                   </div>
               </div>
