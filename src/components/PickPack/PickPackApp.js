@@ -446,17 +446,39 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             };
         }).filter(Boolean);
 
-        // Group bins of the same item into ONE adjustment line (canonical NetSuite shape: a single line per
-        // item carrying a per-bin assignment for each counted bin) — avoids duplicate item lines in one push.
+        // Group bins of the same item, then split each item's bin moves. A single inventory-adjustment line
+        // can only push ONE direction (NetSuite rejects a mix of +/- bins with "Invalid number (must be
+        // positive)" — that's a transfer, not an adjustment). So for each item we pair its down-bins with its
+        // up-bins into BIN TRANSFERS, and only the leftover single-direction remainder becomes an ADJUSTMENT.
         const byItem = {};
         rowDeltas.forEach(d => {
-            if (!byItem[d.internalId]) byItem[d.internalId] = { internalId: d.internalId, docId: d.docId, bins: [], total: 0 };
+            if (!byItem[d.internalId]) byItem[d.internalId] = { internalId: d.internalId, docId: d.docId, bins: [] };
             byItem[d.internalId].bins.push({ binNumber: d.binNumber, qty: d.adjustQtyBy });
-            byItem[d.internalId].total += d.adjustQtyBy;
         });
-        const adjustments = Object.values(byItem);
 
-        if (adjustments.length === 0) {
+        const transferItems = []; // { internalId, moves: [{from, to, qty}] }  → bin transfers (crossing moves)
+        const adjustItems = [];   // { internalId, bins: [{binNumber, qty}], total } → residual real variance
+        Object.values(byItem).forEach(it => {
+            const decs = it.bins.filter(b => b.qty < 0).map(b => ({ bin: b.binNumber, rem: -b.qty }));
+            const incs = it.bins.filter(b => b.qty > 0).map(b => ({ bin: b.binNumber, rem: b.qty }));
+            const moves = [];
+            let di = 0, ii = 0;
+            while (di < decs.length && ii < incs.length) {
+                const move = Math.min(decs[di].rem, incs[ii].rem);
+                if (move > 0) moves.push({ from: decs[di].bin, to: incs[ii].bin, qty: move });
+                decs[di].rem -= move; incs[ii].rem -= move;
+                if (decs[di].rem === 0) di++;
+                if (incs[ii].rem === 0) ii++;
+            }
+            if (moves.length) transferItems.push({ internalId: it.internalId, moves });
+            const adjBins = [
+                ...decs.filter(x => x.rem > 0).map(x => ({ binNumber: x.bin, qty: -x.rem })),
+                ...incs.filter(x => x.rem > 0).map(x => ({ binNumber: x.bin, qty: x.rem }))
+            ];
+            if (adjBins.length) adjustItems.push({ internalId: it.internalId, bins: adjBins, total: adjBins.reduce((s, b) => s + b.qty, 0) });
+        });
+
+        if (transferItems.length === 0 && adjustItems.length === 0) {
             return alert(skipped.length
                 ? `No pushable adjustments — ${skipped.length} counted item(s) have no NetSuite Internal ID. Map them first (HQ → ERP Mapping Audit / Mass Update):\n\n${skipped.slice(0, 12).join('\n')}${skipped.length > 12 ? `\n…+${skipped.length - 12} more` : ''}`
                 : "No variances found to adjust.");
@@ -465,56 +487,57 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
 
+        const postNs = async (url, body) => {
+            const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUrl: url, method: 'POST', payload: body }) });
+            const rb = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(typeof rb === 'object' ? JSON.stringify(rb) : String(rb));
+            return rb;
+        };
+
         try {
             setIsSyncing(true);
 
-            // Create any newly-assigned bins in NetSuite (idempotent) and write the bin back onto the item
-            // so the CONVERT / plating flows pick it up. Done before the adjustment so the bin resolves.
-            const newBins = [...new Set(rowDeltas.filter(a => a.binChanged).map(a => a.binNumber))];
-            for (const bin of newBins) { await ensureBinExists(bin, nsConfig.location); }
+            // Ensure every bin we reference exists (idempotent), and write any new home-bin back onto the item.
+            const allBins = new Set();
+            transferItems.forEach(t => t.moves.forEach(m => { allBins.add(m.from); allBins.add(m.to); }));
+            adjustItems.forEach(a => a.bins.forEach(b => allBins.add(b.binNumber)));
+            rowDeltas.filter(a => a.binChanged).forEach(a => allBins.add(a.binNumber));
+            for (const bin of allBins) { if (bin) await ensureBinExists(bin, nsConfig.location); }
             await Promise.all(rowDeltas.filter(a => a.binChanged).map(a =>
                 updateDoc(doc(db, "Approved_Designs", a.docId), { "manufacturingSpecs.binLocation": a.binNumber }).catch(() => {})
             ));
 
-            // Stamp who ran the count (app operator) + their note into the NetSuite memo field.
             const memoText = `Cycle count by ${operator?.name || 'Unknown'}${countMemo.trim() ? ` — ${countMemo.trim()}` : ''}`;
-            const payload = {
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
-                method: 'POST',
-                payload: {
-                    account: { id: "254" }, // NetSuite Inventory Adjustment Account internal id
-                    subsidiary: { id: nsConfig.subsidiary },
-                    memo: memoText,
-                    // REST sublist for adjustment lines is `inventory` (NOT `inventoryList` — that's the
-                    // legacy SOAP name; REST ignores it and reports "must enter at least one line item").
-                    inventory: {
-                        items: adjustments.map(adj => ({
-                            item: { id: adj.internalId },
-                            location: { id: nsConfig.location }, // location is a LINE field on REST adjustments
-                            adjustQtyBy: adj.total,
-                            // Bin-tracked item: the detail qty and the per-bin assignments must reconcile to the
-                            // line's signed adjustQtyBy. One assignment per counted bin (refName = bin number).
-                            inventoryDetail: {
-                                quantity: adj.total,
-                                inventoryAssignment: {
-                                    items: adj.bins.map(b => ({ binNumber: { refName: b.binNumber }, quantity: b.qty }))
-                                }
-                            }
-                        }))
-                    }
-                }
-            };
+            const posted = [];
 
-            const response = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const result = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
+            // 1) Bin transfers for the crossing moves (qty positive; direction is from→to).
+            if (transferItems.length) {
+                await postNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/bintransfer`, {
+                    location: { id: nsConfig.location }, memo: memoText,
+                    inventory: { items: transferItems.map(t => ({
+                        item: { id: t.internalId },
+                        inventoryDetail: { quantity: t.moves.reduce((s, m) => s + m.qty, 0), inventoryAssignment: { items: t.moves.map(m => ({ binNumber: { refName: m.from }, toBinNumber: { refName: m.to }, quantity: m.qty })) } }
+                    })) }
+                });
+                posted.push(`${transferItems.reduce((s, t) => s + t.moves.length, 0)} bin transfer(s)`);
+            }
 
-            alert(`✅ Inventory adjusted in NetSuite (${adjustments.length} line${adjustments.length === 1 ? '' : 's'}).${skipped.length ? `\n\n⚠️ Skipped ${skipped.length} counted item(s) with no NetSuite Internal ID.` : ''}`);
-            writeLog(`Pushed Inventory Adjustment for ${adjustments.length} lines.${countMemo.trim() ? ` Memo: ${countMemo.trim()}` : ''}`, 'wms');
+            // 2) Inventory adjustment for the residual single-direction variance.
+            if (adjustItems.length) {
+                await postNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`, {
+                    account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: memoText,
+                    inventory: { items: adjustItems.map(adj => ({
+                        item: { id: adj.internalId },
+                        location: { id: nsConfig.location },
+                        adjustQtyBy: adj.total,
+                        inventoryDetail: { quantity: adj.total, inventoryAssignment: { items: adj.bins.map(b => ({ binNumber: { refName: b.binNumber }, quantity: b.qty })) } }
+                    })) }
+                });
+                posted.push(`${adjustItems.length} adjustment line(s)`);
+            }
+
+            alert(`✅ NetSuite updated: ${posted.join(' + ')}.${skipped.length ? `\n\n⚠️ Skipped ${skipped.length} counted item(s) with no NetSuite Internal ID.` : ''}`);
+            writeLog(`Count push: ${posted.join(' + ')}.${countMemo.trim() ? ` Memo: ${countMemo.trim()}` : ''}`, 'wms');
             setPhysicalCounts({});
             setBinEdits({});
             setCountMemo("");
