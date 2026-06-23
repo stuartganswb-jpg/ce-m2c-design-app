@@ -512,12 +512,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
             // 1) Bin transfers for the crossing moves (qty positive; direction is from→to).
             if (transferItems.length) {
-                await postNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/bintransfer`, {
-                    location: { id: nsConfig.location }, memo: memoText,
-                    inventory: { items: transferItems.map(t => ({
-                        item: { id: t.internalId },
-                        inventoryDetail: { quantity: t.moves.reduce((s, m) => s + m.qty, 0), inventoryAssignment: { items: t.moves.map(m => ({ binNumber: { refName: m.from }, toBinNumber: { refName: m.to }, quantity: m.qty })) } }
-                    })) }
+                await postNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/binTransfer`, {
+                    subsidiary: { id: nsConfig.subsidiary }, location: { id: nsConfig.location }, memo: memoText,
+                    inventory: { items: transferItems.map(t => {
+                        const lineQty = t.moves.reduce((s, m) => s + m.qty, 0);
+                        return ({
+                            item: { id: t.internalId },
+                            quantity: lineQty,   // line-level qty is required before NetSuite accepts the inventoryDetail
+                            inventoryDetail: { quantity: lineQty, inventoryAssignment: { items: t.moves.map(m => ({ binNumber: { refName: m.from }, toBinNumber: { refName: m.to }, quantity: m.qty })) } }
+                        });
+                    }) }
                 });
                 posted.push(`${transferItems.reduce((s, t) => s + t.moves.length, 0)} bin transfer(s)`);
             }
@@ -637,14 +641,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // Make sure the destination bin exists (idempotent — an existing bin is fine).
             await ensureBinExists(toBin, nsConfig.location);
             const payload = {
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/bintransfer`,
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/binTransfer`,
                 method: 'POST',
                 payload: {
+                    subsidiary: { id: nsConfig.subsidiary },
                     location: { id: nsConfig.location },
                     memo: memoText,
                     inventory: {
                         items: [{
                             item: { id: item.netSuiteInternalId },
+                            quantity: qty,   // line-level qty is required before NetSuite accepts the inventoryDetail
                             // move qty from the source bin to the destination bin (same item, same location)
                             inventoryDetail: {
                                 quantity: qty,
