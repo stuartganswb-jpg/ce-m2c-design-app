@@ -14,7 +14,7 @@ const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
 const DEFAULT_TOOL_LIFE_HRS = { 'drill': 8, 'spot drill': 12, 'center drill': 12, 'reamer': 10, 'tap right hand': 6, 'tap left hand': 6, 'flat end mill': 10, 'bull nose end mill': 10, 'ball end mill': 10, 'slot mill': 8, 'tapered mill': 8, 'dovetail mill': 8, 'chamfer mill': 15, 'face mill': 20, 'turning general': 8, 'turning threading': 6, 'turning boring': 8, 'probe': 0, 'holder': 0 };
 const defaultToolLife = (type) => { const v = DEFAULT_TOOL_LIFE_HRS[String(type || '').toLowerCase()]; return v === undefined ? 8 : v; };
 
-const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, programsMap, machines, categories, setupCodes, tooling, materials, writeLog, handleDelete, safeUserRole, printMap = new Map() }) => {
+const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, programsMap, machines, categories, setupCodes, tooling, materials, writeLog, handleDelete, safeUserRole, printMap = new Map(), nukeTestJobs }) => {
     
     const [routingForm, setRoutingForm] = useState({ id: null, partId: '', isRawMat: false, matProfile: '', matLength: '', ops: [] });
     const [progForm, setProgForm] = useState({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} });
@@ -787,6 +787,20 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                         Force Sync to HQ
                     </button>
                 </div>
+
+                {['admin'].includes(safeUserRole) && nukeTestJobs && (
+                    <div style={{ background: '#fdf2f2', border: '1px solid #d9534f', padding: '30px', borderRadius: '2px', marginBottom: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div>
+                            <h3 style={{ color: '#d9534f', margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Danger Zone — Clear Test Jobs</h3>
+                            <p style={{ fontSize: '0.95rem', color: 'var(--ink-soft)', margin: 0, maxWidth: '700px', lineHeight: '1.5' }}>
+                                Permanently delete all job data across the shop tabs — floor schedule, milling/tracker queue, custom orders, QC failures, material-usage history, and handyman tickets. Keeps routings, programs, machines, tools and materials. Use once to wipe test data and start fresh.
+                            </p>
+                        </div>
+                        <button onClick={nukeTestJobs} style={{ padding: '16px 32px', background: '#d9534f', color: '#fff', fontWeight: 500, fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            Nuke Test Jobs
+                        </button>
+                    </div>
+                )}
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>

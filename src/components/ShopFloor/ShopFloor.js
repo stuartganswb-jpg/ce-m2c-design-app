@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth, functions, storage } from '../../firebase';
-import { collection, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, query, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, increment } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, increment } from "firebase/firestore";
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
@@ -137,6 +137,31 @@ const ShopFloor = () => {
     // A tool's pool = its machine's category (interchangeable machines share one tool inventory).
     const poolOf = (machineName) => machineCategoryMap[machineName] || machineName;
     const handleDelete = async (col, id) => { if(window.confirm("Delete record?")) { await deleteDoc(doc(shopDb.collection(col), id)); writeLog(`Deleted from ${col}`, 'admin'); } };
+
+    // Full wipe of every doc in a shop_ collection (chunked under the 500-op batch limit).
+    const clearShopCollection = async (name) => {
+        const snap = await getDocs(shopDb.collection(name));
+        const docs = snap.docs;
+        for (let i = 0; i < docs.length; i += 450) {
+            const batch = writeBatch(db);
+            docs.slice(i, i + 450).forEach(d => batch.delete(d.ref));
+            await batch.commit();
+        }
+        return docs.length;
+    };
+    // Nuke all the TEST job data across the shop tabs. Leaves setup/master data (routings, programs,
+    // machines, categories, setup codes, tools, materials) intact.
+    const nukeTestJobs = async () => {
+        if (!window.confirm("⚠️ NUKE all test jobs across the shop floor?\n\nDeletes every record in: floor schedule, milling/tracker queue, custom orders, QC failures, material-usage history, and handyman tickets.\n\nKEEPS routings, programs, machines, tools and materials. Cannot be undone.")) return;
+        if (!window.confirm("Final confirmation — permanently delete all those job records now?")) return;
+        try {
+            const cols = ['schedule', 'milling', 'custom_orders', 'shop_failures', 'material_history', 'livio'];
+            let total = 0;
+            for (const c of cols) total += await clearShopCollection(c);
+            writeLog(`Nuked ${total} test job records across the shop floor`, 'admin');
+            alert(`✅ Cleared ${total} test job records. Shop floor jobs are fresh.`);
+        } catch (e) { console.error(e); alert("Nuke failed: " + (e.message || e)); }
+    };
     
     const handleLogout = () => {
         localStorage.removeItem('hq_session');
@@ -1009,7 +1034,7 @@ const ShopFloor = () => {
                             activeTab={activeTab} user={user} hqParts={hqParts} routings={routings} programs={programs} 
                             programsMap={programsMap} machines={machines} categories={categories} setupCodes={setupCodes} 
                             tooling={tooling} materials={materials} writeLog={writeLog} handleDelete={handleDelete} safeUserRole={safeUserRole}
-                            printMap={printMap}
+                            printMap={printMap} nukeTestJobs={nukeTestJobs}
                         />
                     ) : (
                         <>
