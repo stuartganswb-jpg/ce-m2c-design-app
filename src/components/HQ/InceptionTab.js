@@ -149,8 +149,13 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                   revs.push({ id: 'INITIAL', name: 'Initial Design', url: activeAssembly.finalImageUrl, is3D: false });
               }
           }
-          if (revs.length > 0 && !activeRevisionId) {
-              setActiveRevisionId(activeAssembly.finalRevisionId || revs[revs.length - 1].id); 
+          const validIds = revs.map(r => r.id);
+          // Reset when the carried-over id isn't a revision of THIS item (e.g. switching items directly in the
+          // sidebar), so new notes/swatches save against a valid CURRENT revision — not a stale id from a prior
+          // item, which would make them visible only to the author's session.
+          if (revs.length > 0 && (!activeRevisionId || !validIds.includes(activeRevisionId))) {
+              const finalOk = activeAssembly.finalRevisionId && validIds.includes(activeAssembly.finalRevisionId);
+              setActiveRevisionId(finalOk ? activeAssembly.finalRevisionId : revs[revs.length - 1].id);
           }
       } else {
           setActiveRevisionId(null);
@@ -564,8 +569,23 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
 
   const currentRevisionObj = activeRevisions.find(r => r.id === activeRevisionId) || activeRevisions[0];
   const isCurrent3D = currentRevisionObj?.is3D || is3DFile(currentRevisionObj?.url);
-  const filteredCallouts = (activeAssembly?.spatialCallouts || []).filter(c => c.revisionId === activeRevisionId || (!c.revisionId && activeRevisionId === 'INITIAL'));
-  const filteredOverlays = (activeAssembly?.spatialOverlays || []).filter(o => o.revisionId === activeRevisionId || (!o.revisionId && activeRevisionId === 'INITIAL'));
+  const revIdSet = new Set(activeRevisions.map(r => r.id));
+  // The revision a fresh session lands on (mirrors the auto-select effect): a valid finalRevisionId, else last.
+  const defaultRevId = activeRevisions.length
+      ? ((activeAssembly?.finalRevisionId && revIdSet.has(activeAssembly.finalRevisionId)) ? activeAssembly.finalRevisionId : activeRevisions[activeRevisions.length - 1].id)
+      : null;
+  const onDefaultRev = activeRevisionId === defaultRevId;
+  // A note/swatch shows if it's on the active revision — OR, for legacy notes with no revisionId and for
+  // "orphaned" ids saved against a revision that isn't on this item (the stale-revision carry-over bug that
+  // made annotations visible only to their author), it surfaces on the DEFAULT revision so every collaborator
+  // sees it. Without this, annotations saved under a since-changed revision id stay invisible to everyone but
+  // the session that holds that id in memory.
+  const belongsToRevisionView = (revId) =>
+      revId === activeRevisionId
+      || (!revId && (activeRevisionId === 'INITIAL' || onDefaultRev))
+      || (revId && !revIdSet.has(revId) && onDefaultRev);
+  const filteredCallouts = (activeAssembly?.spatialCallouts || []).filter(c => belongsToRevisionView(c.revisionId));
+  const filteredOverlays = (activeAssembly?.spatialOverlays || []).filter(o => belongsToRevisionView(o.revisionId));
   // Collection picker, filtered to THIS brand: collections registered to the active brand, plus any
   // already in use on this brand's items, plus the current item's own value so editing keeps it.
   const availableCollections = [...new Set([
