@@ -556,7 +556,10 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         } catch (err) { console.error(err); }
     };
 
-    const existingClusters = activeAssembly?.nodeClusters || [];
+    // Memoized so it's a STABLE reference: when an assembly has no saved clusters yet, `|| []` would
+    // otherwise mint a new array every render, recomputing autoProposals and re-running the init effect —
+    // which resets the Loc/Pos/Cat tags on every render and makes manual clicks impossible to set.
+    const existingClusters = useMemo(() => activeAssembly?.nodeClusters || [], [activeAssembly?.nodeClusters]);
     const locatingNodes = existingClusters.find(c => c.id === locatingClusterId)?.nodes || [];
     const hoveredClusterNodes = existingClusters.find(c => c.id === hoveredClusterId)?.nodes || [];
 
