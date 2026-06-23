@@ -116,8 +116,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       let docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       docs.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setAssemblies(docs);
-      // Default to the first MAIN assembly (the only ones this tab lists).
-      const firstMain = docs.find(d => (d.routingType || '').toUpperCase() === 'MAIN');
+      // Default to the first mainline assembly (routingType MAIN or a PRODUCT) — the only ones this tab lists.
+      const firstMain = docs.find(d => (d.routingType || '').toUpperCase() === 'MAIN' || (d.recordType || '').toUpperCase() === 'PRODUCT');
       if (firstMain && !selectedAssemblyId) setSelectedAssemblyId(firstMain.itemId);
     });
     return () => unsubscribe();
@@ -232,9 +232,9 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       const term = searchTerm.toLowerCase();
       const specs = part.manufacturingSpecs || {};
 
-      // The BOM Engine builds the MAIN CPQ assemblies only; sub-assemblies / parts are edited
-      // in the Master Library. So hard-restrict the list to routingType MAIN.
-      if ((part.routingType || '').toUpperCase() !== 'MAIN') return false;
+      // The BOM Engine builds MAINLINE assemblies only (routingType MAIN, or a PRODUCT from Inception);
+      // sub-assemblies / parts are edited in the Master Library.
+      if ((part.routingType || '').toUpperCase() !== 'MAIN' && (part.recordType || '').toUpperCase() !== 'PRODUCT') return false;
 
       const matchesSearch = part.itemName?.toLowerCase().includes(term) ||
                             (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term)) || 

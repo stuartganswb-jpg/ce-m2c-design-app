@@ -201,6 +201,9 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     const q = query(collection(db, "Approved_Designs"), where("brandId", "==", activeBrand), where("partClass", "==", "Assembly"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Master Assembly list = MAINLINE only (a mainline assembly routingType MAIN, or a PRODUCT from
+      // Inception). Orphans / sub-components / unrouted parts live in the BOM Engine / Master Library.
+      docs = docs.filter(d => (d.routingType || '').toUpperCase() === 'MAIN' || (d.recordType || '').toUpperCase() === 'PRODUCT');
       docs.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setAssemblies(docs);
       if (docs.length > 0 && !selectedAssemblyId) setSelectedAssemblyId(docs[0].itemId);

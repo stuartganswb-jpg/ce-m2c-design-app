@@ -186,7 +186,10 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       }
   });
 
-  const groupedAssemblies = assemblies.reduce((acc, asm) => {
+  // Only genuine Inception items belong here — a real PRODUCT/PROJECT (recordType) or a mainline assembly
+  // (routingType MAIN). Orphans/sub-components/NetSuite-synced parts (no recordType, not MAIN) live in the
+  // BOM Engine / Master Library, not here.
+  const groupedAssemblies = assemblies.filter(a => !!a.recordType || (a.routingType || '').toUpperCase() === 'MAIN').reduce((acc, asm) => {
       let groupKey = 'Ungrouped Assemblies'; let type = 'none';
       if (asm.project && asm.project.trim() !== '') { groupKey = asm.project; type = 'project'; } 
       else if (asm.collection && asm.collection !== 'N/A') { groupKey = asm.collection; type = 'collection'; }
@@ -279,6 +282,9 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
       itemName: formData.itemName.toUpperCase(), legacyErpId: formData.legacyErpId.toUpperCase() || "PENDING",
       collection: finalCollection, productType: finalProductType, project: finalProject,
       recordType: formData.recordType || "PRODUCT",
+      // A PRODUCT created in Inception IS a mainline assembly — stamp it MAIN so it flows to Node Grouping →
+      // Visual Assembly → BOM. Projects are not mainline (kept off those tabs). Preserve any existing routing.
+      routingType: formData.recordType === 'PROJECT' ? (activeAssembly?.routingType || '') : (activeAssembly?.routingType || 'MAIN'),
       description: formData.description, finalImageUrl: finalUrl, revisions: updatedRevisions,
       lifecycleStatus: status, spatialCallouts: activeAssembly?.spatialCallouts || [], 
       approvals: activeAssembly?.approvals || { designer: false, technical: false, machinist: false }, 

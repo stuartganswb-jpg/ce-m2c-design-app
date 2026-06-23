@@ -387,9 +387,10 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         const q = query(collection(db, "Approved_Designs"), where("partClass", "in", ["Assembly", "Master Assembly"]));
         const unsubscribe = onSnapshot(q, (snapshot) => {
             let docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            // Only MAIN assemblies belong here — sub-assemblies / components (e.g. screws) are
-            // grouped via their own main assembly, not on their own. Mirrors the BOM Engine.
-            docs = docs.filter(d => (d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand))) && (d.routingType || '').toUpperCase() === 'MAIN');
+            // Only MAINLINE assemblies belong here — a mainline assembly (routingType MAIN) or a PRODUCT from
+            // Inception (which is mainline by definition). Sub-assemblies / components are grouped via their own
+            // main assembly, not on their own. Mirrors the BOM Engine.
+            docs = docs.filter(d => (d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand))) && ((d.routingType || '').toUpperCase() === 'MAIN' || (d.recordType || '').toUpperCase() === 'PRODUCT'));
             docs.sort((a, b) => (a.itemName || "").localeCompare(b.itemName || ""));
             setMasterAssemblies(docs);
             
