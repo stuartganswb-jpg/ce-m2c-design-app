@@ -1374,7 +1374,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             <option value="m2c">M2C Studio</option>
                             <option value="uniquity">Uniquity</option>
                             <option value="ce">Classical Elements</option>
-                            <option value="leyla">Leyla Gans</option>
+                            <option value="leyla">Leyla Gans LLC</option>
                         </select>
                     </div>
                 </div>

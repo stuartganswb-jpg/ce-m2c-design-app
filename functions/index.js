@@ -96,11 +96,16 @@ exports.authenticatePin = onCall({
 // 2. NETSUITE API PROXY
 // ============================================================================
 
+// RFC 3986 / OAuth 1.0 percent-encoding. encodeURIComponent leaves ! ' ( ) * unescaped, but OAuth
+// requires them encoded. URLs like .../purchaseorder/{id}/!transform/itemreceipt contain "!", so without
+// this the signature base string diverges from NetSuite's and auth fails with 401 INVALID_LOGIN.
+const oauthEncode = (s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+
 const generateNetSuiteHeader = (method, url, creds) => {
     const oauth_nonce = Math.random().toString(36).substring(2, 15);
     const oauth_timestamp = Math.floor(Date.now() / 1000).toString();
 
-    const baseString = `${method}&${encodeURIComponent(url)}&` + encodeURIComponent(
+    const baseString = `${method}&${oauthEncode(url)}&` + oauthEncode(
         `oauth_consumer_key=${creds.consumerKey}&` +
         `oauth_nonce=${oauth_nonce}&` +
         `oauth_signature_method=HMAC-SHA256&` +
@@ -109,7 +114,7 @@ const generateNetSuiteHeader = (method, url, creds) => {
         `oauth_version=1.0`
     );
 
-    const signingKey = `${encodeURIComponent(creds.consumerSecret)}&${encodeURIComponent(creds.tokenSecret)}`;
+    const signingKey = `${oauthEncode(creds.consumerSecret)}&${oauthEncode(creds.tokenSecret)}`;
     const hash = CryptoJS.HmacSHA256(baseString, signingKey);
     const oauth_signature = CryptoJS.enc.Base64.stringify(hash);
 
