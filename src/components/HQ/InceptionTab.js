@@ -373,9 +373,17 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
             const updatedRevs = [...currentRevs, newRev];
 
             try {
-                await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { revisions: updatedRevs });
-                setUploadProgress(0); setActiveRevisionId(newRevId); 
-            } catch (err) { console.error(err); }
+                // Promote the newly-uploaded file to the WORKING model so downstream tabs (Visual Assembly,
+                // BOM) actually use it: a .glb updates manufacturingSpecs.cadUrl (the field they read), a 2D
+                // image updates finalImageUrl. Same doc id, so BOM pins + the CPQ flow stay linked.
+                const updatePayload = { revisions: updatedRevs, finalRevisionId: newRevId };
+                if (is3D) updatePayload.manufacturingSpecs = { ...(activeAssembly.manufacturingSpecs || {}), cadUrl: url };
+                else updatePayload.finalImageUrl = url;
+                await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), updatePayload);
+                setActiveAssembly(prev => ({ ...prev, ...updatePayload }));
+                setUploadProgress(0); setActiveRevisionId(newRevId);
+                alert(`✅ New ${is3D ? '3D model' : 'image'} uploaded and set as the current working ${is3D ? 'model' : 'image'} for ${activeAssembly.itemName}. Visual Assembly & BOM now use it; existing BOM pins and the CPQ flow stay linked.`);
+            } catch (err) { console.error(err); alert("Upload save failed: " + (err.message || err)); }
         }
     );
   };
