@@ -127,7 +127,15 @@ const isStockWoNumber = () => {
     return `IS_${mm}${dd}${yy}`;
 };
 
-const PickPackApp = ({ activeBrand = "ce", setActiveBrand }) => {
+const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBrandProp }) => {
+    // Mounted standalone at /pick-pack with no props, so own the brand here (persisted) when no parent
+    // controls it. The header switcher was a no-op before because setActiveBrand was undefined.
+    const [internalBrand, setInternalBrand] = useState(() => {
+        try { return localStorage.getItem('pp_brand') || activeBrandProp || 'ce'; } catch (e) { return activeBrandProp || 'ce'; }
+    });
+    const activeBrand = activeBrandProp || internalBrand;
+    const setActiveBrand = setActiveBrandProp || ((b) => { setInternalBrand(b); try { localStorage.setItem('pp_brand', b); } catch (e) { /* storage unavailable */ } });
+
     const [operator, setOperator] = useState(null);
     const [pinInput, setPinInput] = useState("");
     const [activeTab, setActiveTab] = useState('QUEUE');
