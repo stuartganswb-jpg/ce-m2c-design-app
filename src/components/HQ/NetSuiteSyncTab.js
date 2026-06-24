@@ -484,6 +484,9 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     // own it (MAIN = mainline assembly); NetSuite only supplies STANDARD/UNASSIGNED. A re-import
                     // must never un-mainline an assembly or drop it off Node Grouping / Visual Assembly / BOM.
                     if (existingAppRecord.routingType) payload.routingType = existingAppRecord.routingType;
+                    // 🔒 Keep the app's item name on an EXISTING item — a re-import must not revert a rename
+                    // done in the app back to NetSuite's display name.
+                    if (existingAppRecord.itemName) payload.itemName = existingAppRecord.itemName;
                     // 🔒 App is master for the curated FILTER fields on an EXISTING item — a NetSuite
                     // re-import must not overwrite what was curated in the app:
                     //   • productType (Category): keep the app's value; only let NS fill it when the app
