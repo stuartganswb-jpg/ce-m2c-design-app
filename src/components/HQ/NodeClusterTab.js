@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, where, doc, updateDoc, getDoc, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, updateDoc, getDoc, getDocs, deleteDoc } from "firebase/firestore";
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds } from '@react-three/drei';
@@ -547,13 +547,18 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     };
 
     const handleDeleteCluster = async (clusterId) => {
-        if (!window.confirm("Delete this grouping? The meshes will return to being unassigned.")) return;
+        if (!window.confirm("Delete this grouping? The meshes return to unassigned, and any BOM line linked to it is removed too.")) return;
         try {
             const ref = doc(db, "Approved_Designs", activeAssembly.id);
             const snap = await getDoc(ref);
             const updatedClusters = ((snap.exists() ? snap.data().nodeClusters : activeAssembly.nodeClusters) || []).filter(c => c.id !== clusterId);
             await updateDoc(ref, { nodeClusters: updatedClusters });
-        } catch (err) { console.error(err); }
+            // Fully unwind: remove any BOM line(s) (assembly_pins) linked to this cluster so nothing orphaned
+            // is left pointing at a deleted cluster — and it can't generate a CPQ step.
+            const asmKey = activeAssembly.itemId || activeAssembly.id;
+            const pinSnap = await getDocs(query(collection(db, "assembly_pins"), where("assemblyId", "==", asmKey), where("clusterId", "==", clusterId)));
+            await Promise.all(pinSnap.docs.map(d => deleteDoc(d.ref)));
+        } catch (err) { console.error(err); alert("Delete failed: " + (err.message || err)); }
     };
 
     // Memoized so it's a STABLE reference: when an assembly has no saved clusters yet, `|| []` would
