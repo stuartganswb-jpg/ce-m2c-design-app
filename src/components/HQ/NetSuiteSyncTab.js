@@ -480,6 +480,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
                 if (existingAppRecord) {
                     const existingSpecs = existingAppRecord.manufacturingSpecs || {};
+                    // 🔒 Preserve the app-curated routingType on an EXISTING item — Visual Assembly / Inception
+                    // own it (MAIN = mainline assembly); NetSuite only supplies STANDARD/UNASSIGNED. A re-import
+                    // must never un-mainline an assembly or drop it off Node Grouping / Visual Assembly / BOM.
+                    if (existingAppRecord.routingType) payload.routingType = existingAppRecord.routingType;
                     // 🔒 App is master for the curated FILTER fields on an EXISTING item — a NetSuite
                     // re-import must not overwrite what was curated in the app:
                     //   • productType (Category): keep the app's value; only let NS fill it when the app
