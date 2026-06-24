@@ -135,7 +135,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
   const [viewMode, setViewMode] = useState("3D");
 
-  const [pendingPin, setPendingPin] = useState(null); 
+  const [pendingPin, setPendingPin] = useState(null);
+  const [reassignPinId, setReassignPinId] = useState(null); // when set, the drawer's library pick swaps this pin's part
   const [routingType, setRoutingType] = useState("");
   const [isSavingRouting, setIsSavingRouting] = useState(false);
   const [activeImageUrl, setActiveImageUrl] = useState("");
@@ -237,7 +238,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     } else {
         setAvailableImages([]); setActiveImageUrl(""); setViewMode("2D");
     }
-    setScale(1); setPan({ x: 0, y: 0 }); setPendingPin(null); setIsCanvasLocked(true); setDrawerOpen(false); setCropState(null); setIsFrozen(false); setLocatingClusterId(null); setHiddenNodes([]);
+    setScale(1); setPan({ x: 0, y: 0 }); setPendingPin(null); setReassignPinId(null); setIsCanvasLocked(true); setDrawerOpen(false); setCropState(null); setIsFrozen(false); setLocatingClusterId(null); setHiddenNodes([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAssemblyId]);
 
@@ -453,6 +454,18 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   };
 
   const saveExistingLibraryPart = async (part) => {
+    // Reassign mode: swap the library part on an EXISTING BOM pin in place — same pin, cluster, node link
+    // and quantity are kept; only the part (name / item# / specs) changes. No delete / re-pin.
+    if (reassignPinId) {
+      try {
+        await updateDoc(doc(db, "assembly_pins", reassignPinId), {
+          partName: part.itemName, partId: part.itemId, legacyErpId: part.legacyErpId || "N/A",
+          isExistingLibraryPart: true, specs: part.manufacturingSpecs || {}, status: "SPECS_LOCKED"
+        });
+        setDrawerOpen(false); setReassignPinId(null);
+      } catch (e) { console.error('reassign failed', e); alert('Reassign failed — check console.'); }
+      return;
+    }
     if (!pendingPin) return;
     try {
       await addDoc(collection(db, "assembly_pins"), {
@@ -1175,7 +1188,15 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                         >
                                             {thumbing ? '⏳ Rendering' : '📷 Node Thumb'}
                                         </button>
-                                        
+
+                                        <button
+                                            onClick={() => { setReassignPinId(pin.id); setPendingPin(null); setCreationMode("EXISTING"); setSearchQuery(""); setDrawerOpen(true); }}
+                                            title="Swap this BOM line to a different library part — keeps the node link and quantity"
+                                            style={{ background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer', padding: '8px 12px', whiteSpace: 'nowrap' }}
+                                        >
+                                            ⇄ Reassign
+                                        </button>
+
                                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}><label style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginBottom: '4px' }}>QTY</label><input type="number" min="1" value={pin.defaultQty || 1} onChange={(e) => handleUpdatePinQty(pin.id, e.target.value)} style={{ width: '48px', padding: '6px', border: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--sans)' }} /></div>
                                         <button onClick={(e) => handlePinClick(e, pin.id)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1rem', cursor: 'pointer', padding: '0' }}>Del</button>
                                     </div>
@@ -1202,8 +1223,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       {drawerOpen && (
         <div style={{ position: 'fixed', top: 0, right: 0, width: '500px', height: '100vh', backgroundColor: '#fff', display: 'flex', flexDirection: 'column', boxShadow: '-8px 0 32px rgba(0,0,0,0.1)', zIndex: 10005, borderLeft: '1px solid var(--line)' }}>
             <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
-                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Define Component</h3>
-                <button onClick={() => { setDrawerOpen(false); setPendingPin(null); }} disabled={isProcessingCrop} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: isProcessingCrop ? 'not-allowed' : 'pointer' }}>×</button>
+                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>{reassignPinId ? 'Reassign Part' : 'Define Component'}</h3>
+                <button onClick={() => { setDrawerOpen(false); setPendingPin(null); setReassignPinId(null); }} disabled={isProcessingCrop} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: isProcessingCrop ? 'not-allowed' : 'pointer' }}>×</button>
             </div>
             
             <div style={{ display: 'flex', borderBottom: '1px solid var(--line)' }}>
