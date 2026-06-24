@@ -637,11 +637,14 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       setThumbBusy(null);
   };
 
+  // Sort the library by ITEM # (legacy ERP id) using a natural/numeric compare so it's easy to scan by
+  // number (e.g. H1-2 before H1-10), not by description.
+  const libCode = (p) => (p.legacyErpId && p.legacyErpId !== 'PENDING' && p.legacyErpId !== 'N/A') ? p.legacyErpId : (p.itemId || p.id || '');
   const filteredLibrary = libraryParts.filter(p =>
-      (p.partClass === 'Inventory' || p.partClass === 'Assembly') && 
-      ((p.itemName && p.itemName.toLowerCase().includes(searchQuery.toLowerCase())) || 
+      (p.partClass === 'Inventory' || p.partClass === 'Assembly') &&
+      ((p.itemName && p.itemName.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (p.legacyErpId && p.legacyErpId.toLowerCase().includes(searchQuery.toLowerCase())))
-  );
+  ).sort((a, b) => String(libCode(a)).localeCompare(String(libCode(b)), undefined, { numeric: true, sensitivity: 'base' }));
 
   let canvasCursor = 'default';
   if (interactionMode === 'pan' && viewMode === '2D' && !isFrozen) canvasCursor = isPanning ? 'grabbing' : 'grab';
@@ -1324,11 +1327,11 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                       filteredLibrary.map(part => (
                         <div key={part.id} onClick={() => saveExistingLibraryPart(part)} style={{ display: 'flex', gap: '16px', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--line)', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={(e) => e.currentTarget.style.background = '#fff'}>
                           <div style={{ flex: 1 }}>
-                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '4px' }}>
-                                  {part.partClass === 'Assembly' && <span style={{ color: 'var(--ink)', background: 'var(--paper-2)', padding: '2px 4px', marginRight: '6px', border: '1px solid var(--line)' }}>ASM</span>}
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: '0.95rem', fontWeight: 600, color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  {part.partClass === 'Assembly' && <span style={{ fontSize: '8px', color: 'var(--ink)', background: 'var(--paper-2)', padding: '2px 4px', border: '1px solid var(--line)' }}>ASM</span>}
                                   {part.legacyErpId !== "PENDING" && part.legacyErpId !== "N/A" ? part.legacyErpId : part.itemId}
                               </div>
-                              <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: 'var(--ink)' }}>{part.itemName}</div>
+                              <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '3px' }}>{part.itemName}</div>
                           </div>
                           <div style={{ width: '48px', height: '48px', background: 'var(--paper)', border: '1px solid var(--line)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>{part.finalImageUrl ? <img src={part.finalImageUrl} alt={part.itemName} style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <span style={{ fontSize: '1rem', color: 'var(--ink-soft)' }}>⚙️</span>}</div>
                         </div>
