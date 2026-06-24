@@ -211,14 +211,20 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     return () => unsubscribe();
   }, [activeBrand, selectedAssemblyId]);
 
+  // DATA refresh — keep activeAssembly + routingType in sync with the latest data. Runs whenever the
+  // assemblies list updates; must NOT reset interaction state (that would close an open part drawer).
   useEffect(() => {
     const found = assemblies.find(a => a.itemId === selectedAssemblyId);
     setActiveAssembly(found || null);
-    
+    setRoutingType(found?.routingType || "");
+  }, [selectedAssemblyId, assemblies]);
+
+  // ASSEMBLY SWITCH — rebuild the image gallery / view mode and reset view + interaction state. Keyed ONLY
+  // on selectedAssemblyId so a background Firestore snapshot refresh can't nuke an open drawer / pending pin.
+  useEffect(() => {
+    const found = assemblies.find(a => a.itemId === selectedAssemblyId);
     if (found) {
-        if (found.routingType) setRoutingType(found.routingType); else setRoutingType("");
-        
-        let gallery = [];
+        const gallery = [];
         if (found.finalImageUrl) gallery.push({ url: found.finalImageUrl, name: 'Main Final Image' });
         if (found.revisions && found.revisions.length > 0) {
             found.revisions.forEach(rev => {
@@ -227,16 +233,13 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
         }
         setAvailableImages(gallery);
         setActiveImageUrl(gallery.length > 0 ? gallery[0].url : "");
-        
-        if (found.manufacturingSpecs?.cadUrl) setViewMode("3D");
-        else setViewMode("2D");
-
+        setViewMode(found.manufacturingSpecs?.cadUrl ? "3D" : "2D");
     } else {
-        setRoutingType(""); setAvailableImages([]); setActiveImageUrl(""); setViewMode("2D");
+        setAvailableImages([]); setActiveImageUrl(""); setViewMode("2D");
     }
-    
     setScale(1); setPan({ x: 0, y: 0 }); setPendingPin(null); setIsCanvasLocked(true); setDrawerOpen(false); setCropState(null); setIsFrozen(false); setLocatingClusterId(null); setHiddenNodes([]);
-  }, [selectedAssemblyId, assemblies]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAssemblyId]);
 
   useEffect(() => {
     if (!selectedAssemblyId) return;
