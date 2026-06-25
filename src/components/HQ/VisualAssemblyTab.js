@@ -71,9 +71,11 @@ const SnapshotModel = ({ url, interactionMode, onMeshClick, isFrozen, locatingNo
                 child.visible = !hiddenNodes.includes(child.name);
 
                 if (locatingNodes.length > 0 && isDescendantOf(child, locatingNodes)) {
-                    child.material = new THREE.MeshStandardMaterial({ color: '#b08d57', emissive: '#b08d57', emissiveIntensity: 0.5, transparent: true, opacity: 0.9 });
+                    // Located part pops in strong brass (matches the Node Grouping highlight).
+                    child.material = new THREE.MeshStandardMaterial({ color: '#b08d57', emissive: '#b08d57', emissiveIntensity: 0.6, transparent: true, opacity: 0.95 });
                 } else if (locatingNodes.length > 0) {
-                    child.material = new THREE.MeshStandardMaterial({ color: '#cccccc', transparent: true, opacity: 0.3 });
+                    // Everything else hard-ghosts (unlit, opacity 0.12) so the located part stands out clearly.
+                    child.material = new THREE.MeshBasicMaterial({ color: '#cccccc', transparent: true, opacity: 0.12 });
                 } else {
                     child.material = child.userData.originalMaterial;
                 }
@@ -1162,7 +1164,12 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                                             <div style={{ fontFamily: 'var(--sans)', fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)' }}>{pin.partName}</div>
                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px' }}>{pin.legacyErpId}</div>
                                             {pin.clusterId ? (
-                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink)', background: 'var(--paper-2)', padding: '2px 6px', display: 'inline-block', marginTop: '6px', border: '1px solid var(--line)' }}>Clustered 3D Data</div>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px', alignItems: 'center' }}>
+                                                    {cluster?.location && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', background: 'var(--paper-2)', padding: '2px 6px', border: '1px solid var(--line)' }}>{cluster.location}</span>}
+                                                    {cluster?.position && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em', color: '#fff', background: 'var(--brass)', padding: '2px 6px' }}>{cluster.position}</span>}
+                                                    {cluster?.category && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '2px 6px' }}>{cluster.category}</span>}
+                                                    {!(cluster?.location || cluster?.position || cluster?.category) && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink)', background: 'var(--paper-2)', padding: '2px 6px', border: '1px solid var(--line)' }}>Clustered 3D Data</span>}
+                                                </div>
                                             ) : pin.targetNode && (
                                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', marginTop: '6px' }}>🎯 {pin.targetNode.substring(0, 20)}{pin.targetNode.length > 20 ? '...' : ''}</div>
                                             )}
