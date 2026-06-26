@@ -1731,10 +1731,22 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const steps = activeFlow.steps || [];
       // Rail = the pole's selected geometry (all of it), so center clones space along the FULL pole
       // even when it's modeled as many small segments — the longest single mesh would be one rib.
-      const poleStep = steps.find(s => s.type === 'STYLE_SWAP' && /pole|rod/i.test(s.title || '') && s.geometryMap && Object.keys(s.geometryMap).length)
-                    || steps.find(s => s.type === 'STYLE_SWAP' && s.geometryMap && Object.keys(s.geometryMap).length);
+      const poleStep = steps.find(s => s.type === 'STYLE_SWAP' && /pole|rod/i.test(s.title || '') && s.geometryMap && Object.keys(s.geometryMap).length);
       const poleSel = poleStep && dynamicConfigParams[poleStep.id];
-      const railNames = String((poleStep && poleSel && poleStep.geometryMap[poleSel]) || '').split(',').map(m => m.trim()).filter(Boolean);
+      let railNames = String((poleStep && poleSel && poleStep.geometryMap[poleSel]) || '').split(',').map(m => m.trim()).filter(Boolean);
+      // Single-material poles are combined into the VISUAL_DIMENSIONS "Pole Length & Finish" step (no
+      // STYLE_SWAP pole chooser), so the pole geometry lives in that step's targetNodes — read it there.
+      if (!railNames.length) {
+          const poleDim = steps.find(s => /pole|rod/i.test(s.title || '') && s.targetNodes);
+          railNames = String((poleDim && poleDim.targetNodes) || '').split(',').map(m => m.trim()).filter(Boolean);
+      }
+      // Last resort: any non-bracket STYLE_SWAP geometry. NEVER a center-clone (bracket) step — that
+      // would collapse the spacing span onto the bracket itself and stack the clones.
+      if (!railNames.length) {
+          const anyGeo = steps.find(s => s.type === 'STYLE_SWAP' && !s.isCenterClone && s.geometryMap && Object.keys(s.geometryMap).length);
+          const anySel = anyGeo && dynamicConfigParams[anyGeo.id];
+          railNames = String((anyGeo && anySel && anyGeo.geometryMap[anySel]) || '').split(',').map(m => m.trim()).filter(Boolean);
+      }
       const out = [];
       steps.forEach(step => {
           if (!step.isCenterClone) return;

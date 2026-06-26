@@ -589,7 +589,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate' }); // adds nothing if brackets is empty
       if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
       if (finial.length) addEndTreatment(finial);
-      if (rings.length) add({ title: 'Rings', type: 'DROPDOWN', dataSource: 'master_finishes', partHandling: 'Small Parts', qtyHelperText: 'Number of rings', geometryMap: {}, targetNodes: ringNodes });
+      if (rings.length) add({ title: 'Rings', type: 'STYLE_SWAP', partHandling: 'Small Parts', finishDataSource: 'master_finishes', qtyHelperText: 'Number of rings', styleOptions: rings, geometryMap: geom(rings) });
       // Fee steps — always kept, as-is.
       add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
       add({ title: 'Cut / Splice Fee', type: 'STATIC_FEE', qtyHelperText: 'Per cut / splice', basePrice: '0' });
