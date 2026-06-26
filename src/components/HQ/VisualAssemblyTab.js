@@ -1410,9 +1410,11 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                     <span style={{ color: 'var(--ink-soft)' }}>→</span>
                     <select value={autoAssignPart[p.cluster.id] || ''} onChange={(e) => setAutoAssignPart(prev => ({ ...prev, [p.cluster.id]: e.target.value }))} style={{ flex: 1, padding: '8px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }}>
                       <option value="">-- pick a library part --</option>
-                      {libraryParts.filter(lp => lp.id !== activeAssembly?.id).map(lp => (
-                        <option key={lp.id} value={lp.id}>{lp.itemName} {lp.legacyErpId && lp.legacyErpId !== 'PENDING' ? `[${lp.legacyErpId}]` : ''}</option>
-                      ))}
+                      {libraryParts.filter(lp => lp.id !== activeAssembly?.id)
+                        .sort((a, b) => String(libCode(a)).localeCompare(String(libCode(b)), undefined, { numeric: true, sensitivity: 'base' }))
+                        .map(lp => (
+                          <option key={lp.id} value={lp.id}>{libCode(lp)} — {lp.itemName}</option>
+                        ))}
                     </select>
                   </div>
                 );
