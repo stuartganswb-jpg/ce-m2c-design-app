@@ -29,7 +29,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [typeFilter, setTypeFilter] = useState("");
   const [partClassFilter, setPartClassFilter] = useState("ALL"); 
   const [collectionFilter, setCollectionFilter] = useState(""); 
-  const [watchlistFilter, setWatchlistFilter] = useState(""); 
+  const [watchlistFilter, setWatchlistFilter] = useState("");
+  const [appOnlyFilter, setAppOnlyFilter] = useState(false); // show only app-created parts with no NetSuite item #
   
   const [customSchema, setCustomSchema] = useState([]);
   const [dynamicAssets, setDynamicAssets] = useState([]);
@@ -226,7 +227,12 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     const currentWatchList = specs.watchList ? specs.watchList.toUpperCase() : nsWatchlist;
     let matchesWatchlist = watchlistFilter === "" || currentWatchList === watchlistFilter.toUpperCase();
     
-    return matchesSearch && matchesType && matchesCollection && matchesClass && matchesWatchlist;
+    // "App-only" = no real NetSuite item # — created in-app (legacyErpId is PENDING/N/A/blank) and never
+    // synced (no netSuiteInternalId). Lets you find residual app-generated parts to clean up.
+    const noNsNumber = (!part.legacyErpId || ['PENDING', 'N/A'].includes(String(part.legacyErpId).toUpperCase())) && !part.netSuiteInternalId;
+    const matchesAppOnly = !appOnlyFilter || noNsNumber;
+
+    return matchesSearch && matchesType && matchesCollection && matchesClass && matchesWatchlist && matchesAppOnly;
   });
 
   const openPartDetails = (part) => {
@@ -697,6 +703,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           )}
 
           <input placeholder="Search Name, ERP, Bin..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '200px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }} />
+          <button onClick={() => setAppOnlyFilter(v => !v)} title="Show only app-created parts with no NetSuite item # (legacyErpId PENDING + no internal id) — for finding residual items to clean up" style={{ padding: '10px 14px', border: `1px solid ${appOnlyFilter ? 'var(--brass)' : 'var(--line)'}`, background: appOnlyFilter ? 'var(--brass)' : '#fff', color: appOnlyFilter ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', whiteSpace: 'nowrap' }}>{appOnlyFilter ? '✓ App-only (no NS#)' : 'App-only (no NS#)'}</button>
         </div>
       </div>
 
