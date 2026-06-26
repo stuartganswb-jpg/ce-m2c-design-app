@@ -579,12 +579,18 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           });
       };
 
-      add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, styleOptions: pole, geometryMap: geom(pole) });
+      // Step 1 = Pole/Rod MATERIAL chooser — ONLY when there's more than one material. With a single
+      // material the choice is fixed, so it folds into the combined Length & Finish step below.
+      if (pole.length > 1) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, styleOptions: pole, geometryMap: geom(pole) });
+      // Length & Finish — always present (the core pole step; carries the pole geometry). When there's a
+      // single material, this IS the combined "choose length + finish" step.
       add({ title: 'Pole Length & Finish', type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: 'calc_straight_pole', qtyHelperText: 'Pole length (feet)', required: true, geometryMap: {}, targetNodes: poleNodes });
-      addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate' });
+      // Part-chooser steps are emitted only when they actually have options — 0-choice steps are skipped.
+      addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate' }); // adds nothing if brackets is empty
       if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
-      addEndTreatment(finial);
-      add({ title: 'Rings', type: 'DROPDOWN', dataSource: 'master_finishes', partHandling: 'Small Parts', qtyHelperText: 'Number of rings', geometryMap: {}, targetNodes: ringNodes });
+      if (finial.length) addEndTreatment(finial);
+      if (rings.length) add({ title: 'Rings', type: 'DROPDOWN', dataSource: 'master_finishes', partHandling: 'Small Parts', qtyHelperText: 'Number of rings', geometryMap: {}, targetNodes: ringNodes });
+      // Fee steps — always kept, as-is.
       add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
       add({ title: 'Cut / Splice Fee', type: 'STATIC_FEE', qtyHelperText: 'Per cut / splice', basePrice: '0' });
 
@@ -597,7 +603,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }));
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;
-          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Pole materials: ${pole.length}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} (each position's plates are a 2nd chooser on its bracket step; ${looseBackplates.length} standalone)\n• Finials: ${finial.length} (End Treatment split per end)\n\nEach bracket step now has a Backplate chooser; End Treatment is per end; no standalone Mount step. Review + set prices, then test. Nothing was deleted.`);
+          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Pole materials: ${pole.length}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} (each position's plates are a 2nd chooser on its bracket step; ${looseBackplates.length} standalone)\n• Finials: ${finial.length} (End Treatment split per end)\n\n${pole.length <= 1 ? 'Single pole material → material + length/finish combined into ONE step. ' : ''}Steps with 0 options skipped${finial.length ? '' : ' (no End Treatment)'}${rings.length ? '' : ', no Rings'}. Bracket steps carry a Backplate chooser; fee steps (Splice, Cut/Splice) kept as-is. Review + set prices, then test. Nothing was deleted.`);
       } catch (err) { console.error("Generate failed:", err); alert("Generate failed: " + (err?.message || err)); }
   };
 
