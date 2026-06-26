@@ -391,7 +391,10 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
             // Only MAINLINE assemblies belong here — a mainline assembly (routingType MAIN) or a PRODUCT from
             // Inception (which is mainline by definition). Sub-assemblies / components are grouped via their own
             // main assembly, not on their own. Mirrors the BOM Engine.
-            docs = docs.filter(d => (d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand))) && ((d.routingType || '').toUpperCase() === 'MAIN' || (d.recordType || '').toUpperCase() === 'PRODUCT'));
+            // Mainline (routingType MAIN or a PRODUCT) AND fully APPROVED in Inception (all 3 sign-offs).
+            // Un-approved products stay in Inception until signed off — they don't flow here yet.
+            const isApproved = (d) => !!(d.approvals && d.approvals.designer && d.approvals.technical && d.approvals.machinist);
+            docs = docs.filter(d => (d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand))) && ((d.routingType || '').toUpperCase() === 'MAIN' || (d.recordType || '').toUpperCase() === 'PRODUCT') && isApproved(d));
             docs.sort((a, b) => (a.itemName || "").localeCompare(b.itemName || ""));
             setMasterAssemblies(docs);
             
