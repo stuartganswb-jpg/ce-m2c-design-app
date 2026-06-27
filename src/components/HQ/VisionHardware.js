@@ -1300,13 +1300,17 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                           }
                                           if (!seg) return null;
 
-                                          const nX = seg.norm ? seg.norm.x : 0;
-                                          const nY = seg.norm ? seg.norm.y : -1;
-
                                           const distFromA = att.ref === 'START' ? att.distInches : (seg.len - att.distInches);
                                           const t = distFromA / seg.len; let x = 0; let y = 0;
-                                          if (seg.isBow) { const angle = bowStartAngle + t * (bowEndAngle - bowStartAngle); const rH_px = bowHW_R * S; x = bowCX + rH_px * Math.cos(angle); y = bowCY + rH_px * Math.sin(angle); } 
-                                          else { x = seg.pA.x + t * (seg.pB.x - seg.pA.x); y = seg.pA.y + t * (seg.pB.y - seg.pA.y); }
+                                          let nX = seg.norm ? seg.norm.x : 0;
+                                          let nY = seg.norm ? seg.norm.y : -1;
+                                          if (seg.isBow) {
+                                              const angle = bowStartAngle + t * (bowEndAngle - bowStartAngle); const rH_px = bowHW_R * S;
+                                              x = bowCX + rH_px * Math.cos(angle); y = bowCY + rH_px * Math.sin(angle);
+                                              // Mount radially: perpendicular to the curve and straight back to the wall arc (like the miter's
+                                              // wall normal) instead of a fixed straight-up stem, so the loop sits square over the curved pole.
+                                              nX = Math.cos(angle); nY = Math.sin(angle);
+                                          } else { x = seg.pA.x + t * (seg.pB.x - seg.pA.x); y = seg.pA.y + t * (seg.pB.y - seg.pA.y); }
 
                                           return (
                                               <g key={att.id}>
