@@ -426,6 +426,12 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           HS = { x: bowCX + rH_px * Math.cos(bowStartAngle), y: bowCY + rH_px * Math.sin(bowStartAngle) }; HE = { x: bowCX + rH_px * Math.cos(bowEndAngle), y: bowCY + rH_px * Math.sin(bowEndAngle) };
           const ndxL = P2.x - HS.x; const ndyL = P2.y - HS.y; const nlenL = Math.sqrt(ndxL*ndxL + ndyL*ndyL) || 1; nL = { x: ndxL/nlenL, y: ndyL/nlenL };
           const ndxR = P3.x - HE.x; const ndyR = P3.y - HE.y; const nlenR = Math.sqrt(ndxR*ndxR + ndyR*ndyR) || 1; nR = { x: ndxR/nlenR, y: ndyR/nlenR };
+          // Build the plan-view arc paths (were declared but never assigned → curved pole rendered blank).
+          // Minor arc (large-arc=0), sweep=1 so it bulges UP through the top — matching the bracket-placement
+          // locus at lines ~504/1302. bowWallPath = chord wall (radius bowR); bowHWPath = the curved pole (radius bowHW_R).
+          const largeArc = Math.abs(bowEndAngle - bowStartAngle) > Math.PI ? 1 : 0;
+          bowWallPath = `M ${P2.x} ${P2.y} A ${rW_px} ${rW_px} 0 ${largeArc} 1 ${P3.x} ${P3.y}`;
+          bowHWPath = `M ${HS.x} ${HS.y} A ${rH_px} ${rH_px} 0 ${largeArc} 1 ${HE.x} ${HE.y}`;
       }
   }
 
