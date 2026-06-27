@@ -85,6 +85,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   const [newFlowName, setNewFlowName] = useState("");
   const [generateAsmId, setGenerateAsmId] = useState(""); // assembly the "Generate Flow from Tags" button reads
+  const [genBayConfig, setGenBayConfig] = useState("STRAIGHT"); // bay configuration the generated flow is stamped with (drives fabShape + the pole calculatorTemplate so Vision Hardware math matches)
   const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
   const [zoomImg, setZoomImg] = useState(null);   // {url,label} for the cluster-image lightbox
@@ -474,10 +475,21 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       e.target.value = '';
   };
 
+  // Bay configuration the generated flow is stamped with. Each entry keeps the flow-level fabShape
+  // (what Vision Hardware reads to drive its whole bay diagram/math) IN SYNC with the pole step's
+  // calculatorTemplate (what the CPQ configurator renders), so the two can never disagree.
+  const BAY_CONFIGS = {
+      STRAIGHT:      { fabShape: 'STRAIGHT', calc: 'calc_straight_pole',     endStyle: '',            poleTitle: 'Pole Length & Finish',      qtyHelper: 'Pole length (feet)' },
+      FRENCH_RETURN: { fabShape: 'STRAIGHT', calc: 'calc_french_return_1in', endStyle: 'RETURN_BEND', poleTitle: 'Pole Length & Finish',      qtyHelper: 'Finished length C2C (feet)' },
+      MITERED:       { fabShape: 'MITERED',  calc: 'calc_mitered_bay',       endStyle: '',            poleTitle: 'Bay Pole — Walls & Angles', qtyHelper: 'Total run (feet)' },
+      BOW:           { fabShape: 'BOW',      calc: 'calc_curved_bay',        endStyle: '',            poleTitle: 'Curved Bay Pole — Arc',     qtyHelper: 'Arc length (feet)' },
+  };
+
   // One-click flow build from the assembly's Node-Grouping tags. Groups tagged clusters by
   // Category + part (unioning each part's placement nodes into one option), then stamps out the
   // standard hardware steps fully wired — no hand-picking pins. Creates a NEW flow; touches nothing.
   const handleGenerateHardwareFlow = async () => {
+      const bay = BAY_CONFIGS[genBayConfig] || BAY_CONFIGS.STRAIGHT;
       const asmId = generateAsmId || flowSettings.linkedAssemblyId;
       const asm = masterAssemblies.find(a => a.id === asmId) || allApprovedDesigns.find(a => a.id === asmId || a.itemId === asmId);
       if (!asm) return alert("Pick a Master Assembly from the dropdown next to Generate, then click Generate.");
@@ -583,12 +595,16 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       // material the choice is fixed, so it folds into the combined Length & Finish step below.
       if (pole.length > 1) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, styleOptions: pole, geometryMap: geom(pole) });
       // Length & Finish — always present (the core pole step; carries the pole geometry). When there's a
-      // single material, this IS the combined "choose length + finish" step.
-      add({ title: 'Pole Length & Finish', type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: 'calc_straight_pole', qtyHelperText: 'Pole length (feet)', required: true, geometryMap: {}, targetNodes: poleNodes });
+      // single material, this IS the combined "choose length + finish" step. The calculatorTemplate +
+      // title follow the chosen bay configuration so the configurator math matches the flow's fabShape.
+      add({ title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, geometryMap: {}, targetNodes: poleNodes });
       // Part-chooser steps are emitted only when they actually have options — 0-choice steps are skipped.
       addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate' }); // adds nothing if brackets is empty
       if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
-      if (finial.length) addEndTreatment(finial);
+      // End Treatment is ALWAYS emitted: even with 0 finials it carries the Mitered / Bent / Flush return
+      // options that render the end shape (e.g. the French Return bend) and feed the fab math. Skipping it
+      // when finials=0 was what broke the bay render — these are fee choices and must stay.
+      addEndTreatment(finial);
       if (rings.length) add({ title: 'Rings', type: 'STYLE_SWAP', partHandling: 'Small Parts', finishDataSource: 'master_finishes', qtyHelperText: 'Number of rings', styleOptions: rings, geometryMap: geom(rings) });
       // Fee steps — always kept, as-is.
       add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
@@ -599,11 +615,12 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           await setDoc(doc(db, "cpq_flows", flowId), stripUndefined({
               id: flowId, brandId: activeBrand, name: `${String(asm.itemName || 'HARDWARE').toUpperCase()} — GENERATED`,
               legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id,
-              fabShape: 'STRAIGHT', fabEndStyle: '', fabProjection: '', defaultFinishOptions: [], hiddenClusters: [], steps
+              fabShape: bay.fabShape, fabEndStyle: bay.endStyle, fabProjection: '', defaultFinishOptions: [], hiddenClusters: [], steps
           }));
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;
-          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Pole materials: ${pole.length}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} (each position's plates are a 2nd chooser on its bracket step; ${looseBackplates.length} standalone)\n• Finials: ${finial.length} (End Treatment split per end)\n\n${pole.length <= 1 ? 'Single pole material → material + length/finish combined into ONE step. ' : ''}Steps with 0 options skipped${finial.length ? '' : ' (no End Treatment)'}${rings.length ? '' : ', no Rings'}. Bracket steps carry a Backplate chooser; fee steps (Splice, Cut/Splice) kept as-is. Review + set prices, then test. Nothing was deleted.`);
+          const bayLabel = { STRAIGHT: 'Straight Pole', FRENCH_RETURN: '1" French Return', MITERED: 'Mitered Bay', BOW: 'Curved Bay' }[genBayConfig] || genBayConfig;
+          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Bay configuration: ${bayLabel} → fabShape ${bay.fabShape} + ${bay.calc}\n• Pole materials: ${pole.length}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} (each position's plates are a 2nd chooser on its bracket step; ${looseBackplates.length} standalone)\n• Finials: ${finial.length} (End Treatment always emitted — carries the Miter/Bend/Flush return options)\n\n${pole.length <= 1 ? 'Single pole material → material + length/finish combined into ONE step. ' : ''}fabShape + pole calculator are kept in sync so Vision Hardware math matches. Review + set prices/projection, then test. Nothing was deleted.`);
       } catch (err) { console.error("Generate failed:", err); alert("Generate failed: " + (err?.message || err)); }
   };
 
@@ -1156,6 +1173,12 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                         <select value={generateAsmId} onChange={e => setGenerateAsmId(e.target.value)} title="Master Assembly to build the flow from" style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.82rem', outline: 'none', background: '#fff' }}>
                             <option value="">— assembly to generate from —</option>
                             {masterAssemblies.map(a => <option key={a.id} value={a.id}>{a.itemName}{a.legacyErpId ? ` [${a.legacyErpId}]` : ''}</option>)}
+                        </select>
+                        <select value={genBayConfig} onChange={e => setGenBayConfig(e.target.value)} title="Bay configuration the generated flow is stamped with — sets the flow's fabShape AND the pole calculator together so Vision Hardware's bay math matches the configurator. Generate once per configuration (e.g. a separate Mitered Bay / Curved Bay flow for the same assembly)." style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.82rem', outline: 'none', background: '#fff' }}>
+                            <option value="STRAIGHT">Bay config: Straight Pole</option>
+                            <option value="FRENCH_RETURN">Bay config: 1" French Return (bent ends)</option>
+                            <option value="MITERED">Bay config: Mitered Bay (Wall A/B/C)</option>
+                            <option value="BOW">Bay config: Curved Bay (arc)</option>
                         </select>
                         <button onClick={handleGenerateHardwareFlow} title="Build a complete hardware flow automatically from the picked assembly's Node-Grouping tags — no hand-picking pins" style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⚙ Generate Flow from Tags</button>
                     </div>
