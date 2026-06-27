@@ -1,7 +1,7 @@
-import React, { useState, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth, functions } from '../../firebase'; 
-import { collection, query, where, getDocs, doc, getDoc, addDoc, serverTimestamp } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc, addDoc, serverTimestamp, onSnapshot, orderBy, limit } from "firebase/firestore";
 import { signInWithCustomToken } from 'firebase/auth'; 
 import { httpsCallable } from 'firebase/functions'; 
 import '../../App.css';
@@ -86,6 +86,12 @@ function HQ() {
   const [activeBrand, setActiveBrand] = useState(null);
   const [activeTab, setActiveTab] = useState(TABS[0]);
 
+  // Tab notification badges: unread OS-Comms messages (addressed to me) + unseen Inception pins
+  // (brand-wide, shown to anyone with Inception access). Seen-state for pins is per-user localStorage.
+  const [msgUnread, setMsgUnread] = useState(0);
+  const [pinList, setPinList] = useState([]);
+  const [pinsSeenTick, setPinsSeenTick] = useState(0);
+
   // NEW: State to hold an item ID we want to immediately open in the Master Library
   const [libraryFocusItemId, setLibraryFocusItemId] = useState(null);
 
@@ -109,6 +115,57 @@ function HQ() {
       if (brand) setActiveBrand(brand);
     }
   }, []);
+
+  // OS-Comms badge: count global_messages addressed to me (or ALL broadcasts) that I didn't send
+  // and haven't read yet. Mirrors SharedMessaging's readBy model, so reading there clears the badge.
+  useEffect(() => {
+    const me = user?.name;
+    if (!me) { setMsgUnread(0); return; }
+    const q = query(collection(db, "global_messages"), orderBy("t", "desc"), limit(100));
+    const unsub = onSnapshot(q, snap => {
+      let n = 0;
+      snap.docs.forEach(d => {
+        const m = d.data();
+        const forMe = m.target === me || m.target === 'ALL';
+        if (forMe && m.sender !== me && !(m.readBy || []).includes(me)) n++;
+      });
+      setMsgUnread(n);
+    }, err => console.warn('OS-Comms badge listen failed', err));
+    return () => unsub();
+  }, [user]);
+
+  // Inception badge: gather every spatial-callout (pin) across the active brand's assemblies. The
+  // pin already carries its author (`user`) and a stable `id`; seen-state is a per-user id set in
+  // localStorage, so the asterisk shows to anyone-but-the-author until they open the Inception tab.
+  useEffect(() => {
+    if (!activeBrand) { setPinList([]); return; }
+    const q = query(collection(db, "Approved_Designs"), where("brandId", "==", activeBrand.id));
+    const unsub = onSnapshot(q, snap => {
+      const pins = [];
+      snap.docs.forEach(d => (d.data().spatialCallouts || []).forEach(c => { if (c && c.id) pins.push({ id: String(c.id), user: c.user || '' }); }));
+      setPinList(pins);
+    }, err => console.warn('Inception pin badge listen failed', err));
+    return () => unsub();
+  }, [activeBrand]);
+
+  const currentUserName = user?.name;
+  const unseenPins = useMemo(() => {
+    if (!currentUserName || !pinList.length) return false;
+    let seen; try { seen = new Set(JSON.parse(localStorage.getItem(`inception_seen_pins_${currentUserName}`) || '[]')); } catch (e) { seen = new Set(); }
+    return pinList.some(p => p.user !== currentUserName && !seen.has(p.id));
+  }, [pinList, currentUserName, pinsSeenTick]);
+
+  // Opening the Inception tab acknowledges every pin currently known for this user → clears the badge.
+  useEffect(() => {
+    if (activeTab !== '1. Inception & Validation' || !currentUserName || !pinList.length) return;
+    try {
+      const key = `inception_seen_pins_${currentUserName}`;
+      const seen = new Set(JSON.parse(localStorage.getItem(key) || '[]'));
+      let changed = false;
+      pinList.forEach(p => { if (!seen.has(p.id)) { seen.add(p.id); changed = true; } });
+      if (changed) { localStorage.setItem(key, JSON.stringify([...seen])); setPinsSeenTick(t => t + 1); }
+    } catch (e) { /* localStorage unavailable — badge simply won't persist */ }
+  }, [activeTab, pinList, currentUserName]);
 
   useEffect(() => {
     const handleTabNavigation = (e) => {
@@ -303,6 +360,12 @@ function HQ() {
               onMouseOut={(e) => { if (!isActive) e.currentTarget.style.opacity = 0.7; }}
             >
               {TAB_LABELS[tab] || tab}
+              {tab === '10.7 OS Comms' && msgUnread > 0 && (
+                <span title={`${msgUnread} unread message${msgUnread === 1 ? '' : 's'}`} style={{ color: '#d9534f', fontSize: '17px', fontWeight: 700, marginLeft: '5px', lineHeight: 0, verticalAlign: 'super' }}>*</span>
+              )}
+              {tab === '1. Inception & Validation' && unseenPins && (
+                <span title="New pin on the Inception board" style={{ color: '#d9534f', fontSize: '17px', fontWeight: 700, marginLeft: '5px', lineHeight: 0, verticalAlign: 'super' }}>*</span>
+              )}
             </button>
           );
         })}
