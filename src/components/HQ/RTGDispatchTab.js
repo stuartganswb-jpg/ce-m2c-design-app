@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { classifyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
@@ -31,6 +31,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const [activeViewOrder, setActiveViewOrder] = useState(null);
     const [activeJobDetails, setActiveJobDetails] = useState(null);
     const [cfgQuote, setCfgQuote] = useState(null); // "view configured item" read-only 3D modal
+    // Live "Daily Job Log" feed — brand-scoped snapshots of the four stages a job moves through.
+    const [liveSO, setLiveSO] = useState([]);
+    const [liveWO, setLiveWO] = useState([]);
+    const [liveShop, setLiveShop] = useState([]);
+    const [liveFin, setLiveFin] = useState([]);
+    const [logTodayOnly, setLogTodayOnly] = useState(false);
 
     const addLog = (msg, type = 'info') => {
         const time = new Date().toLocaleTimeString();
@@ -65,6 +71,63 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     useEffect(() => {
         loadRTGOrders();
     }, [activeBrand]);
+
+    // Live job-log feed: read-only snapshots of the four stages a job moves through —
+    // HQ/NetSuite order intake (hq_sales_orders / hq_work_orders) → Shop floor (shop_custom_orders)
+    // → Finishing floor (fin_workorders). Brand-scoped; never writes. Unlike the dispatch board
+    // above (which only shows orders still AWAITING dispatch), this shows every job, wherever it sits.
+    useEffect(() => {
+        if (!activeBrand) return;
+        const mk = (coll, setter) => onSnapshot(query(collection(db, coll), where("brand", "==", activeBrand)),
+            s => setter(s.docs.map(d => ({ id: d.id, ...d.data() }))),
+            err => console.warn(`job-log ${coll} listen failed`, err));
+        const subs = [
+            mk("hq_sales_orders", setLiveSO), mk("hq_work_orders", setLiveWO),
+            mk("shop_custom_orders", setLiveShop), mk("fin_workorders", setLiveFin),
+        ];
+        return () => subs.forEach(u => u && u());
+    }, [activeBrand]);
+
+    // Merge the four feeds into one job per order, keyed by the same canonical id the splitter
+    // stamps as `orderKey` (SO → soId; stock WO → hqJobId/id), so an order's HQ row and its Shop /
+    // Finishing children collapse into a single line that shows everywhere it currently lives.
+    const dailyJobs = useMemo(() => {
+        const jobs = {};
+        const toMs = (v) => { if (v == null || v === '') return null; if (typeof v === 'number') return v; const t = Date.parse(v); return isNaN(t) ? null : t; };
+        const get = (k) => (jobs[k] = jobs[k] || { key: k, soId: null, woId: null, customer: '', quoteId: null, orderTs: null, reqDate: '', stages: {}, latestTs: 0, soRec: null, woRec: null });
+        const touch = (j, ts) => { if (ts && ts > j.latestTs) j.latestTs = ts; };
+        liveSO.forEach(so => {
+            const k = so.soId || so.id || so.hqJobId; if (!k) return; const j = get(k);
+            j.soId = so.soId || so.id; j.customer = j.customer || so.customer || ''; j.quoteId = j.quoteId || so.hqJobId || null; j.soRec = so;
+            if (!j.orderTs) j.orderTs = toMs(so.createdAt); j.reqDate = j.reqDate || so.reqDate || '';
+            j.stages.HQ = { status: so.status || 'Approved', split: !!so.autoSplit, kind: 'SO' };
+            touch(j, toMs(so.createdAt) || toMs(so.reqDate));
+        });
+        liveWO.forEach(wo => {
+            const k = wo.hqJobId || wo.id || wo.woId; if (!k) return; const j = get(k);
+            j.woId = wo.woId || wo.id; j.quoteId = j.quoteId || wo.hqJobId || null; j.woRec = wo;
+            if (!j.orderTs) j.orderTs = toMs(wo.createdAt); j.reqDate = j.reqDate || wo.reqDate || '';
+            j.stages.HQ = j.stages.HQ || { status: wo.status || 'Approved', kind: 'WO' };
+            touch(j, toMs(wo.createdAt) || toMs(wo.reqDate));
+        });
+        liveShop.forEach(s => {
+            const k = s.orderKey || s.salesOrderId || s.quoteId || s.id; if (!k) return; const j = get(k);
+            j.soId = j.soId || s.salesOrderId; j.customer = j.customer || s.clientName || ''; j.quoteId = j.quoteId || s.quoteId || null;
+            if (!j.orderTs) j.orderTs = toMs(s.createdAt); j.reqDate = j.reqDate || s.reqDate || '';
+            j.stages.SHOP = { status: s.status || 'Pending', id: s.id };
+            touch(j, toMs(s.updatedAt) || toMs(s.createdAt));
+        });
+        liveFin.forEach(f => {
+            const k = f.orderKey || f.salesOrderId || f.quoteId || f.id; if (!k) return; const j = get(k);
+            j.soId = j.soId || f.salesOrderId; j.customer = j.customer || f.customerName || f.clientName || ''; j.quoteId = j.quoteId || f.quoteId || null;
+            if (!j.orderTs) j.orderTs = toMs(f.createdAt); j.reqDate = j.reqDate || f.reqDate || '';
+            j.stages.FINISHING = { status: f.currentPhase || f.stepStatus || 'Setup', id: f.id };
+            touch(j, toMs(f.updatedAt) || toMs(f.createdAt));
+        });
+        let arr = Object.values(jobs);
+        if (logTodayOnly) { const d = new Date(); d.setHours(0, 0, 0, 0); const startMs = d.getTime(); arr = arr.filter(j => (j.latestTs || 0) >= startMs); }
+        return arr.sort((a, b) => (b.latestTs || 0) - (a.latestTs || 0));
+    }, [liveSO, liveWO, liveShop, liveFin, logTodayOnly]);
 
     const pullNSSalesOrders = async () => {
         setIsSyncing(true);
@@ -722,6 +785,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const cardStyle = { border: '1px solid var(--line)', padding: '20px', marginBottom: '16px', borderRadius: '2px', background: '#fff', transition: 'box-shadow 0.2s' };
     const btnStyle = { padding: '10px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', background: 'var(--paper-2)', border: '1px solid var(--line)', cursor: 'pointer', transition: 'all 0.2s ease', whiteSpace: 'nowrap' };
 
+    // Clickable job-log row → best available detail view: the SO/WO modal if we still hold the
+    // record, else the read-only configured-item 3D viewer via the linked quote.
+    const openJobDetails = (job) => {
+        if (job.soRec) return handleViewOrder(job.soRec, 'sales');
+        if (job.woRec) return handleViewOrder(job.woRec, 'stock');
+        if (job.quoteId) return setCfgQuote(job.quoteId);
+        alert('No linked detail record for this job yet (it may have been dispatched and cleared from HQ).');
+    };
+    const fmtD = (v) => { if (v == null || v === '') return '—'; const ms = typeof v === 'number' ? v : Date.parse(v); if (isNaN(ms)) return String(v); return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }); };
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
@@ -893,6 +966,69 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     </div>
                 </div>
 
+            </div>
+
+            {/* ============ DAILY JOB LOG (live, full-width, bottom of page) ============ */}
+            <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <div style={{ padding: '20px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Live · NetSuite → HQ → Shop → Finishing</span>
+                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Daily Job Log</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>{dailyJobs.length} job{dailyJobs.length === 1 ? '' : 's'}</span>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={logTodayOnly} onChange={e => setLogTodayOnly(e.target.checked)} /> Today only
+                        </label>
+                    </div>
+                </div>
+                <div style={{ maxHeight: '440px', overflowY: 'auto' }}>
+                    {dailyJobs.length === 0 ? (
+                        <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0, padding: '24px' }}>No jobs in the log{logTodayOnly ? ' for today' : ''} yet — orders appear here as they move through HQ, the shop floor and the finishing floor.</p>
+                    ) : (
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                            <thead>
+                                <tr style={{ background: 'var(--paper)', borderBottom: '1px solid var(--line)' }}>
+                                    {['Order', 'Customer', 'Order Date', 'Required', 'Stage', 'Status', 'Updated'].map(h => (
+                                        <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', fontWeight: 500, position: 'sticky', top: 0, background: 'var(--paper)' }}>{h}</th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {dailyJobs.map(job => {
+                                    const label = job.soId ? `SO ${job.soId}` : (job.woId ? `WO ${job.woId}` : job.key);
+                                    const chips = [
+                                        job.stages.HQ && { k: 'HQ', c: 'var(--ink)' },
+                                        job.stages.SHOP && { k: 'Shop', c: 'var(--brass)' },
+                                        job.stages.FINISHING && { k: 'Finishing', c: '#5b8a72' },
+                                    ].filter(Boolean);
+                                    const statusBits = [
+                                        job.stages.SHOP && `Shop: ${job.stages.SHOP.status}`,
+                                        job.stages.FINISHING && `Fin: ${job.stages.FINISHING.status}`,
+                                        (!job.stages.SHOP && !job.stages.FINISHING && job.stages.HQ) && (job.stages.HQ.split ? 'Split to floors' : 'Awaiting dispatch'),
+                                    ].filter(Boolean).join('  ·  ');
+                                    return (
+                                        <tr key={job.key} style={{ borderBottom: '1px solid var(--line)' }}>
+                                            <td style={{ padding: '12px 16px' }}>
+                                                <button onClick={() => openJobDetails(job)} title="Open details" style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--brass)', fontFamily: 'var(--sans)', fontSize: '0.9rem', fontWeight: 600, textDecoration: 'underline' }}>{label}</button>
+                                            </td>
+                                            <td style={{ padding: '12px 16px', color: 'var(--ink)' }}>{job.customer || '—'}</td>
+                                            <td style={{ padding: '12px 16px', color: 'var(--ink-soft)' }}>{fmtD(job.orderTs)}</td>
+                                            <td style={{ padding: '12px 16px', color: 'var(--ink-soft)' }}>{fmtD(job.reqDate)}</td>
+                                            <td style={{ padding: '12px 16px' }}>
+                                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                                    {chips.map(s => <span key={s.k} style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', padding: '3px 9px', borderRadius: '10px', background: s.c, color: '#fff', letterSpacing: '.05em' }}>{s.k}</span>)}
+                                                </div>
+                                            </td>
+                                            <td style={{ padding: '12px 16px', color: 'var(--ink-soft)', fontSize: '0.8rem' }}>{statusBits || '—'}</td>
+                                            <td style={{ padding: '12px 16px', color: 'var(--ink-soft)', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{job.latestTs ? new Date(job.latestTs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    )}
+                </div>
             </div>
 
             {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} onClose={() => setCfgQuote(null)} />}
