@@ -139,6 +139,23 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
     return () => unsubscribe();
   }, [activeAssembly]);
 
+  // Opening an assembly's board acknowledges its pins for this user: stamp `seenBy` on any callout
+  // they didn't author and haven't seen. This is what clears the HQ Inception-tab asterisk — and it
+  // only fires when the actual board is opened (keyed on the assembly id), not on tab switch.
+  useEffect(() => {
+    if (!activeAssembly?.id || !currentUser) return;
+    const callouts = activeAssembly.spatialCallouts || [];
+    if (!callouts.length) return;
+    let changed = false;
+    const updated = callouts.map(c => {
+      const seenBy = c.seenBy || [];
+      if (c.user !== currentUser && !seenBy.includes(currentUser)) { changed = true; return { ...c, seenBy: [...seenBy, currentUser] }; }
+      return c;
+    });
+    if (changed) updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { spatialCallouts: updated }).catch(e => console.warn('pin seen-mark failed', e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAssembly?.id, currentUser]);
+
   useEffect(() => {
       if (activeAssembly) {
           const revs = activeAssembly.revisions ? [...activeAssembly.revisions] : [];

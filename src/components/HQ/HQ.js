@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth, functions } from '../../firebase'; 
-import { collection, query, where, getDocs, doc, getDoc, addDoc, serverTimestamp, onSnapshot, orderBy, limit } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc, addDoc, serverTimestamp, onSnapshot, orderBy, limit, updateDoc } from "firebase/firestore";
 import { signInWithCustomToken } from 'firebase/auth'; 
 import { httpsCallable } from 'firebase/functions'; 
 import '../../App.css';
@@ -88,9 +88,8 @@ function HQ() {
 
   // Tab notification badges: unread OS-Comms messages (addressed to me) + unseen Inception pins
   // (brand-wide, shown to anyone with Inception access). Seen-state for pins is per-user localStorage.
-  const [msgUnread, setMsgUnread] = useState(0);
-  const [pinList, setPinList] = useState([]);
-  const [pinsSeenTick, setPinsSeenTick] = useState(0);
+  const [unreadMsgs, setUnreadMsgs] = useState([]); // {id, readBy} addressed to me + still unread
+  const [pinList, setPinList] = useState([]);        // {id, user, seenBy} across the brand's assemblies
 
   // NEW: State to hold an item ID we want to immediately open in the Master Library
   const [libraryFocusItemId, setLibraryFocusItemId] = useState(null);
@@ -116,33 +115,41 @@ function HQ() {
     }
   }, []);
 
-  // OS-Comms badge: count global_messages addressed to me (or ALL broadcasts) that I didn't send
-  // and haven't read yet. Mirrors SharedMessaging's readBy model, so reading there clears the badge.
+  // OS-Comms badge: global_messages addressed to me (or ALL broadcasts) that I didn't send and
+  // haven't read. Kept as a list so opening the tab can mark them all read.
   useEffect(() => {
     const me = user?.name;
-    if (!me) { setMsgUnread(0); return; }
+    if (!me) { setUnreadMsgs([]); return; }
     const q = query(collection(db, "global_messages"), orderBy("t", "desc"), limit(100));
     const unsub = onSnapshot(q, snap => {
-      let n = 0;
+      const unread = [];
       snap.docs.forEach(d => {
         const m = d.data();
         const forMe = m.target === me || m.target === 'ALL';
-        if (forMe && m.sender !== me && !(m.readBy || []).includes(me)) n++;
+        if (forMe && m.sender !== me && !(m.readBy || []).includes(me)) unread.push({ id: d.id, readBy: m.readBy || [] });
       });
-      setMsgUnread(n);
+      setUnreadMsgs(unread);
     }, err => console.warn('OS-Comms badge listen failed', err));
     return () => unsub();
   }, [user]);
 
-  // Inception badge: gather every spatial-callout (pin) across the active brand's assemblies. The
-  // pin already carries its author (`user`) and a stable `id`; seen-state is a per-user id set in
-  // localStorage, so the asterisk shows to anyone-but-the-author until they open the Inception tab.
+  // Opening the OS Comms tab auto-marks everything addressed to me as read → clears the asterisk.
+  useEffect(() => {
+    const me = user?.name;
+    if (activeTab !== '10.7 OS Comms' || !me || !unreadMsgs.length) return;
+    unreadMsgs.forEach(m => updateDoc(doc(db, "global_messages", m.id), { readBy: [...(m.readBy || []), me] }).catch(e => console.warn('auto mark-read failed', e)));
+  }, [activeTab, unreadMsgs, user]);
+
+  // Inception badge: every spatial-callout (pin) across the brand's assemblies, with its author
+  // (`user`) and `seenBy` list. The asterisk shows to anyone-but-the-author until they've SEEN it.
+  // seenBy is stamped (in InceptionTab) only when they open that assembly's board — so it syncs
+  // across devices and stays lit until the actual board is viewed, not just the tab.
   useEffect(() => {
     if (!activeBrand) { setPinList([]); return; }
     const q = query(collection(db, "Approved_Designs"), where("brandId", "==", activeBrand.id));
     const unsub = onSnapshot(q, snap => {
       const pins = [];
-      snap.docs.forEach(d => (d.data().spatialCallouts || []).forEach(c => { if (c && c.id) pins.push({ id: String(c.id), user: c.user || '' }); }));
+      snap.docs.forEach(d => (d.data().spatialCallouts || []).forEach(c => { if (c && c.id) pins.push({ id: String(c.id), user: c.user || '', seenBy: c.seenBy || [] }); }));
       setPinList(pins);
     }, err => console.warn('Inception pin badge listen failed', err));
     return () => unsub();
@@ -151,21 +158,8 @@ function HQ() {
   const currentUserName = user?.name;
   const unseenPins = useMemo(() => {
     if (!currentUserName || !pinList.length) return false;
-    let seen; try { seen = new Set(JSON.parse(localStorage.getItem(`inception_seen_pins_${currentUserName}`) || '[]')); } catch (e) { seen = new Set(); }
-    return pinList.some(p => p.user !== currentUserName && !seen.has(p.id));
-  }, [pinList, currentUserName, pinsSeenTick]);
-
-  // Opening the Inception tab acknowledges every pin currently known for this user → clears the badge.
-  useEffect(() => {
-    if (activeTab !== '1. Inception & Validation' || !currentUserName || !pinList.length) return;
-    try {
-      const key = `inception_seen_pins_${currentUserName}`;
-      const seen = new Set(JSON.parse(localStorage.getItem(key) || '[]'));
-      let changed = false;
-      pinList.forEach(p => { if (!seen.has(p.id)) { seen.add(p.id); changed = true; } });
-      if (changed) { localStorage.setItem(key, JSON.stringify([...seen])); setPinsSeenTick(t => t + 1); }
-    } catch (e) { /* localStorage unavailable — badge simply won't persist */ }
-  }, [activeTab, pinList, currentUserName]);
+    return pinList.some(p => p.user !== currentUserName && !(p.seenBy || []).includes(currentUserName));
+  }, [pinList, currentUserName]);
 
   useEffect(() => {
     const handleTabNavigation = (e) => {
@@ -360,8 +354,8 @@ function HQ() {
               onMouseOut={(e) => { if (!isActive) e.currentTarget.style.opacity = 0.7; }}
             >
               {TAB_LABELS[tab] || tab}
-              {tab === '10.7 OS Comms' && msgUnread > 0 && (
-                <span title={`${msgUnread} unread message${msgUnread === 1 ? '' : 's'}`} style={{ color: '#d9534f', fontSize: '17px', fontWeight: 700, marginLeft: '5px', lineHeight: 0, verticalAlign: 'super' }}>*</span>
+              {tab === '10.7 OS Comms' && unreadMsgs.length > 0 && (
+                <span title={`${unreadMsgs.length} unread message${unreadMsgs.length === 1 ? '' : 's'}`} style={{ color: '#d9534f', fontSize: '17px', fontWeight: 700, marginLeft: '5px', lineHeight: 0, verticalAlign: 'super' }}>*</span>
               )}
               {tab === '1. Inception & Validation' && unseenPins && (
                 <span title="New pin on the Inception board" style={{ color: '#d9534f', fontSize: '17px', fontWeight: 700, marginLeft: '5px', lineHeight: 0, verticalAlign: 'super' }}>*</span>
