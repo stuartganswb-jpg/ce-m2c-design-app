@@ -4,6 +4,7 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, 
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import FormPreview from '../Shared/FormPreview';
+import { printForm } from '../Shared/printForm';
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -2252,6 +2253,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                               Sample No.
                               <input value={previewDocNum} onChange={e => setPreviewDocNum(e.target.value)} style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', width: '140px' }} />
                           </label>
+                          <button onClick={() => printForm(<FormPreview type={activeFormType} brand={previewBrand} logoUrl={brandLogos[previewBrand]} header={formEditor.header} footer={formEditor.footer} terms={formEditor.terms} docNumber={previewDocNum} />, `${activeFormType.replace('_', ' ')} ${previewDocNum}`)} style={{ padding: '10px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🖨 Print</button>
                       </div>
                   </div>
                   <div style={{ overflowX: 'auto', paddingBottom: '10px' }}>
