@@ -951,6 +951,21 @@ const ShopFloor = () => {
                         </div>
                     )}
 
+                    {((Array.isArray(order.visionNotes) && order.visionNotes.length > 0) || (Array.isArray(order.bracketNotes) && order.bracketNotes.some(b => b && b.note))) && (
+                        <div style={{ marginBottom: '20px', border: '1px solid var(--brass)' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', background: 'var(--brass)', padding: '6px 12px' }}>Shop Notes (from Vision)</div>
+                            {(order.visionNotes || []).map((n, i) => (
+                                <div key={`v${i}`} style={{ padding: '8px 12px', borderTop: i ? '1px solid var(--line)' : 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)' }}>📝 {n}</div>
+                            ))}
+                            {(order.bracketNotes || []).filter(b => b && b.note).map((b, i) => (
+                                <div key={`b${i}`} style={{ display: 'flex', gap: '10px', padding: '8px 12px', borderTop: (i || (order.visionNotes || []).length) ? '1px solid var(--line)' : 'none', fontFamily: 'var(--sans)', fontSize: '0.88rem' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', minWidth: '120px' }}>{b.type === 'splice' ? 'Splice' : 'Bracket'}{(b.dist !== null && b.dist !== undefined) ? ` @ ${b.dist}"${b.ref ? ` ${b.ref}` : ''}` : ''}</span>
+                                    <span style={{ color: 'var(--ink)' }}>{b.note}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
                     {Array.isArray(order.cutList) && order.cutList.length > 0 && (
                         <div style={{ marginBottom: '20px' }}>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Cut List</div>

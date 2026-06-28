@@ -443,6 +443,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 hangerLocations: Array.isArray(eng.hangerLocations) ? eng.hangerLocations : []
             };
             const fabMethod = eng.qtyBends > 0 ? 'BEND' : (eng.qtySplices > 0 ? 'SPLICE' : (eng.qtyMiters > 0 ? 'MITER' : null));
+
+            // Vision canvas notes captured on the cart items: free-floating shop notes (generalNotes)
+            // and per-bracket/splice note boxes (bracketNotes). Carry them to the floor verbatim.
+            const cartItems = job.cpqData?.cartItems || [];
+            const visionNotes = cartItems.flatMap(it => Array.isArray(it.generalNotes) ? it.generalNotes : []).map(s => String(s || '').trim()).filter(Boolean);
+            const bracketNotes = cartItems.flatMap(it => Array.isArray(it.bracketNotes) ? it.bracketNotes : []).filter(b => b && b.note && String(b.note).trim());
             const drawingUrl = svgUri
                 || (eng.svgString ? "data:image/svg+xml;charset=utf-8," + encodeURIComponent(eng.svgString) : null)
                 || job.finalImageUrl || null;
@@ -538,6 +544,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     priority: 999,
                     brand: activeBrand,
                     note: so.memo || job.sidemark || "",
+                    visionNotes, bracketNotes,
                     cpqSpecs,
                     imageUrl: drawingUrl,
                     fabNotes, fabMethod,
