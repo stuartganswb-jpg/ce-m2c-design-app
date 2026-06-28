@@ -814,7 +814,12 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               engineeringNotes: {
                   poleFeetQty, qtyBrackets, qtyCenterBrackets, recRings, qtyFinials, qtySplices, qtyMiters,
                   qtyBends, qtyMiterReturns, qtyCustomProjBrackets, shape: engData.shape,
-                  poleO2O, totalSystemO2O, pole1, pole2, pole3, hangerLocations, svgString: capturedSvg
+                  poleO2O, totalSystemO2O, pole1, pole2, pole3, hangerLocations, svgString: capturedSvg,
+                  // Shop-floor cut sheet: per-segment finished lengths (above), raw cut lengths, miter
+                  // saw angles + wall angles, bend radius + pole diameter — so the floor cuts/bends from
+                  // the engineered numbers without re-deriving them.
+                  sawAngle1, sawAngle2, wallAngleL: engData.a1, wallAngleR: engData.a2,
+                  rawLeft, rawCenter, rawRight, returnRadius: engData.returnRadius, poleDiameter: engData.poleDiameter
               },
               ...dynamicConfigParams
           }, 

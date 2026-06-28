@@ -431,6 +431,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 qtyMiterReturns: eng.qtyMiterReturns || 0,
                 poleO2O: eng.poleO2O || null,
                 totalSystemO2O: eng.totalSystemO2O || null,
+                // Full cut sheet from Vision: per-segment finished lengths + raw cuts + miter saw / wall
+                // angles + bend radius / pole diameter, so the shop gets the cut+bend detail, not just counts.
+                pole1: eng.pole1 ?? null, pole2: eng.pole2 ?? null, pole3: eng.pole3 ?? null,
+                rawLeft: eng.rawLeft ?? null, rawCenter: eng.rawCenter ?? null, rawRight: eng.rawRight ?? null,
+                sawAngle1: eng.sawAngle1 ?? null, sawAngle2: eng.sawAngle2 ?? null,
+                wallAngleL: eng.wallAngleL ?? null, wallAngleR: eng.wallAngleR ?? null,
+                returnRadius: eng.returnRadius ?? null, poleDiameter: eng.poleDiameter ?? null,
                 // Hidden-hanger mount positions captured in Vision: FIPBH per bracket, FIPBHS per
                 // splice. The shop floor reads these to set the concealed hangers at the right spots.
                 hangerLocations: Array.isArray(eng.hangerLocations) ? eng.hangerLocations : []

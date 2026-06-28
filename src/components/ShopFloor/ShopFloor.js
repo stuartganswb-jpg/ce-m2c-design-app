@@ -908,8 +908,33 @@ const ShopFloor = () => {
                                 {order.fabNotes?.qtyBends ? ` · ${order.fabNotes.qtyBends} bend` : ''}
                                 {order.fabNotes?.qtySplices ? ` · ${order.fabNotes.qtySplices} splice` : ''}
                                 {order.fabNotes?.qtyMiters ? ` · ${order.fabNotes.qtyMiters} miter` : ''}
+                                {(Number(order.fabNotes?.sawAngle1) > 0 || Number(order.fabNotes?.sawAngle2) > 0) ? ` · ∠ ${Number(order.fabNotes?.sawAngle1 || order.fabNotes?.sawAngle2).toFixed(1)}°` : ''}
                                 {order.fabNotes?.poleO2O ? ` · O2O ${order.fabNotes.poleO2O}"` : ''}
                             </span>
+                        </div>
+                    )}
+
+                    {order.fabNotes && (Number(order.fabNotes.pole1) > 0 || Number(order.fabNotes.pole2) > 0 || Number(order.fabNotes.pole3) > 0 || Number(order.fabNotes.rawCenter) > 0) && (
+                        <div style={{ marginBottom: '20px', border: '1px solid var(--line)' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', background: 'var(--ink-soft)', padding: '6px 12px' }}>Pole Cut Sheet</div>
+                            {[
+                                { k: 'Left', fin: order.fabNotes.pole1, raw: order.fabNotes.rawLeft, ang: order.fabNotes.sawAngle1 },
+                                { k: 'Center', fin: order.fabNotes.pole2, raw: order.fabNotes.rawCenter, ang: null },
+                                { k: 'Right', fin: order.fabNotes.pole3, raw: order.fabNotes.rawRight, ang: order.fabNotes.sawAngle2 },
+                            ].filter(s => Number(s.fin) > 0 || Number(s.raw) > 0).map((s, i) => (
+                                <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '8px 12px', borderTop: i ? '1px solid var(--line)' : 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', minWidth: '54px' }}>{s.k}</span>
+                                    <span style={{ color: 'var(--ink)' }}>{Number(s.fin) > 0 ? `Finished ${Number(s.fin).toFixed(2)}"` : ''}{Number(s.raw) > 0 ? `  ·  Raw cut ${Number(s.raw).toFixed(2)}"` : ''}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--brass)', textAlign: 'right', minWidth: '70px' }}>{Number(s.ang) > 0 ? `∠ ${Number(s.ang).toFixed(1)}°` : ''}</span>
+                                </div>
+                            ))}
+                            {(Number(order.fabNotes.returnRadius) > 0 || Number(order.fabNotes.poleDiameter) > 0) && (
+                                <div style={{ display: 'flex', gap: '18px', padding: '8px 12px', borderTop: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '0.78rem', color: 'var(--ink-soft)' }}>
+                                    {order.fabNotes.qtyBends && Number(order.fabNotes.returnRadius) > 0 ? <span>Bend radius {order.fabNotes.returnRadius}"</span> : null}
+                                    {Number(order.fabNotes.poleDiameter) > 0 ? <span>Pole Ø {order.fabNotes.poleDiameter}"</span> : null}
+                                    {Number(order.fabNotes.totalSystemO2O) > 0 ? <span>System O2O {Number(order.fabNotes.totalSystemO2O).toFixed(2)}"</span> : null}
+                                </div>
+                            )}
                         </div>
                     )}
 
