@@ -4,6 +4,8 @@ import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, dele
 import { classifyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
+import FormPreview from '../Shared/FormPreview';
+import { printForm } from '../Shared/printForm';
 
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers).
 const getJobLines = (job) => (job?.cpqData?.breakdown || []).filter(l => l && !l.isHeader);
@@ -37,6 +39,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const [liveShop, setLiveShop] = useState([]);
     const [liveFin, setLiveFin] = useState([]);
     const [logTodayOnly, setLogTodayOnly] = useState(false);
+    const [formTemplates, setFormTemplates] = useState({}); // hq_config/form_templates — header/footer/terms per doc type
+    const [brandLogos, setBrandLogos] = useState({});       // hq_config/brand_logos — printed on the forms
 
     const addLog = (msg, type = 'info') => {
         const time = new Date().toLocaleTimeString();
@@ -87,6 +91,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         ];
         return () => subs.forEach(u => u && u());
     }, [activeBrand]);
+
+    // Form branding (shared with Admin > Form Templates) so printed docs use the configured
+    // header/footer/terms + brand logo.
+    useEffect(() => {
+        const u1 = onSnapshot(doc(db, "hq_config", "form_templates"), s => { if (s.exists()) setFormTemplates(s.data()); });
+        const u2 = onSnapshot(doc(db, "hq_config", "brand_logos"), s => { if (s.exists()) setBrandLogos(s.data()); });
+        return () => { u1(); u2(); };
+    }, []);
 
     // Merge the four feeds into one job per order, keyed by the same canonical id the splitter
     // stamps as `orderKey` (SO → soId; stock WO → hqJobId/id), so an order's HQ row and its Shop /
@@ -795,6 +807,43 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     };
     const fmtD = (v) => { if (v == null || v === '') return '—'; const ms = typeof v === 'number' ? v : Date.parse(v); if (isNaN(ms)) return String(v); return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }); };
 
+    // Map an order + its linked CPQ quote into the FormPreview data shape. Line items come from the
+    // quote's cpqData.breakdown (sans ▶ assembly headers); customer/ship-to from the quote.
+    const buildFormData = (order, job) => {
+        const a = job?.customShippingAddress;
+        const cityLine = a ? [a.city, a.state, a.zip].filter(Boolean).join(', ') : '';
+        const shipTo = a ? [a.addressee || a.attention, a.addr1, a.addr2, cityLine].filter(Boolean) : null;
+        const custName = job?.customer?.name || (typeof order?.customer === 'string' ? order.customer : '') || '';
+        const lines = getJobLines(job).map(l => ({
+            item: l.partId || '',
+            desc: String(l.name || '').replace(/^\s*[-▶]\s*/, '').trim(),
+            qty: l.qty,
+            price: (l.price != null) ? l.price : ((l.total != null && l.qty) ? l.total / l.qty : 0),
+        }));
+        return {
+            billTo: custName ? [custName] : [],
+            shipTo: (shipTo && shipTo.length) ? shipTo : (custName ? [custName] : []),
+            lines,
+            date: order?.reqDate || '',
+            po: order?.poNum || order?.po || '',
+            total: job?.cpqData?.totalPrice,
+        };
+    };
+
+    // Print a branded doc for the order currently open in the View modal. The NetSuite SO# is the
+    // doc number (printed + barcoded); header/footer/terms come from the Admin form templates.
+    const printDoc = (formType) => {
+        const order = activeViewOrder, job = activeJobDetails;
+        if (!order) return;
+        const tpl = formTemplates[formType] || {};
+        const brand = order.brand || activeBrand;
+        const docNumber = order.soId || order.woId || order.id;
+        printForm(
+            <FormPreview type={formType} brand={brand} logoUrl={brandLogos[brand]} header={tpl.header} footer={tpl.footer} terms={tpl.terms} docNumber={docNumber} data={buildFormData(order, job)} />,
+            `${formType.replace('_', ' ')} ${docNumber}`
+        );
+    };
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
@@ -1054,7 +1103,15 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             </div>
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
-                                
+
+                                {/* Print branded docs — SO# is the printed + barcoded spine on each */}
+                                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '14px 16px' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginRight: '4px' }}>Print:</span>
+                                    <button onClick={() => printDoc('SALES_ORDER')} style={{ ...btnStyle, background: 'var(--ink)', color: '#fff', border: 'none' }}>🖨 Sales Order</button>
+                                    <button onClick={() => printDoc('PACKING_SLIP')} style={{ ...btnStyle, background: 'var(--ink)', color: '#fff', border: 'none' }}>🖨 Packing List</button>
+                                    <button onClick={() => printDoc('INVOICE')} style={{ ...btnStyle, background: 'var(--ink)', color: '#fff', border: 'none' }}>🖨 Invoice</button>
+                                </div>
+
                                 {activeJobDetails.svgUri ? (
                                     <div style={{ border: '1px solid var(--line)', padding: '20px', background: 'var(--paper)' }}>
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '16px' }}>Engineering Drawing</div>
