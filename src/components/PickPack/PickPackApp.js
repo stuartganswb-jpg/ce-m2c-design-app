@@ -1366,7 +1366,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     <div style={{ flex: 1, display: 'flex', gap: '40px' }}>
                         <div style={{ flex: 1, background: '#fff', padding: '40px', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>Item {currentPickLine + 1} of {activePickJob.partsList.length}</div>
-                            <div style={{ fontSize: '3rem', fontWeight: 300, color: theme.ink, margin: '20px 0', fontFamily: theme.serif }}>{line.name}</div>
+                            <div style={{ fontSize: '1.5rem', fontFamily: theme.mono, color: theme.ink, fontWeight: 600, letterSpacing: '.04em', margin: '18px 0 6px' }}>ITEM #: {line.legacyErpId || line.partId || 'UNASSIGNED'}</div>
+                            <div style={{ fontSize: '2.2rem', fontWeight: 300, color: theme.ink, margin: '0 0 18px', fontFamily: theme.serif }}>{line.name}</div>
                             <div style={{ fontSize: '1.2rem', fontFamily: theme.mono, color: theme.brass, marginBottom: '40px' }}>BIN: {line.binLocation || 'UNASSIGNED'}</div>
                             
                             <a href={line.assetUrl || '#'} target="_blank" rel="noreferrer" style={{ display: 'inline-block', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textDecoration: 'none', textTransform: 'uppercase', transition: 'all 0.2s' }} onMouseOver={(e) => e.currentTarget.style.borderColor = theme.brass} onMouseOut={(e) => e.currentTarget.style.borderColor = theme.line}>

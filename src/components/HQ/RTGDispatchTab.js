@@ -376,6 +376,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         const cp = part?.clientPricing?.find(c => c.customerId === customerId);
         return {
             partId: line.partId || null,
+            // NetSuite item # for the pick ticket (falls back to the app part id if a part hasn't synced).
+            legacyErpId: part?.legacyErpId || part?.itemId || line.partId || '',
             name: cleanLineName(line.name),
             clientSku: cp?.clientSku || '',
             qty: Number(line.qty) || 1,
