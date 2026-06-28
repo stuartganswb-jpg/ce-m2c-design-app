@@ -378,9 +378,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     });
 
     // §6: import a confirmed Sales Order and fan it out into the two linked work orders.
-    const autoSplitSalesOrder = async (so) => {
+    const autoSplitSalesOrder = async (so, opts = {}) => {
         if (!so.hqJobId) return alert("This SO has no linked CPQ job (custbody50). Cannot auto-split.");
-        if (!window.confirm(`Import SO ${so.soId || so.id} and auto-split into Finishing + Shop work orders?`)) return;
+        if (!opts.skipConfirm && !window.confirm(`Import SO ${so.soId || so.id} and auto-split into Finishing + Shop work orders?`)) return;
 
         try {
             const jobSnap = await getDoc(doc(db, "jobs", so.hqJobId));
@@ -844,6 +844,61 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         );
     };
 
+    // One-click test seed: a complete Brimar French Return order (2× 8 ft poles + a center bracket
+    // each, finish N80) written for the ACTIVE brand, then fanned out through the real auto-split
+    // pipeline so it lands on every screen — RTG, Shop, Finishing, Packaging and Pick & Pack.
+    const seedTestOrder = async () => {
+        if (!activeBrand) return alert('Pick a brand first.');
+        if (!window.confirm(`Seed the Brimar test order (2× 8 ft French Return poles + center brackets, finish N80) onto every screen for brand "${activeBrand}"?`)) return;
+        setIsSyncing(true);
+        try {
+            const SO_NUM = 'BRIMAR-TEST';
+            const QUOTE_ID = 'QUOTE-BRIMAR-TEST';
+            const soDocId = `SO-${SO_NUM}`;
+            const reqDate = new Date(Date.now() + 14 * 864e5).toISOString().split('T')[0];
+
+            // Pole = Custom (→ Shop); Center Bracket = Small Parts (→ Finishing). Two poles, a bracket each.
+            const breakdown = [
+                { name: '▶ Brimar French Return [Master Bath]', qty: 2, total: 901, isHeader: true },
+                { name: '  - 8 ft French Return Pole — Finish N80', qty: 2, price: 412, total: 824, partHandling: 'Custom', partId: 'BRIMAR-FR-8FT', cutLength: 96 },
+                { name: '  - Center Bracket & Mount — Finish N80', qty: 2, price: 38.5, total: 77, partHandling: 'Small Parts', partId: 'HCUMLPB410EB' },
+            ];
+
+            await setDoc(doc(db, "jobs", QUOTE_ID), {
+                jobId: QUOTE_ID, brandId: activeBrand, status: 'CONFIGURED',
+                customer: { id: 'BRIMAR', name: 'Brimar' },
+                jobName: 'Brimar French Return — Test', sidemark: 'Master Bath',
+                flowId: null, linkedAssemblyId: null,
+                customShippingAddress: { attention: '', addressee: 'Brimar Inc.', addr1: '1 Research Drive', addr2: '', city: 'High Point', state: 'NC', zip: '27260', country: 'US' },
+                cpqData: { totalPrice: 901, breakdown, configuration: {}, appliedRules: [] },
+                createdAt: Date.now()
+            }, { merge: true });
+
+            await setDoc(doc(db, "hq_sales_orders", soDocId), {
+                id: soDocId, soId: SO_NUM, nsInternalId: 'TEST',
+                customer: 'Brimar', status: 'Approved', brand: activeBrand,
+                recipe: 'N80', type: 'Custom', totalParts: 4,
+                length: 96, width: 0, height: 0,
+                reqDate, hqJobId: QUOTE_ID, memo: '2× 8 ft French Return poles + center brackets — Finish N80',
+                createdAt: Date.now()
+            }, { merge: true });
+
+            // Real pipeline → Shop (WO/SHOP), Finishing (WO-…), Packaging (PKG-…).
+            const seededSO = { id: soDocId, soId: SO_NUM, hqJobId: QUOTE_ID, brand: activeBrand, customer: 'Brimar', reqDate, recipe: 'N80', orderType: 'sales' };
+            await autoSplitSalesOrder(seededSO, { skipConfirm: true });
+            // The order has a custom pole, so its finishing WO normally waits for shop-start; force it
+            // to Pick & Pack now so the test order is visible there too.
+            await updateDoc(doc(db, "fin_workorders", `WO-${SO_NUM}`), { sentToPickPack: true, pickStatus: 'Pending' }).catch(() => {});
+
+            addLog(`Seeded Brimar test order ${soDocId} across all screens (brand ${activeBrand}).`, 'success');
+            alert(`✅ Seeded Brimar test order (${soDocId}) for brand "${activeBrand}".\n\nNow visible on: RTG Dispatch + Daily Job Log, Shop Floor, Finishing Floor, Packaging, and Pick & Pack. Print buttons on the SO view produce the Sales Order / Packing List / Invoice.`);
+            loadRTGOrders();
+        } catch (e) {
+            console.error('seed failed', e);
+            alert('Seed failed: ' + (e?.message || e));
+        } finally { setIsSyncing(false); }
+    };
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
@@ -857,6 +912,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     </button>
                     <button onClick={loadRTGOrders} style={{ ...btnStyle }}>
                         {loading ? 'Scanning...' : 'Refresh Dispatch List'}
+                    </button>
+                    <button onClick={seedTestOrder} disabled={isSyncing} title="Seed a complete Brimar French Return test order (2× 8ft poles + center brackets, N80) onto every screen for the active brand" style={{ ...btnStyle, background: 'var(--paper-2)', border: '1px dashed var(--line)' }}>
+                        🌱 Seed Test Order
                     </button>
                 </div>
             </div>
