@@ -10,6 +10,17 @@ import { printForm } from '../Shared/printForm';
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers).
 const getJobLines = (job) => (job?.cpqData?.breakdown || []).filter(l => l && !l.isHeader);
 
+// Fixed ids for the Brimar test seed (shared by seed + remove so they can never drift). The floor
+// doc ids follow autoSplitSalesOrder's orderKey convention (WO-/SHOP-/PKG- + soNum).
+const TEST_SEED = { soNum: 'BRIMAR-TEST', quoteId: 'QUOTE-BRIMAR-TEST' };
+const testSeedDocs = () => [
+  ['jobs', TEST_SEED.quoteId],
+  ['hq_sales_orders', `SO-${TEST_SEED.soNum}`],
+  ['shop_custom_orders', `SHOP-${TEST_SEED.soNum}`],
+  ['fin_workorders', `WO-${TEST_SEED.soNum}`],
+  ['packaging_orders', `PKG-${TEST_SEED.soNum}`],
+];
+
 // Strip the "  - " display prefix CPQTab adds when merging cart lines.
 const cleanLineName = (name) => String(name || '').replace(/^\s*[-▶]\s*/, '').trim();
 
@@ -852,8 +863,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (!window.confirm(`Seed the Brimar test order (2× 8 ft French Return poles + center brackets, finish N80) onto every screen for brand "${activeBrand}"?`)) return;
         setIsSyncing(true);
         try {
-            const SO_NUM = 'BRIMAR-TEST';
-            const QUOTE_ID = 'QUOTE-BRIMAR-TEST';
+            const SO_NUM = TEST_SEED.soNum;
+            const QUOTE_ID = TEST_SEED.quoteId;
             const soDocId = `SO-${SO_NUM}`;
             const reqDate = new Date(Date.now() + 14 * 864e5).toISOString().split('T')[0];
 
@@ -899,6 +910,26 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         } finally { setIsSyncing(false); }
     };
 
+    // Remove ONLY the Brimar test seed — the five fixed-id docs it created (quote, SO, shop,
+    // finishing, packaging). Deterministic ids, so nothing real is ever touched.
+    const removeTestOrder = async () => {
+        if (!window.confirm('Remove the Brimar test order from every screen? This deletes only the seeded test docs — nothing else.')) return;
+        setIsSyncing(true);
+        try {
+            const results = await Promise.all(testSeedDocs().map(async ([c, id]) => {
+                try { const s = await getDoc(doc(db, c, id)); if (!s.exists()) return false; await deleteDoc(doc(db, c, id)); return true; }
+                catch (e) { console.warn(`remove ${c}/${id} failed`, e); return false; }
+            }));
+            const n = results.filter(Boolean).length;
+            addLog(`Removed Brimar test order — ${n} doc(s) deleted.`, 'info');
+            alert(`✅ Brimar test order removed (${n} doc${n === 1 ? '' : 's'} deleted) — cleared from RTG, Shop, Finishing, Packaging, and Pick & Pack.`);
+            loadRTGOrders();
+        } catch (e) {
+            console.error('remove failed', e);
+            alert('Remove failed: ' + (e?.message || e));
+        } finally { setIsSyncing(false); }
+    };
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
@@ -915,6 +946,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     </button>
                     <button onClick={seedTestOrder} disabled={isSyncing} title="Seed a complete Brimar French Return test order (2× 8ft poles + center brackets, N80) onto every screen for the active brand" style={{ ...btnStyle, background: 'var(--paper-2)', border: '1px dashed var(--line)' }}>
                         🌱 Seed Test Order
+                    </button>
+                    <button onClick={removeTestOrder} disabled={isSyncing} title="Delete only the Brimar test-order docs from every screen (nothing real is touched)" style={{ ...btnStyle, background: '#fff', border: '1px dashed #d9534f', color: '#d9534f' }}>
+                        🗑 Remove Test Order
                     </button>
                 </div>
             </div>
