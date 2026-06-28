@@ -376,8 +376,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         const cp = part?.clientPricing?.find(c => c.customerId === customerId);
         return {
             partId: line.partId || null,
-            // NetSuite item # for the pick ticket (falls back to the app part id if a part hasn't synced).
-            legacyErpId: part?.legacyErpId || part?.itemId || line.partId || '',
+            // NetSuite item # for the pick ticket — prefer the id baked on the CPQ line, then the
+            // resolved part, then the app part id, so it's populated even if the part hasn't synced.
+            legacyErpId: line.legacyErpId || part?.legacyErpId || part?.itemId || line.partId || '',
             name: cleanLineName(line.name),
             clientSku: cp?.clientSku || '',
             qty: Number(line.qty) || 1,
@@ -508,7 +509,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     name: cleanLineName(l.name),
                     qty: Number(l.qty) || 1,
                     cutLength: l.cutLength || null,
-                    partId: l.partId || null
+                    partId: l.partId || null,
+                    legacyErpId: l.legacyErpId || l.partId || null
                 }));
                 const qty = customLines.reduce((s, l) => s + (Number(l.qty) || 0), 0) || customLines.length;
 
@@ -518,7 +520,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     finSiblingId: hasSmall ? finId : null, hasSmallSibling: hasSmall,
                     status: 'Pending',
                     item: cleanLineName(customLines[0]?.name) || job.cpqData?.cartItems?.[0]?.assemblyName || 'Custom App Order',
-                    partNum: customLines[0]?.partId || '',
+                    partNum: customLines[0]?.legacyErpId || customLines[0]?.partId || '',
                     qty,
                     cutLength: cutLine?.cutLength || null,
                     cutList,
@@ -828,7 +830,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         const shipTo = a ? [a.addressee || a.attention, a.addr1, a.addr2, cityLine].filter(Boolean) : null;
         const custName = job?.customer?.name || (typeof order?.customer === 'string' ? order.customer : '') || '';
         const lines = getJobLines(job).map(l => ({
-            item: l.partId || '',
+            item: l.legacyErpId || l.partId || '',
             desc: String(l.name || '').replace(/^\s*[-▶]\s*/, '').trim(),
             qty: l.qty,
             price: (l.price != null) ? l.price : ((l.total != null && l.qty) ? l.total / l.qty : 0),
@@ -1245,7 +1247,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                             <tbody>
                                                 {activeJobDetails.cpqData.breakdown.map((item, i) => (
                                                     <tr key={i} style={{ borderBottom: '1px solid var(--line)' }}>
-                                                        <td style={{ padding: '16px 0', color: 'var(--ink)' }}>{item.name}</td>
+                                                        <td style={{ padding: '16px 0', color: 'var(--ink)' }}>
+                                                            {!item.isHeader && (item.legacyErpId || item.partId) && <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)', marginRight: '10px' }}>{item.legacyErpId || item.partId}</span>}
+                                                            {item.name}
+                                                        </td>
                                                         <td style={{ padding: '16px 0', textAlign: 'right', color: 'var(--ink-soft)' }}>Qty: {item.qty}</td>
                                                     </tr>
                                                 ))}

@@ -1027,7 +1027,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               name: activeAssembly ? activeAssembly.itemName : activeFlow.name,
               qty: 1, price: baseAssemblyPrice, total: baseAssemblyPrice,
               partHandling: activeAssembly?.manufacturingSpecs?.partHandling || activeFlow.partHandling || '',
-              partId: activeAssembly?.id || null
+              partId: activeAssembly?.id || null,
+              legacyErpId: activeAssembly?.legacyErpId || activeAssembly?.itemId || null
           });
       }
 
@@ -1066,6 +1067,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               // For STYLE_SWAP the selected value is the per-instance optId, not the part id.
               // Resolve the real part id so the part lookup, line item, and ERP push are correct.
               let resolvedPartId = selectedValue;
+              let resolvedErpId = null; // NetSuite item # for this line, baked on so it flows downstream
 
               if (selectedValue) {
                   const styleOpt = step.type === 'STYLE_SWAP' ? (step.styleOptions || []).find(o => (o.optId || o.partId) === selectedValue) : null;
@@ -1075,6 +1077,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   dynamicAssets.find(a => a.id === resolvedPartId) ||
                                   globalFinishes.find(f => f.id === resolvedPartId) ||
                                   outsourceFinishes.find(f => f.id === resolvedPartId);
+
+                  resolvedErpId = partObj?.legacyErpId || partObj?.itemId || styleOpt?.legacyErpId || null;
 
                   if (partObj) itemName = `${step.title} (${partObj.itemName || partObj.name})`;
                   else if (styleOpt) itemName = `${step.title} (${styleOpt.partName})`;
@@ -1126,6 +1130,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       name: itemName, qty: qty, price: stepPrice * multiplier, total: lineTotal,
                       partHandling: step.partHandling || '',
                       partId: resolvedPartId || step.linkedItemId || null,
+                      legacyErpId: resolvedErpId,
                       cutLength: cutLength,
                       dimensions: dimInput ? { length: dimInput.length || null, wallA: dimInput.wallA || null, wallB: dimInput.wallB || null, wallC: dimInput.wallC || null } : null
                   });

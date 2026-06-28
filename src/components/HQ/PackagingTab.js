@@ -982,7 +982,7 @@ const PackagingTab = ({ activeBrand }) => {
             const poleBox = poleItems.length ? { name: wideBox ? 'Pole Box (Large)' : 'Pole Box (Small)', w: wideBox ? 8 : 3, h: 3, len: +(maxPoleLen + 1.25).toFixed(2) } : null;
             const itemRow = (it, i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: theme.ink, padding: '4px 0', borderTop: i ? `1px solid ${theme.line}` : 'none' }}>
-                <span>{it.qty > 1 ? `${it.qty}× ` : ''}{it.partName}</span>
+                <span>{it.qty > 1 ? `${it.qty}× ` : ''}{(it.legacyErpId || it.partId) ? <span style={{ fontFamily: theme.mono, fontSize: '0.7rem', color: theme.inkSoft, marginRight: '6px' }}>{it.legacyErpId || it.partId}</span> : null}{it.partName}</span>
                 <span style={{ fontFamily: theme.mono, fontSize: '0.7rem', color: theme.inkSoft }}>{it.cutLength ? `${it.cutLength}" cut` : (it.dimensions?.width ? `${it.dimensions.width}×${it.dimensions.height}"` : '')}</span>
               </div>
             );
