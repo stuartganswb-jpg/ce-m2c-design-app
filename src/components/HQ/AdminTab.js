@@ -3,6 +3,7 @@ import { db, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc, orderBy, limit, writeBatch } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
+import FormPreview from '../Shared/FormPreview';
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -105,6 +106,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [formTemplates, setFormTemplates] = useState({});
   const [activeFormType, setActiveFormType] = useState('QUOTE');
   const [formEditor, setFormEditor] = useState({ header: '', footer: '', terms: '' });
+  const [previewBrand, setPreviewBrand] = useState(activeBrand || 'ce'); // brand whose logo the form preview shows
+  const [previewDocNum, setPreviewDocNum] = useState('SO10293');         // sample doc/SO number for the preview barcode
 
   const [systemLogs, setSystemLogs] = useState([]);
   const [logFilter, setLogFilter] = useState({ app: 'ALL', user: '' });
@@ -2230,6 +2233,29 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                       <button onClick={handleSaveFormTemplate} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                           Save {activeFormType.replace('_', ' ')} Template
                       </button>
+                  </div>
+              </div>
+
+              {/* LIVE FORM PREVIEW — reflects the header/footer/terms above + the brand logo, with the
+                  doc number printed and barcoded at the bottom (the NetSuite spine on every form). */}
+              <div style={{ marginTop: '30px', background: 'var(--paper)', border: '1px solid var(--line)', padding: '24px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '24px' }}>
+                      <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Live Preview — {activeFormType.replace('_', ' ')}</h4>
+                      <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              Brand
+                              <select value={previewBrand} onChange={e => setPreviewBrand(e.target.value)} style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', background: '#fff' }}>
+                                  {BRANDS_LIST.map(b => <option key={b} value={b}>{b.toUpperCase()}</option>)}
+                              </select>
+                          </label>
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              Sample No.
+                              <input value={previewDocNum} onChange={e => setPreviewDocNum(e.target.value)} style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', width: '140px' }} />
+                          </label>
+                      </div>
+                  </div>
+                  <div style={{ overflowX: 'auto', paddingBottom: '10px' }}>
+                      <FormPreview type={activeFormType} brand={previewBrand} logoUrl={brandLogos[previewBrand]} header={formEditor.header} footer={formEditor.footer} terms={formEditor.terms} docNumber={previewDocNum} />
                   </div>
               </div>
             </div>
