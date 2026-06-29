@@ -90,7 +90,10 @@ const ShopFloor = () => {
                 setPerms(pData);
                 setUser(userData);
                 const r = userData.role ? userData.role.toLowerCase() : 'operator';
-                setActiveTab(pData[r]?.includes('floor') ? 'floor' : (pData[r]?.[0] || 'scheduler'));
+                // Return the operator to the screen they were on — it survives the per-transaction
+                // logout (component stays mounted). Only default if their current tab isn't permitted.
+                const allowed = pData[r];
+                setActiveTab(prev => (!allowed || allowed.includes(prev)) ? prev : (allowed.includes('floor') ? 'floor' : (allowed[0] || 'floor')));
             }
         } catch (error) {
             console.error(error);

@@ -90,7 +90,10 @@ const FinishingFloor = () => {
         setUser(userData);
 
         const r = userData.role ? userData.role.toLowerCase() : 'operator';
-        setActiveTab(pData[r]?.includes('ACTIVE FLOOR') ? 'ACTIVE FLOOR' : (pData[r]?.[0] || 'ACTIVE FLOOR'));
+        // Return the operator to the screen they were on — it survives the per-transaction logout
+        // (component stays mounted). Only default if their current tab isn't permitted.
+        const allowed = pData[r];
+        setActiveTab(prev => (!allowed || allowed.includes(prev)) ? prev : (allowed.includes('ACTIVE FLOOR') ? 'ACTIVE FLOOR' : (allowed[0] || 'ACTIVE FLOOR')));
       }
     } catch (err) {
       console.error(err);
