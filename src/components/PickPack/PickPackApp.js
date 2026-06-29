@@ -185,6 +185,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [convertDestScan, setConvertDestScan] = useState("");
     const [convertMemo, setConvertMemo] = useState("");
     const [convertLot, setConvertLot] = useState(""); // lot/serial # for the finished assembly (lot-tracked assemblies require it)
+    // Conversion Cart (batch phosphate): pull raw -> a WIP cart bin in one trip, then convert off the cart.
+    const [convBatch, setConvBatch] = useState(null);   // the active open batch for this brand
+    const [cartBin, setCartBin] = useState('PHOS-CART'); // WIP bin the raw is staged into
+    const [cartBinEdits, setCartBinEdits] = useState({}); // per-line put-away bin (finished /P is bin-untracked → reference)
 
     // BIN TRANSFER state (move qty between bins within a location)
     const [transferBase, setTransferBase] = useState(null);
@@ -260,7 +264,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const unsubChipUsers = onSnapshot(collection(db, "fin_users"), (snap) => setFinUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
         const unsubChipRecipes = onSnapshot(collection(db, "fin_recipes"), (snap) => setFinRecipes(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
 
-        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); unsubFees(); unsubChips(); unsubChipUsers(); unsubChipRecipes(); };
+        // Active conversion cart (one open batch per brand) for the phosphate pull → convert workflow.
+        const unsubBatch = onSnapshot(query(collection(db, "conversion_batches"), where("brand", "==", activeBrand), where("status", "==", "open")), (snap) => {
+            const open = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            setConvBatch(open[0] || null);
+            if (open[0]?.cartBin) setCartBin(open[0].cartBin);
+        });
+
+        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); unsubFees(); unsubChips(); unsubChipUsers(); unsubChipRecipes(); unsubBatch(); };
     }, [activeBrand]);
 
     // ---- Sample-chip handlers ----
@@ -743,6 +754,87 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } finally {
             setIsSyncing(false);
         }
+    };
+
+    // --- CONVERSION CART (batch phosphate) ------------------------------------------------------
+    // A reusable bin transfer (same proven REST shape as pushBinTransfer), parameterized so the cart
+    // can stage raw → the WIP cart bin without touching the single-transfer form state.
+    const runBinTransfer = async (item, qty, fromBin, toBin, memo) => {
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) throw new Error("NetSuite routing configuration missing for this brand.");
+        await ensureBinExists(toBin, nsConfig.location);
+        const payload = {
+            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/binTransfer`,
+            method: 'POST',
+            payload: { subsidiary: { id: nsConfig.subsidiary }, location: { id: nsConfig.location }, memo,
+                inventory: { items: [{ item: { id: item.netSuiteInternalId }, quantity: qty,
+                    inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: fromBin }, toBinNumber: { refName: toBin }, quantity: qty }] } } }] } }
+        };
+        const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const b = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
+        return b;
+    };
+
+    // Pull the currently-selected raw item onto the cart: bin-transfer raw → cart bin, then add the
+    // line to the (auto-created) open batch. NetSuite stays truthful — the stock shows in the cart bin.
+    const addRawToCart = async () => {
+        if (!convertBase || !convTarget) return alert("Pick a raw item and its /P assembly first.");
+        if (!convertBase.netSuiteInternalId) return alert(`${convertBase.erpId} has no NetSuite Internal ID — map it first.`);
+        const qty = convQtyNum;
+        if (qty <= 0 || qty > convertBase.onHand) return alert("Enter a valid quantity (≤ on hand).");
+        const src = (convertSrcScan.trim() || binOf(convertBase)).toUpperCase();
+        if (!src || src === 'UNASSIGNED') return alert("Scan/enter the source (raw) bin to pull from.");
+        const bin = (convBatch?.cartBin || cartBin || 'PHOS-CART').trim().toUpperCase();
+        try {
+            setIsSyncing(true);
+            await runBinTransfer(convertBase, qty, src, bin, `Pull to phosphate cart ${bin} by ${operator?.name || 'Unknown'}`);
+            const batchId = convBatch?.id || `CBATCH-${activeBrand}-${Date.now()}`;
+            const line = { lineId: `L${Date.now()}`, rawId: convertBase.id, rawErpId: convertBase.erpId, rawName: convertBase.itemName, rawInternalId: convertBase.netSuiteInternalId, targetErpId: erpOf(convTarget), targetName: convTarget.itemName, targetInternalId: convTarget.netSuiteInternalId || null, qty, srcBin: src, status: 'on_cart', newBin: '' };
+            const existing = convBatch || { id: batchId, brand: activeBrand, cartBin: bin, status: 'open', lines: [], createdAt: Date.now(), createdBy: operator?.name || 'Unknown' };
+            await setDoc(doc(db, "conversion_batches", batchId), { ...existing, cartBin: bin, lines: [...(existing.lines || []), line], updatedAt: Date.now() }, { merge: true });
+            writeLog(`Phosphate cart: pulled ${qty}× ${convertBase.erpId} ${src} → ${bin}.`, 'wms');
+            setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo("");
+            pullNetSuiteStock();
+        } catch (e) { console.error('add to cart failed', e); alert("❌ Pull to cart failed:\n\n" + (e.message || e)); }
+        finally { setIsSyncing(false); }
+    };
+
+    // Convert one cart line: assembly build (consume the raw from the cart, produce the /P). Same proven
+    // build shape as pushAssemblyBuild. The /P isn't bin-tracked in NetSuite, so the put-away bin is the
+    // operator's physical reference, recorded on the line.
+    const convertCartLine = async (line) => {
+        if (!convBatch || line.status === 'converted') return;
+        if (!line.targetErpId) return alert("This line has no target /P assembly.");
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+        const newBin = (cartBinEdits[line.lineId] ?? line.newBin ?? '').trim().toUpperCase();
+        try {
+            setIsSyncing(true);
+            const assembly = await resolveItemDetail(line.targetErpId);
+            if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${line.targetErpId} in NetSuite by item id.`); }
+            if (assembly.type && !/assembl/i.test(assembly.type)) { setIsSyncing(false); return alert(`${line.targetErpId} is type "${assembly.type}", not an Assembly.`); }
+            const payload = {
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
+                method: 'POST',
+                payload: { item: { id: assembly.id }, subsidiary: { id: nsConfig.subsidiary }, quantity: line.qty, location: { id: nsConfig.location }, memo: `Phosphate convert from cart ${convBatch.cartBin || ''} by ${operator?.name || 'Unknown'}` }
+            };
+            const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            const b = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
+            const lines = (convBatch.lines || []).map(l => l.lineId === line.lineId ? { ...l, status: 'converted', newBin, convertedAt: Date.now() } : l);
+            await updateDoc(doc(db, "conversion_batches", convBatch.id), { lines, updatedAt: Date.now() });
+            writeLog(`Phosphate convert: +${line.qty} ${line.targetErpId} / −${line.qty} ${line.rawErpId} (cart ${convBatch.cartBin || ''} → ${newBin || 'finished'}).`, 'wms');
+            pullNetSuiteStock();
+        } catch (e) { console.error('convert line failed', e); alert("❌ NetSuite rejected the build:\n\n" + (e.message || e)); }
+        finally { setIsSyncing(false); }
+    };
+
+    const closeCartBatch = async () => {
+        if (!convBatch) return;
+        const open = (convBatch.lines || []).filter(l => l.status !== 'converted').length;
+        if (open && !window.confirm(`${open} line(s) still on the cart (not converted). Close the batch anyway?`)) return;
+        await updateDoc(doc(db, "conversion_batches", convBatch.id), { status: 'closed', closedAt: Date.now() });
     };
 
     // Spool a 2"x4" Zebra label for a plating pull (item / qty / work order + WO barcode). Matches the app's
@@ -1727,6 +1819,46 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 {activeTab === 'CONVERT' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
 
+                        {/* CONVERSION CART — pull raw → WIP cart bin in one trip, then convert off the cart */}
+                        <div style={{ background: '#fff', border: `1px solid ${convBatch ? theme.brass : theme.line}`, padding: '20px 24px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: convBatch ? '16px' : '0' }}>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap' }}>
+                                    <span style={{ fontFamily: theme.serif, fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>Conversion Cart</span>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>Pull raw → cart bin in one trip, then convert off the cart</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <label style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textTransform: 'uppercase' }}>Cart bin</label>
+                                    <input value={convBatch?.cartBin || cartBin} onChange={e => setCartBin(e.target.value.toUpperCase())} disabled={!!convBatch} style={{ width: '120px', padding: '7px', fontFamily: theme.mono, border: `1px solid ${theme.line}`, textAlign: 'center', background: convBatch ? theme.paper : '#fff' }} />
+                                    {convBatch && <button onClick={closeCartBatch} style={{ padding: '8px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Close Batch</button>}
+                                </div>
+                            </div>
+                            {!convBatch ? (
+                                <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No active cart. Pick a raw item below → set qty + scan its source bin → "➕ Add to Cart". The first add opens a batch and transfers the raw to the cart bin.</div>
+                            ) : (
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: theme.sans, fontSize: '0.85rem' }}>
+                                    <thead><tr style={{ background: theme.paper, borderBottom: `1px solid ${theme.line}` }}>
+                                        {['Raw item', 'Qty', 'From → Cart', 'Build /P', 'Put-away bin', ''].map(h => <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft }}>{h}</th>)}
+                                    </tr></thead>
+                                    <tbody>
+                                        {(convBatch.lines || []).map(line => {
+                                            const done = line.status === 'converted';
+                                            return (
+                                                <tr key={line.lineId} style={{ borderBottom: `1px solid ${theme.line}`, opacity: done ? 0.55 : 1 }}>
+                                                    <td style={{ padding: '10px 12px' }}><div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{line.rawErpId}</div><div style={{ color: theme.ink }}>{line.rawName}</div></td>
+                                                    <td style={{ padding: '10px 12px', fontFamily: theme.mono }}>{line.qty}</td>
+                                                    <td style={{ padding: '10px 12px', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{line.srcBin} → {convBatch.cartBin}</td>
+                                                    <td style={{ padding: '10px 12px', fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>{line.targetErpId}</td>
+                                                    <td style={{ padding: '10px 12px' }}>{done ? <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass }}>{line.newBin || '—'}</span> : <input value={cartBinEdits[line.lineId] ?? line.newBin ?? ''} onChange={e => setCartBinEdits(prev => ({ ...prev, [line.lineId]: e.target.value.toUpperCase() }))} placeholder="bin…" style={{ width: '100px', padding: '6px', fontFamily: theme.mono, fontSize: '11px', border: `1px solid ${theme.line}`, textAlign: 'center', outline: 'none' }} />}</td>
+                                                    <td style={{ padding: '10px 12px', textAlign: 'right' }}>{done ? <span style={{ fontFamily: theme.mono, fontSize: '10px', color: '#2f7d3b', textTransform: 'uppercase' }}>Converted ✓</span> : <button onClick={() => convertCartLine(line)} disabled={isSyncing} style={{ padding: '8px 14px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Convert ▸</button>}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                        {(convBatch.lines || []).length === 0 && <tr><td colSpan="6" style={{ padding: '14px 12px', color: theme.inkSoft, fontStyle: 'italic' }}>Cart is empty — add raw items below.</td></tr>}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+
                         {/* CONVERT MODAL */}
                         {convertBase && (
                             <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1807,6 +1939,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                                     <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
                                         <button onClick={() => { setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(""); }} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
+                                        {(() => { const cartReady = !!convertBase && !!convTarget && !!convertBase.netSuiteInternalId && convQtyNum > 0 && convQtyNum <= convertBase.onHand && convSrcOk; return (
+                                            <button onClick={addRawToCart} disabled={!cartReady || isSyncing} title="Pull this raw onto the phosphate cart (transfers it to the cart bin) instead of converting now" style={{ padding: '15px 24px', background: cartReady && !isSyncing ? theme.ink : theme.paper2, color: cartReady && !isSyncing ? '#fff' : theme.inkSoft, border: 'none', cursor: cartReady && !isSyncing ? 'pointer' : 'not-allowed', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
+                                                {isSyncing ? 'Working…' : '➕ Add to Cart'}
+                                            </button>
+                                        ); })()}
                                         <button onClick={pushAssemblyBuild} disabled={!convReady || isSyncing} style={{ padding: '15px 30px', background: convReady && !isSyncing ? theme.brass : theme.paper2, color: convReady && !isSyncing ? '#fff' : theme.inkSoft, border: 'none', cursor: convReady && !isSyncing ? 'pointer' : 'not-allowed', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
                                             {isSyncing ? 'Posting build…' : 'Build & Post to NetSuite'}
                                         </button>
