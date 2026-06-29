@@ -23,7 +23,7 @@ const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 
 // Mirrors the Finishing app's TABS (FinishingFloor.js). 'MANAGEMENT' was retired (its user/perms
 // admin moved here to HQ); 'PRODUCTION TIMES' is the finishing timers + time-matrix config tab.
 const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY'];
-const PICK_TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'GALLERY', 'MESSAGING']; // mirrors PickPackApp TABS
+const PICK_TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING']; // mirrors PickPackApp TABS
 
 // NetSuite plumbing (mirror of ERPPushPullTab) for creating a flow's rollup item.
 const BRAND_NETSUITE_MAP = {
@@ -403,6 +403,12 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const handleFinPermToggle = (role, tab) => {
       const rolePerms = finPerms[role] || [];
       setFinPerms({ ...finPerms, [role]: rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab] });
+  };
+  // Force-scan roles (warehouse): when a role is on this list, the click-to-pick bin chips are hidden
+  // in Pick & Pack — that operator must scan the bin. Stored on the same pick_config/permissions doc.
+  const handleForceScanToggle = (role) => {
+      const cur = pickPerms.forceScanRoles || [];
+      setPickPerms({ ...pickPerms, forceScanRoles: cur.includes(role) ? cur.filter(r => r !== role) : [...cur, role] });
   };
   const handlePickPermToggle = (role, tab) => {
       const rolePerms = pickPerms[role] || [];
@@ -2397,6 +2403,15 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 ))}
                             </tr>
                             ))}
+                            {/* Behaviour toggle (not a tab): force this role to SCAN bins — hides the click-to-pick chips. */}
+                            <tr style={{ borderTop: '2px solid var(--ink)', background: 'var(--paper)' }}>
+                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 600 }}>🔒 Force Bin Scan <span style={{ fontWeight: 400, color: 'var(--ink-soft)', fontSize: '0.8rem' }}>(hide click-to-pick)</span></td>
+                                {dynamicRoles.map(role => (
+                                    <td key={role} style={{ padding: '15px' }}>
+                                        <input type="checkbox" checked={(pickPerms.forceScanRoles || []).includes(role)} onChange={() => handleForceScanToggle(role)} disabled={['admin', 'superadmin'].includes(role)} title={['admin', 'superadmin'].includes(role) ? 'Admins always keep click-to-pick' : ''} style={{ cursor: ['admin', 'superadmin'].includes(role) ? 'not-allowed' : 'pointer' }} />
+                                    </td>
+                                ))}
+                            </tr>
                         </tbody>
                         </table>
                     </div>

@@ -1486,7 +1486,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const platQtyNum = parseInt(platingQty) || 0;
     const platFrom = (platingSrcScan || '').trim();
     const platTo = (platingDestScan || '').trim();
-    const platSrcKnown = !!platingBase && binOf(platingBase) !== 'UNASSIGNED' && platFrom.toUpperCase() === binOf(platingBase).toUpperCase();
+    // Source bin = one of the item's LIVE bins (where stock actually sits), pick/scan one — matches Convert/Transfer.
+    const platBins = platingBase ? (nsStock[platingBase.erpId]?.bins || []).filter(b => b.bin) : [];
+    const platSrcBin = platBins.find(b => String(b.bin).toUpperCase() === platFrom.toUpperCase());
+    const platSrcKnown = !!platSrcBin;
     // A plating pull flips status Good→WIP-Plating, so NetSuite ON-HAND never drops — only available does.
     // Compute available = on-hand − what's already in WIP (staged/shipped/received, live from Firestore), so
     // the number reflects committed pulls immediately (84 → 72 → 60 …) without waiting on a NetSuite re-pull.
@@ -1518,6 +1521,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
     const safeUserRole = operator?.role ? operator.role.toLowerCase() : 'operator';
     const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
+    // Click-to-pick bin chips show unless this role is on the HQ "Force Bin Scan" list (admins always keep it).
+    const canClickBin = ['admin', 'superadmin'].includes(safeUserRole) || !(perms.forceScanRoles || []).includes(safeUserRole);
     // Admin-or-higher gate (normalize so SUPERADMIN / super_admin match) — used for restricted actions.
     const isPlatingAdmin = operator?.superAdmin === true || ['admin', 'superadmin'].includes(String(operator?.role || '').toLowerCase().replace(/[^a-z]/g, ''));
 
@@ -1938,15 +1943,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             <input type="number" min="1" max={convSrcBin ? convSrcQty : convertBase.onHand} value={convertQty} onChange={e => setConvertQty(e.target.value)} placeholder="0" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `2px solid ${convQtyNum > 0 && convQtyNum <= (convSrcBin ? convSrcQty : convertBase.onHand) ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
                                         </div>
                                         <div>
-                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Source bin (pick one)</label>
-                                            {convSrcBins.length > 0 && (
+                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Source bin {canClickBin ? '(pick one)' : '(scan)'}</label>
+                                            {canClickBin && convSrcBins.length > 0 && (
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
                                                     {convSrcBins.map(b => { const sel = convertSrcScan.trim().toUpperCase() === String(b.bin).toUpperCase(); return (
                                                         <button key={b.bin} onClick={() => setConvertSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
                                                     ); })}
                                                 </div>
                                             )}
-                                            <input value={convertSrcScan} onChange={e => setConvertSrcScan(e.target.value)} placeholder="scan / click a bin" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${convSrcOk ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <input value={convertSrcScan} onChange={e => setConvertSrcScan(e.target.value)} placeholder={canClickBin ? "scan / click a bin" : "scan a bin"} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${convSrcOk ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
                                             <div style={{ fontFamily: theme.mono, fontSize: '9px', color: convSrcOk ? '#7dbb81' : theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>{convSrcOk ? `✓ ${convSrcQty} in this bin` : (convSrcBins.length ? 'pick a bin above' : 'no live bins — Pull Live Stock')}</div>
                                         </div>
                                         <div>
@@ -2065,7 +2070,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {/* FROM / QTY / TO */}
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
                                         <div>
-                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan source bin</label>
+                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Source bin {canClickBin ? '(pick one)' : '(scan)'}</label>
+                                            {canClickBin && xferBins.length > 0 && (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                                                    {xferBins.map(b => { const sel = (transferSrcScan || '').trim().toUpperCase() === String(b.bin).toUpperCase(); return (
+                                                        <button key={b.bin} onClick={() => setTransferSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                    ); })}
+                                                </div>
+                                            )}
                                             <input value={transferSrcScan} onChange={e => setTransferSrcScan(e.target.value)} placeholder={xferBins.slice().sort((a, b) => b.qty - a.qty)[0]?.bin || binOf(transferBase)} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${xferSrcKnown ? '#7dbb81' : (xferFrom ? '#d9534f' : theme.line)}`, outline: 'none', boxSizing: 'border-box' }} />
                                             <div style={{ fontFamily: theme.mono, fontSize: '9px', color: xferSrcKnown ? '#7dbb81' : (xferFrom ? '#d9534f' : theme.inkSoft), marginTop: '4px', textAlign: 'center' }}>{xferSrcKnown ? `✓ ${xferSrcQty} in bin` : (xferFrom ? '⚠ item not in this bin' : 'pick a bin with stock')}</div>
                                         </div>
@@ -2197,9 +2209,16 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
                                         <div>
-                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan source bin</label>
-                                            <input value={platingSrcScan} onChange={e => setPlatingSrcScan(e.target.value)} placeholder={binOf(platingBase)} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${platSrcKnown ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
-                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: platSrcKnown ? '#7dbb81' : theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>{platSrcKnown ? '✓ home bin' : `home: ${binOf(platingBase)}`}</div>
+                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Source bin {canClickBin ? '(pick one)' : '(scan)'}</label>
+                                            {canClickBin && platBins.length > 0 && (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                                                    {platBins.map(b => { const sel = platFrom.toUpperCase() === String(b.bin).toUpperCase(); return (
+                                                        <button key={b.bin} onClick={() => setPlatingSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                    ); })}
+                                                </div>
+                                            )}
+                                            <input value={platingSrcScan} onChange={e => setPlatingSrcScan(e.target.value)} placeholder={platBins.slice().sort((a, b) => b.qty - a.qty)[0]?.bin || binOf(platingBase)} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${platSrcKnown ? '#7dbb81' : (platFrom ? '#d9534f' : theme.line)}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: platSrcKnown ? '#7dbb81' : (platFrom ? '#d9534f' : theme.inkSoft), marginTop: '4px', textAlign: 'center' }}>{platSrcKnown ? `✓ ${platSrcBin.qty} in bin` : (platFrom ? '⚠ item not in this bin' : (platBins.length ? 'pick a bin with stock' : `home: ${binOf(platingBase)}`))}</div>
                                         </div>
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Quantity</label>
