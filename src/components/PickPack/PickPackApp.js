@@ -1448,9 +1448,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         || (convertBase && hqParts.find(p => erpOf(p) === `${convertBase.erpId}/P`))
         || null;
     const convQtyNum = parseInt(convertQty) || 0;
-    const convSrcOk = !!convertBase && binOf(convertBase) !== 'UNASSIGNED' && convertSrcScan.trim().toUpperCase() === binOf(convertBase).toUpperCase();
+    // Source bin = one of the item's LIVE bins (stock can sit in several) — pick/scan exactly ONE and
+    // pull from it. Validated against live per-bin stock, not the stale stored home bin (which may be
+    // UNASSIGNED or hold no stock). Qty is capped at that bin's on-hand.
+    const convSrcBins = convertBase ? (nsStock[convertBase.erpId]?.bins || []).filter(b => b.bin) : [];
+    const convSrcBin = convSrcBins.find(b => String(b.bin).toUpperCase() === convertSrcScan.trim().toUpperCase());
+    const convSrcQty = convSrcBin ? convSrcBin.qty : 0;
+    const convSrcOk = !!convSrcBin;
     const convDestOk = !!convTarget && binOf(convTarget) !== 'UNASSIGNED' && convertDestScan.trim().toUpperCase() === binOf(convTarget).toUpperCase();
-    const convReady = !!convertBase && !!convertBase.netSuiteInternalId && !!convTarget && !!convTarget.netSuiteInternalId && convQtyNum > 0 && convQtyNum <= convertBase.onHand && convSrcOk && convDestOk;
+    const convReady = !!convertBase && !!convertBase.netSuiteInternalId && !!convTarget && !!convTarget.netSuiteInternalId && convQtyNum > 0 && convQtyNum <= convSrcQty && convSrcOk && convDestOk;
     const convTargetMatches = convertTargetSearch.trim().length >= 2
         ? hqParts.filter(p => p.id !== convertBase?.id && (erpOf(p).includes(convertTargetSearch.trim().toUpperCase()) || (p.itemName || '').toLowerCase().includes(convertTargetSearch.trim().toLowerCase()))).slice(0, 8)
         : [];
@@ -1920,12 +1926,19 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Quantity</label>
-                                            <input type="number" min="1" max={convertBase.onHand} value={convertQty} onChange={e => setConvertQty(e.target.value)} placeholder="0" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `2px solid ${convQtyNum > 0 && convQtyNum <= convertBase.onHand ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <input type="number" min="1" max={convSrcBin ? convSrcQty : convertBase.onHand} value={convertQty} onChange={e => setConvertQty(e.target.value)} placeholder="0" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `2px solid ${convQtyNum > 0 && convQtyNum <= (convSrcBin ? convSrcQty : convertBase.onHand) ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
                                         </div>
                                         <div>
-                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan source bin</label>
-                                            <input value={convertSrcScan} onChange={e => setConvertSrcScan(e.target.value)} placeholder={binOf(convertBase)} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${convSrcOk ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
-                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: convSrcOk ? '#7dbb81' : theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>{convSrcOk ? '✓ matches' : `expect ${binOf(convertBase)}`}</div>
+                                            <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Source bin (pick one)</label>
+                                            {convSrcBins.length > 0 && (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                                                    {convSrcBins.map(b => { const sel = convertSrcScan.trim().toUpperCase() === String(b.bin).toUpperCase(); return (
+                                                        <button key={b.bin} onClick={() => setConvertSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                    ); })}
+                                                </div>
+                                            )}
+                                            <input value={convertSrcScan} onChange={e => setConvertSrcScan(e.target.value)} placeholder="scan / click a bin" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${convSrcOk ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: convSrcOk ? '#7dbb81' : theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>{convSrcOk ? `✓ ${convSrcQty} in this bin` : (convSrcBins.length ? 'pick a bin above' : 'no live bins — Pull Live Stock')}</div>
                                         </div>
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan dest bin</label>
@@ -1948,7 +1961,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                                     <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
                                         <button onClick={() => { setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(""); }} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
-                                        {(() => { const cartReady = !!convertBase && !!convTarget && !!convertBase.netSuiteInternalId && convQtyNum > 0 && convQtyNum <= convertBase.onHand && convSrcOk; return (
+                                        {(() => { const cartReady = !!convertBase && !!convTarget && !!convertBase.netSuiteInternalId && convQtyNum > 0 && convQtyNum <= convSrcQty && convSrcOk; return (
                                             <button onClick={addRawToCart} disabled={!cartReady || isSyncing} title="Pull this raw onto the phosphate cart (transfers it to the cart bin) instead of converting now" style={{ padding: '15px 24px', background: cartReady && !isSyncing ? theme.ink : theme.paper2, color: cartReady && !isSyncing ? '#fff' : theme.inkSoft, border: 'none', cursor: cartReady && !isSyncing ? 'pointer' : 'not-allowed', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
                                                 {isSyncing ? 'Working…' : '➕ Add to Cart'}
                                             </button>
@@ -1994,7 +2007,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {baseFilteredItems.map(item => (
+                                    {/* Convert only RAW items (mill finish) — those whose item # has no "/" suffix; the
+                                        "/P", "/P25" … are the finished/plated results, never a conversion source. */}
+                                    {baseFilteredItems.filter(it => !String(it.erpId || '').includes('/')).map(item => (
                                         <tr key={item.id} style={{ borderBottom: `1px solid ${theme.line}` }}>
                                             <td style={{ padding: '16px' }}>
                                                 <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{item.erpId}</div>
