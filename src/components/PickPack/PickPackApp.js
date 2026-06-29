@@ -1387,9 +1387,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const matchesCollection = collectionFilter === "" || collectionsOf(specs).includes(collectionFilter.toUpperCase());
         const matchesWatchlist = watchlistFilter === "" || watchlistOf(specs) === watchlistFilter.toUpperCase();
 
-        const isInventory = part.partClass === "Inventory"; // count stock whether we make it (in-house) or buy it (outsourced)
+        // Countable = raw inventory OR anything NetSuite actually carries on hand (so finished /
+        // phosphated / painted variants like H1-1BR/P and /P25 show up to count, not just the mill raw).
+        const erpForStock = (part.legacyErpId || part.itemId || "").toUpperCase();
+        const liveStock = nsStock[erpForStock];
+        const hasStock = !!liveStock && (((liveStock.onHand || 0) !== 0) || (Array.isArray(liveStock.bins) && liveStock.bins.length > 0));
+        const isCountable = part.partClass === "Inventory" || hasStock;
 
-        return matchesSearch && matchesType && matchesCollection && matchesWatchlist && isInventory;
+        return matchesSearch && matchesType && matchesCollection && matchesWatchlist && isCountable;
     }).map(part => {
         const erpId = (part.legacyErpId || part.itemId || "").toUpperCase();
         return {
