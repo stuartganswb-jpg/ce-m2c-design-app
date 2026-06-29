@@ -32,42 +32,44 @@ exports.authenticatePin = onCall({
 
     const db = admin.firestore();
     
-    // Rate Limiting / Lockout Reference
-    const attemptsRef = db.collection('security_logs').doc(`ip_${clientIp}`);
-    const lockoutWindow = 10 * 60 * 1000; // 10 minutes in milliseconds
+    // Rate Limiting / Lockout — keyed primarily on the PIN (account), so one operator's typos can't
+    // lock out the whole warehouse (every device shares one public IP). A much higher IP-level counter
+    // still backstops a brute-force enumeration flood. Only FAILED attempts count; any success clears
+    // the counters. The PIN is hashed so raw PINs never land in security_logs doc ids.
+    const crypto = require('crypto');
+    const lockoutWindow = 10 * 60 * 1000; // 10 minutes
+    const PIN_MAX = 5;   // lock a specific PIN after 5 wrong tries (targeted-guess protection)
+    const IP_MAX = 40;   // lock an IP after 40 wrong tries (flood backstop — high so a shared warehouse IP isn't tripped by normal typos)
     const now = Date.now();
+    const pinHash = crypto.createHash('sha256').update(String(pin)).digest('hex').slice(0, 24);
+    const ipRef = db.collection('security_logs').doc(`ip_${clientIp}`);
+    const pinRef = db.collection('security_logs').doc(`pin_${pinHash}`);
 
-    const attemptDoc = await attemptsRef.get();
+    const [ipDoc, pinDoc] = await Promise.all([ipRef.get(), pinRef.get()]);
 
-    // 1. Check for an active lockout on this IP
-    if (attemptDoc.exists) {
-        const data = attemptDoc.data();
-        if (data.count >= 5 && (now - data.lastAttempt < lockoutWindow)) {
-            const timeLeft = Math.ceil((lockoutWindow - (now - data.lastAttempt)) / 60000);
-            throw new HttpsError('resource-exhausted', `Too many attempts. Locked out for ${timeLeft} minutes.`);
-        }
-        // Reset count if the 10-minute window has expired
-        if (now - data.lastAttempt >= lockoutWindow) {
-            await attemptsRef.set({ count: 0, lastAttempt: now });
-        }
-    }
+    const lockMinsLeft = (doc, max) => {
+        if (!doc.exists) return 0;
+        const d = doc.data();
+        return (d.count >= max && (now - d.lastAttempt < lockoutWindow)) ? Math.ceil((lockoutWindow - (now - d.lastAttempt)) / 60000) : 0;
+    };
+    const pinLock = lockMinsLeft(pinDoc, PIN_MAX);
+    if (pinLock) throw new HttpsError('resource-exhausted', `Too many attempts for this PIN. Try again in ${pinLock} minute(s).`);
+    const ipLock = lockMinsLeft(ipDoc, IP_MAX);
+    if (ipLock) throw new HttpsError('resource-exhausted', `Too many attempts. Locked out for ${ipLock} minutes.`);
 
-    // 2. Query the hq_users collection securely on the server
+    // Query the hq_users collection securely on the server
     const usersRef = db.collection('hq_users');
     const snapshot = await usersRef.where('pin', '==', pin).limit(1).get();
 
-    // 3. Handle Invalid PIN & Increment Failure Count
+    // Invalid PIN → increment BOTH the per-PIN and per-IP failure counters
     if (snapshot.empty) {
-        const newCount = attemptDoc.exists && (now - attemptDoc.data().lastAttempt < lockoutWindow) 
-            ? attemptDoc.data().count + 1 
-            : 1;
-        
-        await attemptsRef.set({ count: newCount, lastAttempt: now });
+        const bump = (doc, ref) => ref.set({ count: (doc.exists && (now - doc.data().lastAttempt < lockoutWindow)) ? doc.data().count + 1 : 1, lastAttempt: now });
+        await Promise.all([bump(pinDoc, pinRef), bump(ipDoc, ipRef)]);
         throw new HttpsError('unauthenticated', 'Invalid PIN.');
     }
 
-    // 4. Success: Clear the attempt logs for this IP
-    await attemptsRef.delete();
+    // Success → clear the failure counters (a valid login proves this is legit activity)
+    await Promise.all([pinRef.delete(), ipRef.delete()]);
 
     // 5. Mint Custom Token utilizing database user profile
     const userDoc = snapshot.docs[0];
