@@ -788,7 +788,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const bin = (convBatch?.cartBin || cartBin || 'PHOS-CART').trim().toUpperCase();
         try {
             setIsSyncing(true);
-            await runBinTransfer(convertBase, qty, src, bin, `Pull to phosphate cart ${bin} by ${operator?.name || 'Unknown'}`);
+            await runBinTransfer(convertBase, qty, src, bin, `Phos cart pull ${bin}`.slice(0, 40)); // NetSuite memo max = 40 chars
             const batchId = convBatch?.id || `CBATCH-${activeBrand}-${Date.now()}`;
             const line = { lineId: `L${Date.now()}`, rawId: convertBase.id, rawErpId: convertBase.erpId, rawName: convertBase.itemName, rawInternalId: convertBase.netSuiteInternalId, targetErpId: erpOf(convTarget), targetName: convTarget.itemName, targetInternalId: convTarget.netSuiteInternalId || null, qty, srcBin: src, status: 'on_cart', newBin: '' };
             const existing = convBatch || { id: batchId, brand: activeBrand, cartBin: bin, status: 'open', lines: [], createdAt: Date.now(), createdBy: operator?.name || 'Unknown' };
@@ -817,7 +817,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
                 method: 'POST',
-                payload: { item: { id: assembly.id }, subsidiary: { id: nsConfig.subsidiary }, quantity: line.qty, location: { id: nsConfig.location }, memo: `Phosphate convert from cart ${convBatch.cartBin || ''} by ${operator?.name || 'Unknown'}` }
+                payload: { item: { id: assembly.id }, subsidiary: { id: nsConfig.subsidiary }, quantity: line.qty, location: { id: nsConfig.location }, memo: `Phos convert ${convBatch.cartBin || ''}`.slice(0, 40) }
             };
             const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             const b = await r.json().catch(() => ({}));
