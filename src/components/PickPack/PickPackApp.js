@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, auth, functions } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp } from "firebase/firestore";
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import SharedMessaging from '../Shared/SharedMessaging';
@@ -10,8 +10,18 @@ import { printPlatingPackingList } from '../Shared/platingPackingList';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
-// TABS updated to include COUNT
-const TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'GALLERY', 'MESSAGING'];
+// TABS updated to include COUNT + CHIPS (sample-chip production control)
+const TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING'];
+
+// Sample-chip production steps, in run order. Painting reuses the paint recipes (P01, P02…).
+const CHIP_STEPS = [
+  { key: 'punching', label: 'Punching' },
+  { key: 'painting', label: 'Painting' },
+  { key: 'sanding', label: 'Sanding' },
+  { key: 'cleaning', label: 'Cleaning' },
+  { key: 'engraving', label: 'Engraving' },
+];
+const CHIP_STATUS_NEXT = { pending: 'doing', doing: 'done', done: 'pending' };
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
 // NetSuite Mapping Dictionary
@@ -139,6 +149,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [operator, setOperator] = useState(null);
     const [pinInput, setPinInput] = useState("");
     const [activeTab, setActiveTab] = useState('QUEUE');
+    // Sample-chip production control
+    const [chipOrders, setChipOrders] = useState([]);
+    const [finUsers, setFinUsers] = useState([]);     // employees, for per-step assignment
+    const [finRecipes, setFinRecipes] = useState([]); // paint recipes (P01, P02…) for the painting step
+    const [chipForm, setChipForm] = useState({ customer: '', qty: 1, recipe: '', notes: '' });
+    const [chipShowDone, setChipShowDone] = useState(false);
     const [perms, setPerms] = useState({});
     const [jobs, setJobs] = useState([]);
     
@@ -238,8 +254,48 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         // Plating fee schedule (by product type) — edited in HQ Admin. The plater PO/packing-list cost.
         const unsubFees = onSnapshot(doc(db, "system", "plating_fees"), (s) => setPlatingFees(s.exists() ? (s.data().rules || {}) : {}));
 
-        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); unsubFees(); };
+        // Sample-chip orders (global control board) + employees + paint recipes for the step controls.
+        const unsubChips = onSnapshot(collection(db, "sample_chip_orders"), (snap) =>
+            setChipOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))));
+        const unsubChipUsers = onSnapshot(collection(db, "fin_users"), (snap) => setFinUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+        const unsubChipRecipes = onSnapshot(collection(db, "fin_recipes"), (snap) => setFinRecipes(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+
+        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); unsubFees(); unsubChips(); unsubChipUsers(); unsubChipRecipes(); };
     }, [activeBrand]);
+
+    // ---- Sample-chip handlers ----
+    const createChipOrder = async () => {
+        if (!chipForm.recipe) return alert('Pick a paint recipe for the chips.');
+        const qty = parseInt(chipForm.qty) || 1;
+        const id = `CHIP-${Date.now()}`;
+        const steps = {};
+        CHIP_STEPS.forEach(s => { steps[s.key] = { status: 'pending', employee: '' }; });
+        steps.painting.recipe = chipForm.recipe;
+        await setDoc(doc(db, "sample_chip_orders", id), {
+            id, brand: activeBrand, customer: chipForm.customer.trim() || 'Sample Chips',
+            qty, recipe: chipForm.recipe, notes: chipForm.notes.trim(),
+            status: 'open', inFinishing: false, steps,
+            createdAt: Date.now(), createdBy: operator?.name || 'Unknown'
+        });
+        setChipForm({ customer: '', qty: 1, recipe: '', notes: '' });
+        writeLog(`Sample-chip order ${id} created (${qty}× ${chipForm.recipe}).`, 'CHIPS');
+    };
+    const patchChipStep = async (order, stepKey, patch) => {
+        const steps = { ...(order.steps || {}) };
+        steps[stepKey] = { ...(steps[stepKey] || {}), ...patch };
+        // Chips consume finishing capacity from the moment Painting starts until the whole order is done.
+        const allDone = CHIP_STEPS.every(s => steps[s.key]?.status === 'done');
+        const paintingStarted = steps.painting?.status && steps.painting.status !== 'pending';
+        await updateDoc(doc(db, "sample_chip_orders", order.id), {
+            steps, inFinishing: !!paintingStarted && !allDone, status: allDone ? 'done' : 'open', updatedAt: Date.now()
+        });
+    };
+    const advanceChipStep = (order, stepKey) =>
+        patchChipStep(order, stepKey, { status: CHIP_STATUS_NEXT[order.steps?.[stepKey]?.status || 'pending'] });
+    const deleteChipOrder = async (id) => {
+        if (!window.confirm('Remove this sample-chip order?')) return;
+        await deleteDoc(doc(db, "sample_chip_orders", id));
+    };
 
     const attemptLogin = async (e) => {
         e.preventDefault();
@@ -2203,6 +2259,73 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </div>
                     </div>
                 )}
+
+                {/* 🎨 TAB: SAMPLE CHIPS — PRODUCTION CONTROL */}
+                {activeTab === 'CHIPS' && (() => {
+                    const openOrders = chipOrders.filter(o => o.status !== 'done');
+                    const doneOrders = chipOrders.filter(o => o.status === 'done');
+                    const inFinishingCount = chipOrders.filter(o => o.inFinishing).length;
+                    const recipeOptions = [...new Set(finRecipes.map(r => r.code || r.id).filter(Boolean))].sort();
+                    const pillOf = (status) => ({
+                        pending: { bg: theme.paper, fg: theme.inkSoft, label: 'Pending' },
+                        doing: { bg: theme.brass, fg: '#fff', label: 'In Progress' },
+                        done: { bg: '#e8f3e9', fg: '#2f7d3b', label: 'Done ✓' },
+                    }[status] || { bg: theme.paper, fg: theme.inkSoft, label: 'Pending' });
+                    const lbl = { fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, display: 'block', marginBottom: '4px', letterSpacing: '.1em' };
+                    const inp = { width: '100%', padding: '9px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, boxSizing: 'border-box', background: '#fff', outline: 'none' };
+                    const renderOrderCard = (o) => (
+                        <div key={o.id} style={{ border: `1px solid ${o.inFinishing ? theme.brass : theme.line}`, background: '#fff', marginBottom: '16px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '14px 18px', background: theme.paper, borderBottom: `1px solid ${theme.line}` }}>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap' }}>
+                                    <span style={{ fontFamily: theme.serif, fontSize: '1.3rem', fontWeight: 500, color: theme.ink }}>{o.customer}</span>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{o.qty}× chips · {o.recipe} · {String(o.brand || '').toUpperCase()}</span>
+                                    {o.inFinishing && <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: theme.brass, color: '#fff', padding: '3px 8px', borderRadius: '10px' }}>In Finishing · uses capacity</span>}
+                                </div>
+                                <button onClick={() => deleteChipOrder(o.id)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1.3rem', cursor: 'pointer' }}>×</button>
+                            </div>
+                            {o.notes && <div style={{ padding: '8px 18px', fontStyle: 'italic', fontSize: '0.85rem', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{o.notes}</div>}
+                            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${CHIP_STEPS.length}, 1fr)` }}>
+                                {CHIP_STEPS.map((s, i) => {
+                                    const st = o.steps?.[s.key] || { status: 'pending', employee: '' };
+                                    const p = pillOf(st.status);
+                                    return (
+                                        <div key={s.key} style={{ padding: '14px', borderLeft: i ? `1px solid ${theme.line}` : 'none', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.ink, fontWeight: 600 }}>{i + 1}. {s.label}{s.key === 'painting' && st.recipe ? ` (${st.recipe})` : ''}</div>
+                                            <button onClick={() => advanceChipStep(o, s.key)} title="Click to advance: Pending → In Progress → Done" style={{ background: p.bg, color: p.fg, border: `1px solid ${theme.line}`, padding: '8px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer' }}>{p.label}</button>
+                                            <select value={st.employee || ''} onChange={(e) => patchChipStep(o, s.key, { employee: e.target.value })} style={{ padding: '7px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.8rem', background: '#fff', outline: 'none' }}>
+                                                <option value="">— employee —</option>
+                                                {finUsers.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                                            </select>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    );
+                    return (
+                        <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '8px' }}>
+                                <h2 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.6rem', fontWeight: 500, color: theme.ink }}>Sample Chips — Production Control</h2>
+                                <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', color: theme.inkSoft }}>{openOrders.length} open · {inFinishingCount} in finishing</span>
+                            </div>
+                            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end', background: theme.paper, border: `1px solid ${theme.line}`, padding: '16px', marginBottom: '24px' }}>
+                                <div style={{ flex: 2, minWidth: '150px' }}><label style={lbl}>Customer</label><input value={chipForm.customer} onChange={e => setChipForm({ ...chipForm, customer: e.target.value })} placeholder="e.g. Brimar" style={inp} /></div>
+                                <div style={{ width: '70px' }}><label style={lbl}>Qty</label><input type="number" min="1" value={chipForm.qty} onChange={e => setChipForm({ ...chipForm, qty: e.target.value })} style={inp} /></div>
+                                <div style={{ width: '150px' }}><label style={lbl}>Paint Recipe</label><select value={chipForm.recipe} onChange={e => setChipForm({ ...chipForm, recipe: e.target.value })} style={inp}><option value="">— recipe —</option>{recipeOptions.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                                <div style={{ flex: 2, minWidth: '150px' }}><label style={lbl}>Notes</label><input value={chipForm.notes} onChange={e => setChipForm({ ...chipForm, notes: e.target.value })} placeholder="optional" style={inp} /></div>
+                                <button onClick={createChipOrder} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', whiteSpace: 'nowrap' }}>+ Add Chip Order</button>
+                            </div>
+                            {openOrders.length === 0 && <p style={{ color: theme.inkSoft, fontStyle: 'italic', margin: 0 }}>No open sample-chip orders. Add one above to start the punching → painting → sanding → cleaning → engraving run.</p>}
+                            {openOrders.map(renderOrderCard)}
+                            {doneOrders.length > 0 && (
+                                <div style={{ marginTop: '20px', borderTop: `1px solid ${theme.line}`, paddingTop: '16px' }}>
+                                    <button onClick={() => setChipShowDone(v => !v)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{chipShowDone ? '▾' : '▸'} Completed ({doneOrders.length})</button>
+                                    {chipShowDone && <div style={{ marginTop: '12px', opacity: 0.65 }}>{doneOrders.map(renderOrderCard)}</div>}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })()}
 
                 {/* 🖼️ TAB: ASSET GALLERY */}
                 {activeTab === 'GALLERY' && (
