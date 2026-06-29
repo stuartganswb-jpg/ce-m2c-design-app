@@ -494,7 +494,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // Don't send a Firestore doc id as a NetSuite item ref — skip unmapped items (they'd 400).
             if (!row.netSuiteInternalId) { skipped.push(row.itemName || row.erpId || row.id); return null; }
             const storedBin = (row.binLocation || '').trim().toUpperCase();
-            const effBin = (row.isExistingBin ? row.countBin : ((binEdits[row.rowKey] ?? row.countBin) || '')).trim().toUpperCase();
+            const rawEff = (row.isExistingBin ? row.countBin : ((binEdits[row.rowKey] ?? row.countBin) || '')).trim().toUpperCase();
+            // "UNASSIGNED" is a UI placeholder, never a real bin — never create/push it to NetSuite.
+            const effBin = rawEff === 'UNASSIGNED' ? '' : rawEff;
             return {
                 internalId: row.netSuiteInternalId,
                 docId: row.id,
@@ -1599,7 +1601,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <tbody>
                                             {countRows.filter(row => physicalCounts[row.rowKey] !== undefined).map(row => {
                                                 const delta = physicalCounts[row.rowKey] - row.binOnHand;
-                                                const effBin = (row.isExistingBin ? row.countBin : (binEdits[row.rowKey] ?? row.countBin) || '').trim().toUpperCase();
+                                                const rawEff = (row.isExistingBin ? row.countBin : (binEdits[row.rowKey] ?? row.countBin) || '').trim().toUpperCase();
+                                                const effBin = rawEff === 'UNASSIGNED' ? '' : rawEff;
                                                 const binIsNew = !row.isExistingBin && effBin !== '' && effBin.toUpperCase() !== (row.binLocation || '').trim().toUpperCase();
                                                 return (
                                                     <tr key={row.rowKey} style={{ borderBottom: `1px solid ${theme.line}` }}>
@@ -1680,7 +1683,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {row.isExistingBin ? (
                                                     <span style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{row.countBin}</span>
                                                 ) : (
-                                                    <input value={binEdits[row.rowKey] ?? row.countBin} onChange={e => setBinEdits(prev => ({ ...prev, [row.rowKey]: e.target.value }))} placeholder="bin…" style={{ width: '130px', padding: '8px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass, background: 'transparent', border: (binEdits[row.rowKey] !== undefined && (binEdits[row.rowKey] || '').toUpperCase() !== (row.countBin || '').toUpperCase()) ? `2px solid ${theme.brass}` : `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                                    <input value={binEdits[row.rowKey] ?? (String(row.countBin || '').toUpperCase() === 'UNASSIGNED' ? '' : row.countBin)} onChange={e => setBinEdits(prev => ({ ...prev, [row.rowKey]: e.target.value }))} placeholder="type bin #…" style={{ width: '130px', padding: '8px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass, background: 'transparent', border: (binEdits[row.rowKey] !== undefined && (binEdits[row.rowKey] || '').toUpperCase() !== (row.countBin || '').toUpperCase()) ? `2px solid ${theme.brass}` : `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
                                                 )}
                                             </td>
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{row.binOnHand}</td>
