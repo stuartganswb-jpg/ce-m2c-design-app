@@ -1884,8 +1884,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             {!convBatch ? (
                                 <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No active cart. Pick a raw item below → set qty + scan its source bin → "➕ Add to Cart". The first add opens a batch and transfers the raw to the cart bin.</div>
                             ) : (
+                                <div style={{ maxHeight: '34vh', overflowY: 'auto', border: `1px solid ${theme.line}` }}>
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: theme.sans, fontSize: '0.85rem' }}>
-                                    <thead><tr style={{ background: theme.paper, borderBottom: `1px solid ${theme.line}` }}>
+                                    <thead><tr style={{ background: theme.paper, borderBottom: `1px solid ${theme.line}`, position: 'sticky', top: 0, zIndex: 1 }}>
                                         {['Raw item', 'Qty', 'From → Cart', 'Build /P', 'Put-away bin', ''].map(h => <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft }}>{h}</th>)}
                                     </tr></thead>
                                     <tbody>
@@ -1905,6 +1906,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         {(convBatch.lines || []).length === 0 && <tr><td colSpan="6" style={{ padding: '14px 12px', color: theme.inkSoft, fontStyle: 'italic' }}>Cart is empty — add raw items below.</td></tr>}
                                     </tbody>
                                 </table>
+                                </div>
                             )}
                         </div>
 
