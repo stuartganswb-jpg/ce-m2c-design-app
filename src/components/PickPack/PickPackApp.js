@@ -173,6 +173,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [isSyncing, setIsSyncing] = useState(false);
     const [physicalCounts, setPhysicalCounts] = useState({});
     const [binEdits, setBinEdits] = useState({}); // per-item bin reassignment during a count; a new bin is created in NetSuite on push
+    const [extraCountRows, setExtraCountRows] = useState([]); // operator-added count rows for stock found in a bin NetSuite doesn't show yet ({id,itemId})
     const [showSynapsis, setShowSynapsis] = useState(false);
     const [countMemo, setCountMemo] = useState("");
 
@@ -1424,6 +1425,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     // count adjusts ONLY the entered bin instead of the item's combined cross-bin total. Items with no
     // per-bin breakdown (non-bin-managed, or the per-bin pull was unavailable) fall back to a single row
     // whose O.H. is the combined total — i.e. the original behavior, so nothing regresses for them.
+    // Operator can add a fresh bin row for an item to count stock found in a bin NetSuite doesn't list
+    // yet (binOnHand 0 → the push posts a +adjustment INTO that bin). Keyed to the item; live-resolved.
+    const addCountBin = (item) => setExtraCountRows(prev => [...prev, { id: `xb-${item.id}-${Date.now()}`, itemId: item.id }]);
+    const removeCountBin = (rowKey) => {
+        setExtraCountRows(prev => prev.filter(x => x.id !== rowKey));
+        setBinEdits(prev => { const n = { ...prev }; delete n[rowKey]; return n; });
+        setPhysicalCounts(prev => { const n = { ...prev }; delete n[rowKey]; return n; });
+    };
+
     const countRows = baseFilteredItems.flatMap(item => {
         const bins = (nsStock[item.erpId]?.bins || []).filter(b => b.bin);
         if (bins.length > 0) {
@@ -1450,7 +1460,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const itemMatch = (r.itemName || '').toLowerCase().includes(term) || String(r.erpId || '').toLowerCase().includes(term) || String(r.itemId || '').toLowerCase().includes(term);
         const binMatch = String(r.countBin || '').toLowerCase().includes(term);
         return itemMatch || binMatch;
-    });
+    }).concat(extraCountRows.map(x => {
+        // Operator-added rows: count stock in a bin NetSuite doesn't show. binOnHand 0 → +adjustment.
+        const item = baseFilteredItems.find(p => p.id === x.itemId);
+        return item ? { ...item, rowKey: x.id, countBin: '', binOnHand: 0, isExistingBin: false, isExtra: true } : null;
+    }).filter(Boolean));
 
     // CONVERT derived: resolve target assembly (by /P convention or manual pick) + readiness gates
     const convTarget = (convertTargetId && hqParts.find(p => p.id === convertTargetId))
@@ -1802,9 +1816,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             </td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
                                                 {row.isExistingBin ? (
-                                                    <span style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{row.countBin}</span>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+                                                        <span style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{row.countBin}</span>
+                                                        <button onClick={() => addCountBin(row)} title="Found this item in another bin? Add a row to count it there (posts a +adjustment into that bin)." style={{ background: 'none', border: 'none', color: theme.inkSoft, fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', textDecoration: 'underline' }}>+ add bin</button>
+                                                    </div>
                                                 ) : (
-                                                    <input value={binEdits[row.rowKey] ?? (String(row.countBin || '').toUpperCase() === 'UNASSIGNED' ? '' : row.countBin)} onChange={e => setBinEdits(prev => ({ ...prev, [row.rowKey]: e.target.value }))} placeholder="type bin #…" style={{ width: '130px', padding: '8px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass, background: 'transparent', border: (binEdits[row.rowKey] !== undefined && (binEdits[row.rowKey] || '').toUpperCase() !== (row.countBin || '').toUpperCase()) ? `2px solid ${theme.brass}` : `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                                                        <input value={binEdits[row.rowKey] ?? (String(row.countBin || '').toUpperCase() === 'UNASSIGNED' ? '' : row.countBin)} onChange={e => setBinEdits(prev => ({ ...prev, [row.rowKey]: e.target.value }))} placeholder={row.isExtra ? 'new bin #…' : 'type bin #…'} style={{ width: '130px', padding: '8px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass, background: 'transparent', border: (binEdits[row.rowKey] !== undefined && (binEdits[row.rowKey] || '').toUpperCase() !== (row.countBin || '').toUpperCase()) ? `2px solid ${theme.brass}` : `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                                        {row.isExtra && <button onClick={() => removeCountBin(row.rowKey)} title="Remove this added bin row" style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.1rem', lineHeight: 1, cursor: 'pointer', padding: 0 }}>×</button>}
+                                                    </div>
                                                 )}
                                             </td>
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{row.binOnHand}</td>
