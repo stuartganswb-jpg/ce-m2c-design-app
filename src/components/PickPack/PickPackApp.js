@@ -1387,12 +1387,16 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const matchesCollection = collectionFilter === "" || collectionsOf(specs).includes(collectionFilter.toUpperCase());
         const matchesWatchlist = watchlistFilter === "" || watchlistOf(specs) === watchlistFilter.toUpperCase();
 
-        // Countable = raw inventory OR anything NetSuite actually carries on hand (so finished /
-        // phosphated / painted variants like H1-1BR/P and /P25 show up to count, not just the mill raw).
+        // Countable = the same stock-bearing classes Stock View shows (Inventory + Assembly + Master
+        // Assembly — raw, in-house, outsourced, and finished /P / painted / plated variants), PLUS
+        // anything NetSuite carries on hand. NOT gated on partClass==='Inventory' alone, which hid the
+        // finished variants. ('Approved_Designs' is just the collection name — there is no approval gate.)
+        const cls = part.partClass || "";
+        const isStockClass = cls === "Inventory" || cls === "Assembly" || cls === "Master Assembly";
         const erpForStock = (part.legacyErpId || part.itemId || "").toUpperCase();
         const liveStock = nsStock[erpForStock];
         const hasStock = !!liveStock && (((liveStock.onHand || 0) !== 0) || (Array.isArray(liveStock.bins) && liveStock.bins.length > 0));
-        const isCountable = part.partClass === "Inventory" || hasStock;
+        const isCountable = isStockClass || hasStock;
 
         return matchesSearch && matchesType && matchesCollection && matchesWatchlist && isCountable;
     }).map(part => {
