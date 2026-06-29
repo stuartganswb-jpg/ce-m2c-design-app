@@ -782,17 +782,26 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!convertBase || !convTarget) return alert("Pick a raw item and its /P assembly first.");
         if (!convertBase.netSuiteInternalId) return alert(`${convertBase.erpId} has no NetSuite Internal ID — map it first.`);
         const qty = convQtyNum;
-        if (qty <= 0 || qty > convertBase.onHand) return alert("Enter a valid quantity (≤ on hand).");
-        const src = (convertSrcScan.trim() || binOf(convertBase)).toUpperCase();
-        if (!src || src === 'UNASSIGNED') return alert("Scan/enter the source (raw) bin to pull from.");
+        if (qty <= 0 || qty > convSrcQty) return alert("Enter a valid quantity (≤ the selected bin's on hand).");
+        const src = convertSrcScan.trim().toUpperCase();
+        if (!src || src === 'UNASSIGNED') return alert("Pick the source (raw) bin to pull from.");
         const bin = (convBatch?.cartBin || cartBin || 'PHOS-CART').trim().toUpperCase();
+        const batchId = convBatch?.id || `CBATCH-${activeBrand}-${Date.now()}`;
+        const existingLines = convBatch?.lines || [];
+        const base = convBatch || { id: batchId, brand: activeBrand, cartBin: bin, status: 'open', lines: [], createdAt: Date.now(), createdBy: operator?.name || 'Unknown' };
+        const line = { lineId: `L${Date.now()}`, rawId: convertBase.id, rawErpId: convertBase.erpId, rawName: convertBase.itemName, rawInternalId: convertBase.netSuiteInternalId, targetErpId: erpOf(convTarget), targetName: convTarget.itemName, targetInternalId: convTarget.netSuiteInternalId || null, qty, srcBin: src, status: 'on_cart', newBin: '' };
         try {
             setIsSyncing(true);
-            await runBinTransfer(convertBase, qty, src, bin, `Phos cart pull ${bin}`.slice(0, 40)); // NetSuite memo max = 40 chars
-            const batchId = convBatch?.id || `CBATCH-${activeBrand}-${Date.now()}`;
-            const line = { lineId: `L${Date.now()}`, rawId: convertBase.id, rawErpId: convertBase.erpId, rawName: convertBase.itemName, rawInternalId: convertBase.netSuiteInternalId, targetErpId: erpOf(convTarget), targetName: convTarget.itemName, targetInternalId: convTarget.netSuiteInternalId || null, qty, srcBin: src, status: 'on_cart', newBin: '' };
-            const existing = convBatch || { id: batchId, brand: activeBrand, cartBin: bin, status: 'open', lines: [], createdAt: Date.now(), createdBy: operator?.name || 'Unknown' };
-            await setDoc(doc(db, "conversion_batches", batchId), { ...existing, cartBin: bin, lines: [...(existing.lines || []), line], updatedAt: Date.now() }, { merge: true });
+            // 1) Record the line FIRST — so a Firestore permission/write failure surfaces BEFORE any
+            //    stock moves in NetSuite (no more "transferred but the cart never recorded it").
+            await setDoc(doc(db, "conversion_batches", batchId), { ...base, cartBin: bin, lines: [...existingLines, line], updatedAt: Date.now() }, { merge: true });
+            // 2) Move the raw onto the cart. If NetSuite rejects it, roll the line back so the two stay in sync.
+            try {
+                await runBinTransfer(convertBase, qty, src, bin, `Phos cart pull ${bin}`.slice(0, 40)); // NetSuite memo max = 40 chars
+            } catch (txErr) {
+                await updateDoc(doc(db, "conversion_batches", batchId), { lines: existingLines }).catch(() => {});
+                throw txErr;
+            }
             writeLog(`Phosphate cart: pulled ${qty}× ${convertBase.erpId} ${src} → ${bin}.`, 'wms');
             setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo("");
             pullNetSuiteStock();
