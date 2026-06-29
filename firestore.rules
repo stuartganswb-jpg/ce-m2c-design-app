@@ -94,6 +94,8 @@ service cloud.firestore {
     match /fin_users/{document=**}              { allow read, write: if isAuth(); }
     match /plating_shipments/{document=**}      { allow read, write: if isAuth(); }
     match /plating_demand/{document=**}         { allow read, write: if isAuth(); }
+    match /conversion_batches/{document=**}     { allow read, write: if isAuth(); }
+    match /sample_chip_orders/{document=**}     { allow read, write: if isAuth(); }
 
     // Anything not explicitly listed above is denied by default.
   }
