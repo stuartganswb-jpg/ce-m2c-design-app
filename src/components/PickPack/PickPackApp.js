@@ -1280,11 +1280,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const specs = part.manufacturingSpecs || {};
         const erpId = (part.legacyErpId || part.itemId || "").toUpperCase();
 
+        // Search matches item identity, the stored home bin, OR any LIVE bin the item occupies in
+        // NetSuite — so you can search by bin and find every item sitting in that bin.
+        const liveBins = (nsStock[erpId]?.bins || []).map(b => String(b.bin || '').toLowerCase());
         const matchesSearch = !term
             || part.itemName?.toLowerCase().includes(term)
             || erpId.toLowerCase().includes(term)
             || (part.itemId || "").toLowerCase().includes(term)
-            || (specs.binLocation || "").toLowerCase().includes(term);
+            || (specs.binLocation || "").toLowerCase().includes(term)
+            || liveBins.some(b => b.includes(term));
         const matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase();
         const matchesCollection = collectionFilter === "" || collectionsOf(specs).includes(collectionFilter.toUpperCase());
         const matchesWatchlist = watchlistFilter === "" || watchlistOf(specs) === watchlistFilter.toUpperCase();
@@ -1326,6 +1330,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             binOnHand: item.onHand,     // no bin breakdown → use combined total (original behavior)
             isExistingBin: false
         }];
+    }).filter(r => {
+        // Row-level search: an item term keeps all of that item's bin rows; a bin term keeps only the
+        // rows for the matching bin (across every item in it). Item-level filter already let it through.
+        const term = searchQuery.trim().toLowerCase();
+        if (!term) return true;
+        const itemMatch = (r.itemName || '').toLowerCase().includes(term) || String(r.erpId || '').toLowerCase().includes(term) || String(r.itemId || '').toLowerCase().includes(term);
+        const binMatch = String(r.countBin || '').toLowerCase().includes(term);
+        return itemMatch || binMatch;
     });
 
     // CONVERT derived: resolve target assembly (by /P convention or manual pick) + readiness gates
