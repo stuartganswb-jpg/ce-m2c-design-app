@@ -400,6 +400,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
             const records = Object.values(uniqueRecordsMap);
             let successCount = 0;
+            let stockedCount = 0, inHouseCount = 0;
 
             // NetSuite checkbox custom fields come back as 'T'/'F'. custitem27 = "Stocked" (held on the
             // shelf, sold via Quick Ship); custitem26 = finished IN-HOUSE (needs a WO, not outsourced).
@@ -441,6 +442,8 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 // in-house-finish flag (overrides the suffix guess when set); custitem27 marks stocked stock.
                 const isStocked = nsBool(item.is_stocked);
                 if (nsHasVal(item.is_inhouse)) isInHouse = nsBool(item.is_inhouse);
+                if (isStocked) stockedCount++;
+                if (isInHouse) inHouseCount++;
 
                 // 3. Part Handling Logic (Poles vs Small Parts)
                 const pTypeClean = (item.product_type || '').toLowerCase().trim();
@@ -557,6 +560,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             }
 
             addLog(`✅ Successfully synced and mapped ${successCount} library items. App structure preserved.`, 'success');
+            addLog(`🏷️ Flagged ${stockedCount} STOCKED (custitem27) and ${inHouseCount} IN-HOUSE (custitem26) of ${successCount} items.`, stockedCount > 0 ? 'success' : 'info');
 
         } catch (err) {
             console.error(err);
