@@ -1582,6 +1582,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
     // Click-to-pick bin chips show unless this role is on the HQ "Force Bin Scan" list (admins always keep it).
     const canClickBin = ['admin', 'superadmin'].includes(safeUserRole) || !(perms.forceScanRoles || []).includes(safeUserRole);
+    // Management-only chip reports (per-step timers + who-did-what roll-up): admins + HQ-granted roles.
+    const canSeeChipReport = ['admin', 'superadmin'].includes(safeUserRole) || (perms.chipReportRoles || []).includes(safeUserRole);
     // Admin-or-higher gate (normalize so SUPERADMIN / super_admin match) — used for restricted actions.
     const isPlatingAdmin = operator?.superAdmin === true || ['admin', 'superadmin'].includes(String(operator?.role || '').toLowerCase().replace(/[^a-z]/g, ''));
 
@@ -2579,6 +2581,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </div>
                     );
                     const thR = { padding: '8px 10px', textAlign: 'left', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, position: 'sticky', top: 0, background: theme.paper };
+                    const fmtDur = (ms) => { if (!ms || ms < 0) return '—'; const t = Math.floor(ms / 1000); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60; return h ? `${h}h ${m}m` : (m ? `${m}m ${s}s` : `${s}s`); };
+                    const stepElapsed = (st) => st?.startedAt ? ((st.stoppedAt || Date.now()) - st.startedAt) : 0;
                     const renderRun = (o) => {
                         const totalOnOrder = (o.lines || []).reduce((s, l) => s + (l.qty || 0), 0);
                         const totalDone = (o.lines || []).reduce((s, l) => s + (l.completed || 0), 0);
@@ -2627,6 +2631,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                                                 <button onClick={() => runStepClock(o, l.finish, s.key, s.label, st.status === 'running' ? 'stop' : 'start')} style={{ padding: '6px', background: st.status === 'running' ? '#d9534f' : theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>{st.status === 'running' ? '⏹ Stop (PIN)' : '▶ Start (PIN)'}</button>
                                                                             )}
                                                                             {st.startedBy && <div style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.inkSoft }}>{st.status === 'running' ? '▶ running ·' : 'by'} {st.startedBy}</div>}
+                                                                            {canSeeChipReport && st.startedAt && <div style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.brass }}>⏱ {fmtDur(stepElapsed(st))}{st.stoppedAt ? '' : ' (running)'}</div>}
                                                                         </div>
                                                                     ); })}
                                                                 </div>
@@ -2638,6 +2643,37 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         </tbody>
                                     </table>
                                 </div>
+                                {canSeeChipReport && (() => {
+                                    const roll = {};
+                                    (o.lines || []).forEach(l => CHIP_STEPS.forEach(s => {
+                                        const st = l.steps?.[s.key];
+                                        if (st && st.startedBy && st.startedAt) {
+                                            const r = roll[st.startedBy] = roll[st.startedBy] || { steps: 0, ms: 0, running: 0 };
+                                            if (st.stoppedAt) r.steps += 1; else r.running += 1;
+                                            r.ms += (st.stoppedAt || Date.now()) - st.startedAt;
+                                        }
+                                    }));
+                                    const rows = Object.entries(roll).sort((a, b) => b[1].ms - a[1].ms);
+                                    if (!rows.length) return null;
+                                    return (
+                                        <div style={{ borderTop: `1px solid ${theme.line}`, padding: '14px 18px', background: theme.paper }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginBottom: '8px' }}>📊 Roll-up — who did what · management only</div>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: theme.sans, fontSize: '0.82rem' }}>
+                                                <thead><tr>{['Employee', 'Steps done', 'Running', 'Total time'].map(h => <th key={h} style={{ textAlign: 'left', padding: '5px 10px', fontFamily: theme.mono, fontSize: '8px', textTransform: 'uppercase', color: theme.inkSoft }}>{h}</th>)}</tr></thead>
+                                                <tbody>
+                                                    {rows.map(([who, r]) => (
+                                                        <tr key={who} style={{ borderTop: `1px solid ${theme.line}` }}>
+                                                            <td style={{ padding: '5px 10px', color: theme.ink }}>{who}</td>
+                                                            <td style={{ padding: '5px 10px', fontFamily: theme.mono }}>{r.steps}</td>
+                                                            <td style={{ padding: '5px 10px', fontFamily: theme.mono, color: r.running ? theme.brass : theme.inkSoft }}>{r.running || '—'}</td>
+                                                            <td style={{ padding: '5px 10px', fontFamily: theme.mono }}>{fmtDur(r.ms)}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         );
                     };

@@ -410,6 +410,11 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const cur = pickPerms.forceScanRoles || [];
       setPickPerms({ ...pickPerms, forceScanRoles: cur.includes(role) ? cur.filter(r => r !== role) : [...cur, role] });
   };
+  // Roles that can see the management-only chip reports (per-step timers + who-did-what roll-up).
+  const handleChipReportToggle = (role) => {
+      const cur = pickPerms.chipReportRoles || [];
+      setPickPerms({ ...pickPerms, chipReportRoles: cur.includes(role) ? cur.filter(r => r !== role) : [...cur, role] });
+  };
   const handlePickPermToggle = (role, tab) => {
       const rolePerms = pickPerms[role] || [];
       setPickPerms({ ...pickPerms, [role]: rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab] });
@@ -2409,6 +2414,15 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 {dynamicRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
                                         <input type="checkbox" checked={(pickPerms.forceScanRoles || []).includes(role)} onChange={() => handleForceScanToggle(role)} disabled={['admin', 'superadmin'].includes(role)} title={['admin', 'superadmin'].includes(role) ? 'Admins always keep click-to-pick' : ''} style={{ cursor: ['admin', 'superadmin'].includes(role) ? 'not-allowed' : 'pointer' }} />
+                                    </td>
+                                ))}
+                            </tr>
+                            {/* Behaviour toggle: which roles can see the management-only chip reports (timers + roll-up). */}
+                            <tr style={{ background: 'var(--paper)' }}>
+                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 600 }}>📊 Chip Reports <span style={{ fontWeight: 400, color: 'var(--ink-soft)', fontSize: '0.8rem' }}>(mgmt: timers + who-did-what)</span></td>
+                                {dynamicRoles.map(role => (
+                                    <td key={role} style={{ padding: '15px' }}>
+                                        <input type="checkbox" checked={['admin', 'superadmin'].includes(role) || (pickPerms.chipReportRoles || []).includes(role)} onChange={() => handleChipReportToggle(role)} disabled={['admin', 'superadmin'].includes(role)} title={['admin', 'superadmin'].includes(role) ? 'Admins always see reports' : ''} style={{ cursor: ['admin', 'superadmin'].includes(role) ? 'not-allowed' : 'pointer' }} />
                                     </td>
                                 ))}
                             </tr>
