@@ -162,7 +162,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [finRecipes, setFinRecipes] = useState([]); // paint recipes (P01, P02…) for the painting step
     const [chipForm, setChipForm] = useState({ customer: '', qty: 1, recipe: '', notes: '' });
     const [chipShowDone, setChipShowDone] = useState(false);
-    const [runExpand, setRunExpand] = useState(null); // `${orderId}::${finish}` of the expanded run line
+    const [batchQty, setBatchQty] = useState({}); // assign-amount per `${orderId}::${finish}` (default 200)
     const [perms, setPerms] = useState({});
     const [jobs, setJobs] = useState([]);
     
@@ -318,41 +318,52 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
 
     // ---- Big multi-finish chip RUN (HDSC) ----
+    // Model: the ORDER (lines: finish/qty/completed) is the top. Production is done in separate WORKING
+    // BATCHES (e.g. 200 pcs of a finish at a time) that people sign in/out of per step; completing a batch
+    // rolls its qty into that finish's completed.
+    const mkChipSteps = () => { const s = {}; CHIP_STEPS.forEach(st => { s[st.key] = { status: 'pending', employee: '', startedBy: '', startedAt: null, stoppedBy: '', stoppedAt: null }; }); return s; };
+    const updateOrderDoc = (order, patch) => updateDoc(doc(db, "sample_chip_orders", order.id), { ...patch, updatedAt: Date.now() });
     const seedHdscRun = async () => {
         if (!window.confirm(`Seed the HDSC sample-chip run — 1500 pcs each across ${HDSC_RUN_FINISHES.length} finishes (P01–P30, EP1–EP6, S01–S12)?`)) return;
         const id = `CHIPRUN-HDSC-${Date.now()}`;
-        const mkSteps = () => { const s = {}; CHIP_STEPS.forEach(st => { s[st.key] = { status: 'pending', employee: '', startedBy: '', startedAt: null, stoppedBy: '', stoppedAt: null }; }); return s; };
-        const lines = HDSC_RUN_FINISHES.map(f => ({ finish: f, qty: 1500, completed: 0, steps: mkSteps() }));
+        const lines = HDSC_RUN_FINISHES.map(f => ({ finish: f, qty: 1500, completed: 0 }));
         await setDoc(doc(db, "sample_chip_orders", id), {
             id, brand: activeBrand, type: 'run', code: 'HDSC', customer: 'HDSC Sample Chip Run',
-            status: 'open', inFinishing: false, lines, createdAt: Date.now(), createdBy: operator?.name || 'Unknown'
+            status: 'open', inFinishing: false, lines, batches: [], createdAt: Date.now(), createdBy: operator?.name || 'Unknown'
         });
         writeLog(`Seeded HDSC chip run (${lines.length} finishes × 1500).`, 'CHIPS');
-        alert(`✅ Seeded HDSC chip run: ${lines.length} finishes × 1500 pcs. Enter completed per finish, then run the missing through the steps (PIN start/stop).`);
-    };
-    const updateRunLine = (order, finish, mutate) => {
-        const lines = (order.lines || []).map(l => l.finish === finish ? mutate({ ...l, steps: { ...(l.steps || {}) } }) : l);
-        return updateDoc(doc(db, "sample_chip_orders", order.id), { lines, updatedAt: Date.now() });
+        alert(`✅ Seeded HDSC chip run: ${lines.length} finishes × 1500 pcs. Enter what's already complete, then assign batches to the floor.`);
     };
     const setRunCompleted = (order, finish, val) => {
         const line = (order.lines || []).find(l => l.finish === finish);
         const c = Math.max(0, Math.min(parseInt(val) || 0, line?.qty || 0));
-        return updateRunLine(order, finish, l => ({ ...l, completed: c }));
+        return updateOrderDoc(order, { lines: (order.lines || []).map(l => l.finish === finish ? { ...l, completed: c } : l) });
     };
-    const setRunStepEmployee = (order, finish, stepKey, employee) =>
-        updateRunLine(order, finish, l => ({ ...l, steps: { ...l.steps, [stepKey]: { ...(l.steps?.[stepKey] || {}), employee } } }));
-    // PIN-gated start/stop on a process — the operator must enter a valid PIN; we record who + when.
-    const runStepClock = (order, finish, stepKey, stepLabel, action) => {
-        const pin = window.prompt(`Enter your PIN to ${action === 'start' ? 'START' : 'STOP'} ${stepLabel} — ${finish}`);
+    // Assign a working batch (a sign-in card) for a finish — defaults to 200, capped at what's missing.
+    const assignBatch = (order, finish, qtyVal) => {
+        const qty = Math.max(1, parseInt(qtyVal) || 0);
+        const batch = { id: `B${Date.now()}`, finish, qty, status: 'working', steps: mkChipSteps(), createdAt: Date.now(), createdBy: operator?.name || 'Unknown' };
+        return updateOrderDoc(order, { batches: [...(order.batches || []), batch] });
+    };
+    const updateBatch = (order, batchId, mutate) => updateOrderDoc(order, { batches: (order.batches || []).map(b => b.id === batchId ? mutate({ ...b, steps: { ...(b.steps || {}) } }) : b) });
+    const batchStepEmployee = (order, batchId, stepKey, employee) => updateBatch(order, batchId, b => ({ ...b, steps: { ...b.steps, [stepKey]: { ...(b.steps?.[stepKey] || {}), employee } } }));
+    // PIN-gated start/stop on a process — valid PIN required; records who + when.
+    const batchStepClock = (order, batchId, stepKey, stepLabel, action) => {
+        const pin = window.prompt(`Enter your PIN to ${action === 'start' ? 'START' : 'STOP'} ${stepLabel}`);
         if (pin == null || !String(pin).trim()) return;
         const user = finUsers.find(u => String(u.pin) === String(pin).trim());
         if (!user) return alert('PIN not recognized.');
-        return updateRunLine(order, finish, l => {
-            const cur = l.steps?.[stepKey] || {};
-            if (action === 'start') return { ...l, steps: { ...l.steps, [stepKey]: { ...cur, status: 'running', employee: cur.employee || user.name, startedBy: user.name, startedAt: Date.now(), stoppedBy: '', stoppedAt: null } } };
-            return { ...l, steps: { ...l.steps, [stepKey]: { ...cur, status: 'done', stoppedBy: user.name, stoppedAt: Date.now() } } };
-        });
+        return updateBatch(order, batchId, b => { const cur = b.steps?.[stepKey] || {}; return action === 'start'
+            ? { ...b, steps: { ...b.steps, [stepKey]: { ...cur, status: 'running', employee: cur.employee || user.name, startedBy: user.name, startedAt: Date.now(), stoppedBy: '', stoppedAt: null } } }
+            : { ...b, steps: { ...b.steps, [stepKey]: { ...cur, status: 'done', stoppedBy: user.name, stoppedAt: Date.now() } } }; });
     };
+    const completeBatch = (order, batch) => {
+        if (!window.confirm(`Complete this batch — add ${batch.qty} pcs to ${batch.finish}'s completed?`)) return;
+        const lines = (order.lines || []).map(l => l.finish === batch.finish ? { ...l, completed: Math.min(l.qty, (l.completed || 0) + batch.qty) } : l);
+        const batches = (order.batches || []).map(b => b.id === batch.id ? { ...b, status: 'done', completedAt: Date.now() } : b);
+        return updateOrderDoc(order, { lines, batches });
+    };
+    const removeBatch = (order, batchId) => { if (!window.confirm('Discard this working batch?')) return; return updateOrderDoc(order, { batches: (order.batches || []).filter(b => b.id !== batchId) }); };
 
     const attemptLogin = async (e) => {
         e.preventDefault();
@@ -2584,96 +2595,129 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     const fmtDur = (ms) => { if (!ms || ms < 0) return '—'; const t = Math.floor(ms / 1000); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60; return h ? `${h}h ${m}m` : (m ? `${m}m ${s}s` : `${s}s`); };
                     const stepElapsed = (st) => st?.startedAt ? ((st.stoppedAt || Date.now()) - st.startedAt) : 0;
                     const renderRun = (o) => {
+                        const batches = o.batches || [];
+                        const workingByFinish = {}; batches.filter(b => b.status === 'working').forEach(b => { workingByFinish[b.finish] = (workingByFinish[b.finish] || 0) + (b.qty || 0); });
                         const totalOnOrder = (o.lines || []).reduce((s, l) => s + (l.qty || 0), 0);
                         const totalDone = (o.lines || []).reduce((s, l) => s + (l.completed || 0), 0);
                         const totalMissing = totalOnOrder - totalDone;
+                        const workingCards = batches.filter(b => b.status === 'working');
+                        const stepPill = (status) => pillOf(status === 'running' ? 'doing' : status);
                         return (
-                            <div key={o.id} style={{ border: `1px solid ${theme.brass}`, marginBottom: '20px', background: '#fff' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '14px 18px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, flexWrap: 'wrap' }}>
-                                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap' }}>
-                                        <span style={{ fontFamily: theme.serif, fontSize: '1.3rem', fontWeight: 500 }}>{o.code} Sample Chip Run</span>
-                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{o.lines?.length || 0} finishes · {totalOnOrder.toLocaleString()} on order · {totalDone.toLocaleString()} complete · <b style={{ color: totalMissing ? theme.brass : '#2f7d3b' }}>{totalMissing.toLocaleString()} missing</b></span>
+                            <div key={o.id} style={{ marginBottom: '24px' }}>
+                                {/* THE ORDER (top): totals + per-finish completed/missing + assign-to-floor */}
+                                <div style={{ border: `1px solid ${theme.brass}`, background: '#fff' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '14px 18px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, flexWrap: 'wrap' }}>
+                                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap' }}>
+                                            <span style={{ fontFamily: theme.serif, fontSize: '1.3rem', fontWeight: 500 }}>{o.code} Sample Chip Run</span>
+                                            <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{o.lines?.length || 0} finishes · {totalOnOrder.toLocaleString()} on order · {totalDone.toLocaleString()} complete · <b style={{ color: totalMissing ? theme.brass : '#2f7d3b' }}>{totalMissing.toLocaleString()} missing</b></span>
+                                        </div>
+                                        <button onClick={() => deleteChipOrder(o.id)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1.3rem', cursor: 'pointer' }}>×</button>
                                     </div>
-                                    <button onClick={() => deleteChipOrder(o.id)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1.3rem', cursor: 'pointer' }}>×</button>
-                                </div>
-                                <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: theme.sans, fontSize: '0.85rem' }}>
-                                        <thead><tr style={{ borderBottom: `1px solid ${theme.line}` }}>{['Finish', 'On Order', 'Completed', 'Missing', 'Status', ''].map(h => <th key={h} style={thR}>{h}</th>)}</tr></thead>
-                                        <tbody>
-                                            {(o.lines || []).map(l => {
-                                                const missing = (l.qty || 0) - (l.completed || 0);
-                                                const key = `${o.id}::${l.finish}`;
-                                                const expanded = runExpand === key;
-                                                return (
-                                                    <React.Fragment key={l.finish}>
-                                                        <tr style={{ borderBottom: `1px solid ${theme.line}`, background: missing <= 0 ? '#f4faf4' : '#fff' }}>
+                                    <div style={{ maxHeight: '42vh', overflowY: 'auto' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: theme.sans, fontSize: '0.85rem' }}>
+                                            <thead><tr style={{ borderBottom: `1px solid ${theme.line}` }}>{['Finish', 'On Order', 'Completed', 'In Prog', 'Missing', 'Assign to floor'].map(h => <th key={h} style={thR}>{h}</th>)}</tr></thead>
+                                            <tbody>
+                                                {(o.lines || []).map(l => {
+                                                    const inProg = workingByFinish[l.finish] || 0;
+                                                    const missing = (l.qty || 0) - (l.completed || 0);
+                                                    const remaining = missing - inProg;
+                                                    const qkey = `${o.id}::${l.finish}`;
+                                                    const aq = batchQty[qkey] ?? '200';
+                                                    return (
+                                                        <tr key={l.finish} style={{ borderBottom: `1px solid ${theme.line}`, background: missing <= 0 ? '#f4faf4' : '#fff' }}>
                                                             <td style={{ padding: '8px 10px', fontFamily: theme.mono, fontWeight: 600 }}>{l.finish}</td>
                                                             <td style={{ padding: '8px 10px', fontFamily: theme.mono }}>{(l.qty || 0).toLocaleString()}</td>
-                                                            <td style={{ padding: '8px 10px' }}><input type="number" min="0" max={l.qty} value={l.completed ?? 0} onChange={e => setRunCompleted(o, l.finish, e.target.value)} style={{ width: '80px', padding: '6px', fontFamily: theme.mono, textAlign: 'center', border: `1px solid ${theme.line}`, outline: 'none' }} /></td>
+                                                            <td style={{ padding: '8px 10px' }}><input type="number" min="0" max={l.qty} value={l.completed ?? 0} onChange={e => setRunCompleted(o, l.finish, e.target.value)} style={{ width: '78px', padding: '6px', fontFamily: theme.mono, textAlign: 'center', border: `1px solid ${theme.line}`, outline: 'none' }} /></td>
+                                                            <td style={{ padding: '8px 10px', fontFamily: theme.mono, color: inProg ? theme.brass : theme.inkSoft }}>{inProg ? inProg.toLocaleString() : '—'}</td>
                                                             <td style={{ padding: '8px 10px', fontFamily: theme.mono, color: missing > 0 ? theme.brass : '#2f7d3b', fontWeight: 600 }}>{missing.toLocaleString()}</td>
-                                                            <td style={{ padding: '8px 10px', fontFamily: theme.mono, fontSize: '0.72rem', textTransform: 'uppercase', color: missing <= 0 ? '#2f7d3b' : theme.inkSoft }}>{missing <= 0 ? 'Complete ✓' : 'Open'}</td>
-                                                            <td style={{ padding: '8px 10px', textAlign: 'right' }}>{missing > 0 && <button onClick={() => setRunExpand(expanded ? null : key)} style={{ background: 'none', border: `1px solid ${theme.line}`, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>{expanded ? '▾ steps' : '▸ run steps'}</button>}</td>
+                                                            <td style={{ padding: '8px 10px' }}>
+                                                                {remaining > 0 ? (
+                                                                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                                                        <input type="number" min="1" max={remaining} value={aq} onChange={e => setBatchQty(p => ({ ...p, [qkey]: e.target.value }))} style={{ width: '62px', padding: '5px', fontFamily: theme.mono, textAlign: 'center', border: `1px solid ${theme.line}` }} />
+                                                                        <button onClick={() => assignBatch(o, l.finish, Math.min(parseInt(aq) || 0, remaining))} style={{ padding: '5px 10px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>Assign ▾</button>
+                                                                    </div>
+                                                                ) : <span style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textTransform: 'uppercase' }}>{missing <= 0 ? 'Complete ✓' : 'all assigned'}</span>}
+                                                            </td>
                                                         </tr>
-                                                        {expanded && (
-                                                            <tr><td colSpan="6" style={{ padding: '0 10px 12px', background: theme.paper }}>
-                                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, padding: '8px 0 6px' }}>Run the {missing.toLocaleString()} missing — assign + PIN start/stop each process:</div>
-                                                                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${CHIP_STEPS.length}, 1fr)`, gap: '8px' }}>
-                                                                    {CHIP_STEPS.map((s, i) => { const st = l.steps?.[s.key] || {}; return (
-                                                                        <div key={s.key} style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', fontWeight: 600 }}>{i + 1}. {s.label}</div>
-                                                                            <select value={st.employee || ''} onChange={e => setRunStepEmployee(o, l.finish, s.key, e.target.value)} style={{ padding: '5px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.75rem', outline: 'none' }}>
-                                                                                <option value="">— assign —</option>
-                                                                                {finUsers.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
-                                                                            </select>
-                                                                            {st.status === 'done' ? (
-                                                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', color: '#2f7d3b' }}>✓ done · {st.stoppedBy}</div>
-                                                                            ) : (
-                                                                                <button onClick={() => runStepClock(o, l.finish, s.key, s.label, st.status === 'running' ? 'stop' : 'start')} style={{ padding: '6px', background: st.status === 'running' ? '#d9534f' : theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>{st.status === 'running' ? '⏹ Stop (PIN)' : '▶ Start (PIN)'}</button>
-                                                                            )}
-                                                                            {st.startedBy && <div style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.inkSoft }}>{st.status === 'running' ? '▶ running ·' : 'by'} {st.startedBy}</div>}
-                                                                            {canSeeChipReport && st.startedAt && <div style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.brass }}>⏱ {fmtDur(stepElapsed(st))}{st.stoppedAt ? '' : ' (running)'}</div>}
-                                                                        </div>
-                                                                    ); })}
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    {canSeeChipReport && (() => {
+                                        const roll = {};
+                                        batches.forEach(b => CHIP_STEPS.forEach(s => {
+                                            const st = b.steps?.[s.key];
+                                            if (st && st.startedBy && st.startedAt) {
+                                                const r = roll[st.startedBy] = roll[st.startedBy] || { steps: 0, ms: 0, running: 0 };
+                                                if (st.stoppedAt) r.steps += 1; else r.running += 1;
+                                                r.ms += (st.stoppedAt || Date.now()) - st.startedAt;
+                                            }
+                                        }));
+                                        const rows = Object.entries(roll).sort((a, b) => b[1].ms - a[1].ms);
+                                        if (!rows.length) return null;
+                                        return (
+                                            <div style={{ borderTop: `1px solid ${theme.line}`, padding: '14px 18px', background: theme.paper }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginBottom: '8px' }}>📊 Roll-up — who did what · management only</div>
+                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: theme.sans, fontSize: '0.82rem' }}>
+                                                    <thead><tr>{['Employee', 'Steps done', 'Running', 'Total time'].map(h => <th key={h} style={{ textAlign: 'left', padding: '5px 10px', fontFamily: theme.mono, fontSize: '8px', textTransform: 'uppercase', color: theme.inkSoft }}>{h}</th>)}</tr></thead>
+                                                    <tbody>
+                                                        {rows.map(([who, r]) => (
+                                                            <tr key={who} style={{ borderTop: `1px solid ${theme.line}` }}>
+                                                                <td style={{ padding: '5px 10px', color: theme.ink }}>{who}</td>
+                                                                <td style={{ padding: '5px 10px', fontFamily: theme.mono }}>{r.steps}</td>
+                                                                <td style={{ padding: '5px 10px', fontFamily: theme.mono, color: r.running ? theme.brass : theme.inkSoft }}>{r.running || '—'}</td>
+                                                                <td style={{ padding: '5px 10px', fontFamily: theme.mono }}>{fmtDur(r.ms)}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
+
+                                {/* WORKING (bottom): assigned batches people sign in/out of */}
+                                {workingCards.length > 0 && (
+                                    <div style={{ marginTop: '16px' }}>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginBottom: '10px' }}>On the floor — working batches ({workingCards.length})</div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(440px, 1fr))', gap: '14px' }}>
+                                            {workingCards.map(b => {
+                                                const allDone = CHIP_STEPS.every(s => b.steps?.[s.key]?.status === 'done');
+                                                return (
+                                                    <div key={b.id} style={{ border: `1px solid ${theme.brass}`, background: '#fff' }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.paper, borderBottom: `1px solid ${theme.line}` }}>
+                                                            <span style={{ fontFamily: theme.serif, fontSize: '1.1rem', fontWeight: 500 }}>{b.finish} · {b.qty} pcs</span>
+                                                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                                <button onClick={() => completeBatch(o, b)} disabled={!allDone} title={allDone ? '' : 'Finish all steps first'} style={{ padding: '5px 10px', background: allDone ? '#2f7d3b' : theme.paper, color: allDone ? '#fff' : theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', cursor: allDone ? 'pointer' : 'not-allowed' }}>✓ Complete</button>
+                                                                <button onClick={() => removeBatch(o, b.id)} title="Discard batch" style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1.1rem', cursor: 'pointer' }}>×</button>
+                                                            </div>
+                                                        </div>
+                                                        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${CHIP_STEPS.length}, 1fr)` }}>
+                                                            {CHIP_STEPS.map((s, i) => { const st = b.steps?.[s.key] || {}; const p = stepPill(st.status); return (
+                                                                <div key={s.key} style={{ padding: '10px', borderLeft: i ? `1px solid ${theme.line}` : 'none', display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                                                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', fontWeight: 600 }}>{i + 1}. {s.label}</div>
+                                                                    <div style={{ fontFamily: theme.mono, fontSize: '8px', textTransform: 'uppercase', color: p.fg, background: p.bg, border: `1px solid ${theme.line}`, padding: '2px 4px', textAlign: 'center' }}>{p.label}</div>
+                                                                    <select value={st.employee || ''} onChange={e => batchStepEmployee(o, b.id, s.key, e.target.value)} style={{ padding: '4px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.72rem', outline: 'none' }}>
+                                                                        <option value="">— assign —</option>
+                                                                        {finUsers.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                                                                    </select>
+                                                                    {st.status === 'done' ? (
+                                                                        <div style={{ fontFamily: theme.mono, fontSize: '8px', color: '#2f7d3b' }}>✓ {st.stoppedBy}</div>
+                                                                    ) : (
+                                                                        <button onClick={() => batchStepClock(o, b.id, s.key, s.label, st.status === 'running' ? 'stop' : 'start')} style={{ padding: '5px', background: st.status === 'running' ? '#d9534f' : theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '8px', textTransform: 'uppercase', cursor: 'pointer' }}>{st.status === 'running' ? '⏹ Stop' : '▶ Start'} (PIN)</button>
+                                                                    )}
+                                                                    {st.startedBy && <div style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.inkSoft }}>{st.status === 'running' ? '▶' : 'by'} {st.startedBy}</div>}
+                                                                    {canSeeChipReport && st.startedAt && <div style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.brass }}>⏱ {fmtDur(stepElapsed(st))}{st.stoppedAt ? '' : ' (running)'}</div>}
                                                                 </div>
-                                                            </td></tr>
-                                                        )}
-                                                    </React.Fragment>
+                                                            ); })}
+                                                        </div>
+                                                    </div>
                                                 );
                                             })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                                {canSeeChipReport && (() => {
-                                    const roll = {};
-                                    (o.lines || []).forEach(l => CHIP_STEPS.forEach(s => {
-                                        const st = l.steps?.[s.key];
-                                        if (st && st.startedBy && st.startedAt) {
-                                            const r = roll[st.startedBy] = roll[st.startedBy] || { steps: 0, ms: 0, running: 0 };
-                                            if (st.stoppedAt) r.steps += 1; else r.running += 1;
-                                            r.ms += (st.stoppedAt || Date.now()) - st.startedAt;
-                                        }
-                                    }));
-                                    const rows = Object.entries(roll).sort((a, b) => b[1].ms - a[1].ms);
-                                    if (!rows.length) return null;
-                                    return (
-                                        <div style={{ borderTop: `1px solid ${theme.line}`, padding: '14px 18px', background: theme.paper }}>
-                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginBottom: '8px' }}>📊 Roll-up — who did what · management only</div>
-                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: theme.sans, fontSize: '0.82rem' }}>
-                                                <thead><tr>{['Employee', 'Steps done', 'Running', 'Total time'].map(h => <th key={h} style={{ textAlign: 'left', padding: '5px 10px', fontFamily: theme.mono, fontSize: '8px', textTransform: 'uppercase', color: theme.inkSoft }}>{h}</th>)}</tr></thead>
-                                                <tbody>
-                                                    {rows.map(([who, r]) => (
-                                                        <tr key={who} style={{ borderTop: `1px solid ${theme.line}` }}>
-                                                            <td style={{ padding: '5px 10px', color: theme.ink }}>{who}</td>
-                                                            <td style={{ padding: '5px 10px', fontFamily: theme.mono }}>{r.steps}</td>
-                                                            <td style={{ padding: '5px 10px', fontFamily: theme.mono, color: r.running ? theme.brass : theme.inkSoft }}>{r.running || '—'}</td>
-                                                            <td style={{ padding: '5px 10px', fontFamily: theme.mono }}>{fmtDur(r.ms)}</td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
                                         </div>
-                                    );
-                                })()}
+                                    </div>
+                                )}
                             </div>
                         );
                     };
