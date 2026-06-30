@@ -67,7 +67,7 @@ const ItemSelect = ({ value, onChange, items, placeholder }) => {
     );
 };
 
-const EMPTY_KB = { poleId: '', poleLen: '6', poleQty: 1, bracketId: '', bracketQty: 2, ringId: '', ringQty: 14, finialId: '', finialQty: 2, cutId: '', cutLen: '', cutQty: 1, spliceId: '', spliceQty: 1, miterId: '', miterQty: 1 };
+const EMPTY_KB = { poleId: '', poleQty: 1, bracketId: '', bracketQty: 2, ringId: '', ringQty: 14, finialId: '', finialQty: 2, cutId: '', cutLen: '', cutQty: 1, spliceId: '', spliceQty: 1, miterId: '', miterQty: 1 };
 
 const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [allItems, setAllItems] = useState([]);     // every brand part (for fee lookup)
@@ -154,7 +154,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const resolveKb = (cfg) => {
         const out = [];
         const add = (id, qty, note) => { const it = itemById(id); if (it && qty > 0) out.push({ it, qty: parseInt(qty) || 1, note: note || '' }); };
-        add(cfg.poleId, cfg.poleQty, cfg.poleLen ? `${cfg.poleLen}ft set` : '');
+        add(cfg.poleId, cfg.poleQty, '');
         add(cfg.bracketId, cfg.bracketQty, '');
         add(cfg.ringId, cfg.ringQty, '');
         add(cfg.finialId, cfg.finialQty, '');
@@ -369,15 +369,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     <div style={card}>
                         <div style={cardHd}>Kit Builder</div>
                         <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                            <KitSlot title="Pole" items={poles} idKey="poleId" qtyKey="poleQty">
-                                <div style={{ display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center' }}>
-                                    <span style={{ ...lbl, margin: 0 }}>Set length</span>
-                                    {['4', '6', '8'].map(L => (
-                                        <button key={L} onClick={() => setKb({ ...kb, poleLen: L })}
-                                            style={{ padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', background: kb.poleLen === L ? 'var(--ink)' : '#fff', color: kb.poleLen === L ? '#fff' : 'var(--ink)' }}>{L}ft</button>
-                                    ))}
-                                </div>
-                            </KitSlot>
+                            <KitSlot title="Pole" items={poles} idKey="poleId" qtyKey="poleQty" />
                             <KitSlot title="Bracket" items={brackets} idKey="bracketId" qtyKey="bracketQty" />
                             <KitSlot title="Ring" items={rings} idKey="ringId" qtyKey="ringQty" />
                             <KitSlot title="Finial" items={finials} idKey="finialId" qtyKey="finialQty" />
