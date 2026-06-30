@@ -7,6 +7,7 @@ import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
+import { printItemLabel, printBinLabel } from '../Shared/labelPrint';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -1869,8 +1870,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {countRows.map(row => (
                                         <tr key={row.rowKey} style={{ borderBottom: `1px solid ${theme.line}`, background: physicalCounts[row.rowKey] !== undefined ? '#f8fdf8' : '#fff' }}>
                                             <td style={{ padding: '16px' }}>
-                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{row.erpId}</div>
-                                                <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{row.itemName}</div>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                    <button onClick={() => { const bin = String(binEdits[row.rowKey] ?? row.countBin ?? '').trim(); printItemLabel({ itemId: row.erpId, itemName: row.itemName, imageUrl: row.imageUrl || row.manufacturingSpecs?.referenceImageUrl || '' }); if (bin && bin.toUpperCase() !== 'UNASSIGNED') setTimeout(() => printBinLabel({ bin }), 400); }} title="Print 2×4 item + bin labels" style={{ background: 'none', border: `1px solid ${theme.line}`, cursor: 'pointer', fontSize: '1rem', padding: '4px 8px', lineHeight: 1, color: theme.ink }}>🖨</button>
+                                                    <div>
+                                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{row.erpId}</div>
+                                                        <div style={{ fontFamily: theme.sans, fontSize: '1rem', color: theme.ink, fontWeight: 500 }}>{row.itemName}</div>
+                                                    </div>
+                                                </div>
                                             </td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
                                                 {row.isExistingBin ? (
