@@ -268,12 +268,6 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         // Plating fee schedule (by product type) — edited in HQ Admin. The plater PO/packing-list cost.
         const unsubFees = onSnapshot(doc(db, "system", "plating_fees"), (s) => setPlatingFees(s.exists() ? (s.data().rules || {}) : {}));
 
-        // Sample-chip orders (global control board) + employees + paint recipes for the step controls.
-        const unsubChips = onSnapshot(collection(db, "sample_chip_orders"), (snap) =>
-            setChipOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))));
-        const unsubChipUsers = onSnapshot(collection(db, "fin_users"), (snap) => setFinUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-        const unsubChipRecipes = onSnapshot(collection(db, "fin_recipes"), (snap) => setFinRecipes(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-
         // Active conversion cart (one open batch per brand) for the phosphate pull → convert workflow.
         const unsubBatch = onSnapshot(query(collection(db, "conversion_batches"), where("brand", "==", activeBrand), where("status", "==", "open")), (snap) => {
             const open = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -281,8 +275,20 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (open[0]?.cartBin) setCartBin(open[0].cartBin);
         });
 
-        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); unsubFees(); unsubChips(); unsubChipUsers(); unsubChipRecipes(); unsubBatch(); };
+        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); unsubFees(); unsubBatch(); };
     }, [activeBrand]);
+
+    // Global, brand-agnostic feeds for the Chips control (orders + employees + paint recipes). Their OWN
+    // mount-only effect so they subscribe ONCE and stay live — they don't churn on brand switches, so a
+    // seeded run pushes to every open screen live (no need to leave the tab and come back).
+    useEffect(() => {
+        const subs = [
+            onSnapshot(collection(db, "sample_chip_orders"), (snap) => setChipOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))), e => console.warn('chip orders listen failed', e)),
+            onSnapshot(collection(db, "fin_users"), (snap) => setFinUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.warn('fin_users listen failed', e)),
+            onSnapshot(collection(db, "fin_recipes"), (snap) => setFinRecipes(snap.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.warn('fin_recipes listen failed', e)),
+        ];
+        return () => subs.forEach(u => u && u());
+    }, []);
 
     // ---- Sample-chip handlers ----
     const createChipOrder = async () => {

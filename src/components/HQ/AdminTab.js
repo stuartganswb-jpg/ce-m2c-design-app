@@ -86,6 +86,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   });
 
   const [newFlowName, setNewFlowName] = useState("");
+  const [linkItemSearch, setLinkItemSearch] = useState(""); // CPQ step "Link to Library Item" search box
   const [generateAsmId, setGenerateAsmId] = useState(""); // assembly the "Generate Flow from Tags" button reads
   const [genBayConfig, setGenBayConfig] = useState("STRAIGHT"); // bay configuration the generated flow is stamped with (drives fabShape + the pole calculatorTemplate so Vision Hardware math matches)
   const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
@@ -1550,23 +1551,44 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                             <div>
                                                  <label style={{ fontSize: '0.85rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Link to Library Item</label>
-                                                 <select value={newStep.linkedItemId || newStep.linkedPinId || ''} onChange={e => {
-                                                     const selectedId = e.target.value;
-                                                     const part = allApprovedDesigns.find(p => p.id === selectedId || p.itemId === selectedId || p.legacyErpId === selectedId);
-                                                     let extractedPrice = '';
-                                                     
-                                                     if (part) {
-                                                         const specs = part.manufacturingSpecs || {};
+                                                 {(() => {
+                                                     const codeOf = (p) => String((p.legacyErpId && !['PENDING', 'N/A'].includes(String(p.legacyErpId).toUpperCase())) ? p.legacyErpId : (p.itemId || p.id || '')).toUpperCase();
+                                                     const selId = newStep.linkedItemId || newStep.linkedPinId || '';
+                                                     const linked = selId && allApprovedDesigns.find(p => p.id === selId || p.itemId === selId || p.legacyErpId === selId);
+                                                     const linkItem = (part) => {
+                                                         const specs = part?.manufacturingSpecs || {};
                                                          const bp = specs.basePrice !== undefined && specs.basePrice !== "" ? parseFloat(specs.basePrice) : 0;
-                                                         if (bp > 0) extractedPrice = bp;
-                                                         else extractedPrice = 0;
-                                                     }
-                                                     
-                                                     setNewStep(prev => ({...prev, linkedItemId: selectedId, linkedPinId: selectedId, basePrice: extractedPrice}));
-                                                 }} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
-                                                     <option value="">-- No Item Linked --</option>
-                                                     {allApprovedDesigns.filter(p => p.partClass === 'Inventory' || p.partClass === 'Assembly').map(p => <option key={p.id} value={p.id}>{p.itemName}</option>)}
-                                                 </select>
+                                                         setNewStep(prev => ({ ...prev, linkedItemId: part.id, linkedPinId: part.id, basePrice: bp > 0 ? bp : 0 }));
+                                                         setLinkItemSearch("");
+                                                     };
+                                                     if (linked) return (
+                                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', padding: '10px', border: '1px solid var(--brass)', background: 'var(--paper-2)' }}>
+                                                             <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)' }}><b style={{ fontFamily: 'var(--mono)' }}>{codeOf(linked)}</b> — {linked.itemName}</span>
+                                                             <button onClick={() => setNewStep(prev => ({ ...prev, linkedItemId: '', linkedPinId: '' }))} title="Clear" style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.2rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                                                         </div>
+                                                     );
+                                                     const term = linkItemSearch.trim().toLowerCase();
+                                                     const matches = !term ? [] : allApprovedDesigns
+                                                         .filter(p => (p.partClass === 'Inventory' || p.partClass === 'Assembly') && (codeOf(p).toLowerCase().includes(term) || String(p.itemName || '').toLowerCase().includes(term)))
+                                                         .sort((a, b) => codeOf(a).localeCompare(codeOf(b), undefined, { numeric: true, sensitivity: 'base' }))
+                                                         .slice(0, 50);
+                                                     return (
+                                                         <div>
+                                                             <input value={linkItemSearch} onChange={e => setLinkItemSearch(e.target.value)} placeholder="Search by item # or name…" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }} />
+                                                             {term && (
+                                                                 <div style={{ maxHeight: '220px', overflowY: 'auto', border: '1px solid var(--line)', borderTop: 'none' }}>
+                                                                     {matches.map(p => (
+                                                                         <div key={p.id} onClick={() => linkItem(p)} style={{ padding: '9px 12px', cursor: 'pointer', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+                                                                             <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', fontWeight: 600 }}>{codeOf(p)}</span>
+                                                                             <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)', textAlign: 'right' }}>{p.itemName}</span>
+                                                                         </div>
+                                                                     ))}
+                                                                     {matches.length === 0 && <div style={{ padding: '10px 12px', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '0.85rem' }}>No matches.</div>}
+                                                                 </div>
+                                                             )}
+                                                         </div>
+                                                     );
+                                                 })()}
                                             </div>
                                             <div>
                                                 <label style={{ fontSize: '0.85rem', color: 'var(--ink)', display: 'block', marginBottom: '6px' }}>Step Base Price ($)</label>
