@@ -2681,11 +2681,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 {workingCards.length > 0 && (
                                     <div style={{ marginTop: '16px' }}>
                                         <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginBottom: '10px' }}>On the floor — working batches ({workingCards.length})</div>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(440px, 1fr))', gap: '14px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(580px, 1fr))', gap: '14px' }}>
                                             {workingCards.map(b => {
                                                 const allDone = CHIP_STEPS.every(s => b.steps?.[s.key]?.status === 'done');
                                                 return (
-                                                    <div key={b.id} style={{ border: `1px solid ${theme.brass}`, background: '#fff' }}>
+                                                    <div key={b.id} style={{ border: `1px solid ${theme.brass}`, background: '#fff', overflow: 'hidden' }}>
                                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: theme.paper, borderBottom: `1px solid ${theme.line}` }}>
                                                             <span style={{ fontFamily: theme.serif, fontSize: '1.1rem', fontWeight: 500 }}>{b.finish} · {b.qty} pcs</span>
                                                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -2693,7 +2693,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                                 <button onClick={() => removeBatch(o, b.id)} title="Discard batch" style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1.1rem', cursor: 'pointer' }}>×</button>
                                                             </div>
                                                         </div>
-                                                        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${CHIP_STEPS.length}, 1fr)` }}>
+                                                        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${CHIP_STEPS.length}, minmax(0, 1fr))` }}>
                                                             {CHIP_STEPS.map((s, i) => { const st = b.steps?.[s.key] || {}; const p = stepPill(st.status); return (
                                                                 <div key={s.key} style={{ padding: '10px', borderLeft: i ? `1px solid ${theme.line}` : 'none', display: 'flex', flexDirection: 'column', gap: '7px' }}>
                                                                     <div style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', fontWeight: 600 }}>{i + 1}. {s.label}</div>
