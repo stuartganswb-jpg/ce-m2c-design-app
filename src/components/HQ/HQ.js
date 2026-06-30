@@ -25,6 +25,7 @@ const ERPPushPullTab = lazy(() => import('./ERPPushPullTab'));
 const StockViewTab = lazy(() => import('./StockViewTab'));
 const ErpMappingAudit = lazy(() => import('./ErpMappingAudit'));
 const RTGDispatchTab = lazy(() => import('./RTGDispatchTab'));
+const QuickShipTab = lazy(() => import('./QuickShipTab'));
 
 const AssetGalleryTab = lazy(() => import('../Shared/AssetGalleryTab'));
 const BatchImageProcessor = lazy(() => import('../Shared/BatchImageProcessor'));
@@ -46,9 +47,9 @@ const TAB_LABELS = {
 
 const TABS = [
   '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update',
-  '5. Marketing', '6. Instructions', '7. Packaging', '8. CPQ Configurator',
+  '5. Marketing', '6. Instructions', '7. Quick Ship', '8. CPQ Configurator',
   '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '11.1 NetSuite Sync', '11.2 ERP Mapping Audit', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
-  '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', 'ERP_WRITE_BACK'
+  '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', '15. Packaging', 'ERP_WRITE_BACK'
 ];
 
 const theme = {
@@ -390,7 +391,8 @@ function HQ() {
             
             {activeTab === '4.5 Mass Update' && <LibraryMassUpdateTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '6. Instructions' && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === '7. Packaging' && <PackagingTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '7. Quick Ship' && <QuickShipTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '15. Packaging' && <PackagingTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '8. CPQ Configurator' && <CPQTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} setCart={setGlobalCart} />}
             {activeTab === '9. Client Vision' && <ClientVisionTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '9.5 UPS Shipping' && <UPSShippingCalculator currentUser={user.name} activeBrand={activeBrand.id} />}

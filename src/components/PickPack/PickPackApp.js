@@ -12,7 +12,7 @@ import { printItemLabel, printBinLabel } from '../Shared/labelPrint';
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
 // TABS updated to include COUNT + CHIPS (sample-chip production control)
-const TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING'];
+const TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING'];
 
 // Sample-chip production steps, in run order. Painting reuses the paint recipes (P01, P02…).
 // Finishes for the big HDSC chip run: P01–P30 (incl. P25), EP1–EP6, S01–S12 = 48 finishes.
@@ -233,6 +233,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [watchlistFilter, setWatchlistFilter] = useState("");
     const [globalLists, setGlobalLists] = useState({});
 
+    // Quick Ship (stocked / pre-finished) sales orders — pick/pack in their OWN tab, kept separate
+    // from custom orders (which arrive via fin_workorders). Sourced from hq_sales_orders tagged QUICKSHIP.
+    const [quickShipOrders, setQuickShipOrders] = useState([]);
+
     // Fetch Global Lists & HQ Parts for cycle counting
     useEffect(() => {
         const unsubParts = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
@@ -275,7 +279,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (open[0]?.cartBin) setCartBin(open[0].cartBin);
         });
 
-        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); unsubFees(); unsubBatch(); };
+        // Quick Ship stock orders for this brand (own pick/pack tab).
+        const unsubQS = onSnapshot(query(collection(db, "hq_sales_orders"), where("orderClass", "==", "QUICKSHIP")), (snap) => {
+            const rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand);
+            rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            setQuickShipOrders(rows);
+        }, e => console.warn('quick ship orders listen failed', e));
+
+        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); unsubFees(); unsubBatch(); unsubQS(); };
     }, [activeBrand]);
 
     // Global, brand-agnostic feeds for the Chips control (orders + employees + paint recipes). Their OWN
@@ -1756,6 +1767,62 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </div>
                     </div>
                 )}
+
+                {/* 📦 TAB: STOCK / QUICK SHIP — pre-finished stocked orders, kept apart from custom */}
+                {activeTab === 'STOCK' && (() => {
+                    const setQSStatus = async (o, status) => {
+                        try { await updateDoc(doc(db, "hq_sales_orders", o.id), { status, pickStatus: status }); writeLog(`Quick Ship ${o.id} → ${status}`, 'STOCK'); }
+                        catch (e) { alert('Update failed: ' + e.message); }
+                    };
+                    const open = quickShipOrders.filter(o => (o.status || 'Pending') !== 'Shipped');
+                    const shipped = quickShipOrders.filter(o => o.status === 'Shipped');
+                    const Card = ({ o }) => (
+                        <div style={{ border: `1px solid ${theme.line}`, marginBottom: '16px', background: '#fff' }}>
+                            <div style={{ padding: '14px 18px', borderBottom: `1px solid ${theme.line}`, background: theme.paper, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                    <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500 }}>{o.customer || 'Customer'}</span>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginLeft: '12px' }}>SO {o.soId || o.id} · {o.totalParts || 0} pcs{o.jobName ? ` · ${o.jobName}` : ''}</span>
+                                </div>
+                                <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: o.status === 'Shipped' ? '#3a7d44' : (o.status === 'Picked' ? theme.brass : theme.inkSoft) }}>{o.status || 'Pending'}</span>
+                            </div>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                <thead><tr style={{ background: theme.paper2 }}>
+                                    {['Item #', 'Description', 'Bin', 'Qty'].map(h => <th key={h} style={{ textAlign: h === 'Qty' ? 'center' : 'left', padding: '8px 18px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>)}
+                                </tr></thead>
+                                <tbody>
+                                    {(o.lines || []).map((l, i) => (
+                                        <tr key={i}>
+                                            <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{l.erp || '—'}</td>
+                                            <td style={{ padding: '9px 18px', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{l.name}{l.note ? ` · ${l.note}` : ''}</td>
+                                            <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.bin ? theme.ink : theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{l.bin || 'UNASSIGNED'}</td>
+                                            <td style={{ padding: '9px 18px', textAlign: 'center', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{l.qty}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                            {o.status !== 'Shipped' && (
+                                <div style={{ padding: '12px 18px', display: 'flex', gap: '10px', justifyContent: 'flex-end', borderTop: `1px solid ${theme.line}` }}>
+                                    {o.status !== 'Picked' && <button onClick={() => setQSStatus(o, 'Picked')} style={{ padding: '9px 18px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Picked</button>}
+                                    <button onClick={() => setQSStatus(o, 'Shipped')} style={{ padding: '9px 18px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Shipped</button>
+                                </div>
+                            )}
+                        </div>
+                    );
+                    return (
+                        <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                            <div style={{ fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem', marginBottom: '6px' }}>Stock / Quick Ship Orders</div>
+                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.05em', marginBottom: '24px' }}>Pre-finished stocked goods — pick off the shelf. Separate from custom orders.</div>
+                            {open.length === 0 && <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No open stock orders.</div>}
+                            {open.map(o => <Card key={o.id} o={o} />)}
+                            {shipped.length > 0 && (
+                                <>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', margin: '30px 0 14px' }}>Shipped ({shipped.length})</div>
+                                    {shipped.map(o => <Card key={o.id} o={o} />)}
+                                </>
+                            )}
+                        </div>
+                    );
+                })()}
 
                 {/* 🏷️ TAB: PACKAGING PREP */}
                 {activeTab === 'PACKING' && (
