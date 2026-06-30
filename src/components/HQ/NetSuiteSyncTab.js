@@ -302,7 +302,9 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
                         BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
                         BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
-                        BUILTIN.DF(item.custitem_bracket_projection) AS projection, 
+                        BUILTIN.DF(item.custitem_bracket_projection) AS projection,
+                        item.custitem27 AS is_stocked,
+                        item.custitem26 AS is_inhouse,
                         BUILTIN.DF(item.stockunit) AS uom,
                         item.averagecost AS base_cost,
                         Vendor.companyname AS vendor_name,
@@ -399,6 +401,11 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             const records = Object.values(uniqueRecordsMap);
             let successCount = 0;
 
+            // NetSuite checkbox custom fields come back as 'T'/'F'. custitem27 = "Stocked" (held on the
+            // shelf, sold via Quick Ship); custitem26 = finished IN-HOUSE (needs a WO, not outsourced).
+            const nsBool = (v) => v === true || v === 'T' || v === 't' || v === 'true' || v === 1 || v === '1';
+            const nsHasVal = (v) => v !== undefined && v !== null && v !== '';
+
             // 2. Process and Push to Firebase
             for (const item of records) {
                 const sku = (item.itemid || item.id).toString().toUpperCase();
@@ -429,6 +436,11 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 } else if (sku.includes('/EP')) {
                     outsourceAction = "PLATING"; // Fallback for any other /EP items
                 }
+
+                // 🚀 Curated NetSuite flags win over the SKU heuristic. custitem26 is the authoritative
+                // in-house-finish flag (overrides the suffix guess when set); custitem27 marks stocked stock.
+                const isStocked = nsBool(item.is_stocked);
+                if (nsHasVal(item.is_inhouse)) isInHouse = nsBool(item.is_inhouse);
 
                 // 3. Part Handling Logic (Poles vs Small Parts)
                 const pTypeClean = (item.product_type || '').toLowerCase().trim();
@@ -463,6 +475,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     cost: determinedCost,
                     weight: parseFloat(item.weight) || 0,
                     isInHouse: isInHouse,
+                    isStocked: isStocked,
                     outsourceAction: outsourceAction,
                     partHandling: partHandling,
                     productType: item.product_type || 'Uncategorized',
