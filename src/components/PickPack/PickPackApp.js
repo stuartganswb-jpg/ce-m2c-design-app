@@ -14,6 +14,13 @@ const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#
 const TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING'];
 
 // Sample-chip production steps, in run order. Painting reuses the paint recipes (P01, P02…).
+// Finishes for the big HDSC chip run: P01–P30 (incl. P25), EP1–EP6, S01–S12 = 48 finishes.
+const HDSC_RUN_FINISHES = [
+  ...Array.from({ length: 30 }, (_, i) => 'P' + String(i + 1).padStart(2, '0')),
+  ...Array.from({ length: 6 }, (_, i) => 'EP' + (i + 1)),
+  ...Array.from({ length: 12 }, (_, i) => 'S' + String(i + 1).padStart(2, '0')),
+];
+
 const CHIP_STEPS = [
   { key: 'punching', label: 'Punching' },
   { key: 'painting', label: 'Painting' },
@@ -155,6 +162,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [finRecipes, setFinRecipes] = useState([]); // paint recipes (P01, P02…) for the painting step
     const [chipForm, setChipForm] = useState({ customer: '', qty: 1, recipe: '', notes: '' });
     const [chipShowDone, setChipShowDone] = useState(false);
+    const [runExpand, setRunExpand] = useState(null); // `${orderId}::${finish}` of the expanded run line
     const [perms, setPerms] = useState({});
     const [jobs, setJobs] = useState([]);
     
@@ -307,6 +315,43 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const deleteChipOrder = async (id) => {
         if (!window.confirm('Remove this sample-chip order?')) return;
         await deleteDoc(doc(db, "sample_chip_orders", id));
+    };
+
+    // ---- Big multi-finish chip RUN (HDSC) ----
+    const seedHdscRun = async () => {
+        if (!window.confirm(`Seed the HDSC sample-chip run — 1500 pcs each across ${HDSC_RUN_FINISHES.length} finishes (P01–P30, EP1–EP6, S01–S12)?`)) return;
+        const id = `CHIPRUN-HDSC-${Date.now()}`;
+        const mkSteps = () => { const s = {}; CHIP_STEPS.forEach(st => { s[st.key] = { status: 'pending', employee: '', startedBy: '', startedAt: null, stoppedBy: '', stoppedAt: null }; }); return s; };
+        const lines = HDSC_RUN_FINISHES.map(f => ({ finish: f, qty: 1500, completed: 0, steps: mkSteps() }));
+        await setDoc(doc(db, "sample_chip_orders", id), {
+            id, brand: activeBrand, type: 'run', code: 'HDSC', customer: 'HDSC Sample Chip Run',
+            status: 'open', inFinishing: false, lines, createdAt: Date.now(), createdBy: operator?.name || 'Unknown'
+        });
+        writeLog(`Seeded HDSC chip run (${lines.length} finishes × 1500).`, 'CHIPS');
+        alert(`✅ Seeded HDSC chip run: ${lines.length} finishes × 1500 pcs. Enter completed per finish, then run the missing through the steps (PIN start/stop).`);
+    };
+    const updateRunLine = (order, finish, mutate) => {
+        const lines = (order.lines || []).map(l => l.finish === finish ? mutate({ ...l, steps: { ...(l.steps || {}) } }) : l);
+        return updateDoc(doc(db, "sample_chip_orders", order.id), { lines, updatedAt: Date.now() });
+    };
+    const setRunCompleted = (order, finish, val) => {
+        const line = (order.lines || []).find(l => l.finish === finish);
+        const c = Math.max(0, Math.min(parseInt(val) || 0, line?.qty || 0));
+        return updateRunLine(order, finish, l => ({ ...l, completed: c }));
+    };
+    const setRunStepEmployee = (order, finish, stepKey, employee) =>
+        updateRunLine(order, finish, l => ({ ...l, steps: { ...l.steps, [stepKey]: { ...(l.steps?.[stepKey] || {}), employee } } }));
+    // PIN-gated start/stop on a process — the operator must enter a valid PIN; we record who + when.
+    const runStepClock = (order, finish, stepKey, stepLabel, action) => {
+        const pin = window.prompt(`Enter your PIN to ${action === 'start' ? 'START' : 'STOP'} ${stepLabel} — ${finish}`);
+        if (pin == null || !String(pin).trim()) return;
+        const user = finUsers.find(u => String(u.pin) === String(pin).trim());
+        if (!user) return alert('PIN not recognized.');
+        return updateRunLine(order, finish, l => {
+            const cur = l.steps?.[stepKey] || {};
+            if (action === 'start') return { ...l, steps: { ...l.steps, [stepKey]: { ...cur, status: 'running', employee: cur.employee || user.name, startedBy: user.name, startedAt: Date.now(), stoppedBy: '', stoppedAt: null } } };
+            return { ...l, steps: { ...l.steps, [stepKey]: { ...cur, status: 'done', stoppedBy: user.name, stoppedAt: Date.now() } } };
+        });
     };
 
     const attemptLogin = async (e) => {
@@ -2492,8 +2537,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                 {/* 🎨 TAB: SAMPLE CHIPS — PRODUCTION CONTROL */}
                 {activeTab === 'CHIPS' && (() => {
-                    const openOrders = chipOrders.filter(o => o.status !== 'done');
-                    const doneOrders = chipOrders.filter(o => o.status === 'done');
+                    const runOrders = chipOrders.filter(o => o.type === 'run');
+                    const openOrders = chipOrders.filter(o => o.type !== 'run' && o.status !== 'done');
+                    const doneOrders = chipOrders.filter(o => o.type !== 'run' && o.status === 'done');
                     const inFinishingCount = chipOrders.filter(o => o.inFinishing).length;
                     const recipeOptions = [...new Set(finRecipes.map(r => r.code || r.id).filter(Boolean))].sort();
                     const pillOf = (status) => ({
@@ -2532,12 +2578,79 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             </div>
                         </div>
                     );
+                    const thR = { padding: '8px 10px', textAlign: 'left', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, position: 'sticky', top: 0, background: theme.paper };
+                    const renderRun = (o) => {
+                        const totalOnOrder = (o.lines || []).reduce((s, l) => s + (l.qty || 0), 0);
+                        const totalDone = (o.lines || []).reduce((s, l) => s + (l.completed || 0), 0);
+                        const totalMissing = totalOnOrder - totalDone;
+                        return (
+                            <div key={o.id} style={{ border: `1px solid ${theme.brass}`, marginBottom: '20px', background: '#fff' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '14px 18px', background: theme.paper, borderBottom: `1px solid ${theme.line}`, flexWrap: 'wrap' }}>
+                                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap' }}>
+                                        <span style={{ fontFamily: theme.serif, fontSize: '1.3rem', fontWeight: 500 }}>{o.code} Sample Chip Run</span>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{o.lines?.length || 0} finishes · {totalOnOrder.toLocaleString()} on order · {totalDone.toLocaleString()} complete · <b style={{ color: totalMissing ? theme.brass : '#2f7d3b' }}>{totalMissing.toLocaleString()} missing</b></span>
+                                    </div>
+                                    <button onClick={() => deleteChipOrder(o.id)} style={{ background: 'none', border: 'none', color: theme.inkSoft, fontSize: '1.3rem', cursor: 'pointer' }}>×</button>
+                                </div>
+                                <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: theme.sans, fontSize: '0.85rem' }}>
+                                        <thead><tr style={{ borderBottom: `1px solid ${theme.line}` }}>{['Finish', 'On Order', 'Completed', 'Missing', 'Status', ''].map(h => <th key={h} style={thR}>{h}</th>)}</tr></thead>
+                                        <tbody>
+                                            {(o.lines || []).map(l => {
+                                                const missing = (l.qty || 0) - (l.completed || 0);
+                                                const key = `${o.id}::${l.finish}`;
+                                                const expanded = runExpand === key;
+                                                return (
+                                                    <React.Fragment key={l.finish}>
+                                                        <tr style={{ borderBottom: `1px solid ${theme.line}`, background: missing <= 0 ? '#f4faf4' : '#fff' }}>
+                                                            <td style={{ padding: '8px 10px', fontFamily: theme.mono, fontWeight: 600 }}>{l.finish}</td>
+                                                            <td style={{ padding: '8px 10px', fontFamily: theme.mono }}>{(l.qty || 0).toLocaleString()}</td>
+                                                            <td style={{ padding: '8px 10px' }}><input type="number" min="0" max={l.qty} value={l.completed ?? 0} onChange={e => setRunCompleted(o, l.finish, e.target.value)} style={{ width: '80px', padding: '6px', fontFamily: theme.mono, textAlign: 'center', border: `1px solid ${theme.line}`, outline: 'none' }} /></td>
+                                                            <td style={{ padding: '8px 10px', fontFamily: theme.mono, color: missing > 0 ? theme.brass : '#2f7d3b', fontWeight: 600 }}>{missing.toLocaleString()}</td>
+                                                            <td style={{ padding: '8px 10px', fontFamily: theme.mono, fontSize: '0.72rem', textTransform: 'uppercase', color: missing <= 0 ? '#2f7d3b' : theme.inkSoft }}>{missing <= 0 ? 'Complete ✓' : 'Open'}</td>
+                                                            <td style={{ padding: '8px 10px', textAlign: 'right' }}>{missing > 0 && <button onClick={() => setRunExpand(expanded ? null : key)} style={{ background: 'none', border: `1px solid ${theme.line}`, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>{expanded ? '▾ steps' : '▸ run steps'}</button>}</td>
+                                                        </tr>
+                                                        {expanded && (
+                                                            <tr><td colSpan="6" style={{ padding: '0 10px 12px', background: theme.paper }}>
+                                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, padding: '8px 0 6px' }}>Run the {missing.toLocaleString()} missing — assign + PIN start/stop each process:</div>
+                                                                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${CHIP_STEPS.length}, 1fr)`, gap: '8px' }}>
+                                                                    {CHIP_STEPS.map((s, i) => { const st = l.steps?.[s.key] || {}; return (
+                                                                        <div key={s.key} style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', fontWeight: 600 }}>{i + 1}. {s.label}</div>
+                                                                            <select value={st.employee || ''} onChange={e => setRunStepEmployee(o, l.finish, s.key, e.target.value)} style={{ padding: '5px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.75rem', outline: 'none' }}>
+                                                                                <option value="">— assign —</option>
+                                                                                {finUsers.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                                                                            </select>
+                                                                            {st.status === 'done' ? (
+                                                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', color: '#2f7d3b' }}>✓ done · {st.stoppedBy}</div>
+                                                                            ) : (
+                                                                                <button onClick={() => runStepClock(o, l.finish, s.key, s.label, st.status === 'running' ? 'stop' : 'start')} style={{ padding: '6px', background: st.status === 'running' ? '#d9534f' : theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>{st.status === 'running' ? '⏹ Stop (PIN)' : '▶ Start (PIN)'}</button>
+                                                                            )}
+                                                                            {st.startedBy && <div style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.inkSoft }}>{st.status === 'running' ? '▶ running ·' : 'by'} {st.startedBy}</div>}
+                                                                        </div>
+                                                                    ); })}
+                                                                </div>
+                                                            </td></tr>
+                                                        )}
+                                                    </React.Fragment>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        );
+                    };
                     return (
                         <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '8px' }}>
                                 <h2 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.6rem', fontWeight: 500, color: theme.ink }}>Sample Chips — Production Control</h2>
-                                <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', color: theme.inkSoft }}>{openOrders.length} open · {inFinishingCount} in finishing</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', color: theme.inkSoft }}>{openOrders.length} open · {inFinishingCount} in finishing</span>
+                                    <button onClick={seedHdscRun} style={{ padding: '9px 14px', background: theme.paper, border: `1px dashed ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', color: theme.ink }}>🌱 Seed HDSC Run</button>
+                                </div>
                             </div>
+                            {runOrders.map(renderRun)}
                             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end', background: theme.paper, border: `1px solid ${theme.line}`, padding: '16px', marginBottom: '24px' }}>
                                 <div style={{ flex: 2, minWidth: '150px' }}><label style={lbl}>Customer</label><input value={chipForm.customer} onChange={e => setChipForm({ ...chipForm, customer: e.target.value })} placeholder="e.g. Brimar" style={inp} /></div>
                                 <div style={{ width: '70px' }}><label style={lbl}>Qty</label><input type="number" min="1" value={chipForm.qty} onChange={e => setChipForm({ ...chipForm, qty: e.target.value })} style={inp} /></div>
