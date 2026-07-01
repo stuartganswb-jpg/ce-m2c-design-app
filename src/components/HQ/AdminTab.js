@@ -520,6 +520,18 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       } catch (e) { alert('Cleanup failed: ' + e.message); }
   };
 
+  // Per-user membership of the finishing/chip selection list (fin_users). Direct control — no role
+  // guessing: check = on the floor/chip dropdowns, uncheck = removed from them (still an HQ user).
+  const finPins = new Set(finUsers.map(f => String(f.pin)));
+  const toggleFloorUser = async (u) => {
+      const pin = String(u.pin || u.id);
+      if (!pin) return;
+      try {
+          if (finPins.has(pin)) await deleteDoc(doc(db, "fin_users", pin));
+          else await setDoc(doc(db, "fin_users", pin), { name: u.name, pin, role: roleKey(u.role) }, { merge: true });
+      } catch (e) { alert('Update failed: ' + e.message); }
+  };
+
   const handleCreateNewFlow = async () => {
       if (!newFlowName.trim()) return alert("Please enter a flow name (e.g., CUSTOM PILLOW)");
       const flowId = `FLOW-${Date.now()}`;
@@ -2545,6 +2557,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                       <tr>
                           <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Name</th>
                           <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Role</th>
+                          <th title="On the finishing/chip employee selection lists (fin_users)" style={{ padding: '15px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Floor / Chips</th>
                           <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', textAlign: 'right' }}></th>
                       </tr>
                   </thead>
@@ -2553,6 +2566,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                           <tr key={u.id} style={{ borderBottom: '1px solid var(--line)' }}>
                               <td style={{ padding: '15px', color: 'var(--ink)' }}>{u.name}</td>
                               <td style={{ padding: '15px', color: 'var(--ink-soft)' }}>{u.role?.toUpperCase().replace(/_/g, ' ')}</td>
+                              <td style={{ padding: '15px', textAlign: 'center' }}>
+                                  <input type="checkbox" checked={finPins.has(String(u.pin || u.id))} onChange={() => toggleFloorUser(u)} title="Show this person on finishing/chip employee selections" style={{ cursor: 'pointer', width: '16px', height: '16px' }} />
+                              </td>
                               <td style={{ padding: '15px', textAlign: 'right' }}>
                                   <button onClick={() => setAdminForm({ uName: u.name, uPin: u.pin || '', uRole: u.role || dynamicRoles[0], oldId: u.id })} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', fontSize: '10px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer', marginRight: '10px' }}>Edit</button>
                                   <button onClick={() => handleDeleteUser(u)} style={{ background: 'transparent', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer' }}>🗑️</button>
