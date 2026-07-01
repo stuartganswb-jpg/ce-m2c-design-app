@@ -305,6 +305,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         BUILTIN.DF(item.custitem_bracket_projection) AS projection,
                         item.custitem27 AS is_stocked,
                         item.custitem26 AS is_inhouse,
+                        item.custitem28 AS is_old,
                         BUILTIN.DF(item.stockunit) AS uom,
                         item.averagecost AS base_cost,
                         Vendor.companyname AS vendor_name,
@@ -400,7 +401,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
             const records = Object.values(uniqueRecordsMap);
             let successCount = 0;
-            let stockedCount = 0, inHouseCount = 0;
+            let stockedCount = 0, inHouseCount = 0, oldCount = 0;
 
             // NetSuite checkbox custom fields come back as 'T'/'F'. custitem27 = "Stocked" (held on the
             // shelf, sold via Quick Ship); custitem26 = finished IN-HOUSE (needs a WO, not outsourced).
@@ -441,8 +442,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 // 🚀 Curated NetSuite flags win over the SKU heuristic. custitem26 is the authoritative
                 // in-house-finish flag (overrides the suffix guess when set); custitem27 marks stocked stock.
                 const isStocked = nsBool(item.is_stocked);
+                const isRetired = nsBool(item.is_old); // custitem28 = OLD/retiring → hidden from browse screens
                 if (nsHasVal(item.is_inhouse)) isInHouse = nsBool(item.is_inhouse);
                 if (isStocked) stockedCount++;
+                if (isRetired) oldCount++;
                 if (isInHouse) inHouseCount++;
 
                 // 3. Part Handling Logic (Poles vs Small Parts)
@@ -479,6 +482,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     weight: parseFloat(item.weight) || 0,
                     isInHouse: isInHouse,
                     isStocked: isStocked,
+                    isRetired: isRetired,
                     outsourceAction: outsourceAction,
                     partHandling: partHandling,
                     productType: item.product_type || 'Uncategorized',
@@ -560,7 +564,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             }
 
             addLog(`✅ Successfully synced and mapped ${successCount} library items. App structure preserved.`, 'success');
-            addLog(`🏷️ Flagged ${stockedCount} STOCKED (custitem27) and ${inHouseCount} IN-HOUSE (custitem26) of ${successCount} items.`, stockedCount > 0 ? 'success' : 'info');
+            addLog(`🏷️ Flagged ${stockedCount} STOCKED (custitem27), ${inHouseCount} IN-HOUSE (custitem26), ${oldCount} OLD/hidden (custitem28) of ${successCount} items.`, stockedCount > 0 ? 'success' : 'info');
 
         } catch (err) {
             console.error(err);

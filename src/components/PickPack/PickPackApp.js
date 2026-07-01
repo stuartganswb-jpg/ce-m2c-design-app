@@ -1456,7 +1456,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const dynamicWatchlists = Array.from(new Set(hqParts.map(p => watchlistOf(p.manufacturingSpecs || {})).filter(Boolean))).sort();
 
     const baseFilteredItems = hqParts.filter(part => {
-        if (retiredSet.has(String(part.netSuiteInternalId || ''))) return false; // hide retired "- OLD" items
+        if (part.manufacturingSpecs?.isRetired === true || retiredSet.has(String(part.netSuiteInternalId || ''))) return false; // hide retired (custitem28 / locked) items
         const term = searchQuery.toLowerCase();
         const specs = part.manufacturingSpecs || {};
         const erpId = (part.legacyErpId || part.itemId || "").toUpperCase();

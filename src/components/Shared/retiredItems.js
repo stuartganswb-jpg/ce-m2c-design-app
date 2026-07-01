@@ -19,5 +19,9 @@ export const useRetiredSet = () => {
     return set;
 };
 
-// Predicate: true when the part is NOT retired. Matches on the app doc's netSuiteInternalId.
-export const notRetired = (set) => (p) => !(set && set.has(String((p && p.netSuiteInternalId) ?? '')));
+// Predicate: true when the part is NOT retired. Retired = locked by internal ID (set) OR flagged
+// manufacturingSpecs.isRetired (custitem28, set by the NetSuite sync).
+export const notRetired = (set) => (p) => {
+    if (p && p.manufacturingSpecs && p.manufacturingSpecs.isRetired === true) return false;
+    return !(set && set.has(String((p && p.netSuiteInternalId) ?? '')));
+};

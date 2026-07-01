@@ -198,7 +198,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   ])).sort();
 
   const filteredInventory = inventory.filter(part => {
-    if (retiredSet.has(String(part.netSuiteInternalId || ''))) return false; // hide retired "- OLD" items from the browse list
+    if (part.manufacturingSpecs?.isRetired === true || retiredSet.has(String(part.netSuiteInternalId || ''))) return false; // hide retired (custitem28 / locked) items from the browse list
     const term = searchTerm.toLowerCase();
     const specs = part.manufacturingSpecs || {};
 
