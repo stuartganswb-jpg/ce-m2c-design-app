@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, doc, setDoc, getDoc } from "firebase/firestore";
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
+import { makeFullTasks } from '../Shared/workOrderContract';
+import { SIZE_CAPACITY, lookupCapacity } from '../Shared/finishingTime';
 
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
@@ -49,6 +51,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     useEffect(() => onSnapshot(doc(db, 'system', 'retired_items'),
         s => setRetiredDoc(s.exists() ? { internalIds: s.data().internalIds || [], items: s.data().items || [] } : { internalIds: [], items: [] }),
         () => { }), []);
+    // Finishing sled-capacity matrix (pieces/sled by size×type) drives the recommended production run.
+    const [capacityMatrix, setCapacityMatrix] = useState({ rules: {}, default: null });
+    useEffect(() => onSnapshot(doc(db, 'fin_config', 'capacityMatrix'),
+        s => setCapacityMatrix(s.exists() ? s.data() : { rules: {}, default: null }), () => { }), []);
+    const [orderQty, setOrderQty] = useState({});   // per-row entered production amount (keyed by internalId)
+    const [genBusy, setGenBusy] = useState(false);
 
     // BUILDER STATE
     const [activeBuilder, setActiveBuilder] = useState("PO"); // 'PO' or 'WO'
@@ -735,6 +743,76 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         } catch (e) { addLog(`Lock failed: ${e.message}`, 'error'); alert('Lock failed: ' + e.message); }
     };
 
+    // ---- REORDER + WORK-ORDER MATH (right side of the Sales Snapshot) ----
+    // Cross-ref a report row (NetSuite item) back to the app's part for paintSize/productType.
+    const partByKey = {};
+    hqParts.forEach(p => {
+        if (p.netSuiteInternalId != null) partByKey['id:' + String(p.netSuiteInternalId)] = p;
+        const e = (p.legacyErpId || p.itemId || '').toUpperCase();
+        if (e) partByKey['erp:' + e] = p;
+    });
+    // Finish/recipe = the code after the last "/" in the base item# (strip a trailing "-N").
+    const finishOf = (itemid) => { const base = String(itemid || '').replace(/-N$/i, ''); const i = base.lastIndexOf('/'); return i >= 0 ? base.slice(i + 1) : ''; };
+    // Per-row reorder analysis. min-on-hand = 4 weeks of the 6-month avg sales rate; recommended = the
+    // shortfall rounded UP to full finishing sleds for the part's size (S~70 / M~35 / L~22).
+    const reorderFor = (r) => {
+        const part = partByKey['id:' + String(r.internalId)] || partByKey['erp:' + String(r.itemid).toUpperCase()];
+        const size = (part?.manufacturingSpecs?.paintSize || '').toUpperCase();
+        const ptype = (part?.manufacturingSpecs?.productType || '').toUpperCase();
+        const available = Math.round(Number((nsStock[String(r.itemid).toUpperCase()] || {}).available) || 0);
+        const last6 = (r.cells || []).slice(-6).reduce((s, c) => s + (c.v || 0), 0); // merged (new+old) last 6 months
+        const minOnHand = Math.round((last6 / 26) * 4);
+        const cap = lookupCapacity(capacityMatrix, size, ptype) || SIZE_CAPACITY[size] || 0;
+        const shortfall = Math.max(0, minOnHand - available);
+        const recommended = shortfall > 0 ? (cap > 0 ? Math.ceil(shortfall / cap) * cap : shortfall) : 0;
+        return { part, size, ptype, available, minOnHand, cap, shortfall, recommended };
+    };
+
+    // Generate finishing WOs for every row with an Order qty > 0 → fin_workorders (Setup phase), grouped
+    // by finish. Stock builds skip the shop floor. Mirrors RTGDispatch.pushToFinishing's stock contract.
+    const generateFinishingWOs = async () => {
+        const rows = (salesHist?.rows) || [];
+        const toMake = rows.map(r => { const info = reorderFor(r); const qty = parseInt(orderQty[r.internalId] ?? info.recommended) || 0; return { r, info, qty }; }).filter(x => x.qty > 0);
+        if (!toMake.length) return alert('Enter an Order quantity on at least one row first (or accept a Recommended amount).');
+        if (!window.confirm(`Generate ${toMake.length} finishing work order(s) — ${toMake.reduce((s, x) => s + x.qty, 0)} pcs total — and send them to the Finishing Floor Setup queue (grouped by finish)?`)) return;
+        setGenBusy(true);
+        try {
+            const reqDate = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+            let n = 0;
+            for (const { r, info, qty } of toMake) {
+                const finish = finishOf(r.itemid);
+                const woId = `WO-STK-${r.internalId}-${Date.now()}`;
+                const paintSizes = ['S', 'M', 'L'].includes(info.size) ? { S: 0, M: 0, L: 0, [info.size]: qty } : null;
+                await setDoc(doc(db, "fin_workorders", woId), {
+                    id: woId, displayId: woId, woNum: woId, orderKey: woId,
+                    quoteId: null, salesOrderId: null, estimateId: null,
+                    orderType: 'stock', soId: null, soNum: null,
+                    customerId: null, customerName: 'Internal Stock', customer: 'Internal Stock', clientName: 'Internal Stock',
+                    recipe: finish || 'PENDING-RECIPE',
+                    reqDate, type: r.itemid, totalParts: qty,
+                    stockErpId: r.itemid, stockInternalId: r.internalId,
+                    paintSize: info.size || null, productType: info.ptype || null, paintSizes,
+                    note: `Stock replenish · avail ${info.available} · min ${info.minOnHand}`,
+                    cpqSpecs: {}, imageUrl: info.part?.finalImageUrl || null,
+                    dimensions: { length: 0, width: 0, height: 0 },
+                    partsList: [],
+                    currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
+                    tasks: makeFullTasks(),
+                    machineAssigned: null, redlineAlert: false,
+                    sentToPickPack: false, pickStatus: 'Pending',
+                    shopSiblingId: null, hasCustomSibling: false, customFabStatus: 'Pending',
+                    brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
+                });
+                await setDoc(doc(db, "hq_work_orders", woId), { id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Dispatched', pushedToFinishing: true, erpId: r.itemid, recipe: finish || 'PENDING-RECIPE', qty, reqDate, paintSize: info.size || null, customer: 'Internal Stock', createdAt: Date.now(), createdBy: currentUser || '' }, { merge: true });
+                n++;
+            }
+            addLog(`Generated ${n} finishing work order(s) → Setup queue (grouped by finish).`, 'success');
+            setOrderQty({});
+            alert(`✅ ${n} finishing work order(s) sent to the Finishing Floor Setup queue.`);
+        } catch (e) { addLog(`Generate WOs failed: ${e.message}`, 'error'); alert('Failed to generate work orders:\n\n' + (e.message || e)); }
+        setGenBusy(false);
+    };
+
     // --- AGGREGATING DEMAND FROM VARIANTS TO ROOT ITEM ---
     const retiredSet = new Set((retiredDoc.internalIds || []).map(String));
     const enrichedInventory = hqParts.filter(part => part.manufacturingSpecs?.isRetired !== true && !retiredSet.has(String(part.netSuiteInternalId || ''))).map(part => {
@@ -864,6 +942,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const rows = (salesHist.rows || []).filter(r => !term || String(r.itemid).toUpperCase().includes(term));
                 const gt = salesHist.months.map((m, i) => rows.reduce((s, r) => s + (r.cells[i]?.v || 0), 0));
                 const gtTotal = rows.reduce((s, r) => s + r.total, 0);
+                const reo = rows.map(r => reorderFor(r));
+                const totAvail = reo.reduce((s, x) => s + x.available, 0);
+                const totMin = reo.reduce((s, x) => s + x.minOnHand, 0);
+                const totRec = reo.reduce((s, x) => s + x.recommended, 0);
+                const totOrder = rows.reduce((s, r, i) => s + (parseInt(orderQty[r.internalId] ?? reo[i].recommended) || 0), 0);
                 const numTd = { padding: '7px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', borderBottom: '1px solid var(--paper-2)' };
                 const monthTh = { padding: '8px 6px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)', borderBottom: '2px solid var(--ink)', whiteSpace: 'nowrap' };
                 return (
@@ -885,6 +968,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{salesHist.loading ? 'Loading…' : `${rows.length} item${rows.length === 1 ? '' : 's'}`}</span>
                                 <button onClick={lockRetiredByInternalId} disabled={!salesHist.withOld} title="Notate the OLD counterparts by NetSuite internal ID and hide them app-wide" style={{ marginLeft: 'auto', padding: '9px 16px', background: salesHist.withOld ? 'var(--brass)' : 'var(--paper-2)', color: salesHist.withOld ? '#fff' : 'var(--ink-soft)', border: salesHist.withOld ? 'none' : '1px solid var(--line)', cursor: salesHist.withOld ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🔒 Lock {salesHist.withOld || ''} OLD</button>
                                 <button onClick={downloadSalesHistoryCsv} disabled={!rows.length} style={{ padding: '9px 16px', background: rows.length ? 'var(--ink)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⬇ Download CSV</button>
+                                <button onClick={generateFinishingWOs} disabled={genBusy || !rows.length} title="Create finishing work orders for every row with an Order qty and send them to the Finishing Floor" style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : '⚙ Generate Work Orders'}</button>
                             </div>
 
                             <div style={{ overflow: 'auto', flex: 1, border: '1px solid var(--line)' }}>
@@ -904,12 +988,19 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '1px solid var(--line)' }}>Total</th>
                                                 <th style={monthTh}>Avg/mo</th>
                                                 <th style={monthTh}>Orders</th>
+                                                <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '2px solid var(--ink)' }} title="NetSuite quantity available">Avail</th>
+                                                <th style={monthTh} title="Min on hand = 4 weeks of the 6-month avg sales rate">Min OH</th>
+                                                <th style={{ ...monthTh, color: '#3a7d44' }} title="Shortfall rounded up to full finishing sleds for the part size">Rec</th>
+                                                <th style={{ ...monthTh, color: 'var(--ink)' }}>Order</th>
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {rows.map(r => (
+                                            {rows.map(r => {
+                                                const info = reorderFor(r);
+                                                const ov = orderQty[r.internalId] ?? info.recommended;
+                                                return (
                                                 <tr key={r.internalId}>
-                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}</td>
+                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null}</td>
                                                     <td style={{ ...numTd, textAlign: 'left', color: r.oldInternalId ? OLD_BLUE : 'var(--line)' }}>{r.oldInternalId || '—'}</td>
                                                     {r.cells.map((c, i) => (
                                                         <td key={salesHist.months[i].key} style={{ ...numTd, color: c.src === 'new' ? 'var(--ink)' : (c.src === 'old' ? OLD_BLUE : 'var(--line)'), fontWeight: c.src === 'new' ? 500 : 400 }}>{c.v || '·'}</td>
@@ -917,8 +1008,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>{r.total || '·'}</td>
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.avg.toFixed(1)}</td>
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.orders}</td>
+                                                    <td style={{ ...numTd, color: info.available <= info.minOnHand ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }}>{info.available}</td>
+                                                    <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{info.minOnHand || '·'}</td>
+                                                    <td style={{ ...numTd, fontWeight: 600, color: info.recommended > 0 ? '#3a7d44' : 'var(--line)' }}>{info.recommended || '·'}</td>
+                                                    <td style={{ ...numTd }}><input type="number" min="0" value={ov} onChange={e => setOrderQty(prev => ({ ...prev, [r.internalId]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', outline: 'none' }} /></td>
                                                 </tr>
-                                            ))}
+                                                );
+                                            })}
                                         </tbody>
                                         <tfoot style={{ position: 'sticky', bottom: 0 }}>
                                             <tr>
@@ -928,6 +1024,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)', borderLeft: '1px solid var(--line)' }}>{gtTotal}</td>
                                                 <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}></td>
                                                 <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}></td>
+                                                <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)', borderLeft: '2px solid var(--ink)' }}>{totAvail}</td>
+                                                <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{totMin}</td>
+                                                <td style={{ ...numTd, fontWeight: 700, color: '#3a7d44', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{totRec}</td>
+                                                <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{totOrder}</td>
                                             </tr>
                                         </tfoot>
                                     </table>
