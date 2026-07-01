@@ -23,7 +23,7 @@ const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 
 // Mirrors the Finishing app's TABS (FinishingFloor.js). 'MANAGEMENT' was retired (its user/perms
 // admin moved here to HQ); 'PRODUCTION TIMES' is the finishing timers + time-matrix config tab.
 const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY'];
-const PICK_TABS = ['QUEUE', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING']; // mirrors PickPackApp TABS
+const PICK_TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING']; // mirrors PickPackApp TABS
 
 // NetSuite plumbing (mirror of ERPPushPullTab) for creating a flow's rollup item.
 const BRAND_NETSUITE_MAP = {
@@ -44,7 +44,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
   
   const [users, setUsers] = useState([]);
-  
+  const [finUsers, setFinUsers] = useState([]); // legacy Finishing-floor directory (fin_users) — merged in for visibility + import
+
   const [dynamicRoles, setDynamicRoles] = useState(['admin', 'executive', 'design_team', 'sales_rep', 'operator', 'programmer', 'floor_manager', 'paint_manager']);
   
   // ADDED STATE FOR FLOOR PERMISSIONS
@@ -121,8 +122,20 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const currentActiveUser = users.find(u => u.name === currentUser);
   const isSuperAdmin = currentActiveUser?.role === "superadmin" || currentActiveUser?.superAdmin === true;
 
+  // Roles the permission matrices + user dropdown expose. The managed list (dynamicRoles) UNION every
+  // role actually assigned to a user (hq_users + legacy fin_users) — lowercased to match how PickPack /
+  // ShopFloor / Finishing look up perms (role.toLowerCase()). Without this, a finishing role like
+  // "painter" has no column, so CHIPS (and other tabs) can never be granted to it.
+  const roleKey = (r) => String(r || '').toLowerCase().trim();
+  const allRoles = Array.from(new Set([
+    ...dynamicRoles.map(roleKey),
+    ...users.map(u => roleKey(u.role)),
+    ...finUsers.map(u => roleKey(u.role)),
+  ])).filter(r => r && r !== 'superadmin').sort();
+
   useEffect(() => {
       const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubFinUsers = onSnapshot(collection(db, "fin_users"), (snap) => setFinUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => { });
       const unsubRoles = onSnapshot(doc(db, "hq_config", "roles"), (docSnap) => { if (docSnap.exists() && docSnap.data().list) setDynamicRoles(docSnap.data().list); });
       const unsubSchema = onSnapshot(doc(db, "system", "master_schema"), (docSnap) => { if (docSnap.exists() && docSnap.data().inventoryFields) setCustomSchema(docSnap.data().inventoryFields); });
       const unsubRules = onSnapshot(doc(db, "system", "cpq_rules"), (docSnap) => { if (docSnap.exists() && docSnap.data().rules) setCpqRules(docSnap.data().rules); });
@@ -174,7 +187,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
       });
 
-      return () => { unsubUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubPlatingFees(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubColGlobal(); unsubInhouse(); unsubFloor(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
+      return () => { unsubUsers(); unsubFinUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubPlatingFees(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubColGlobal(); unsubInhouse(); unsubFloor(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -454,6 +467,23 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       setAdminForm({ uName: '', uPin: '', uRole: dynamicRoles[0] || 'operator', oldId: '' });
   };
   const handleDeleteUser = async (u) => { if(!window.confirm(`Terminate ${u.name}?`)) return; await deleteDoc(doc(db, "hq_users", u.id)); };
+
+  // Legacy Finishing-floor employees live in fin_users (chip-PIN checks + finishing dropdowns still use
+  // it). HQ login / permissions read hq_users, so those users were invisible here and couldn't get into
+  // WMS. Copy any fin_users PIN missing from hq_users INTO hq_users (non-destructive: fin_users kept,
+  // existing hq_users untouched). Dedupe is by PIN (the hq_users doc id), so re-running is safe.
+  const finToImport = finUsers.filter(f => f.pin && !new Set(users.map(u => String(u.pin))).has(String(f.pin)));
+  const importFinishingUsers = async () => {
+      if (!finUsers.length) return alert("No legacy fin_users found to import.");
+      if (!finToImport.length) return alert(`All ${finUsers.length} finishing user(s) already exist in the HQ directory. Nothing to import.`);
+      if (!window.confirm(`Import ${finToImport.length} legacy Finishing user(s) into the HQ directory?\n\n• They'll be able to log into HQ / WMS and appear here for permissions.\n• Existing users are left unchanged; fin_users is NOT deleted (chip PINs still use it).`)) return;
+      try {
+          for (const f of finToImport) {
+              await setDoc(doc(db, "hq_users", String(f.pin)), { name: f.name || 'Finishing User', pin: String(f.pin), role: roleKey(f.role) || 'operator', importedFromFin: true }, { merge: true });
+          }
+          alert(`Imported ${finToImport.length} finishing user(s) into the HQ directory.\n\nTheir roles now appear as columns in the WMS permission matrix — check CHIPS (and any other tabs) for those roles to grant access.`);
+      } catch (e) { alert('Import failed: ' + e.message); }
+  };
 
   const handleCreateNewFlow = async () => {
       if (!newFlowName.trim()) return alert("Please enter a flow name (e.g., CUSTOM PILLOW)");
@@ -2335,14 +2365,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                         <thead style={{ background: '#fff', borderBottom: '1px solid var(--line)' }}>
                             <tr>
                                 <th style={{ padding: '15px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Tab</th>
-                                {dynamicRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
+                                {allRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
                             </tr>
                         </thead>
                         <tbody>
                             {TABS.map(tab => (
                             <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
                                 <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
-                                {dynamicRoles.map(role => (
+                                {allRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
                                         <input type="checkbox" checked={perms[role]?.includes(tab) || false} onChange={() => handleHqPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
                                     </td>
@@ -2362,14 +2392,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                         <thead style={{ background: '#fff', borderBottom: '1px solid var(--line)' }}>
                             <tr>
                                 <th style={{ padding: '15px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Tab</th>
-                                {dynamicRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
+                                {allRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
                             </tr>
                         </thead>
                         <tbody>
                             {SHOP_TABS.map(tab => (
                             <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
                                 <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
-                                {dynamicRoles.map(role => (
+                                {allRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
                                         <input type="checkbox" checked={shopPerms[role]?.includes(tab) || false} onChange={() => handleShopPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
                                     </td>
@@ -2389,14 +2419,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                         <thead style={{ background: '#fff', borderBottom: '1px solid var(--line)' }}>
                             <tr>
                                 <th style={{ padding: '15px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Tab</th>
-                                {dynamicRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
+                                {allRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
                             </tr>
                         </thead>
                         <tbody>
                             {FIN_TABS.map(tab => (
                             <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
                                 <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
-                                {dynamicRoles.map(role => (
+                                {allRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
                                         <input type="checkbox" checked={finPerms[role]?.includes(tab) || false} onChange={() => handleFinPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
                                     </td>
@@ -2416,14 +2446,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                         <thead style={{ background: '#fff', borderBottom: '1px solid var(--line)' }}>
                             <tr>
                                 <th style={{ padding: '15px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Tab</th>
-                                {dynamicRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
+                                {allRoles.map(r => (<th key={r} style={{ padding: '15px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>{r.replace(/_/g, ' ')}</th>))}
                             </tr>
                         </thead>
                         <tbody>
                             {PICK_TABS.map(tab => (
                             <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
                                 <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
-                                {dynamicRoles.map(role => (
+                                {allRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
                                         <input type="checkbox" checked={pickPerms[role]?.includes(tab) || false} onChange={() => handlePickPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
                                     </td>
@@ -2433,7 +2463,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                             {/* Behaviour toggle (not a tab): force this role to SCAN bins — hides the click-to-pick chips. */}
                             <tr style={{ borderTop: '2px solid var(--ink)', background: 'var(--paper)' }}>
                                 <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 600 }}>🔒 Force Bin Scan <span style={{ fontWeight: 400, color: 'var(--ink-soft)', fontSize: '0.8rem' }}>(hide click-to-pick)</span></td>
-                                {dynamicRoles.map(role => (
+                                {allRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
                                         <input type="checkbox" checked={(pickPerms.forceScanRoles || []).includes(role)} onChange={() => handleForceScanToggle(role)} disabled={['admin', 'superadmin'].includes(role)} title={['admin', 'superadmin'].includes(role) ? 'Admins always keep click-to-pick' : ''} style={{ cursor: ['admin', 'superadmin'].includes(role) ? 'not-allowed' : 'pointer' }} />
                                     </td>
@@ -2442,7 +2472,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                             {/* Behaviour toggle: which roles can see the management-only chip reports (timers + roll-up). */}
                             <tr style={{ background: 'var(--paper)' }}>
                                 <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 600 }}>📊 Chip Reports <span style={{ fontWeight: 400, color: 'var(--ink-soft)', fontSize: '0.8rem' }}>(mgmt: timers + who-did-what)</span></td>
-                                {dynamicRoles.map(role => (
+                                {allRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
                                         <input type="checkbox" checked={['admin', 'superadmin'].includes(role) || (pickPerms.chipReportRoles || []).includes(role)} onChange={() => handleChipReportToggle(role)} disabled={['admin', 'superadmin'].includes(role)} title={['admin', 'superadmin'].includes(role) ? 'Admins always see reports' : ''} style={{ cursor: ['admin', 'superadmin'].includes(role) ? 'not-allowed' : 'pointer' }} />
                                     </td>
@@ -2456,11 +2486,19 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
               </div>
 
               <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Global User Directory</h4>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', gap: '16px', flexWrap: 'wrap' }}>
+                  <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Global User Directory</h4>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>
+                    {finUsers.length} legacy Finishing user{finUsers.length === 1 ? '' : 's'} on file
+                    {finToImport.length > 0
+                      ? <button onClick={importFinishingUsers} style={{ marginLeft: '12px', padding: '9px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⇩ Import {finToImport.length} missing into HQ</button>
+                      : <span style={{ marginLeft: '12px', color: '#3a7d44' }}>✓ all present in HQ directory</span>}
+                  </div>
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '15px', marginBottom: '20px' }}>
                   <input value={adminForm.uName} onChange={e => setAdminForm({...adminForm, uName: e.target.value})} placeholder="User Name" disabled={!!adminForm.oldId} style={{ padding: '12px', border: '1px solid var(--line)', background: adminForm.oldId ? 'var(--paper)' : '#fff', outline: 'none', fontFamily: 'var(--sans)' }} />
                   <input value={adminForm.uPin} onChange={e => setAdminForm({...adminForm, uPin: e.target.value})} placeholder="4-Digit PIN" maxLength="4" style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
-                  <select value={adminForm.uRole} onChange={e => setAdminForm({...adminForm, uRole: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>{dynamicRoles.map(r => <option key={r} value={r}>{r.toUpperCase().replace(/_/g, ' ')}</option>)}</select>
+                  <select value={adminForm.uRole} onChange={e => setAdminForm({...adminForm, uRole: e.target.value})} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>{allRoles.map(r => <option key={r} value={r}>{r.toUpperCase().replace(/_/g, ' ')}</option>)}</select>
                 </div>
                 <div style={{ display: 'flex', gap: '15px', marginBottom: '30px' }}>
                   <button onClick={handleSaveUser} style={{ flex: 1, padding: '16px', background: adminForm.oldId ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{adminForm.oldId ? 'Update User' : 'Add User'}</button>
