@@ -25,6 +25,14 @@ const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 
 const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY'];
 const PICK_TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING']; // mirrors PickPackApp TABS
 
+// Roles treated as OFFICE (not floor). Kept OUT of fin_users so they don't clutter the finishing/chip
+// employee selections. Everything else (operator, painter, finisher, *_manager, custom floor roles…) is
+// floor and DOES mirror to fin_users so its PIN works for chip start/stop.
+const OFFICE_ROLES = ['superadmin', 'admin', 'executive', 'design_team', 'sales_rep', 'programmer'];
+// Bulk-purge targets: unambiguously-office roles safe to strip from fin_users (never a floor worker). Omits
+// 'admin' since a finishing supervisor could plausibly carry it — remove those one-by-one instead.
+const PURGEABLE_OFFICE_ROLES = ['superadmin', 'executive', 'design_team', 'sales_rep', 'programmer'];
+
 // NetSuite plumbing (mirror of ERPPushPullTab) for creating a flow's rollup item.
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -469,9 +477,14 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           role: effRole,
           ...(wasSuperAdmin ? { superAdmin: true } : {}),
       });
-      // Mirror to fin_users so the same PIN works for chip start/stop + finishing dropdowns. HQ is now the
-      // single place to manage people; fin_users stays in sync (merge keeps any finishing-specific fields).
-      await setDoc(doc(db, "fin_users", adminForm.uPin), { name: adminForm.uName, pin: adminForm.uPin, role: effRole }, { merge: true }).catch(() => { });
+      // Mirror to fin_users (chip start/stop PINs + finishing dropdowns) ONLY for floor/finishing roles.
+      // Office roles are kept out — and actively removed if a floor→office change happened — so they don't
+      // clutter the floor employee selections.
+      if (OFFICE_ROLES.includes(roleKey(effRole))) {
+          await deleteDoc(doc(db, "fin_users", adminForm.uPin)).catch(() => { });
+      } else {
+          await setDoc(doc(db, "fin_users", adminForm.uPin), { name: adminForm.uName, pin: adminForm.uPin, role: effRole }, { merge: true }).catch(() => { });
+      }
       setAdminForm({ uName: '', uPin: '', uRole: dynamicRoles[0] || 'operator', oldId: '' });
   };
   // Terminate removes the person from BOTH directories, so a deleted duplicate can't linger as a chip PIN.
@@ -492,6 +505,19 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
           alert(`Imported ${finToImport.length} finishing user(s) into the HQ directory.\n\nTheir roles now appear as columns in the WMS permission matrix — check CHIPS (and any other tabs) for those roles to grant access.`);
       } catch (e) { alert('Import failed: ' + e.message); }
+  };
+
+  // Office users that leaked into fin_users clutter the floor employee selections. Strip the ones whose
+  // role is unambiguously office (never a floor worker) — they stay in hq_users, only the finishing mirror
+  // is removed.
+  const finOfficeUsers = finUsers.filter(f => PURGEABLE_OFFICE_ROLES.includes(roleKey(f.role)));
+  const purgeOfficeFromFin = async () => {
+      if (!finOfficeUsers.length) return;
+      if (!window.confirm(`Remove ${finOfficeUsers.length} office user(s) from the finishing (chip PIN) directory so they don't clutter floor selections?\n\nThey stay in HQ; only their finishing-list mirror is removed.`)) return;
+      try {
+          for (const f of finOfficeUsers) await deleteDoc(doc(db, "fin_users", String(f.pin || f.id))).catch(() => { });
+          alert(`Removed ${finOfficeUsers.length} office user(s) from the finishing list.`);
+      } catch (e) { alert('Cleanup failed: ' + e.message); }
   };
 
   const handleCreateNewFlow = async () => {
@@ -2502,6 +2528,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                     {finToImport.length > 0
                       ? <button onClick={importFinishingUsers} style={{ marginLeft: '12px', padding: '9px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⇩ Import {finToImport.length} missing into HQ</button>
                       : <span style={{ marginLeft: '12px', color: '#3a7d44' }}>✓ all present in HQ directory</span>}
+                    {finOfficeUsers.length > 0 && <button onClick={purgeOfficeFromFin} title="Remove office users from the finishing (chip PIN) directory" style={{ marginLeft: '12px', padding: '9px 16px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>✖ Remove {finOfficeUsers.length} office from floor list</button>}
                   </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '15px', marginBottom: '20px' }}>
