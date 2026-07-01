@@ -5,6 +5,26 @@ import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '
 
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
+const BRAND_NETSUITE_MAP = {
+    'm2c': { subsidiary: "3", location: "19" },
+    'uniquity': { subsidiary: "6", location: "20" },
+    'ce': { subsidiary: "2", location: "17" },
+    'leyla': { subsidiary: "5", location: "18" }
+};
+
+// Last 12 calendar months oldest → newest, e.g. { key:'2025-07', label:"Jul '25" }.
+const last12Months = (now) => {
+    const out = [];
+    for (let i = 11; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        out.push({
+            key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+            label: `${d.toLocaleString('en-US', { month: 'short' })} '${String(d.getFullYear()).slice(-2)}`
+        });
+    }
+    return out;
+};
+
 // Finish code = the assembly suffix (base/CODE); some finish docs hold it in `name` (matches PickPack/Library).
 const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
 
@@ -21,6 +41,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [labelMode, setLabelMode] = useState('bins');   // 'bins' | 'items'
     const [wipModal, setWipModal] = useState(null);       // { erpId, itemName, lines } when the WIP popup is open
     const [poModal, setPoModal] = useState(null);         // { erpId, itemName, loading, lines, error } for the On-Order popup
+    const [salesHist, setSalesHist] = useState(null);     // 12-mo sales-history report for retiring "- OLD" items
+    const [salesHistSearch, setSalesHistSearch] = useState('');
 
     // BUILDER STATE
     const [activeBuilder, setActiveBuilder] = useState("PO"); // 'PO' or 'WO'
@@ -608,6 +630,68 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
     };
 
+    // Sales-History report for retiring "<item> - OLD" items. Pulls SalesOrd (customer demand) for
+    // every "- OLD" item in this brand's subsidiary, grouped by month, one query → pivoted client-side.
+    // Read live from NetSuite by item-id pattern, so it works whether or not the OLD items are imported
+    // into the app. Used to size work orders / reorder points for the NEW replacement parts.
+    const openSalesHistory = async () => {
+        const months = last12Months(new Date());
+        setSalesHist({ loading: true, error: null, rows: [], months, generatedAt: new Date().toLocaleString() });
+        setSalesHistSearch('');
+        try {
+            const sub = (BRAND_NETSUITE_MAP[activeBrand] || {}).subsidiary || '2';
+            const q = `
+                SELECT i.itemid AS itemid, TO_CHAR(t.trandate,'YYYY-MM') AS ym,
+                       SUM(ABS(tl.quantity)) AS qty, COUNT(DISTINCT t.id) AS orders
+                FROM transaction t
+                JOIN transactionline tl ON tl.transaction = t.id
+                JOIN item i ON i.id = tl.item
+                JOIN ItemSubsidiaryMap ism ON ism.item = i.id
+                WHERE t.type = 'SalesOrd'
+                  AND UPPER(i.itemid) LIKE '% - OLD'
+                  AND ism.subsidiary = ${sub}
+                  AND tl.quantity <> 0
+                  AND t.trandate >= ADD_MONTHS(CURRENT_DATE, -12)
+                GROUP BY i.itemid, TO_CHAR(t.trandate,'YYYY-MM')
+            `;
+            const r = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } })
+            });
+            const b = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
+            const byItem = {};
+            (b.items || []).forEach(row => {
+                const id = row.itemid;
+                if (!byItem[id]) byItem[id] = { itemid: id, base: id.replace(/\s*-\s*OLD$/i, ''), m: {}, orders: 0 };
+                byItem[id].m[row.ym] = (byItem[id].m[row.ym] || 0) + (parseInt(row.qty) || 0);
+                byItem[id].orders += parseInt(row.orders) || 0;
+            });
+            const monthKeys = months.map(x => x.key);
+            const rows = Object.values(byItem).map(it => {
+                const total = monthKeys.reduce((s, k) => s + (it.m[k] || 0), 0);
+                return { ...it, total, avg: total / 12 };
+            }).sort((a, b) => b.total - a.total);
+            setSalesHist(s => (s ? { ...s, loading: false, rows } : s));
+        } catch (e) {
+            setSalesHist(s => (s ? { ...s, loading: false, error: e.message || String(e) } : s));
+        }
+    };
+
+    const downloadSalesHistoryCsv = () => {
+        if (!salesHist || !salesHist.rows.length) return;
+        const months = salesHist.months;
+        const esc = (c) => `"${String(c).replace(/"/g, '""')}"`;
+        const lines = [['New Item', 'OLD Item', ...months.map(m => m.label), '12-mo Total', 'Avg/mo', 'Orders'].map(esc).join(',')];
+        salesHist.rows.forEach(r => {
+            lines.push([r.base, r.itemid, ...months.map(m => r.m[m.key] || 0), r.total, r.avg.toFixed(1), r.orders].map(esc).join(','));
+        });
+        const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = `OLD_sales_history_${activeBrand}_12mo.csv`; a.click();
+        URL.revokeObjectURL(url);
+    };
+
     // --- AGGREGATING DEMAND FROM VARIANTS TO ROOT ITEM ---
     const enrichedInventory = hqParts.map(part => {
         const erpId = (part.legacyErpId || part.itemId).toUpperCase();
@@ -723,6 +807,82 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{!term ? 'Type to search' : `${count} ${labelMode} match${count === 1 ? '' : 'es'}`}{labelMode === 'items' && matchItems.length >= 300 ? ' (capped at 300)' : ''}</span>
                                     <button onClick={doBatch} disabled={count === 0} style={{ padding: '12px 20px', background: count ? 'var(--brass)' : 'var(--paper-2)', color: count ? '#fff' : 'var(--ink-soft)', border: count ? 'none' : '1px solid var(--line)', cursor: count ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Print {count || ''} {labelMode === 'items' ? 'item' : 'bin'} label{count === 1 ? '' : 's'}</button>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* 📈 SALES HISTORY — retiring "- OLD" items, month-by-month, to size WOs for the new parts */}
+            {salesHist && (() => {
+                const term = salesHistSearch.trim().toUpperCase();
+                const rows = (salesHist.rows || []).filter(r => !term || r.base.toUpperCase().includes(term) || r.itemid.toUpperCase().includes(term));
+                const gt = salesHist.months.map(m => rows.reduce((s, r) => s + (r.m[m.key] || 0), 0));
+                const gtTotal = rows.reduce((s, r) => s + r.total, 0);
+                const numTd = { padding: '7px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', borderBottom: '1px solid var(--paper-2)' };
+                const monthTh = { padding: '8px 6px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)', borderBottom: '2px solid var(--ink)', whiteSpace: 'nowrap' };
+                return (
+                    <div onClick={() => setSalesHist(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '28px 32px', width: '94vw', maxWidth: '1240px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+                                <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>Sales History — Retiring Items</h2>
+                                <button onClick={() => setSalesHist(null)} style={{ background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                            </div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '18px' }}>
+                                Last 12 months of customer demand (Sales Orders) for every <strong>“ - OLD”</strong> item · {activeBrand?.toUpperCase()} · as of {salesHist.generatedAt}
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
+                                <input value={salesHistSearch} onChange={e => setSalesHistSearch(e.target.value)} placeholder="Search item # (e.g. HAFICBR1)…" style={{ flex: 1, maxWidth: '320px', padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{salesHist.loading ? 'Loading…' : `${rows.length} item${rows.length === 1 ? '' : 's'}`}</span>
+                                <button onClick={downloadSalesHistoryCsv} disabled={!rows.length} style={{ marginLeft: 'auto', padding: '9px 16px', background: rows.length ? 'var(--ink)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⬇ Download CSV</button>
+                            </div>
+
+                            <div style={{ overflow: 'auto', flex: 1, border: '1px solid var(--line)' }}>
+                                {salesHist.loading ? (
+                                    <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>Querying NetSuite sales history…</div>
+                                ) : salesHist.error ? (
+                                    <div style={{ padding: '32px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '12px' }}>Failed: {salesHist.error}</div>
+                                ) : rows.length === 0 ? (
+                                    <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>No “- OLD” items with sales in the last 12 months.</div>
+                                ) : (
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
+                                        <thead style={{ position: 'sticky', top: 0, background: 'var(--paper)', zIndex: 5 }}>
+                                            <tr>
+                                                <th style={{ padding: '8px 12px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', borderBottom: '2px solid var(--ink)', position: 'sticky', left: 0, background: 'var(--paper)' }}>New Item</th>
+                                                {salesHist.months.map(m => <th key={m.key} style={monthTh}>{m.label}</th>)}
+                                                <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '1px solid var(--line)' }}>Total</th>
+                                                <th style={monthTh}>Avg/mo</th>
+                                                <th style={monthTh}>Orders</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {rows.map(r => (
+                                                <tr key={r.itemid}>
+                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>
+                                                        {r.base}<span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> ◦ OLD</span>
+                                                    </td>
+                                                    {salesHist.months.map(m => {
+                                                        const v = r.m[m.key] || 0;
+                                                        return <td key={m.key} style={{ ...numTd, color: v ? 'var(--ink)' : 'var(--line)' }}>{v || '·'}</td>;
+                                                    })}
+                                                    <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>{r.total}</td>
+                                                    <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.avg.toFixed(1)}</td>
+                                                    <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.orders}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                        <tfoot style={{ position: 'sticky', bottom: 0 }}>
+                                            <tr>
+                                                <td style={{ padding: '9px 12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)', position: 'sticky', left: 0 }}>All ({rows.length})</td>
+                                                {gt.map((v, i) => <td key={i} style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{v || '·'}</td>)}
+                                                <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)', borderLeft: '1px solid var(--line)' }}>{gtTotal}</td>
+                                                <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}></td>
+                                                <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}></td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -883,7 +1043,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Global Inventory Health</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', border: '1px solid #d9534f', padding: '4px 8px' }}>Highlighted = At or Below ROP</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#7c4dff', border: '1px solid #7c4dff', padding: '4px 8px', marginLeft: '8px' }}>Purple On-Order = in-app plating WIP (no NetSuite PO)</span>
-                        <button onClick={() => setLabelTool(true)} style={{ marginLeft: 'auto', padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🏷 Print Labels</button>
+                        <button onClick={openSalesHistory} style={{ marginLeft: 'auto', padding: '8px 14px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>📈 OLD Sales History</button>
+                        <button onClick={() => setLabelTool(true)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🏷 Print Labels</button>
                     </div>
                     
                     <div style={{ overflowY: 'auto', maxHeight: '75vh', background: '#fff' }}>
