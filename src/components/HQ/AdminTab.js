@@ -456,17 +456,26 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const existing = { ...(users.find(u => u.id === adminForm.oldId || u.pin === adminForm.uPin) || {}) };
       delete existing.id; // drop the synthetic doc-id field; it isn't stored data
       const wasSuperAdmin = existing.superAdmin === true || String(existing.role || '').toLowerCase().replace(/[^a-z]/g, '') === 'superadmin';
-      if (adminForm.oldId && adminForm.oldId !== adminForm.uPin) await deleteDoc(doc(db, "hq_users", adminForm.oldId));
+      const effRole = wasSuperAdmin ? (existing.role || 'superadmin') : adminForm.uRole;
+      // PIN changed → drop the OLD doc from BOTH directories
+      if (adminForm.oldId && adminForm.oldId !== adminForm.uPin) {
+          await deleteDoc(doc(db, "hq_users", adminForm.oldId));
+          await deleteDoc(doc(db, "fin_users", adminForm.oldId)).catch(() => { });
+      }
       await setDoc(doc(db, "hq_users", adminForm.uPin), {
           ...existing,
           name: adminForm.uName,
           pin: adminForm.uPin,
-          role: wasSuperAdmin ? (existing.role || 'superadmin') : adminForm.uRole,
+          role: effRole,
           ...(wasSuperAdmin ? { superAdmin: true } : {}),
       });
+      // Mirror to fin_users so the same PIN works for chip start/stop + finishing dropdowns. HQ is now the
+      // single place to manage people; fin_users stays in sync (merge keeps any finishing-specific fields).
+      await setDoc(doc(db, "fin_users", adminForm.uPin), { name: adminForm.uName, pin: adminForm.uPin, role: effRole }, { merge: true }).catch(() => { });
       setAdminForm({ uName: '', uPin: '', uRole: dynamicRoles[0] || 'operator', oldId: '' });
   };
-  const handleDeleteUser = async (u) => { if(!window.confirm(`Terminate ${u.name}?`)) return; await deleteDoc(doc(db, "hq_users", u.id)); };
+  // Terminate removes the person from BOTH directories, so a deleted duplicate can't linger as a chip PIN.
+  const handleDeleteUser = async (u) => { if(!window.confirm(`Terminate ${u.name}? This removes them from HQ and the finishing (chip PIN) directory.`)) return; const key = String(u.pin || u.id); await deleteDoc(doc(db, "hq_users", u.id)); await deleteDoc(doc(db, "fin_users", key)).catch(() => { }); };
 
   // Legacy Finishing-floor employees live in fin_users (chip-PIN checks + finishing dropdowns still use
   // it). HQ login / permissions read hq_users, so those users were invisible here and couldn't get into
