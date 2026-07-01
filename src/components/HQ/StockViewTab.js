@@ -689,6 +689,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     rec.orders += parseInt(row.orders) || 0;
                 });
             }
+            // 2b) Live AVAILABLE qty straight from NetSuite (AggregateItemLocation.quantityavailable at the
+            // brand's location) — the report used to read the app's nsStock cache, which was empty here.
+            const loc = (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17';
+            const availById = {};
+            for (let i = 0; i < allIds.length; i += 200) {
+                const chunk = allIds.slice(i, i + 200);
+                const arows = await runSql(`SELECT ail.item AS internal_id, SUM(ail.quantityavailable) AS avail FROM AggregateItemLocation ail WHERE ail.item IN (${chunk.join(',')}) AND ail.location = ${loc} GROUP BY ail.item`);
+                arows.forEach(row => { availById[String(row.internal_id)] = Math.round(Number(row.avail) || 0); });
+            }
             // 3) One row per stocked item; pair "<base>-N" → old "<base>" for the blue fallback.
             const rows = stocked.map(s => {
                 const newRec = salesById[s.internalId] || { m: {}, orders: 0 };
@@ -703,7 +712,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 });
                 const total = cells.reduce((a, c) => a + c.v, 0);
                 const newTotal = months.reduce((a, mo) => a + (newRec.m[mo.key] || 0), 0);
-                return { itemid: s.itemid, base: s.itemid, internalId: s.internalId, oldInternalId: oldSib ? oldSib.internalId : null, oldItemId: oldSib ? oldSib.itemid : null, cells, total, newTotal, avg: total / 12, orders: (newRec.orders || 0) + (oldRec.orders || 0), hasOld: !!oldSib };
+                return { itemid: s.itemid, base: s.itemid, internalId: s.internalId, available: availById[s.internalId] || 0, oldInternalId: oldSib ? oldSib.internalId : null, oldItemId: oldSib ? oldSib.itemid : null, cells, total, newTotal, avg: total / 12, orders: (newRec.orders || 0) + (oldRec.orders || 0), hasOld: !!oldSib };
             }).sort((a, b2) => String(a.itemid).localeCompare(String(b2.itemid), undefined, { numeric: true, sensitivity: 'base' }));
             setSalesHist(s => (s ? { ...s, loading: false, rows, withOld: rows.filter(r => r.hasOld).length } : s));
         } catch (e) {
@@ -754,19 +763,22 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // Finish/recipe = the code after the last "/", up to the first "-" (e.g. BL-N→BL, CP-10-N→CP, P01→P01).
     // The "-N" is a temporary new-item marker and any "-10"/"-12" is a size, not part of the finish.
     const finishOf = (itemid) => { const s = String(itemid || ''); const i = s.lastIndexOf('/'); return i >= 0 ? s.slice(i + 1).split('-')[0].toUpperCase() : ''; };
+    const POLE_RACK = 8; // poles are painted 8 per rack (not sled-packed by S/M/L)
     // Per-row reorder analysis. min-on-hand = 4 weeks of the 6-month avg sales rate; recommended = the
-    // shortfall rounded UP to full finishing sleds for the part's size (S~70 / M~35 / L~22).
+    // shortfall rounded UP to a full finishing batch — a sled for the part's size (S~70/M~35/L~22), or a
+    // rack of 8 for POLES (productType flagged POLE/ROD).
     const reorderFor = (r) => {
         const part = partByKey['id:' + String(r.internalId)] || partByKey['erp:' + String(r.itemid).toUpperCase()];
         const size = (part?.manufacturingSpecs?.paintSize || '').toUpperCase();
         const ptype = (part?.manufacturingSpecs?.productType || '').toUpperCase();
-        const available = Math.round(Number((nsStock[String(r.itemid).toUpperCase()] || {}).available) || 0);
+        const isPole = /POLE|ROD/.test(ptype);
+        const available = Math.round(Number(r.available) || 0);
         const last6 = (r.cells || []).slice(-6).reduce((s, c) => s + (c.v || 0), 0); // merged (new+old) last 6 months
         const minOnHand = Math.round((last6 / 26) * 4);
-        const cap = lookupCapacity(capacityMatrix, size, ptype) || SIZE_CAPACITY[size] || 0;
+        const cap = isPole ? POLE_RACK : (lookupCapacity(capacityMatrix, size, ptype) || SIZE_CAPACITY[size] || 0);
         const shortfall = Math.max(0, minOnHand - available);
         const recommended = shortfall > 0 ? (cap > 0 ? Math.ceil(shortfall / cap) * cap : shortfall) : 0;
-        return { part, size, ptype, available, minOnHand, cap, shortfall, recommended };
+        return { part, size, ptype, isPole, available, minOnHand, cap, recommended };
     };
 
     // Generate finishing WOs for every row with an Order qty > 0 → fin_workorders (Setup phase), grouped
@@ -783,7 +795,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             for (const { r, info, qty } of toMake) {
                 const finish = finishOf(r.itemid);
                 const woId = `WO-STK-${r.internalId}-${Date.now()}`;
-                const paintSizes = ['S', 'M', 'L'].includes(info.size) ? { S: 0, M: 0, L: 0, [info.size]: qty } : null;
+                // Poles are racked (8/rack), not sled-packed → no paintSizes; carry poles.qty so the planner
+                // treats it as a rack-based workstream. Small parts carry the S/M/L size for sled packing.
+                const paintSizes = (!info.isPole && ['S', 'M', 'L'].includes(info.size)) ? { S: 0, M: 0, L: 0, [info.size]: qty } : null;
                 await setDoc(doc(db, "fin_workorders", woId), {
                     id: woId, displayId: woId, woNum: woId, orderKey: woId,
                     quoteId: null, salesOrderId: null, estimateId: null,
@@ -792,8 +806,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     recipe: finish || 'PENDING-RECIPE',
                     reqDate, type: r.itemid, totalParts: qty,
                     stockErpId: r.itemid, stockInternalId: r.internalId,
-                    paintSize: info.size || null, productType: info.ptype || null, paintSizes,
-                    note: `Stock replenish · avail ${info.available} · min ${info.minOnHand}`,
+                    paintSize: info.isPole ? null : (info.size || null), productType: info.ptype || null, paintSizes,
+                    ...(info.isPole ? { poles: { qty, type: info.ptype || 'POLE' }, totalPoles: qty } : {}),
+                    note: `Stock replenish · avail ${info.available} · min ${info.minOnHand}${info.isPole ? ' · POLE (rack of 8)' : ''}`,
                     cpqSpecs: {}, imageUrl: info.part?.finalImageUrl || null,
                     dimensions: { length: 0, width: 0, height: 0 },
                     partsList: [],
@@ -1001,7 +1016,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 const ov = orderQty[r.internalId] ?? info.recommended;
                                                 return (
                                                 <tr key={r.internalId}>
-                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null}</td>
+                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}</td>
                                                     <td style={{ ...numTd, textAlign: 'left', color: r.oldInternalId ? OLD_BLUE : 'var(--line)' }}>{r.oldInternalId || '—'}</td>
                                                     {r.cells.map((c, i) => (
                                                         <td key={salesHist.months[i].key} style={{ ...numTd, color: c.src === 'new' ? 'var(--ink)' : (c.src === 'old' ? OLD_BLUE : 'var(--line)'), fontWeight: c.src === 'new' ? 500 : 400 }}>{c.v || '·'}</td>
