@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
 import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch } from "firebase/firestore";
@@ -24,6 +25,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [isAdmin] = useState(true);
 
   const [inventory, setInventory] = useState([]);
+  const retiredSet = useRetiredSet(); // retired "- OLD" items (by internal ID) hidden from the browse list
   const [syncingThumbs, setSyncingThumbs] = useState(null);   // {done,total} while syncing, else null
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
@@ -196,6 +198,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   ])).sort();
 
   const filteredInventory = inventory.filter(part => {
+    if (retiredSet.has(String(part.netSuiteInternalId || ''))) return false; // hide retired "- OLD" items from the browse list
     const term = searchTerm.toLowerCase();
     const specs = part.manufacturingSpecs || {};
 

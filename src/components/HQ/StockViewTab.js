@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, doc, setDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, doc, setDoc, getDoc } from "firebase/firestore";
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 
 const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
@@ -43,6 +43,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [poModal, setPoModal] = useState(null);         // { erpId, itemName, loading, lines, error } for the On-Order popup
     const [salesHist, setSalesHist] = useState(null);     // 12-mo sales-history report for retiring "- OLD" items
     const [salesHistSearch, setSalesHistSearch] = useState('');
+    // Retired items — locked by NetSuite INTERNAL ID (stable across an item# rename). Hidden from all
+    // user-facing browse surfaces; still visible to sync/ERP tabs. Global list in system/retired_items.
+    const [retiredDoc, setRetiredDoc] = useState({ internalIds: [], items: [] });
+    useEffect(() => onSnapshot(doc(db, 'system', 'retired_items'),
+        s => setRetiredDoc(s.exists() ? { internalIds: s.data().internalIds || [], items: s.data().items || [] } : { internalIds: [], items: [] }),
+        () => { }), []);
 
     // BUILDER STATE
     const [activeBuilder, setActiveBuilder] = useState("PO"); // 'PO' or 'WO'
@@ -640,19 +646,23 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         setSalesHistSearch('');
         try {
             const sub = (BRAND_NETSUITE_MAP[activeBrand] || {}).subsidiary || '2';
+            const lockedIds = (retiredDoc.internalIds || []).map(x => parseInt(x)).filter(n => !isNaN(n));
+            // Once LOCKED by internal ID, query by id so the report survives renaming the item# in NetSuite
+            // (dropping the " - OLD" suffix). Before locking, DISCOVER them by the "- OLD" item# pattern.
+            const itemWhere = lockedIds.length ? `tl.item IN (${lockedIds.join(',')})` : `UPPER(i.itemid) LIKE '% - OLD'`;
             const q = `
-                SELECT i.itemid AS itemid, TO_CHAR(t.trandate,'YYYY-MM') AS ym,
+                SELECT i.id AS internal_id, i.itemid AS itemid, TO_CHAR(t.trandate,'YYYY-MM') AS ym,
                        SUM(ABS(tl.quantity)) AS qty, COUNT(DISTINCT t.id) AS orders
                 FROM transaction t
                 JOIN transactionline tl ON tl.transaction = t.id
                 JOIN item i ON i.id = tl.item
                 JOIN ItemSubsidiaryMap ism ON ism.item = i.id
                 WHERE t.type = 'SalesOrd'
-                  AND UPPER(i.itemid) LIKE '% - OLD'
+                  AND ${itemWhere}
                   AND ism.subsidiary = ${sub}
                   AND tl.quantity <> 0
                   AND t.trandate >= ADD_MONTHS(CURRENT_DATE, -12)
-                GROUP BY i.itemid, TO_CHAR(t.trandate,'YYYY-MM')
+                GROUP BY i.id, i.itemid, TO_CHAR(t.trandate,'YYYY-MM')
             `;
             const r = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -662,17 +672,17 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
             const byItem = {};
             (b.items || []).forEach(row => {
-                const id = row.itemid;
-                if (!byItem[id]) byItem[id] = { itemid: id, base: id.replace(/\s*-\s*OLD$/i, ''), m: {}, orders: 0 };
-                byItem[id].m[row.ym] = (byItem[id].m[row.ym] || 0) + (parseInt(row.qty) || 0);
-                byItem[id].orders += parseInt(row.orders) || 0;
+                const iid = String(row.internal_id);
+                if (!byItem[iid]) byItem[iid] = { internalId: iid, itemid: row.itemid, base: String(row.itemid).replace(/\s*-\s*OLD$/i, ''), m: {}, orders: 0 };
+                byItem[iid].m[row.ym] = (byItem[iid].m[row.ym] || 0) + (parseInt(row.qty) || 0);
+                byItem[iid].orders += parseInt(row.orders) || 0;
             });
             const monthKeys = months.map(x => x.key);
             const rows = Object.values(byItem).map(it => {
                 const total = monthKeys.reduce((s, k) => s + (it.m[k] || 0), 0);
                 return { ...it, total, avg: total / 12 };
-            }).sort((a, b) => b.total - a.total);
-            setSalesHist(s => (s ? { ...s, loading: false, rows } : s));
+            }).sort((a, b) => a.base.localeCompare(b.base, undefined, { numeric: true, sensitivity: 'base' }));
+            setSalesHist(s => (s ? { ...s, loading: false, rows, locked: lockedIds.length > 0 } : s));
         } catch (e) {
             setSalesHist(s => (s ? { ...s, loading: false, error: e.message || String(e) } : s));
         }
@@ -682,9 +692,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (!salesHist || !salesHist.rows.length) return;
         const months = salesHist.months;
         const esc = (c) => `"${String(c).replace(/"/g, '""')}"`;
-        const lines = [['New Item', 'OLD Item', ...months.map(m => m.label), '12-mo Total', 'Avg/mo', 'Orders'].map(esc).join(',')];
+        const lines = [['Internal ID', 'New Item', 'Item# (as in NetSuite)', ...months.map(m => m.label), '12-mo Total', 'Avg/mo', 'Orders'].map(esc).join(',')];
         salesHist.rows.forEach(r => {
-            lines.push([r.base, r.itemid, ...months.map(m => r.m[m.key] || 0), r.total, r.avg.toFixed(1), r.orders].map(esc).join(','));
+            lines.push([r.internalId, r.base, r.itemid, ...months.map(m => r.m[m.key] || 0), r.total, r.avg.toFixed(1), r.orders].map(esc).join(','));
         });
         const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
         const a = document.createElement('a');
@@ -692,8 +702,28 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         URL.revokeObjectURL(url);
     };
 
+    // Notate these items permanently by NetSuite internal ID → system/retired_items. Internal IDs don't
+    // change when you rename the item# (drop " - OLD"), so both the report and the app-wide hide keep
+    // working afterward. Unions with any already-locked items (doesn't clobber other brands).
+    const lockRetiredByInternalId = async () => {
+        const rows = salesHist?.rows || [];
+        if (!rows.length) return;
+        if (!window.confirm(`Lock ${rows.length} item(s) by NetSuite internal ID?\n\nThey'll be hidden everywhere in the app except this report, and stay tracked even after you remove " - OLD" from the item#s in NetSuite.`)) return;
+        try {
+            const ref = doc(db, 'system', 'retired_items');
+            const snap = await getDoc(ref);
+            const map = {};
+            (snap.exists() ? (snap.data().items || []) : []).forEach(it => { if (it && it.internalId) map[String(it.internalId)] = it; });
+            rows.forEach(r => { map[String(r.internalId)] = { internalId: r.internalId, itemid: r.itemid, base: r.base }; });
+            const items = Object.values(map);
+            await setDoc(ref, { internalIds: items.map(i => i.internalId), items, updatedAt: new Date().toISOString(), updatedBy: currentUser || '' }, { merge: true });
+            addLog(`🔒 Locked ${rows.length} retiring item(s) by internal ID (${items.length} total retired).`, 'success');
+        } catch (e) { addLog(`Lock failed: ${e.message}`, 'error'); alert('Lock failed: ' + e.message); }
+    };
+
     // --- AGGREGATING DEMAND FROM VARIANTS TO ROOT ITEM ---
-    const enrichedInventory = hqParts.map(part => {
+    const retiredSet = new Set((retiredDoc.internalIds || []).map(String));
+    const enrichedInventory = hqParts.filter(part => !retiredSet.has(String(part.netSuiteInternalId || ''))).map(part => {
         const erpId = (part.legacyErpId || part.itemId).toUpperCase();
         const stock = nsStock[erpId] || { onHand: 0, available: 0, onOrder: 0, committed: 0, backorder: 0 };
         const specs = part.manufacturingSpecs || {};
@@ -829,13 +859,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 <button onClick={() => setSalesHist(null)} style={{ background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
                             </div>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '18px' }}>
-                                Last 12 months of customer demand (Sales Orders) for every <strong>“ - OLD”</strong> item · {activeBrand?.toUpperCase()} · as of {salesHist.generatedAt}
+                                Last 12 months of customer demand (Sales Orders) · {activeBrand?.toUpperCase()} · as of {salesHist.generatedAt} · {salesHist.locked
+                                    ? <span style={{ color: '#3a7d44' }}>🔒 tracked by internal ID (survives the item# rename)</span>
+                                    : <span style={{ color: 'var(--brass)' }}>discovering by “ - OLD” item# pattern — Lock to make it permanent</span>}
                             </div>
 
                             <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
-                                <input value={salesHistSearch} onChange={e => setSalesHistSearch(e.target.value)} placeholder="Search item # (e.g. HAFICBR1)…" style={{ flex: 1, maxWidth: '320px', padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
+                                <input value={salesHistSearch} onChange={e => setSalesHistSearch(e.target.value)} placeholder="Search item # (e.g. HAFICBR1)…" style={{ flex: 1, maxWidth: '300px', padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{salesHist.loading ? 'Loading…' : `${rows.length} item${rows.length === 1 ? '' : 's'}`}</span>
-                                <button onClick={downloadSalesHistoryCsv} disabled={!rows.length} style={{ marginLeft: 'auto', padding: '9px 16px', background: rows.length ? 'var(--ink)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⬇ Download CSV</button>
+                                <button onClick={lockRetiredByInternalId} disabled={!rows.length} title="Notate these items by NetSuite internal ID and hide them app-wide" style={{ marginLeft: 'auto', padding: '9px 16px', background: rows.length ? 'var(--brass)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{salesHist.locked ? '🔒 Update lock' : '🔒 Lock by internal ID'}</button>
+                                <button onClick={downloadSalesHistoryCsv} disabled={!rows.length} style={{ padding: '9px 16px', background: rows.length ? 'var(--ink)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⬇ Download CSV</button>
                             </div>
 
                             <div style={{ overflow: 'auto', flex: 1, border: '1px solid var(--line)' }}>
@@ -850,6 +883,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         <thead style={{ position: 'sticky', top: 0, background: 'var(--paper)', zIndex: 5 }}>
                                             <tr>
                                                 <th style={{ padding: '8px 12px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', borderBottom: '2px solid var(--ink)', position: 'sticky', left: 0, background: 'var(--paper)' }}>New Item</th>
+                                                <th style={{ ...monthTh, textAlign: 'left' }}>Internal ID</th>
                                                 {salesHist.months.map(m => <th key={m.key} style={monthTh}>{m.label}</th>)}
                                                 <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '1px solid var(--line)' }}>Total</th>
                                                 <th style={monthTh}>Avg/mo</th>
@@ -862,6 +896,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>
                                                         {r.base}<span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> ◦ OLD</span>
                                                     </td>
+                                                    <td style={{ ...numTd, textAlign: 'left', color: 'var(--ink-soft)' }}>{r.internalId}</td>
                                                     {salesHist.months.map(m => {
                                                         const v = r.m[m.key] || 0;
                                                         return <td key={m.key} style={{ ...numTd, color: v ? 'var(--ink)' : 'var(--line)' }}>{v || '·'}</td>;
@@ -875,6 +910,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         <tfoot style={{ position: 'sticky', bottom: 0 }}>
                                             <tr>
                                                 <td style={{ padding: '9px 12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)', position: 'sticky', left: 0 }}>All ({rows.length})</td>
+                                                <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}></td>
                                                 {gt.map((v, i) => <td key={i} style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{v || '·'}</td>)}
                                                 <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)', borderLeft: '1px solid var(--line)' }}>{gtTotal}</td>
                                                 <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}></td>

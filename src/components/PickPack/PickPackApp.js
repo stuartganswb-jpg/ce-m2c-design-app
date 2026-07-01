@@ -8,6 +8,7 @@ import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { printItemLabel, printBinLabel } from '../Shared/labelPrint';
+import { useRetiredSet } from '../Shared/retiredItems';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -178,6 +179,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
     // Counting State
     const [hqParts, setHqParts] = useState([]);
+    const retiredSet = useRetiredSet(); // internal-ID set of retired "- OLD" items → hidden from the count list
     const [nsStock, setNsStock] = useState({});
     const [isSyncing, setIsSyncing] = useState(false);
     const [physicalCounts, setPhysicalCounts] = useState({});
@@ -1454,6 +1456,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const dynamicWatchlists = Array.from(new Set(hqParts.map(p => watchlistOf(p.manufacturingSpecs || {})).filter(Boolean))).sort();
 
     const baseFilteredItems = hqParts.filter(part => {
+        if (retiredSet.has(String(part.netSuiteInternalId || ''))) return false; // hide retired "- OLD" items
         const term = searchQuery.toLowerCase();
         const specs = part.manufacturingSpecs || {};
         const erpId = (part.legacyErpId || part.itemId || "").toUpperCase();
