@@ -415,11 +415,26 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
         try {
             const text = await csvFile.text();
-            
-            const rows = text.split('\n').map(row => {
-                const matches = row.match(/(\\.|[^",\s]+|"(?:\\.|[^\\"])*")/g) || [];
-                return matches.map(m => m.replace(/^"|"$/g, '').replace(/""/g, '"'));
-            });
+
+            // Proper CSV parse: split on commas OUTSIDE quotes and KEEP spaces inside fields. The old regex
+            // tokenizer used [^",\s]+ which excluded whitespace, so any header/value containing a space
+            // (e.g. "Legacy ERP ID", "ID (DO NOT EDIT)", item names, bins) got shredded into separate
+            // tokens — which is why the "Legacy ERP ID" column looked missing.
+            const parseLine = (line) => {
+                const out = []; let cur = '', inQ = false;
+                for (let i = 0; i < line.length; i++) {
+                    const ch = line[i];
+                    if (inQ) {
+                        if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+                        else cur += ch;
+                    } else if (ch === '"') inQ = true;
+                    else if (ch === ',') { out.push(cur); cur = ''; }
+                    else cur += ch;
+                }
+                out.push(cur);
+                return out;
+            };
+            const rows = text.replace(/^﻿/, '').split(/\r?\n/).map(parseLine);
 
             if (rows.length < 2) throw new Error("File is empty or invalid.");
 

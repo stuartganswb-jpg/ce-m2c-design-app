@@ -751,8 +751,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const e = (p.legacyErpId || p.itemId || '').toUpperCase();
         if (e) partByKey['erp:' + e] = p;
     });
-    // Finish/recipe = the code after the last "/" in the base item# (strip a trailing "-N").
-    const finishOf = (itemid) => { const base = String(itemid || '').replace(/-N$/i, ''); const i = base.lastIndexOf('/'); return i >= 0 ? base.slice(i + 1) : ''; };
+    // Finish/recipe = the code after the last "/", up to the first "-" (e.g. BL-N→BL, CP-10-N→CP, P01→P01).
+    // The "-N" is a temporary new-item marker and any "-10"/"-12" is a size, not part of the finish.
+    const finishOf = (itemid) => { const s = String(itemid || ''); const i = s.lastIndexOf('/'); return i >= 0 ? s.slice(i + 1).split('-')[0].toUpperCase() : ''; };
     // Per-row reorder analysis. min-on-hand = 4 weeks of the 6-month avg sales rate; recommended = the
     // shortfall rounded UP to full finishing sleds for the part's size (S~70 / M~35 / L~22).
     const reorderFor = (r) => {
