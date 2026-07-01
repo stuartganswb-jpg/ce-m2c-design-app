@@ -48,7 +48,7 @@ const NS_ROLLUP_INCOME_ACCT = "249";
 // Tax schedule for rollup items: "No Taxable", NetSuite id 2.
 const NS_ROLLUP_TAX_SCHEDULE = "2";
 
-const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
+const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
   
   const [users, setUsers] = useState([]);
@@ -57,6 +57,10 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   const [dynamicRoles, setDynamicRoles] = useState(['admin', 'executive', 'design_team', 'sales_rep', 'operator', 'programmer', 'floor_manager', 'paint_manager']);
   
   // ADDED STATE FOR FLOOR PERMISSIONS
+  // hqPerms is loaded LIVE from hq_config/permissions (not the `perms` prop). The prop is a login-time
+  // shortcut — a master-PIN (1032) login sets it to just { admin: TABS }, so saving that back would blank
+  // every other role's HQ tabs. Editing the real doc directly avoids that data loss.
+  const [hqPerms, setHqPerms] = useState({});
   const [shopPerms, setShopPerms] = useState({});
   const [finPerms, setFinPerms] = useState({});
   const [pickPerms, setPickPerms] = useState({}); // 🚀 ADDED WMS PERMISSIONS
@@ -145,6 +149,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
       const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       const unsubFinUsers = onSnapshot(collection(db, "fin_users"), (snap) => setFinUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => { });
       const unsubRoles = onSnapshot(doc(db, "hq_config", "roles"), (docSnap) => { if (docSnap.exists() && docSnap.data().list) setDynamicRoles(docSnap.data().list); });
+      const unsubHqPerms = onSnapshot(doc(db, "hq_config", "permissions"), (docSnap) => { if (docSnap.exists()) setHqPerms(docSnap.data()); });
       const unsubSchema = onSnapshot(doc(db, "system", "master_schema"), (docSnap) => { if (docSnap.exists() && docSnap.data().inventoryFields) setCustomSchema(docSnap.data().inventoryFields); });
       const unsubRules = onSnapshot(doc(db, "system", "cpq_rules"), (docSnap) => { if (docSnap.exists() && docSnap.data().rules) setCpqRules(docSnap.data().rules); });
       const unsubFlows = onSnapshot(collection(db, "cpq_flows"), (snap) => setCpqFlows(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -195,7 +200,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
           }
       });
 
-      return () => { unsubUsers(); unsubFinUsers(); unsubRoles(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubPlatingFees(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubColGlobal(); unsubInhouse(); unsubFloor(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
+      return () => { unsubUsers(); unsubFinUsers(); unsubRoles(); unsubHqPerms(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubPlatingFees(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubColGlobal(); unsubInhouse(); unsubFloor(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -415,8 +420,8 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
 
   // 🚀 UNIFIED PERMISSION TOGGLES
   const handleHqPermToggle = (role, tab) => {
-      const rolePerms = perms[role] || [];
-      setPerms({ ...perms, [role]: rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab] });
+      const rolePerms = hqPerms[role] || [];
+      setHqPerms({ ...hqPerms, [role]: rolePerms.includes(tab) ? rolePerms.filter(t => t !== tab) : [...rolePerms, tab] });
   };
   const handleShopPermToggle = (role, tab) => {
       const rolePerms = shopPerms[role] || [];
@@ -445,7 +450,9 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
   // 🚀 MASS SAVE TO ALL DATABASES
   const handleSavePermissions = async () => { 
       try {
-          await setDoc(doc(db, "hq_config", "permissions"), perms); 
+          // Guard: never overwrite the HQ matrix with an empty object (would blank every role's tabs). If
+          // the live doc hasn't loaded into hqPerms yet, skip the HQ write rather than wipe it.
+          if (hqPerms && Object.keys(hqPerms).length) await setDoc(doc(db, "hq_config", "permissions"), hqPerms);
           await setDoc(doc(db, "shop_config", "permissions"), shopPerms);
           await setDoc(doc(db, "fin_config", "permissions"), finPerms);
           await setDoc(doc(db, "pick_config", "permissions"), pickPerms);
@@ -2421,7 +2428,7 @@ const AdminTab = ({ currentUser, activeBrand, perms, setPerms, TABS }) => {
                                 <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
                                 {allRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
-                                        <input type="checkbox" checked={perms[role]?.includes(tab) || false} onChange={() => handleHqPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
+                                        <input type="checkbox" checked={hqPerms[role]?.includes(tab) || false} onChange={() => handleHqPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
                                     </td>
                                 ))}
                             </tr>

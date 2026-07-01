@@ -325,8 +325,8 @@ function HQ() {
             >
               Switch Division
             </button>
-            <button 
-              onClick={() => navigate('/')} 
+            <button
+              onClick={() => { window.location.href = '/'; }}
               style={{ padding: '8px 16px', fontSize: '10px', fontFamily: theme.mono, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', background: theme.ink, color: '#fff', border: 'none', transition: 'background 0.2s' }}
               onMouseOver={(e) => e.currentTarget.style.background = theme.brass}
               onMouseOut={(e) => e.currentTarget.style.background = theme.ink}
