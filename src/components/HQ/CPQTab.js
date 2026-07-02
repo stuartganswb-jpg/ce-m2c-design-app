@@ -1965,15 +1965,26 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               const scopedFinishes = (selOpt && Array.isArray(selOpt.finishAllowedOptions) && selOpt.finishAllowedOptions.length)
                                   ? selOpt.finishAllowedOptions
                                   : (currentStep.finishAllowedOptions || []);
+                              const finishOpts = getOptionsForStep({ ...currentStep, type: 'DROPDOWN', dataSource: currentStep.finishDataSource, allowedOptions: scopedFinishes, geometryMap: {}, styleOptions: [] });
+                              const selFinish = dynamicConfigParams[`${currentStep.id}__finish`] || '';
                               return (
                               <div style={{ marginBottom: '20px' }}>
                                   <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Finish</label>
-                                  <select value={dynamicConfigParams[`${currentStep.id}__finish`] || ''} onChange={(e) => handleParamChange(`${currentStep.id}__finish`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none' }}>
-                                      <option value="">-- Select Finish --</option>
-                                      {getOptionsForStep({ ...currentStep, type: 'DROPDOWN', dataSource: currentStep.finishDataSource, allowedOptions: scopedFinishes, geometryMap: {}, styleOptions: [] }).map(opt => (
-                                          <option key={opt.id} value={opt.id}>{opt.itemName}</option>
-                                      ))}
-                                  </select>
+                                  {/* Visual swatch grid of finish textures — replaces the finish dropdown. Click a
+                                      swatch to apply; click the selected one again to clear. */}
+                                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(88px, 1fr))', gap: '10px' }}>
+                                      {finishOpts.length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', gridColumn: '1 / -1' }}>No finishes available for this step.</span>}
+                                      {finishOpts.map(opt => {
+                                          const on = selFinish === opt.id;
+                                          return (
+                                              <div key={opt.id} onClick={() => handleParamChange(`${currentStep.id}__finish`, on ? '' : opt.id)} title={opt.itemName}
+                                                  style={{ border: `2px solid ${on ? 'var(--brass)' : 'var(--line)'}`, borderRadius: '2px', cursor: 'pointer', overflow: 'hidden', background: on ? 'var(--paper-2)' : '#fff', transition: 'all 0.15s' }}>
+                                                  <div style={{ width: '100%', height: '58px', background: opt.finalImageUrl ? `url(${opt.finalImageUrl}) center/cover` : 'var(--paper-2)' }} />
+                                                  <div style={{ padding: '4px 6px', fontSize: '0.72rem', color: 'var(--ink)', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: on ? 600 : 400 }}>{opt.itemName}</div>
+                                              </div>
+                                          );
+                                      })}
+                                  </div>
                               </div>
                               );
                           })()}
