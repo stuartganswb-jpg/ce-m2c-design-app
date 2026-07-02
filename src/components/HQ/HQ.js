@@ -26,6 +26,7 @@ const StockViewTab = lazy(() => import('./StockViewTab'));
 const ErpMappingAudit = lazy(() => import('./ErpMappingAudit'));
 const RTGDispatchTab = lazy(() => import('./RTGDispatchTab'));
 const QuickShipTab = lazy(() => import('./QuickShipTab'));
+const AssemblyBuilderTab = lazy(() => import('./AssemblyBuilderTab'));
 
 const AssetGalleryTab = lazy(() => import('../Shared/AssetGalleryTab'));
 const BatchImageProcessor = lazy(() => import('../Shared/BatchImageProcessor'));
@@ -46,7 +47,7 @@ const TAB_LABELS = {
 };
 
 const TABS = [
-  '1. Inception & Validation', '1.5 Node Grouping', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update',
+  '1. Inception & Validation', '1.5 Node Grouping', '1.6 Assembly Builder', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update',
   '5. Marketing', '6. Instructions', '7. Quick Ship', '8. CPQ Configurator',
   '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '11.1 NetSuite Sync', '11.2 ERP Mapping Audit', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', '15. Packaging', 'ERP_WRITE_BACK'
@@ -376,6 +377,7 @@ function HQ() {
           }>
             {activeTab === '1. Inception & Validation' && <InceptionTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '1.5 Node Grouping' && <NodeClusterTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '1.6 Assembly Builder' && <AssemblyBuilderTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '2. Visual Assembly' && <VisualAssemblyTab currentUser={user.name} activeBrand={activeBrand.id} onProceed={() => setActiveTab('3. BOM Engine')} />}
             {activeTab === '3. BOM Engine' && <BOMTab currentUser={user.name} activeBrand={activeBrand.id} />}
             
