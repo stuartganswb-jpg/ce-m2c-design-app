@@ -673,6 +673,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const hasNextActiveStep = !!activeFlow && (activeFlow.steps || []).slice(currentStepIndex + 1).some(s => !engineFlags.disabledSteps.includes(s.title));
   const availableProductTypes = [...new Set(libraryParts.map(p => p.manufacturingSpecs?.productType).filter(Boolean))];
 
+  // Resolve a style option's underlying part → its human item description, so CPQ choices show more
+  // than the bare ERP id/code. Matches the option's partId/partName against every part key, then
+  // returns the part's itemName (the description) when it differs from what's already shown.
+  const partDescOf = (partId, partName) => {
+      if (!partId && !partName) return '';
+      const allParts = [...libraryParts, ...liveAssemblies];
+      const p = allParts.find(x => x.id === partId || x.itemId === partId || x.legacyErpId === partId
+          || (partName && (x.itemName === partName || x.legacyErpId === partName || x.itemId === partName)));
+      const desc = p?.itemName || p?.manufacturingSpecs?.description || '';
+      return desc && desc !== partName ? desc : '';
+  };
+
   const getOptionsForStep = (step) => {
       // Tag-driven Mount selector: options are the distinct Location tags on the linked assembly's
       // clusters (Wall / Ceiling / Inside-End). Picking one hides the off-mount end regions.
@@ -685,8 +697,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       // Choose / Swap Style: options are the curated BOM items on the step itself.
       if (step?.type === 'STYLE_SWAP') {
           // Identify each option by optId (unique per instance) so a part repeated at
-          // multiple positions stays distinct; fall back to partId for legacy flows.
-          return (step.styleOptions || []).map(o => ({ id: o.optId || o.partId, itemName: o.partName, price: o.price }));
+          // multiple positions stays distinct; fall back to partId for legacy flows. Also resolve the
+          // underlying part's human description so the choice shows more than the bare ERP id.
+          return (step.styleOptions || []).map(o => ({ id: o.optId || o.partId, itemName: o.partName, desc: partDescOf(o.partId, o.partName), price: o.price }));
       }
       if (!step || !step.dataSource) return [];
       let options = [];
@@ -1927,7 +1940,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleStyleChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: currentStep.finishDataSource ? '12px' : '20px', outline: 'none' }}>
                                   <option value="">{currentStep.type === 'STYLE_SWAP' ? '-- Choose Style --' : '-- Select Option --'}</option>
                                   {getOptionsForStep(currentStep).map(opt => (
-                                      <option key={opt.id} value={opt.id}>{opt.itemName}{renderOptionPrice(opt, currentStep)}</option>
+                                      <option key={opt.id} value={opt.id}>{opt.itemName}{opt.desc ? ` — ${opt.desc}` : ''}{renderOptionPrice(opt, currentStep)}</option>
                                   ))}
                               </select>
                           )}
@@ -1946,9 +1959,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>{currentStep.subLabel || 'Backplate'}</label>
                                   <select value={dynamicConfigParams[`${currentStep.id}__sub`] || ''} onChange={(e) => handleParamChange(`${currentStep.id}__sub`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none' }}>
                                       <option value="">-- None --</option>
-                                      {subs.map(o => (
-                                          <option key={o.optId} value={o.optId}>{o.partName}</option>
-                                      ))}
+                                      {subs.map(o => { const d = partDescOf(o.partId, o.partName); return (
+                                          <option key={o.optId} value={o.optId}>{o.partName}{d ? ` — ${d}` : ''}</option>
+                                      ); })}
                                   </select>
                               </div>
                               );
