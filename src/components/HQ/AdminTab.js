@@ -603,7 +603,21 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // Category from the cluster tag, falling back to the pin's part product type (so clusters
       // tagged only with Location/Position still classify).
       const catOf = (cl) => { if (cl.category) return String(cl.category).toUpperCase(); const pin = pinByCluster[cl.id]; const part = pin && partsById[pin.partId]; return classifyCat(part?.manufacturingSpecs?.productType || part?.productType); };
-      const clusters = (asm.nodeClusters || []).filter(c => catOf(c));
+      // HIDDEN clusters (e.g. bushings) are BOM-only accessories: never a customer choice/step, but
+      // auto-included in the BOM when their position is used. Pull them out of the step-building set and
+      // index their part by position → attached to that position's first step as includedParts.
+      const hiddenByPos = {};
+      (asm.nodeClusters || []).filter(c => c.hidden).forEach(cl => {
+          const pin = pinByCluster[cl.id];
+          const partId = pin?.partId;
+          if (!partId) return; // needs a BOM pin (item #) to include anything
+          const key = (cl.position || '').toUpperCase();
+          (hiddenByPos[key] = hiddenByPos[key] || []).push({ partId, partName: pin?.partName || cl.name, qty: parseInt(pin?.defaultQty) || 1 });
+      });
+      const posGotHidden = new Set();
+      const takeIncluded = (pos) => { const k = (pos || '').toUpperCase(); if (posGotHidden.has(k) || !(hiddenByPos[k] || []).length) return null; posGotHidden.add(k); return hiddenByPos[k]; };
+
+      const clusters = (asm.nodeClusters || []).filter(c => catOf(c) && !c.hidden);
       if (!clusters.length) return alert("No usable clusters — none have a Category tag or a classifiable part. Tag them in Node Grouping first (or set the parts' Product Type).");
       // De-union: each distinct (part, position, location) placement is its OWN option, so the
       // position splits you make in Node Grouping are never merged back together. Each option
@@ -658,12 +672,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               if (!group.length) return;
               const label = POS_LABEL[pos] !== undefined ? POS_LABEL[pos] : pos;
               const subs = subOpts ? subOpts.filter(o => (o.position || '') === pos) : [];
+              const inc = takeIncluded(pos);
               add({
                   title: label ? `${label} ${base}` : base,
                   type: 'STYLE_SWAP', partHandling: 'Custom', required: false, finishDataSource: 'master_finishes',
                   ...(clone && pos === 'CENTER' ? { isCenterClone: true, qtyHelperText: 'Number of center passing brackets' } : {}),
                   styleOptions: group, geometryMap: geom(group),
-                  ...(subs.length ? { subLabel, subOptions: subs, subGeometryMap: geom(subs) } : {})
+                  ...(subs.length ? { subLabel, subOptions: subs, subGeometryMap: geom(subs) } : {}),
+                  ...(inc ? { includedParts: inc } : {})
               });
           });
       };
@@ -679,6 +695,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               const group = opts.filter(o => (o.position || '') === pos);
               const label = POS_LABEL[pos] !== undefined ? POS_LABEL[pos] : pos;
               const sfx = pos || 'X';
+              const inc = takeIncluded(pos);
               add({
                   title: label ? `${label} End Treatment` : 'End Treatment',
                   type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, finishDataSource: 'master_finishes',
@@ -686,7 +703,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       { optId: `OPT-MITER-${sfx}`, partId: '', partName: 'Mitered Return (fee — set price)', targetNode: '', price: 0 },
                       { optId: `OPT-BEND-${sfx}`, partId: '', partName: 'Bent Return (fee — set price)', targetNode: '', price: 0 },
                       { optId: `OPT-FLUSH-${sfx}`, partId: '', partName: 'Flush Cut', targetNode: '', price: 0 }],
-                  geometryMap: geom(group)
+                  geometryMap: geom(group),
+                  ...(inc ? { includedParts: inc } : {})
               });
           });
       };
@@ -697,7 +715,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // Length & Finish — always present (the core pole step; carries the pole geometry). When there's a
       // single material, this IS the combined "choose length + finish" step. The calculatorTemplate +
       // title follow the chosen bay configuration so the configurator math matches the flow's fabShape.
-      add({ title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, geometryMap: {}, targetNodes: poleNodes });
+      const poleInc = takeIncluded(''); // shared/untagged hidden accessories ride the always-present pole step
+      add({ title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, geometryMap: {}, targetNodes: poleNodes, ...(poleInc ? { includedParts: poleInc } : {}) });
       // Part-chooser steps are emitted only when they actually have options — 0-choice steps are skipped.
       addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate' }); // adds nothing if brackets is empty
       if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
@@ -715,7 +734,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           await setDoc(doc(db, "cpq_flows", flowId), stripUndefined({
               id: flowId, brandId: activeBrand, name: `${String(asm.itemName || 'HARDWARE').toUpperCase()} — GENERATED`,
               legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id,
-              fabShape: bay.fabShape, fabEndStyle: bay.endStyle, fabProjection: '', defaultFinishOptions: [], hiddenClusters: [], steps
+              fabShape: bay.fabShape, fabEndStyle: bay.endStyle, fabProjection: '', defaultFinishOptions: [],
+              hiddenClusters: Object.entries(hiddenByPos).flatMap(([pos, arr]) => arr.map(a => ({ ...a, position: pos }))), steps
           }));
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;

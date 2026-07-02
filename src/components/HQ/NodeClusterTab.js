@@ -382,6 +382,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [autoLocations, setAutoLocations] = useState({}); // proposalId -> 'WALL'|'CEILING'|'END'|''
     const [autoPositions, setAutoPositions] = useState({}); // proposalId -> 'LEFT'|'CENTER'|'RIGHT'|''
     const [autoCategories, setAutoCategories] = useState({}); // proposalId -> 'BRACKET'|'POLE'|'FINIAL'|''
+    const [autoHidden, setAutoHidden] = useState({}); // proposalId -> true = BOM-only accessory (no customer choice/step)
     const [showGroupColors, setShowGroupColors] = useState(false); // optional: paint every proposed group its own color (off by default — hover to glow instead)
     const [hoveredProposalId, setHoveredProposalId] = useState(null); // hover a part / row -> glow that group
     const [previewProposalId, setPreviewProposalId] = useState(null); // click a part / row -> isolate that group
@@ -534,6 +535,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const handleSetClusterLocation = (clusterId, location) => setClusterField(clusterId, { location });
     const handleSetClusterPosition = (clusterId, position) => setClusterField(clusterId, { position });
     const handleSetClusterCategory = (clusterId, category) => setClusterField(clusterId, { category });
+    const handleSetClusterHidden = (clusterId, hidden) => setClusterField(clusterId, { hidden });
 
     // Fix 1B — per-assembly LEFT/RIGHT flip (safety net for mirrored models). Persists on the
     // Approved_Designs doc; autoProposals re-runs (it's in the dep array) so labels update live.
@@ -793,7 +795,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         const additions = [];
         plan.forEach((x, i) => {
             // Region tags travel with the cluster (the name stays part-based for BOM Auto-Assign).
-            const region = { position: autoPositions[x.p.id] || x.p.pos || '', location: autoLocations[x.p.id] || '', category: autoCategories[x.p.id] || '', center: x.p.center || null };
+            const region = { position: autoPositions[x.p.id] || x.p.pos || '', location: autoLocations[x.p.id] || '', category: autoCategories[x.p.id] || '', hidden: !!autoHidden[x.p.id], center: x.p.center || null };
             const savedNodes = proposalNodeOverrides[x.p.id] || x.p.nodes; // honor hand-edits
             if (x.matchedId) {
                 const ex = existingClusters.find(c => c.id === x.matchedId);
@@ -1097,6 +1099,9 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                                         <button key={C} onClick={() => handleSetClusterCategory(cl.id, cl.category === C ? '' : C)} style={{ padding: '3px 8px', background: cl.category === C ? 'var(--ink)' : '#fff', color: cl.category === C ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{C}</button>
                                                     ))}
                                                 </div>
+                                                <div style={{ display: 'flex', gap: '5px', marginTop: '5px' }}>
+                                                    <button onClick={() => handleSetClusterHidden(cl.id, !cl.hidden)} title="Hidden accessory (e.g. bushing) — auto-included in the BOM when this position is used; never a customer choice/step" style={{ padding: '3px 8px', background: cl.hidden ? '#6b675e' : '#fff', color: cl.hidden ? '#fff' : 'var(--ink-soft)', border: `1px solid ${cl.hidden ? '#6b675e' : 'var(--line)'}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{cl.hidden ? '✓ Hidden — BOM only' : '⊘ Hidden component'}</button>
+                                                </div>
                                                 {/* Node names — shown while Locating so the 3D isolate is paired with the exact mesh list */}
                                                 {isLocating && (
                                                     <div style={{ marginTop: '8px', maxHeight: '90px', overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', padding: '6px 8px', fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', lineHeight: 1.6, wordBreak: 'break-all' }}>
@@ -1163,6 +1168,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                             {CATEGORIES.map(c => (
                                 <button key={c} onClick={() => setAutoCategories(prev => { const n = { ...prev }; autoProposals.forEach(p => { if (autoChecked[p.id]) n[p.id] = c; }); return n; })} style={{ padding: '5px 10px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{c}</button>
                             ))}
+                            <span style={{ color: 'var(--line)' }}>|</span>
+                            <button onClick={() => setAutoHidden(prev => { const n = { ...prev }; const anyOff = autoProposals.some(p => autoChecked[p.id] && !prev[p.id]); autoProposals.forEach(p => { if (autoChecked[p.id]) n[p.id] = anyOff; }); return n; })} title="Toggle all CHECKED groups as hidden BOM-only accessories (no customer choice)" style={{ padding: '5px 10px', background: '#fff', color: '#6b675e', border: '1px solid #6b675e', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>⊘ Hidden</button>
                             <button onClick={() => { setAutoLocations(prev => { const n = { ...prev }; autoProposals.forEach(p => { if (autoChecked[p.id] && p.library) n[p.id] = p.library.location || n[p.id] || ''; }); return n; }); setAutoCategories(prev => { const n = { ...prev }; autoProposals.forEach(p => { if (autoChecked[p.id] && p.library) n[p.id] = p.library.category || n[p.id] || ''; }); return n; }); }} title="Fill Location + Category from the matched library item for every checked group" style={{ padding: '5px 10px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>⛓ From Library</button>
                         </div>
                     </div>
@@ -1217,6 +1224,12 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                             {CATEGORIES.map(C => (
                                                 <button key={C} onClick={() => setAutoCategories(prev => ({ ...prev, [p.id]: cat === C ? '' : C }))} style={{ padding: '4px 9px', background: cat === C ? 'var(--ink)' : '#fff', color: cat === C ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{C}</button>
                                             ))}
+                                        </div>
+                                        {/* Hidden / BOM-only accessory (e.g. bushings): auto-included in the BOM when this
+                                            position is used, but NEVER a customer choice/step in the CPQ flow. */}
+                                        <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>BOM:</span>
+                                            <button onClick={() => setAutoHidden(prev => ({ ...prev, [p.id]: !prev[p.id] }))} title="Hidden accessory — auto-included in the BOM when this position is used; never shown as a customer choice/step" style={{ padding: '4px 9px', background: autoHidden[p.id] ? '#6b675e' : '#fff', color: autoHidden[p.id] ? '#fff' : 'var(--ink-soft)', border: `1px solid ${autoHidden[p.id] ? '#6b675e' : 'var(--line)'}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{autoHidden[p.id] ? '✓ Hidden — BOM only' : '⊘ Hidden component'}</button>
                                         </div>
                                         {/* Library match — verify the node resolved to the right component */}
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', marginTop: '6px', textTransform: 'uppercase', letterSpacing: '.05em', color: p.library ? 'var(--brass)' : 'var(--ink-soft)' }}>

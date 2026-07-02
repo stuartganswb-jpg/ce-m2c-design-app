@@ -108,6 +108,17 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       activeStepIds.forEach(stepId => {
           if (stepId.endsWith('__finish')) return; // finishes are applied, not physical BOM components
           const step = flowSteps.find(s => s.id === stepId);
+          // Hidden BOM-only accessories (e.g. bushings) attached to this step in Node Grouping → auto-added
+          // to the BOM whenever this step is configured/selected. Never a customer choice; one per position.
+          (step?.includedParts || []).forEach(ip => {
+              const accPart = matchPart(ip.partId);
+              if (!accPart) { result.unresolved.push({ stepTitle: `${step?.title || stepId} · included`, partId: ip.partId }); return; }
+              result.lines.push({
+                  stepId: `${stepId}__inc__${ip.partId}`, masterPart: accPart, qty: parseInt(ip.qty) || 1,
+                  nsId: accPart.netSuiteInternalId || accPart.legacyErpId || accPart.itemId || 'UNMAPPED',
+                  finishedErpId: '', finishUnmapped: '', partCategory: accPart.manufacturingSpecs?.partHandling || 'Accessory', projection: ''
+              });
+          });
           const userSelectionId = job.cpqData.configuration?.[stepId];
           let qty = job.cpqData.quantities?.[stepId];
           if (qty === undefined || qty === null || qty === '') qty = 1;
