@@ -758,13 +758,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // title follow the chosen bay configuration so the configurator math matches the flow's fabShape.
       const poleInc = takeIncluded(''); // shared/untagged hidden accessories ride the always-present pole step
       add({ title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, geometryMap: {}, targetNodes: poleNodes, ...(poleInc ? { includedParts: poleInc } : {}) });
+      // End Treatment comes BEFORE the brackets on purpose: picking a return here can remove that end's
+      // outer bracket step (returnHidesBracket), so the customer settles each end first and never picks
+      // a bracket that then disappears. It's ALWAYS emitted — even with 0 finials it carries the Mitered
+      // / Bent / Flush return options that render the end shape and feed the fab math.
+      addEndTreatment(finial, endPole);
       // Part-chooser steps are emitted only when they actually have options — 0-choice steps are skipped.
       addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate', stepRole: 'BRACKET' }); // adds nothing if brackets is empty
       if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
-      // End Treatment is ALWAYS emitted: even with 0 finials it carries the Mitered / Bent / Flush return
-      // options that render the end shape (e.g. the French Return bend) and feed the fab math. Skipping it
-      // when finials=0 was what broke the bay render — these are fee choices and must stay.
-      addEndTreatment(finial, endPole);
       if (rings.length) add({ title: 'Rings', type: 'STYLE_SWAP', partHandling: 'Small Parts', finishDataSource: 'master_finishes', qtyHelperText: 'Number of rings', styleOptions: rings, geometryMap: geom(rings) });
       // Fee steps — always kept, as-is.
       add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
