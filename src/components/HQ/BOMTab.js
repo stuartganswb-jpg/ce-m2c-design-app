@@ -16,6 +16,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [assemblies, setAssemblies] = useState([]);
   const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
   const [capturingThumb, setCapturingThumb] = useState(false);
+  const [bulkThumb, setBulkThumb] = useState({ running: false, done: 0, total: 0 });
   
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
@@ -160,6 +161,30 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           alert("✅ Assembly thumbnail captured.");
       } catch (e) { console.error(e); alert("Capture failed: " + (e.message || e)); }
       finally { setCapturingThumb(false); }
+  };
+
+  // Bulk: render + save a .glb thumbnail for EVERY filtered assembly that has a cadUrl but no image.
+  // Sequential so we never hold many offscreen WebGL contexts at once (snapshotPNG releases each after).
+  const handleBulkThumbnails = async () => {
+      const targets = filteredAssemblies.filter(a => a.manufacturingSpecs?.cadUrl && !a.finalImageUrl);
+      if (!targets.length) return alert('Every assembly matching the current filters already has a thumbnail. Adjust the filters, or use the per-assembly Re-capture button on one that has an image.');
+      if (!window.confirm(`Generate thumbnails from the .glb for ${targets.length} assembly(ies) missing an image?\n\nEach is rendered offscreen — this can take a little while for a large batch. You can keep working; leaving the tab cancels it.`)) return;
+      setBulkThumb({ running: true, done: 0, total: targets.length });
+      let ok = 0, fail = 0;
+      for (let i = 0; i < targets.length; i++) {
+          const a = targets[i];
+          try {
+              const scene = await loadGLBScene(a.manufacturingSpecs.cadUrl);
+              const png = await snapshotPNG(scene, 768);
+              const sref = ref(storage, `assembly_thumbnails/${activeBrand}_${a.itemId}.png`);
+              await uploadBytes(sref, png, { contentType: 'image/png' });
+              await updateDoc(doc(db, "Approved_Designs", a.id), { finalImageUrl: await getDownloadURL(sref) });
+              ok++;
+          } catch (e) { console.error('Bulk thumbnail failed for', a.itemId, e); fail++; }
+          setBulkThumb({ running: true, done: i + 1, total: targets.length });
+      }
+      setBulkThumb({ running: false, done: 0, total: 0 });
+      alert(`✅ Thumbnails: ${ok} generated${fail ? ` · ${fail} failed (see console — usually a missing/invalid .glb)` : ''}.`);
   };
 
   useEffect(() => {
@@ -646,6 +671,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
               <button onClick={runMismatchScan} disabled={scanningMismatches} title="Scan every assembly for BOM components linked to a placeholder part that matches a real library part." style={{ padding: '10px 14px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--ink)', cursor: scanningMismatches ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                   {scanningMismatches ? 'Scanning…' : '⚲ Find Part Mismatches'}
+              </button>
+
+              <button onClick={handleBulkThumbnails} disabled={bulkThumb.running} title="Render + save a thumbnail from the .glb for every filtered assembly that's missing an image (works after clusters are assigned)" style={{ padding: '10px 14px', border: '1px solid var(--ink)', background: bulkThumb.running ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', cursor: bulkThumb.running ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                  {bulkThumb.running ? `⚙ ${bulkThumb.done}/${bulkThumb.total}…` : '🖼 Generate Missing Thumbnails'}
               </button>
 
               <select value={selectedAssemblyId} onChange={(e) => { setSelectedAssemblyId(e.target.value); setActiveComponent(null); }} style={{ padding: '10px 16px', border: '2px solid var(--ink)', fontFamily: 'var(--sans)', fontSize: '0.95rem', minWidth: '300px', outline: 'none', background: '#fff', marginLeft: 'auto', fontWeight: 500 }}>
