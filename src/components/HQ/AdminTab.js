@@ -696,15 +696,17 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // shared miter / bend / flush fee options, so each end is finished independently. With no
       // position-tagged finials it collapses to a single End Treatment (just the fee options).
       //
-      // endPoleOpts = the LEFT/RIGHT pole segments split off above. At each end we sort them into a
-      // BEND segment (name/tag says bend/return/miter/curve) vs a STRAIGHT (full-length) segment,
-      // then wire them into THIS step's geometryMap so the render follows the end's own selection:
-      //   • a finial or a Flush cut  → show the STRAIGHT (full) pole end (so the finial isn't left
-      //     floating on a short rod), plus the finial's own mesh.
-      //   • a Bent / Mitered return  → show the BEND pole end instead.
-      // Because visibilityOverrides hides any node listed in a geometryMap unless its option is the
-      // one selected, each end shows exactly its own pole geometry — mixed ends (finial + french
-      // return) now render correctly. Assemblies with no LEFT/RIGHT pole segments behave as before.
+      // POLE MODEL (BRIMAR-style): one SHORT rod = the center run, always shown; the LONG rod is
+      // layered TWICE and tagged position LEFT + RIGHT (endPoleOpts) so each side hides independently.
+      // We wire that side's long rod into THIS step's geometryMap so it follows the end's own pick:
+      //   • real finial (or Flush) → SHOW this side's long rod, so the finial sits on the full length.
+      //   • french / bent / mitered RETURN → do NOT list the long rod, so picking it HIDES the long
+      //     rod on that side and the short center rod carries the return length.
+      // The long rod is always CONTROLLED (listed under Flush below), so it hides on a return even if
+      // no real finial lists it — that's the "flag" you asked for: the return SELECTION is the flag,
+      // no separate field to track. Returns are recognized by keyword (french/return/bend/miter/...)
+      // in the option's part name or id. bendNodes only matters if a distinct bend GEOMETRY is tagged
+      // (not the case here — there's no separate bend segment). No L/R pole segments → behaves as before.
       const BEND_RE = /bend|return|miter|mitre|curv|french|\bfr\b/i;
       const addEndTreatment = (opts, endPoleOpts = []) => {
           const present = [...new Set([...opts, ...endPoleOpts].map(o => o.position || ''))];
@@ -720,10 +722,13 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               const label = POS_LABEL[pos] !== undefined ? POS_LABEL[pos] : pos;
               const sfx = pos || 'X';
               const inc = takeIncluded(pos);
-              // Finials & Flush → straight (full) end; Bent/Mitered returns → bend end.
+              // Real finials → long (straight) rod shown; a return-type option (french/bent/miter,
+              // even if authored as a "finial" choice) hides it. Flush always controls the long rod
+              // so it can hide on a return even when every option this side is a return.
               const gmap = {};
               group.forEach(o => {
-                  const nodes = [o.targetNode, straightNodes].filter(Boolean).join(', ');
+                  const isReturn = BEND_RE.test(`${o.partName || ''} ${o.optId || ''}`);
+                  const nodes = [o.targetNode, isReturn ? '' : straightNodes].filter(Boolean).join(', ');
                   if (nodes) gmap[o.optId] = nodes;
               });
               if (bendNodes) { gmap[`OPT-MITER-${sfx}`] = bendNodes; gmap[`OPT-BEND-${sfx}`] = bendNodes; }
