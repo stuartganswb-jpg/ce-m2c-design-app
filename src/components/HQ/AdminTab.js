@@ -588,11 +588,17 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   // One-click flow build from the assembly's Node-Grouping tags. Groups tagged clusters by
   // Category + part (unioning each part's placement nodes into one option), then stamps out the
   // standard hardware steps fully wired — no hand-picking pins. Creates a NEW flow; touches nothing.
-  const handleGenerateHardwareFlow = async () => {
-      const bay = BAY_CONFIGS[genBayConfig] || BAY_CONFIGS.STRAIGHT;
-      const asmId = generateAsmId || flowSettings.linkedAssemblyId;
+  // inPlaceFlowId → rebuild STEPS on an existing flow (keeping its id + all flow-level settings +
+  // per-option prices) instead of spawning a new flow. bayConfigKey overrides which bay config to
+  // rebuild with (defaults to the flow's stored bayConfig, then the dropdown).
+  const handleGenerateHardwareFlow = async ({ inPlaceFlowId = null, bayConfigKey = null } = {}) => {
+      const oldFlow = inPlaceFlowId ? cpqFlows.find(f => f.id === inPlaceFlowId) : null;
+      const bay = BAY_CONFIGS[bayConfigKey || oldFlow?.bayConfig || genBayConfig] || BAY_CONFIGS.STRAIGHT;
+      const asmId = inPlaceFlowId ? oldFlow?.linkedAssemblyId : (generateAsmId || flowSettings.linkedAssemblyId);
       const asm = masterAssemblies.find(a => a.id === asmId) || allApprovedDesigns.find(a => a.id === asmId || a.itemId === asmId);
-      if (!asm) return alert("Pick a Master Assembly from the dropdown next to Generate, then click Generate.");
+      if (!asm) return alert(inPlaceFlowId
+          ? "This flow has no linked assembly to regenerate from. Set its Linked Assembly in flow settings first."
+          : "Pick a Master Assembly from the dropdown next to Generate, then click Generate.");
       let pins = [];
       try { const snap = await getDocs(query(collection(db, "assembly_pins"), where("assemblyId", "==", asm.itemId))); pins = snap.docs.map(d => d.data()); } catch (e) { console.warn("pin load failed", e); }
       const pinByCluster = {};
@@ -771,16 +777,53 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
       add({ title: 'Cut / Splice Fee', type: 'STATIC_FEE', qtyHelperText: 'Per cut / splice', basePrice: '0' });
 
+      // Force-hidden meshes = every cluster tagged hidden (e.g. bushings), by cluster id — the runtime
+      // + the flow-settings hidden-clusters editor both key on cluster ids. (BOM inclusion of those
+      // parts is handled separately via includedParts / hiddenByPos.)
+      const newHidden = (asm.nodeClusters || []).filter(c => c.hidden).map(c => c.id);
+
+      // ── IN-PLACE REGENERATE ──────────────────────────────────────────────────────────────────
+      // Rebuild the STEPS on the existing flow (same id) from the current tags + latest generator
+      // logic, then copy per-option prices back by (step title, optId) so nothing priced is lost.
+      // Every flow-level setting the user configured (name, ids, fab shape/endStyle/projection, base
+      // price, rollup, finishes) is left untouched — only steps + hiddenClusters + bayConfig change.
+      if (inPlaceFlowId && oldFlow) {
+          const norm = (s) => String(s == null ? '' : s).trim().toUpperCase();
+          const priceByKey = {}; const feeByTitle = {};
+          (oldFlow.steps || []).forEach(s => {
+              const t = norm(s.title);
+              [...(s.styleOptions || []), ...(s.subOptions || [])].forEach(o => {
+                  const k = o && (o.optId || o.partId);
+                  if (k != null && o.price !== undefined) priceByKey[`${t}||${k}`] = o.price;
+              });
+              if (s.type === 'STATIC_FEE' && s.basePrice !== undefined) feeByTitle[t] = s.basePrice;
+          });
+          const applyPrices = (opts, t) => (opts || []).map(o => {
+              const k = `${t}||${o.optId || o.partId}`;
+              return (k in priceByKey) ? { ...o, price: priceByKey[k] } : o;
+          });
+          const mergedSteps = steps.map(s => {
+              const t = norm(s.title);
+              const next = { ...s };
+              if (next.styleOptions) next.styleOptions = applyPrices(next.styleOptions, t);
+              if (next.subOptions) next.subOptions = applyPrices(next.subOptions, t);
+              if (next.type === 'STATIC_FEE' && feeByTitle[t] !== undefined) next.basePrice = feeByTitle[t];
+              return next;
+          });
+          try {
+              await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig }));
+              alert(`✅ Regenerated "${oldFlow.name}" in place — ${mergedSteps.length} steps rebuilt from current tags + latest generator logic.\n\nPrices carried over where the option still exists (${Object.keys(priceByKey).length} priced entr${Object.keys(priceByKey).length === 1 ? 'y' : 'ies'} matched). Flow settings (name, IDs, fab shape/projection, rollup) left untouched. Review any new/changed steps, set prices on anything new, then test.`);
+          } catch (err) { console.error("Regenerate failed:", err); alert("Regenerate failed: " + (err?.message || err)); }
+          return;
+      }
+
       const flowId = `FLOW-${ts}`;
       try {
           await setDoc(doc(db, "cpq_flows", flowId), stripUndefined({
               id: flowId, brandId: activeBrand, name: `${String(asm.itemName || 'HARDWARE').toUpperCase()} — GENERATED`,
-              legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id,
+              legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id, bayConfig: bayConfigKey || genBayConfig,
               fabShape: bay.fabShape, fabEndStyle: bay.endStyle, fabProjection: '', defaultFinishOptions: [],
-              // Force-hidden meshes = every cluster tagged hidden (e.g. bushings), by cluster id — the
-              // runtime + the flow-settings hidden-clusters editor both key on cluster ids. (The BOM
-              // inclusion of those parts is handled separately via includedParts / hiddenByPos.)
-              hiddenClusters: (asm.nodeClusters || []).filter(c => c.hidden).map(c => c.id), steps
+              hiddenClusters: newHidden, steps
           }));
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;
@@ -1345,7 +1388,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                             <option value="MITERED">Bay config: Mitered Bay (Wall A/B/C)</option>
                             <option value="BOW">Bay config: Curved Bay (arc)</option>
                         </select>
-                        <button onClick={handleGenerateHardwareFlow} title="Build a complete hardware flow automatically from the picked assembly's Node-Grouping tags — no hand-picking pins" style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⚙ Generate Flow from Tags</button>
+                        <button onClick={() => handleGenerateHardwareFlow()} title="Build a complete hardware flow automatically from the picked assembly's Node-Grouping tags — no hand-picking pins" style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⚙ Generate Flow from Tags</button>
                     </div>
                     
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', flex: 1 }}>
@@ -1572,6 +1615,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                         Delete Flow
                                     </button>
                                 </div>
+                                {flowSettings.linkedAssemblyId && (
+                                    <div style={{ marginTop: '12px' }}>
+                                        <button onClick={() => { if (window.confirm("Regenerate this flow's steps from the linked assembly's current tags + the latest generator logic?\n\nPrices are kept for options that still exist. All flow settings (name, IDs, fab shape/projection, rollup) stay. New or changed steps may need prices set. Nothing is deleted — the flow keeps its id, so BOM/CPQ links are preserved.")) handleGenerateHardwareFlow({ inPlaceFlowId: activeFlowId }); }} style={{ width: '100%', padding: '12px 24px', background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>↻ Regenerate Steps from Tags (keep prices)</button>
+                                        <span style={{ display: 'block', marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>Rebuilds steps in place from the assembly's tags + latest generator logic — no delete, prices &amp; settings kept. Use this after retagging or a generator update instead of delete + regenerate.</span>
+                                    </div>
+                                )}
                             </div>
 
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 20px 0', borderBottom: '1px solid var(--line)', paddingBottom: '15px' }}>
