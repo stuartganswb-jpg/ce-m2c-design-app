@@ -137,6 +137,10 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               result.unresolved.push({ stepTitle: step?.title || stepId, partId: targetPartId });
               return;
           }
+          // ALIAS parts render as their own node but ARE the aliased real item in the BOM (e.g. two pole
+          // lengths that are both the same steel pole) → resolve to the real part before building the line.
+          const aliasId = masterPart.aliasOf || masterPart.manufacturingSpecs?.aliasOf;
+          if (aliasId) { const real = matchPart(aliasId); if (real) masterPart = real; }
           // The demand lands on the finished assembly (base/CODE, e.g. H1-138BF/EP1 or H1-138BF/P) instead of the
           // bare base when the selected finish is either (a) OUTSOURCED — always consumes finished stock — or
           // (b) IN-HOUSE but the finished assembly is flagged "Stocked" in the library (held in stock, not

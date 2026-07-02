@@ -130,8 +130,9 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   const [creationMode, setCreationMode] = useState("EXISTING"); 
   const [searchQuery, setSearchQuery] = useState("");
   const [newPartName, setNewPartName] = useState("");
-  const [newPartType, setNewPartType] = useState("Inventory"); 
-  const [newPartRouting, setNewPartRouting] = useState(""); 
+  const [newPartType, setNewPartType] = useState("Inventory");
+  const [newPartRouting, setNewPartRouting] = useState("");
+  const [aliasTargetId, setAliasTargetId] = useState(""); // for the "Alias of" type: the real BOM item this renders as
   
   const [newPartSpecs, setNewPartSpecs] = useState({ productType: '', collection: '', uom: 'EA', partHandling: '', dynamicDicts: {}, customData: {} });
 
@@ -386,6 +387,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     if (!newPartName.trim()) return alert("Enter a name for the new entity.");
     if (newPartType === 'Assembly' && !newPartRouting) return alert("Please select a Routing Type for this Sub-Assembly.");
     if (newPartType === 'Inventory' && !newPartRouting) return alert("Please select an Inventory Category.");
+    if (newPartType === 'Alias' && !aliasTargetId) return alert("Pick the real library item this aliases (same BOM item, different render node).");
     if (!reassignPinId && !pendingPin) return; // reassign updates an existing pin; a fresh define needs a pending pin
 
     // Duplicate-name guard: the typed name is often a raw CAD node like "H1-1EC_V61". If a real
@@ -407,7 +409,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     }
 
     try {
-      const prefix = newPartType === 'Inventory' ? 'INV' : newPartType === 'Fee' ? 'FEE' : 'ASM';
+      const prefix = newPartType === 'Inventory' ? 'INV' : newPartType === 'Fee' ? 'FEE' : newPartType === 'Alias' ? 'ALIAS' : 'ASM';
       const newMasterId = `${activeBrand.toUpperCase()}-${prefix}-${Math.floor(1000+Math.random()*9000)}`;
       
       const newDoc = {
@@ -429,7 +431,17 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           status: "NEEDS_SPECS"
       };
 
-      if (newPartType === 'Fee') {
+      if (newPartType === 'Alias') {
+          // Alias: renders as its OWN node/geometry but IS the aliased real item in the BOM. Two aliases
+          // of the same pole (different node/length) → distinct pole options → generator makes step 1 a
+          // Style Swap; the ERP push follows aliasOf so both bill as the one real item.
+          const real = [...(libraryParts || []), ...(assemblies || [])].find(p => p.id === aliasTargetId || p.itemId === aliasTargetId);
+          const realId = real?.itemId || real?.id || aliasTargetId;
+          const realPt = real?.manufacturingSpecs?.productType || real?.productType || '';
+          newDoc.productType = realPt; // classify the alias as the same category (e.g. POLE) so it groups right
+          newDoc.aliasOf = realId; newDoc.aliasOfName = real?.itemName || '';
+          newDoc.manufacturingSpecs = { ...baseSpecs, productType: realPt, isAlias: true, aliasOf: realId, aliasOfName: real?.itemName || '' };
+      } else if (newPartType === 'Fee') {
           // A fee/charge: not physical, books as a fee line. productType 'FEE' so the CPQ generator
           // treats it as a fee (like the built-in miter/bend/flush options) rather than a geometry part.
           newDoc.productType = newPartSpecs.productType || 'FEE';
@@ -1282,14 +1294,26 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                   
                   <div>
                       <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Entity Type</label>
-                      <div style={{ display: 'flex', gap: '10px' }}>
-                          <button onClick={() => { setNewPartType("Inventory"); setNewPartRouting(""); }} style={{ flex: 1, padding: '12px', background: newPartType === "Inventory" ? 'var(--ink)' : 'var(--paper)', color: newPartType === "Inventory" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Raw Mat / Component</button>
-                          <button onClick={() => setNewPartType("Assembly")} style={{ flex: 1, padding: '12px', background: newPartType === "Assembly" ? 'var(--ink)' : 'var(--paper)', color: newPartType === "Assembly" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Sub-Assembly / Kit</button>
-                          <button onClick={() => { setNewPartType("Fee"); setNewPartRouting("FEE"); setNewPartSpecs(prev => ({ ...prev, productType: prev.productType || 'FEE' })); }} style={{ flex: 1, padding: '12px', background: newPartType === "Fee" ? 'var(--ink)' : 'var(--paper)', color: newPartType === "Fee" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Fee / Charge</button>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          <button onClick={() => { setNewPartType("Inventory"); setNewPartRouting(""); }} style={{ flex: '1 1 45%', padding: '12px', background: newPartType === "Inventory" ? 'var(--ink)' : 'var(--paper)', color: newPartType === "Inventory" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Raw Mat / Component</button>
+                          <button onClick={() => setNewPartType("Assembly")} style={{ flex: '1 1 45%', padding: '12px', background: newPartType === "Assembly" ? 'var(--ink)' : 'var(--paper)', color: newPartType === "Assembly" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Sub-Assembly / Kit</button>
+                          <button onClick={() => { setNewPartType("Fee"); setNewPartRouting("FEE"); setNewPartSpecs(prev => ({ ...prev, productType: prev.productType || 'FEE' })); }} style={{ flex: '1 1 45%', padding: '12px', background: newPartType === "Fee" ? 'var(--ink)' : 'var(--paper)', color: newPartType === "Fee" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Fee / Charge</button>
+                          <button onClick={() => { setNewPartType("Alias"); setNewPartRouting("ALIAS"); }} style={{ flex: '1 1 45%', padding: '12px', background: newPartType === "Alias" ? 'var(--ink)' : 'var(--paper)', color: newPartType === "Alias" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Alias of…</button>
                       </div>
                   </div>
 
-                  {newPartType === "Fee" ? (
+                  {newPartType === "Alias" ? (
+                      <div style={{ background: 'var(--paper-2)', padding: '16px', border: '1px solid var(--line)' }}>
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Alias of — real BOM item this renders as</label>
+                          <select value={aliasTargetId} onChange={(e) => setAliasTargetId(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                              <option value="">-- SELECT LIBRARY ITEM --</option>
+                              {[...(libraryParts || []), ...(assemblies || [])].filter(p => p.itemName).sort((a, b) => String(a.itemName).localeCompare(String(b.itemName))).map(p => (
+                                  <option key={p.id} value={p.id}>{p.legacyErpId && p.legacyErpId !== 'PENDING' ? `${p.legacyErpId} · ` : ''}{p.itemName}</option>
+                              ))}
+                          </select>
+                          <div style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '8px' }}>Same BOM item, different render node. Two aliases of the same pole (e.g. finial-length + french-return-length) become Style-Swap options in step 1 that both bill as this one item.</div>
+                      </div>
+                  ) : newPartType === "Fee" ? (
                       <div style={{ background: 'var(--paper-2)', padding: '16px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
                           <strong style={{ color: 'var(--ink)' }}>Fee / charge</strong> — not physical inventory, no routing. Books as a fee line (e.g. a French-return bend fee), so it doesn't tie the render to a real item.
                       </div>
