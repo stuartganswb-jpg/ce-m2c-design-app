@@ -232,7 +232,24 @@ const SelectableModel = ({ url, selectedNodes, existingClusters, hiddenNodes, hi
         if (!onComponents) return;
         clonedScene.updateMatrixWorld(true);
         const root = findAssemblyRoot(clonedScene);
-        const comps = (root.children || []).map((child) => {
+        // Collect the real named sub-assemblies. Some exports nest everything under one or more
+        // COLLECTION nodes — e.g. this BRIMAR model has the scene holding an "…Assembly" wrapper (15
+        // sub-assemblies inside) PLUS a stray part, so the old one-level "root.children" saw only those
+        // 1–2 wrappers → all 218 nodes collapsed into 1–2 groups. Descend through pure container nodes
+        // (no geometry of their own, and ≥2 children that are themselves sub-assemblies) until we reach
+        // each component (a named node whose single child is its geometry/version wrapper).
+        const componentNodes = [];
+        const MAX_DEPTH = 6;
+        const collect = (node, depth) => {
+            const kids = node.children || [];
+            const subAssemblyKids = kids.filter(k => (k.children || []).length > 0).length;
+            const isCollection = !node.isMesh && depth < MAX_DEPTH && subAssemblyKids >= 2;
+            if (isCollection) kids.forEach(k => collect(k, depth + 1));
+            else componentNodes.push(node);
+        };
+        (root.children || []).forEach(k => collect(k, 0));
+        if (componentNodes.length === 0) (root.children || []).forEach(k => componentNodes.push(k)); // safety net
+        const comps = componentNodes.map((child) => {
             const names = [];
             let meshCount = 0;
             child.traverse((o) => {
