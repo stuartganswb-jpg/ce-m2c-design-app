@@ -386,7 +386,7 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     if (!newPartName.trim()) return alert("Enter a name for the new entity.");
     if (newPartType === 'Assembly' && !newPartRouting) return alert("Please select a Routing Type for this Sub-Assembly.");
     if (newPartType === 'Inventory' && !newPartRouting) return alert("Please select an Inventory Category.");
-    if (!pendingPin) return;
+    if (!reassignPinId && !pendingPin) return; // reassign updates an existing pin; a fresh define needs a pending pin
 
     // Duplicate-name guard: the typed name is often a raw CAD node like "H1-1EC_V61". If a real
     // library part already matches it (by name/ERP, or its base with a trailing _V## version suffix
@@ -407,7 +407,8 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     }
 
     try {
-      const newMasterId = `${activeBrand.toUpperCase()}-${newPartType === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
+      const prefix = newPartType === 'Inventory' ? 'INV' : newPartType === 'Fee' ? 'FEE' : 'ASM';
+      const newMasterId = `${activeBrand.toUpperCase()}-${prefix}-${Math.floor(1000+Math.random()*9000)}`;
       
       const newDoc = {
           id: newMasterId, itemId: newMasterId, legacyErpId: "PENDING", itemName: newPartName.toUpperCase(),
@@ -428,7 +429,12 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           status: "NEEDS_SPECS"
       };
 
-      if (newPartType === 'Inventory') {
+      if (newPartType === 'Fee') {
+          // A fee/charge: not physical, books as a fee line. productType 'FEE' so the CPQ generator
+          // treats it as a fee (like the built-in miter/bend/flush options) rather than a geometry part.
+          newDoc.productType = newPartSpecs.productType || 'FEE';
+          newDoc.manufacturingSpecs = { ...baseSpecs, productType: newPartSpecs.productType || 'FEE', isFee: true, basePrice: 0, cost: 0 };
+      } else if (newPartType === 'Inventory') {
           newDoc.manufacturingSpecs = { ...baseSpecs };
       } else {
           newDoc.project = activeAssembly?.project || "";
@@ -437,8 +443,21 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
 
       await setDoc(doc(db, "Approved_Designs", newMasterId), newDoc);
 
+      // REASSIGN mode: swap the newly-created part onto the EXISTING pin (keep its cluster/node/qty),
+      // instead of dropping a new pin. This is what was silently failing before.
+      if (reassignPinId) {
+        await updateDoc(doc(db, "assembly_pins", reassignPinId), {
+          partName: newPartName.toUpperCase(), partId: newMasterId, legacyErpId: "PENDING",
+          isExistingLibraryPart: false, specs: newDoc.manufacturingSpecs || {}, status: "NEEDS_SPECS"
+        });
+        setDrawerOpen(false); setReassignPinId(null);
+        setNewPartSpecs({ productType: '', collection: '', uom: 'EA', partHandling: '', dynamicDicts: {}, customData: {} });
+        setIsCanvasMaximized(false);
+        return;
+      }
+
       await addDoc(collection(db, "assembly_pins"), {
-        assemblyId: selectedAssemblyId, 
+        assemblyId: selectedAssemblyId,
         x: viewMode === '3D' ? (pendingPin.x || 0) : pendingPin.pinX, 
         y: viewMode === '3D' ? (pendingPin.y || 0) : pendingPin.pinY,
         z: viewMode === '3D' ? (pendingPin.z || 0) : null,
@@ -1263,13 +1282,18 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                   
                   <div>
                       <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Entity Type</label>
-                      <div style={{ display: 'flex', gap: '12px' }}>
+                      <div style={{ display: 'flex', gap: '10px' }}>
                           <button onClick={() => { setNewPartType("Inventory"); setNewPartRouting(""); }} style={{ flex: 1, padding: '12px', background: newPartType === "Inventory" ? 'var(--ink)' : 'var(--paper)', color: newPartType === "Inventory" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Raw Mat / Component</button>
                           <button onClick={() => setNewPartType("Assembly")} style={{ flex: 1, padding: '12px', background: newPartType === "Assembly" ? 'var(--ink)' : 'var(--paper)', color: newPartType === "Assembly" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Sub-Assembly / Kit</button>
+                          <button onClick={() => { setNewPartType("Fee"); setNewPartRouting("FEE"); setNewPartSpecs(prev => ({ ...prev, productType: prev.productType || 'FEE' })); }} style={{ flex: 1, padding: '12px', background: newPartType === "Fee" ? 'var(--ink)' : 'var(--paper)', color: newPartType === "Fee" ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>Fee / Charge</button>
                       </div>
                   </div>
 
-                  {newPartType === "Inventory" ? (
+                  {newPartType === "Fee" ? (
+                      <div style={{ background: 'var(--paper-2)', padding: '16px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
+                          <strong style={{ color: 'var(--ink)' }}>Fee / charge</strong> — not physical inventory, no routing. Books as a fee line (e.g. a French-return bend fee), so it doesn't tie the render to a real item.
+                      </div>
+                  ) : newPartType === "Inventory" ? (
                       <div style={{ background: 'var(--paper-2)', padding: '16px', border: '1px solid var(--line)' }}>
                           <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Inventory Category</label>
                           <select value={newPartRouting} onChange={(e) => setNewPartRouting(e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
