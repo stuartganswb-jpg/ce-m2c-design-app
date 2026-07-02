@@ -863,8 +863,30 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   };
 
   useEffect(() => {
-      if (!cpqRules || cpqRules.length === 0) return;
       let newFlags = { disabledSteps: [], warnings: [] };
+
+      // Cross-step rule (runs with or without part-field cpqRules): a french / bent / mitered RETURN
+      // chosen on an end removes THAT end's OUTER bracket choice — the return wraps back to the wall,
+      // so there's no end bracket; the center passing bracket(s) (clone/multiply) carry the pole. The
+      // generator tags End Treatment steps with returnHidesBracket + position and bracket steps with
+      // stepRole:'BRACKET' + position, so we disable the same-side bracket step by title. Disabling
+      // clears its selection downstream → it drops from price, BOM, and the 3D render.
+      const RETURN_RE = /bend|return|miter|mitre|curv|french|\bfr\b/i;
+      (activeFlow?.steps || []).forEach(step => {
+          if (!step.returnHidesBracket) return;
+          const pos = (step.position || '').toUpperCase();
+          if (!['LEFT', 'RIGHT'].includes(pos)) return;
+          const sel = dynamicConfigParams[step.id];
+          if (!sel) return;
+          const opt = (step.styleOptions || []).find(o => (o.optId || o.partId) === sel);
+          const isReturn = /^OPT-(BEND|MITER)/i.test(sel) || (opt && RETURN_RE.test(`${opt.partName || ''} ${opt.optId || ''}`));
+          if (!isReturn) return;
+          (activeFlow?.steps || []).forEach(bs => {
+              if (bs.stepRole === 'BRACKET' && (bs.position || '').toUpperCase() === pos && !newFlags.disabledSteps.includes(bs.title))
+                  newFlags.disabledSteps.push(bs.title);
+          });
+      });
+
       const selectedItemIds = Object.values(dynamicConfigParams);
 
       const allParts = [...libraryParts, ...liveAssemblies];
@@ -915,7 +937,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       selectedParts.forEach(part => {
           const specs = part.manufacturingSpecs || part;
-          cpqRules.forEach(rule => {
+          (cpqRules || []).forEach(rule => {
               const field = rule.conditionField || '';
               const testVal = field.startsWith('customData.')
                   ? specs.customData?.[field.split('.')[1]]

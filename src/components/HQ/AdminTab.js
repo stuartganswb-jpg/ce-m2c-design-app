@@ -671,7 +671,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // generated flow adapts to whatever you tagged (unknown positions fall through under their
       // own label; untagged collapse to a single base step).
       const POS_LABEL = { LEFT: 'Left', CENTER: 'Center', RIGHT: 'Right', '': '' };
-      const addPerPosition = (opts, base, { clone = false, subOpts = null, subLabel = '' } = {}) => {
+      const addPerPosition = (opts, base, { clone = false, subOpts = null, subLabel = '', stepRole = '' } = {}) => {
           const present = [...new Set(opts.map(o => o.position || ''))];
           const ordered = ['LEFT', 'CENTER', 'RIGHT', ''].filter(p => present.includes(p))
               .concat(present.filter(p => !['LEFT', 'CENTER', 'RIGHT', ''].includes(p)));
@@ -684,6 +684,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               add({
                   title: label ? `${label} ${base}` : base,
                   type: 'STYLE_SWAP', partHandling: 'Custom', required: false, finishDataSource: 'master_finishes',
+                  position: pos, ...(stepRole ? { stepRole } : {}),
                   ...(clone && pos === 'CENTER' ? { isCenterClone: true, qtyHelperText: 'Number of center passing brackets' } : {}),
                   styleOptions: group, geometryMap: geom(group),
                   ...(subs.length ? { subLabel, subOptions: subs, subGeometryMap: geom(subs) } : {}),
@@ -736,6 +737,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               add({
                   title: label ? `${label} End Treatment` : 'End Treatment',
                   type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, finishDataSource: 'master_finishes',
+                  // Picking a return here disables this side's outer bracket step (see CPQTab): the
+                  // return wraps to the wall, so center passing brackets (clone/multiply) carry the pole.
+                  position: pos, returnHidesBracket: true,
                   styleOptions: [...group,
                       { optId: `OPT-MITER-${sfx}`, partId: '', partName: 'Mitered Return (fee — set price)', targetNode: bendNodes, price: 0 },
                       { optId: `OPT-BEND-${sfx}`, partId: '', partName: 'Bent Return (fee — set price)', targetNode: bendNodes, price: 0 },
@@ -755,7 +759,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       const poleInc = takeIncluded(''); // shared/untagged hidden accessories ride the always-present pole step
       add({ title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, geometryMap: {}, targetNodes: poleNodes, ...(poleInc ? { includedParts: poleInc } : {}) });
       // Part-chooser steps are emitted only when they actually have options — 0-choice steps are skipped.
-      addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate' }); // adds nothing if brackets is empty
+      addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate', stepRole: 'BRACKET' }); // adds nothing if brackets is empty
       if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
       // End Treatment is ALWAYS emitted: even with 0 finials it carries the Mitered / Bent / Flush return
       // options that render the end shape (e.g. the French Return bend) and feed the fab math. Skipping it
@@ -772,7 +776,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               id: flowId, brandId: activeBrand, name: `${String(asm.itemName || 'HARDWARE').toUpperCase()} — GENERATED`,
               legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id,
               fabShape: bay.fabShape, fabEndStyle: bay.endStyle, fabProjection: '', defaultFinishOptions: [],
-              hiddenClusters: Object.entries(hiddenByPos).flatMap(([pos, arr]) => arr.map(a => ({ ...a, position: pos }))), steps
+              // Force-hidden meshes = every cluster tagged hidden (e.g. bushings), by cluster id — the
+              // runtime + the flow-settings hidden-clusters editor both key on cluster ids. (The BOM
+              // inclusion of those parts is handled separately via includedParts / hiddenByPos.)
+              hiddenClusters: (asm.nodeClusters || []).filter(c => c.hidden).map(c => c.id), steps
           }));
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;
