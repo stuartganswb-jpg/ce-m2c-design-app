@@ -642,7 +642,15 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       const finial = groupPlacements('FINIAL');
       const brackets = groupPlacements('BRACKET');
       const backplates = groupPlacements('BACKPLATE');
-      const poleNodes = pole.map(o => o.targetNode).filter(Boolean).join(', ');
+      // Split the pole: LEFT/RIGHT-tagged segments are END-POLE (bend vs straight) that must follow
+      // that end's End Treatment selection; everything else (CENTER / untagged / shared) is the main
+      // run that's always shown. This is what lets a french-return end and a finial end coexist —
+      // each end shows its own pole geometry instead of one global step-1 pole. End segments carry
+      // their geometry into the End Treatment step (see addEndTreatment); the center run stays on.
+      const isEndPos = (o) => ['LEFT', 'RIGHT'].includes((o.position || '').toUpperCase());
+      const centerPole = pole.filter(o => !isEndPos(o));
+      const endPole = pole.filter(o => isEndPos(o));
+      const poleNodes = centerPole.map(o => o.targetNode).filter(Boolean).join(', ');
       const rings = groupPlacements('RING');
       const ringNodes = rings.map(o => o.targetNode).filter(Boolean).join(', ');
 
@@ -687,23 +695,47 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // End Treatment per END position (Left/Right/...), each with that end's finials plus the
       // shared miter / bend / flush fee options, so each end is finished independently. With no
       // position-tagged finials it collapses to a single End Treatment (just the fee options).
-      const addEndTreatment = (opts) => {
-          const present = [...new Set(opts.map(o => o.position || ''))];
+      //
+      // endPoleOpts = the LEFT/RIGHT pole segments split off above. At each end we sort them into a
+      // BEND segment (name/tag says bend/return/miter/curve) vs a STRAIGHT (full-length) segment,
+      // then wire them into THIS step's geometryMap so the render follows the end's own selection:
+      //   • a finial or a Flush cut  → show the STRAIGHT (full) pole end (so the finial isn't left
+      //     floating on a short rod), plus the finial's own mesh.
+      //   • a Bent / Mitered return  → show the BEND pole end instead.
+      // Because visibilityOverrides hides any node listed in a geometryMap unless its option is the
+      // one selected, each end shows exactly its own pole geometry — mixed ends (finial + french
+      // return) now render correctly. Assemblies with no LEFT/RIGHT pole segments behave as before.
+      const BEND_RE = /bend|return|miter|mitre|curv|french|\bfr\b/i;
+      const addEndTreatment = (opts, endPoleOpts = []) => {
+          const present = [...new Set([...opts, ...endPoleOpts].map(o => o.position || ''))];
           const ordered = ['LEFT', 'CENTER', 'RIGHT', ''].filter(p => present.includes(p))
               .concat(present.filter(p => !['LEFT', 'CENTER', 'RIGHT', ''].includes(p)));
           (ordered.length ? ordered : ['']).forEach(pos => {
               const group = opts.filter(o => (o.position || '') === pos);
+              const ends = endPoleOpts.filter(o => (o.position || '') === pos);
+              const bendNodes = ends.filter(o => BEND_RE.test(`${o.partName || ''} ${o.optId || ''}`))
+                  .map(o => o.targetNode).filter(Boolean).join(', ');
+              const straightNodes = ends.filter(o => !BEND_RE.test(`${o.partName || ''} ${o.optId || ''}`))
+                  .map(o => o.targetNode).filter(Boolean).join(', ');
               const label = POS_LABEL[pos] !== undefined ? POS_LABEL[pos] : pos;
               const sfx = pos || 'X';
               const inc = takeIncluded(pos);
+              // Finials & Flush → straight (full) end; Bent/Mitered returns → bend end.
+              const gmap = {};
+              group.forEach(o => {
+                  const nodes = [o.targetNode, straightNodes].filter(Boolean).join(', ');
+                  if (nodes) gmap[o.optId] = nodes;
+              });
+              if (bendNodes) { gmap[`OPT-MITER-${sfx}`] = bendNodes; gmap[`OPT-BEND-${sfx}`] = bendNodes; }
+              if (straightNodes) gmap[`OPT-FLUSH-${sfx}`] = straightNodes;
               add({
                   title: label ? `${label} End Treatment` : 'End Treatment',
                   type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, finishDataSource: 'master_finishes',
                   styleOptions: [...group,
-                      { optId: `OPT-MITER-${sfx}`, partId: '', partName: 'Mitered Return (fee — set price)', targetNode: '', price: 0 },
-                      { optId: `OPT-BEND-${sfx}`, partId: '', partName: 'Bent Return (fee — set price)', targetNode: '', price: 0 },
-                      { optId: `OPT-FLUSH-${sfx}`, partId: '', partName: 'Flush Cut', targetNode: '', price: 0 }],
-                  geometryMap: geom(group),
+                      { optId: `OPT-MITER-${sfx}`, partId: '', partName: 'Mitered Return (fee — set price)', targetNode: bendNodes, price: 0 },
+                      { optId: `OPT-BEND-${sfx}`, partId: '', partName: 'Bent Return (fee — set price)', targetNode: bendNodes, price: 0 },
+                      { optId: `OPT-FLUSH-${sfx}`, partId: '', partName: 'Flush Cut', targetNode: straightNodes, price: 0 }],
+                  geometryMap: gmap,
                   ...(inc ? { includedParts: inc } : {})
               });
           });
@@ -711,7 +743,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
 
       // Step 1 = Pole/Rod MATERIAL chooser — ONLY when there's more than one material. With a single
       // material the choice is fixed, so it folds into the combined Length & Finish step below.
-      if (pole.length > 1) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, styleOptions: pole, geometryMap: geom(pole) });
+      if (centerPole.length > 1) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, styleOptions: centerPole, geometryMap: geom(centerPole) });
       // Length & Finish — always present (the core pole step; carries the pole geometry). When there's a
       // single material, this IS the combined "choose length + finish" step. The calculatorTemplate +
       // title follow the chosen bay configuration so the configurator math matches the flow's fabShape.
@@ -723,7 +755,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // End Treatment is ALWAYS emitted: even with 0 finials it carries the Mitered / Bent / Flush return
       // options that render the end shape (e.g. the French Return bend) and feed the fab math. Skipping it
       // when finials=0 was what broke the bay render — these are fee choices and must stay.
-      addEndTreatment(finial);
+      addEndTreatment(finial, endPole);
       if (rings.length) add({ title: 'Rings', type: 'STYLE_SWAP', partHandling: 'Small Parts', finishDataSource: 'master_finishes', qtyHelperText: 'Number of rings', styleOptions: rings, geometryMap: geom(rings) });
       // Fee steps — always kept, as-is.
       add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
@@ -740,7 +772,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;
           const bayLabel = { STRAIGHT: 'Straight Pole', FRENCH_RETURN: '1" French Return', MITERED: 'Mitered Bay', BOW: 'Curved Bay' }[genBayConfig] || genBayConfig;
-          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Bay configuration: ${bayLabel} → fabShape ${bay.fabShape} + ${bay.calc}\n• Pole materials: ${pole.length}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} (each position's plates are a 2nd chooser on its bracket step; ${looseBackplates.length} standalone)\n• Finials: ${finial.length} (End Treatment always emitted — carries the Miter/Bend/Flush return options)\n\n${pole.length <= 1 ? 'Single pole material → material + length/finish combined into ONE step. ' : ''}fabShape + pole calculator are kept in sync so Vision Hardware math matches. Review + set prices/projection, then test. Nothing was deleted.`);
+          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Bay configuration: ${bayLabel} → fabShape ${bay.fabShape} + ${bay.calc}\n• Pole materials (center run): ${centerPole.length}${endPole.length ? `\n• End-pole segments: ${endPole.length} → wired into the L/R End Treatment steps (bend vs straight follows each end's pick)` : ''}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} (each position's plates are a 2nd chooser on its bracket step; ${looseBackplates.length} standalone)\n• Finials: ${finial.length} (End Treatment always emitted — carries the Miter/Bend/Flush return options)\n\n${centerPole.length <= 1 ? 'Single pole material → material + length/finish combined into ONE step. ' : ''}fabShape + pole calculator are kept in sync so Vision Hardware math matches. Review + set prices/projection, then test. Nothing was deleted.`);
       } catch (err) { console.error("Generate failed:", err); alert("Generate failed: " + (err?.message || err)); }
   };
 
