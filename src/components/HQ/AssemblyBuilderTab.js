@@ -18,21 +18,51 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
 
 const DRACO = 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/';
 const CATEGORIES = ['POLE', 'RING', 'BRACKET', 'BACKPLATE', 'FINIAL', 'END', 'OTHER'];
-const POSITIONS = ['SHARED', 'LEFT', 'CENTER', 'RIGHT'];
+const POSITIONS = ['SHARED', 'LEFT', 'CENTER', 'RIGHT', 'FRONT', 'BACK'];
 const LOCATIONS = ['', 'WALL', 'CEILING', 'INSIDE', 'OPEN'];
 
-const DEFAULT_SLOTS = [
-    { id: 'pole', label: 'Pole', category: 'POLE', position: 'SHARED', location: '' },
-    { id: 'rings', label: 'Rings', category: 'RING', position: 'SHARED', location: '' },
-    { id: 'left_bracket', label: 'Left Bracket', category: 'BRACKET', position: 'LEFT', location: 'WALL' },
-    { id: 'left_backplate', label: 'Left Backplate', category: 'BACKPLATE', position: 'LEFT', location: 'WALL' },
-    { id: 'left_finial', label: 'Left Finial', category: 'FINIAL', position: 'LEFT', location: '' },
-    { id: 'center_bracket', label: 'Center Bracket', category: 'BRACKET', position: 'CENTER', location: 'WALL' },
-    { id: 'center_backplate', label: 'Center Backplate', category: 'BACKPLATE', position: 'CENTER', location: 'WALL' },
-    { id: 'right_bracket', label: 'Right Bracket', category: 'BRACKET', position: 'RIGHT', location: 'WALL' },
-    { id: 'right_backplate', label: 'Right Backplate', category: 'BACKPLATE', position: 'RIGHT', location: 'WALL' },
-    { id: 'right_finial', label: 'Right Finial', category: 'FINIAL', position: 'RIGHT', location: '' },
+// Two authoring workflows. Every slot is OPTIONAL — upload only what this assembly uses; the CPQ
+// flow is generated from the slots you actually fill. `desc` is the on-screen note explaining the
+// slot's role so the tagging matches how the generator + 3D engine read it.
+//
+// STANDARD BAY — the per-end pole model: a SHORT rod tagged CENTER (always shown, carries the
+// french-return ends) plus the LONG rod split at center into a LEFT half and a RIGHT half. Each end's
+// finial/return choices stack in that end's FINIAL slot; naming a choice with "return"/"french"/etc.
+// makes the generator hide that side's long half so the return renders short. (See System Admin →
+// Generate; this is the mixed-end fix.)
+const STANDARD_SLOTS = [
+    { id: 'short_rod', label: 'Short Rod — center (always shown)', category: 'POLE', position: 'CENTER', location: '', desc: 'The short french-return-length rod. Always visible — it carries the return ends. Tag position CENTER.' },
+    { id: 'long_left', label: 'Long Rod — LEFT half', category: 'POLE', position: 'LEFT', location: '', desc: 'Left half of the full-length rod (split at center). Auto-hidden when the LEFT end is a return, shown for a finial.' },
+    { id: 'long_right', label: 'Long Rod — RIGHT half', category: 'POLE', position: 'RIGHT', location: '', desc: 'Right half of the full-length rod (split at center). Auto-hidden when the RIGHT end is a return, shown for a finial.' },
+    { id: 'rings', label: 'Rings', category: 'RING', position: 'SHARED', location: '', desc: 'Optional decorative rings.' },
+    { id: 'left_bracket', label: 'Left Bracket', category: 'BRACKET', position: 'LEFT', location: 'WALL', desc: 'Left mounting bracket. Stack mount variants (wall/ceiling) inside as choices.' },
+    { id: 'left_backplate', label: 'Left Backplate', category: 'BACKPLATE', position: 'LEFT', location: 'WALL', desc: 'Rides as a 2nd chooser on the left bracket step.' },
+    { id: 'center_bracket', label: 'Center Bracket', category: 'BRACKET', position: 'CENTER', location: 'WALL', desc: 'Center / passing bracket(s).' },
+    { id: 'center_backplate', label: 'Center Backplate', category: 'BACKPLATE', position: 'CENTER', location: 'WALL', desc: '2nd chooser on the center bracket step.' },
+    { id: 'right_bracket', label: 'Right Bracket', category: 'BRACKET', position: 'RIGHT', location: 'WALL', desc: 'Right mounting bracket.' },
+    { id: 'right_backplate', label: 'Right Backplate', category: 'BACKPLATE', position: 'RIGHT', location: 'WALL', desc: 'Rides as a 2nd chooser on the right bracket step.' },
+    { id: 'left_end', label: 'Left End — finials + returns', category: 'FINIAL', position: 'LEFT', location: '', desc: 'Stack ALL left-end choices in one file: finials + french/bent/mitered returns. Name the return choices with "return"/"french" so they hide the left long half.' },
+    { id: 'right_end', label: 'Right End — finials + returns', category: 'FINIAL', position: 'RIGHT', location: '', desc: 'Stack ALL right-end choices: finials + returns. Name returns with "return"/"french" so they hide the right long half.' },
 ];
+
+// DOUBLE BRACKET — same idea, but the bracket carries TWO rows: a FRONT pole+finials and a BACK
+// pole+finials. Both rows are always shown (no left/right pole split here); each row's finial choices
+// stack in its FINIAL slot. Positions FRONT/BACK keep the two rows as separate generated steps.
+const DOUBLE_SLOTS = [
+    { id: 'dbl_left_bracket', label: 'Left Double Bracket', category: 'BRACKET', position: 'LEFT', location: 'WALL', desc: 'Left bracket that holds both the front and back rods. Stack mount variants as choices.' },
+    { id: 'dbl_center_bracket', label: 'Center Double Bracket', category: 'BRACKET', position: 'CENTER', location: 'WALL', desc: 'Optional center / passing double bracket.' },
+    { id: 'dbl_right_bracket', label: 'Right Double Bracket', category: 'BRACKET', position: 'RIGHT', location: 'WALL', desc: 'Right bracket that holds both rods.' },
+    { id: 'front_pole', label: 'Front Pole', category: 'POLE', position: 'FRONT', location: '', desc: 'The front-row rod. Always shown. Stack material/length choices inside.' },
+    { id: 'front_finials', label: 'Front Finials', category: 'FINIAL', position: 'FRONT', location: '', desc: 'Front-row finial choices (both ends). Stack all options in one file.' },
+    { id: 'back_pole', label: 'Back Pole', category: 'POLE', position: 'BACK', location: '', desc: 'The back-row rod. Always shown. Stack material/length choices inside.' },
+    { id: 'back_finials', label: 'Back Finials', category: 'FINIAL', position: 'BACK', location: '', desc: 'Back-row finial choices (both ends). Stack all options in one file.' },
+    { id: 'dbl_rings', label: 'Rings', category: 'RING', position: 'SHARED', location: '', desc: 'Optional decorative rings (either row).' },
+];
+
+const TEMPLATES = {
+    standard: { label: 'Standard Bay', hint: 'Per-end pole: short center rod + long rod split into L/R halves; returns hide their half.', slots: STANDARD_SLOTS },
+    double: { label: 'Double Bracket', hint: 'Two rows on one bracket: front pole + finials and back pole + finials.', slots: DOUBLE_SLOTS },
+};
 
 // One shared loader (Draco-enabled) for parsing + merge.
 const makeLoader = () => {
@@ -52,7 +82,8 @@ const allNodeNames = (obj) => { const n = []; obj.traverse(o => { if (o.name) n.
 
 function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [assemblyName, setAssemblyName] = useState('');
-    const [slots, setSlots] = useState(DEFAULT_SLOTS.map(s => ({ ...s })));
+    const [template, setTemplate] = useState('standard');
+    const [slots, setSlots] = useState(TEMPLATES.standard.slots.map(s => ({ ...s })));
     // per-slot layer: { scene, url, fileName, parts:[], items:{part:itemNo}, offset:{x,y,z} }
     const [layers, setLayers] = useState({});
     const [busy, setBusy] = useState('');
@@ -86,9 +117,20 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const setItem = (slotId, part, val) => setLayers(prev => ({ ...prev, [slotId]: { ...prev[slotId], items: { ...prev[slotId].items, [part]: val } } }));
     const nudge = (slotId, axis, val) => setLayers(prev => ({ ...prev, [slotId]: { ...prev[slotId], offset: { ...prev[slotId].offset, [axis]: Number(val) || 0 } } }));
     const removeLayer = (slotId) => setLayers(prev => { const n = { ...prev }; if (n[slotId]?.url) URL.revokeObjectURL(n[slotId].url); delete n[slotId]; return n; });
-    const addSlot = () => setSlots(s => [...s, { id: `slot_${Date.now()}`, label: 'New Slot', category: 'OTHER', position: 'SHARED', location: '' }]);
+    const addSlot = () => setSlots(s => [...s, { id: `slot_${Date.now()}`, label: 'New Slot', category: 'OTHER', position: 'SHARED', location: '', desc: '' }]);
     const patchSlot = (id, patch) => setSlots(s => s.map(x => x.id === id ? { ...x, ...patch } : x));
     const removeSlot = (id) => { removeLayer(id); setSlots(s => s.filter(x => x.id !== id)); };
+
+    // Switch workflow template. If anything's already uploaded, confirm first (uploads are cleared
+    // because the new template's slots have different ids). Nothing here touches saved data.
+    const switchTemplate = (key) => {
+        if (key === template) return;
+        if (Object.keys(layers).length && !window.confirm(`Switch to the "${TEMPLATES[key].label}" workflow? This resets the slots and clears the ${Object.keys(layers).length} file(s) you've uploaded (nothing saved is affected).`)) return;
+        Object.values(layers).forEach(l => l.url && URL.revokeObjectURL(l.url));
+        setLayers({});
+        setTemplate(key);
+        setSlots(TEMPLATES[key].slots.map(s => ({ ...s })));
+    };
 
     const filledSlots = slots.filter(s => layers[s.id]);
 
@@ -166,6 +208,21 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 <input value={assemblyName} onChange={e => setAssemblyName(e.target.value)} placeholder="Assembly name / item #…" style={{ ...inp, minWidth: '260px' }} />
             </div>
 
+            {/* Workflow template picker — swaps the slot scaffold. Every slot is optional. */}
+            <div style={{ ...card, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                <span style={lbl}>Workflow</span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    {Object.entries(TEMPLATES).map(([key, t]) => (
+                        <button key={key} onClick={() => switchTemplate(key)}
+                            style={{ padding: '8px 14px', border: `1px solid ${template === key ? 'var(--ink)' : 'var(--line)'}`, background: template === key ? 'var(--ink)' : '#fff', color: template === key ? '#fff' : 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', borderRadius: '2px' }}>
+                            {t.label}
+                        </button>
+                    ))}
+                </div>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', flex: 1, minWidth: '220px' }}>{TEMPLATES[template].hint}</span>
+                <span style={{ ...lbl, color: 'var(--brass)' }}>Every slot optional — upload only what's used; the flow builds from filled slots</span>
+            </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: '18px', alignItems: 'start' }}>
                 {/* LEFT: slot uploader */}
                 <div style={{ ...card, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '78vh', overflowY: 'auto' }}>
@@ -184,6 +241,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                     <select value={slot.location} onChange={e => patchSlot(slot.id, { location: e.target.value })} style={sel}>{LOCATIONS.map(c => <option key={c} value={c}>{c || '—'}</option>)}</select>
                                     <button onClick={() => removeSlot(slot.id)} title="Remove slot" style={{ border: 'none', background: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.1rem' }}>×</button>
                                 </div>
+                                {slot.desc && (
+                                    <div style={{ marginTop: '6px', fontFamily: 'var(--sans)', fontSize: '0.78rem', lineHeight: 1.4, color: 'var(--ink-soft)' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.1em', textTransform: 'uppercase', color: layer ? 'var(--brass)' : 'var(--ink-soft)', border: '1px solid var(--line)', borderRadius: '2px', padding: '1px 5px', marginRight: '7px', whiteSpace: 'nowrap' }}>optional</span>
+                                        {slot.desc}
+                                    </div>
+                                )}
                                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '8px' }}>
                                     <label style={{ ...sel, cursor: 'pointer', background: 'var(--ink)', color: '#fff', textTransform: 'uppercase' }}>
                                         {busy === slot.id ? 'Loading…' : (layer ? 'Replace .glb' : 'Upload .glb')}
