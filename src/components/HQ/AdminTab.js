@@ -743,9 +743,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               add({
                   title: label ? `${label} End Treatment` : 'End Treatment',
                   type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, finishDataSource: 'master_finishes',
-                  // Picking a return here disables this side's outer bracket step (see CPQTab): the
-                  // return wraps to the wall, so center passing brackets (clone/multiply) carry the pole.
-                  position: pos, returnHidesBracket: true,
+                  // position lets an option flagged "hides bracket" (ticked per option in the step editor)
+                  // disable THIS side's outer Bracket & Mount step in CPQTab. Off by default — a return
+                  // that still needs its bracket/backplate (e.g. french-return backplates) keeps the step.
+                  position: pos,
                   styleOptions: [...group,
                       { optId: `OPT-MITER-${sfx}`, partId: '', partName: 'Mitered Return (fee — set price)', targetNode: bendNodes, price: 0 },
                       { optId: `OPT-BEND-${sfx}`, partId: '', partName: 'Bent Return (fee — set price)', targetNode: bendNodes, price: 0 },
@@ -789,30 +790,37 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // price, rollup, finishes) is left untouched — only steps + hiddenClusters + bayConfig change.
       if (inPlaceFlowId && oldFlow) {
           const norm = (s) => String(s == null ? '' : s).trim().toUpperCase();
-          const priceByKey = {}; const feeByTitle = {};
+          // Preserve everything the CPQ author set per option that the generator doesn't itself emit:
+          // price, layer Z, per-option projection (Vision), the hides-bracket flag, and per-style finish
+          // scoping. Matched by (step title || optId) — both are stable across regenerations.
+          const USER_OPT_FIELDS = ['price', 'layerZ', 'projection', 'hidesBracket', 'finishAllowedOptions'];
+          const oldOptByKey = {}; const feeByTitle = {};
           (oldFlow.steps || []).forEach(s => {
               const t = norm(s.title);
               [...(s.styleOptions || []), ...(s.subOptions || [])].forEach(o => {
                   const k = o && (o.optId || o.partId);
-                  if (k != null && o.price !== undefined) priceByKey[`${t}||${k}`] = o.price;
+                  if (k != null) oldOptByKey[`${t}||${k}`] = o;
               });
               if (s.type === 'STATIC_FEE' && s.basePrice !== undefined) feeByTitle[t] = s.basePrice;
           });
-          const applyPrices = (opts, t) => (opts || []).map(o => {
-              const k = `${t}||${o.optId || o.partId}`;
-              return (k in priceByKey) ? { ...o, price: priceByKey[k] } : o;
+          const applyUser = (opts, t) => (opts || []).map(o => {
+              const old = oldOptByKey[`${t}||${o.optId || o.partId}`];
+              if (!old) return o;
+              const merged = { ...o };
+              USER_OPT_FIELDS.forEach(f => { if (old[f] !== undefined) merged[f] = old[f]; });
+              return merged;
           });
           const mergedSteps = steps.map(s => {
               const t = norm(s.title);
               const next = { ...s };
-              if (next.styleOptions) next.styleOptions = applyPrices(next.styleOptions, t);
-              if (next.subOptions) next.subOptions = applyPrices(next.subOptions, t);
+              if (next.styleOptions) next.styleOptions = applyUser(next.styleOptions, t);
+              if (next.subOptions) next.subOptions = applyUser(next.subOptions, t);
               if (next.type === 'STATIC_FEE' && feeByTitle[t] !== undefined) next.basePrice = feeByTitle[t];
               return next;
           });
           try {
               await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig }));
-              alert(`✅ Regenerated "${oldFlow.name}" in place — ${mergedSteps.length} steps rebuilt from current tags + latest generator logic.\n\nPrices carried over where the option still exists (${Object.keys(priceByKey).length} priced entr${Object.keys(priceByKey).length === 1 ? 'y' : 'ies'} matched). Flow settings (name, IDs, fab shape/projection, rollup) left untouched. Review any new/changed steps, set prices on anything new, then test.`);
+              alert(`✅ Regenerated "${oldFlow.name}" in place — ${mergedSteps.length} steps rebuilt from current tags + latest generator logic.\n\nCarried over your per-option settings (price, projection, layer, hides-bracket, finishes) where the option still exists (${Object.keys(oldOptByKey).length} option(s) matched). Flow settings (name, IDs, fab shape/projection, rollup) left untouched. Review any new/changed steps, set prices on anything new, then test.`);
           } catch (err) { console.error("Regenerate failed:", err); alert("Regenerate failed: " + (err?.message || err)); }
           return;
       }
@@ -1913,6 +1921,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                                                         : <span style={{ width: '34px', height: '34px', flexShrink: 0, border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)' }}>no img</span>}
                                                                     <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--ink)' }}>{o.partName || okey}</span>
                                                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{(o.price !== undefined && o.price !== '' && o.price !== null) ? `$${o.price}` : ''}</span>
+                                                                    <label title="When this option is the customer's pick, hide this step's position outer Bracket & Mount step (e.g. a french return that replaces the end bracket). Leave OFF to keep the bracket step — e.g. when you still offer french-return backplates there." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: o.hidesBracket ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                                        <input type="checkbox" checked={!!o.hidesBracket} onChange={(e) => setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(x => (x.optId || x.partId) === okey ? { ...x, hidesBracket: e.target.checked } : x) }))} style={{ cursor: 'pointer' }} />
+                                                                        hides bracket
+                                                                    </label>
                                                                     <button onClick={() => setNewStep(prev => { const opts = (prev.styleOptions || []).filter(x => (x.optId || x.partId) !== okey); const geometryMap = {}; opts.forEach(x => { geometryMap[x.optId || x.partId] = x.targetNode; }); return { ...prev, styleOptions: opts, geometryMap }; })} title="Remove this option" style={{ background: 'transparent', border: 'none', color: '#d9534f', fontSize: '1.1rem', lineHeight: 1, cursor: 'pointer', padding: '0 6px' }}>×</button>
                                                                 </div>
                                                             );

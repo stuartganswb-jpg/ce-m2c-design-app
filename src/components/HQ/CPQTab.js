@@ -865,25 +865,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   useEffect(() => {
       let newFlags = { disabledSteps: [], warnings: [] };
 
-      // Cross-step rule (runs with or without part-field cpqRules): a french / bent / mitered RETURN
-      // chosen on an end removes THAT end's OUTER bracket choice — the return wraps back to the wall,
-      // so there's no end bracket; the center passing bracket(s) (clone/multiply) carry the pole. The
-      // generator tags End Treatment steps with returnHidesBracket + position and bracket steps with
-      // stepRole:'BRACKET' + position, so we disable the same-side bracket step by title. Disabling
-      // clears its selection downstream → it drops from price, BOM, and the 3D render.
-      const RETURN_RE = /bend|return|miter|mitre|curv|french|\bfr\b/i;
+      // Flag-driven cross-step rule (runs with or without part-field cpqRules): an option flagged
+      // `hidesBracket` removes the outer bracket step for its position when it's the current selection
+      // — e.g. a french/bent return that wraps to the wall so there's no end bracket (center passing
+      // brackets, clone/multiply, carry the pole). It is NOT automatic: the CPQ author ticks "hides
+      // bracket" per option in the step editor, so a return that still needs its bracket/backplate
+      // keeps the step. Disables same-position BRACKET steps (all bracket steps if the step is
+      // unpositioned). Disabling clears the selection downstream → drops from price, BOM, 3D render.
       (activeFlow?.steps || []).forEach(step => {
-          if (!step.returnHidesBracket) return;
-          const pos = (step.position || '').toUpperCase();
-          if (!['LEFT', 'RIGHT'].includes(pos)) return;
           const sel = dynamicConfigParams[step.id];
           if (!sel) return;
           const opt = (step.styleOptions || []).find(o => (o.optId || o.partId) === sel);
-          const isReturn = /^OPT-(BEND|MITER)/i.test(sel) || (opt && RETURN_RE.test(`${opt.partName || ''} ${opt.optId || ''}`));
-          if (!isReturn) return;
+          if (!opt || !opt.hidesBracket) return;
+          const pos = (step.position || '').toUpperCase();
           (activeFlow?.steps || []).forEach(bs => {
-              if (bs.stepRole === 'BRACKET' && (bs.position || '').toUpperCase() === pos && !newFlags.disabledSteps.includes(bs.title))
-                  newFlags.disabledSteps.push(bs.title);
+              if (bs.stepRole !== 'BRACKET') return;
+              if (pos && (bs.position || '').toUpperCase() !== pos) return;
+              if (!newFlags.disabledSteps.includes(bs.title)) newFlags.disabledSteps.push(bs.title);
           });
       });
 
