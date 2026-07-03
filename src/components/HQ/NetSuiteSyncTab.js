@@ -308,6 +308,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         item.custitem28 AS is_old,
                         BUILTIN.DF(item.stockunit) AS uom,
                         item.averagecost AS base_cost,
+                        pl1.unitprice AS base_price,
                         Vendor.companyname AS vendor_name,
                         ItemVendor.vendorcode AS vendor_part_number,
                         ItemVendor.preferredvendor,
@@ -325,7 +326,9 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id
                     LEFT JOIN InventoryBalance ON InventoryBalance.item = item.id
                     LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
-                    
+                    /* Base Price = the standard "Base Price" price level (internal id 1) → the sales price */
+                    LEFT JOIN pricing pl1 ON pl1.item = item.id AND pl1.pricelevel = 1
+
                     /* ADVANCED BOM RELATIONAL JOINS - CLEANED */
                     LEFT JOIN assemblyitembom ON assemblyitembom.assembly = item.id
                     LEFT JOIN bom ON bom.id = assemblyitembom.billofmaterials
@@ -492,11 +495,17 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     vendorName: item.vendor_name || '', 
                     vendorId: item.vendor_part_number || '', 
                     customData: {
-                        collection: item.collection || '', 
+                        collection: item.collection || '',
                         watchlist: item.watchlist || '',
                         projection: item.projection || ''
                     }
                 };
+
+                // Sales price = NetSuite's standard "Base Price" price level (pricelevel 1). Only set it
+                // when NetSuite actually has a price, so a re-import never wipes a curated price back to 0
+                // for the ~1,265 items that carry no Base Price in NetSuite. When present, NetSuite wins.
+                const nsBasePrice = parseFloat(item.base_price);
+                if (Number.isFinite(nsBasePrice) && nsBasePrice > 0) newSpecs.basePrice = nsBasePrice;
 
                 if (existingAppRecord) {
                     const existingSpecs = existingAppRecord.manufacturingSpecs || {};
