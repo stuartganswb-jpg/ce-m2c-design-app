@@ -4,6 +4,7 @@ import { mergeWindowConfig } from './systemWindows';
 import { collection, onSnapshot, query, where, doc, updateDoc, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
 import { loadGLBScene, snapshotPNG } from '../Shared/componentExport';
+import { generateOnboardingXlsx } from '../Shared/onboardingXlsx';
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -41,6 +42,13 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [collectionsData, setCollectionsData] = useState([]);
   
   const [customersData, setCustomersData] = useState([]);
+  // Onboarding price-list export: finishes (for the "across the top" band), CPQ flows (to know which
+  // finishes are tagged for the assembly), brand logos (branding), + the export's own customer pick.
+  const [globalFinishes, setGlobalFinishes] = useState([]);
+  const [cpqFlows, setCpqFlows] = useState([]);
+  const [brandLogos, setBrandLogos] = useState({});
+  const [onboardCustomerId, setOnboardCustomerId] = useState("");
+  const [onboarding, setOnboarding] = useState(false);
 
   const [activeComponent, setActiveComponent] = useState(null);
   const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, cpqCategories: [], collections: [], clientPricing: [], sharedBrands: [], bomRevision: "" });
@@ -107,7 +115,13 @@ const BOMTab = ({ currentUser, activeBrand }) => {
         setCustomersData(onlyCustomers);
     });
 
-    return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); unsubAssets(); unsubCollections(); unsubCustomers(); };
+    // For the onboarding sheet: master finishes (code/name/texture), CPQ flows (which finishes are
+    // tagged per assembly), and the per-brand logo.
+    const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (snap) => { if (snap.exists() && snap.data().finishes) setGlobalFinishes(snap.data().finishes); });
+    const unsubFlows = onSnapshot(collection(db, "cpq_flows"), snap => setCpqFlows(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubLogos = onSnapshot(doc(db, "hq_config", "brand_logos"), (snap) => { if (snap.exists()) setBrandLogos(snap.data()); });
+
+    return () => { unsubSchema(); unsubLists(); unsubWindowConfig(); unsubAssets(); unsubCollections(); unsubCustomers(); unsubFinishes(); unsubFlows(); unsubLogos(); };
   }, []);
 
   useEffect(() => {
@@ -284,6 +298,66 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       const masterPart = libraryParts.find(p => p.id === pin.partId || p.legacyErpId === pin.partId || p.itemId === pin.partId || p.netSuiteInternalId == pin.partId);
       return { ...pin, masterPart: masterPart || null };
   });
+
+  // Build + download the customer onboarding / price-list .xlsx for the selected main assembly.
+  // Items come from the assembly's BOM pins → library parts; category + hidden come from its
+  // nodeClusters; the finish band comes from the assembly's CPQ flow(s). A chosen customer fills the
+  // per-customer id / SKU / price columns from each part's clientPricing.
+  const handleGenerateOnboarding = async () => {
+      if (!selectedAssemblyData) return alert("Select a main assembly first.");
+      setOnboarding(true);
+      try {
+          const asm = selectedAssemblyData;
+          const clusterById = {}; (asm.nodeClusters || []).forEach(c => { clusterById[c.id] = c; });
+          const classify = (raw) => { const t = String(raw || '').toUpperCase(); if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE'; if (t.includes('BRACKET')) return 'BRACKET'; if (t.includes('FINIAL')) return 'FINIAL'; if (t.includes('RING')) return 'RING'; if (t.includes('POLE') || t.includes('ROD')) return 'POLE'; if (t.includes('END')) return 'END'; return 'OTHER'; };
+          // One row per unique item (a part repeated across positions lists once); skip hidden + retired.
+          const byPart = {};
+          (bomPins || []).forEach(pin => {
+              const cl = pin.clusterId ? clusterById[pin.clusterId] : null;
+              if (cl && cl.hidden) return;
+              const part = libraryParts.find(p => p.id === pin.partId || p.legacyErpId === pin.partId || p.itemId === pin.partId || p.netSuiteInternalId == pin.partId);
+              if (!part || part.manufacturingSpecs?.isRetired) return;
+              const key = part.id || part.legacyErpId || pin.partId;
+              if (byPart[key]) return;
+              const cp = (part.clientPricing || []).find(x => x.customerId === onboardCustomerId);
+              byPart[key] = {
+                  cat: classify(cl?.category || part.manufacturingSpecs?.productType || part.productType),
+                  thumbnailUrl: part.finalImageUrl || part.componentImageUrl || part.manufacturingSpecs?.finalImageUrl || '',
+                  erpId: (part.legacyErpId && part.legacyErpId !== 'PENDING') ? part.legacyErpId : (part.itemId || ''),
+                  description: part.itemName || '',
+                  salesPrice: part.manufacturingSpecs?.basePrice,
+                  customerSku: cp?.clientSku || '',
+                  customerPrice: cp?.price,
+              };
+          });
+          const items = Object.values(byPart);
+          if (!items.length) return alert("No sellable items found for this assembly (after removing hidden/retired). Check its BOM pins + Node-Grouping tags.");
+          const ORDER = [['POLE', 'Poles / Rods'], ['FINIAL', 'Finials'], ['RING', 'Rings'], ['BRACKET', 'Brackets'], ['BACKPLATE', 'Backplates'], ['END', 'End Treatments'], ['OTHER', 'Other Hardware']];
+          const groups = ORDER.map(([cat, label]) => ({ label, items: items.filter(i => i.cat === cat).sort((a, b) => String(a.erpId).localeCompare(String(b.erpId))) })).filter(g => g.items.length);
+          // Finishes tagged on this assembly's flow(s); if nothing is explicitly restricted, all apply.
+          const flows = cpqFlows.filter(f => f.linkedAssemblyId === asm.id || f.linkedAssemblyId === asm.itemId);
+          const finishIds = new Set();
+          flows.forEach(f => {
+              (f.defaultFinishOptions || []).forEach(id => finishIds.add(id));
+              (f.steps || []).forEach(s => { (s.finishAllowedOptions || []).forEach(id => finishIds.add(id)); (s.styleOptions || []).forEach(o => (o.finishAllowedOptions || []).forEach(id => finishIds.add(id))); });
+          });
+          let finishes = [...finishIds].map(id => { const fn = globalFinishes.find(g => g.id === id); return fn ? { code: fn.code, name: fn.name } : null; }).filter(Boolean);
+          if (!finishes.length) finishes = globalFinishes.map(g => ({ code: g.code, name: g.name }));
+          finishes.sort((a, b) => String(a.code || a.name).localeCompare(String(b.code || b.name)));
+          const brand = AVAILABLE_BRANDS.find(b => b.id === activeBrand);
+          const cust = onboardCustomerId ? customersData.find(c => c.id === onboardCustomerId) : null;
+          await generateOnboardingXlsx({
+              brandName: brand?.name || (activeBrand || '').toUpperCase(),
+              logoUrl: brandLogos[activeBrand] || '',
+              assemblyName: asm.itemName || asm.itemId || 'Assembly',
+              assemblyErpId: (asm.legacyErpId && asm.legacyErpId !== 'PENDING') ? asm.legacyErpId : '',
+              finishes, groups,
+              customer: cust ? { id: cust.id, name: cust.companyName || cust.name || cust.id } : null,
+              fileName: `${(brand?.name || activeBrand || 'brand').replace(/[^a-z0-9]/gi, '_')}_${(asm.itemName || asm.itemId || 'assembly').replace(/[^a-z0-9]/gi, '_')}_onboarding.xlsx`,
+          });
+      } catch (e) { console.error("Onboarding export failed", e); alert("Onboarding export failed: " + (e?.message || e)); }
+      setOnboarding(false);
+  };
 
   const openComponentEditor = (bomItem) => {
       if (!bomItem.masterPart) return alert("Master part not found. It may have been deleted.");
@@ -775,8 +849,26 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     )}
                                 </div>
 
+                                {/* Customer onboarding / price-list export — one branded .xlsx for this assembly. */}
+                                <div style={{ background: 'var(--paper)', border: '1px solid var(--brass)', borderRadius: '2px', padding: '18px 20px', marginBottom: '30px', display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                                    <div style={{ flex: 1, minWidth: '220px' }}>
+                                        <label style={{ ...labelStyle, color: 'var(--brass)' }}>Customer Onboarding Sheet</label>
+                                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>Branded price list of this assembly's items (thumbnail · ERP id · description · price), grouped by tag, with the configurator's finishes across the top. Hidden-tagged parts are omitted.</span>
+                                    </div>
+                                    <div style={{ minWidth: '220px' }}>
+                                        <label style={labelStyle}>Customer pricing (optional)</label>
+                                        <select value={onboardCustomerId} onChange={e => setOnboardCustomerId(e.target.value)} style={fieldStyle}>
+                                            <option value="">List price only</option>
+                                            {customersData.map(c => <option key={c.id} value={c.id}>{(c.companyName || c.name || c.id)}</option>)}
+                                        </select>
+                                    </div>
+                                    <button onClick={handleGenerateOnboarding} disabled={onboarding} style={{ padding: '11px 22px', background: onboarding ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', border: 'none', cursor: onboarding ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                                        {onboarding ? '⚙ Building…' : '⬇ Generate Excel'}
+                                    </button>
+                                </div>
+
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
-                                    
+
                                     <div>
                                         <h4 style={sectionHeaderStyle}>Parent Assembly Details</h4>
                                         
