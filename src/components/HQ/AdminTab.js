@@ -603,6 +603,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       try { const snap = await getDocs(query(collection(db, "assembly_pins"), where("assemblyId", "==", asm.itemId))); pins = snap.docs.map(d => d.data()); } catch (e) { console.warn("pin load failed", e); }
       const pinByCluster = {};
       pins.forEach(p => { if (p.clusterId) pinByCluster[p.clusterId] = p; });
+      // ALL pins per cluster — Assembly-Builder clusters stack many CHOICES in one cluster, each with
+      // its own pin + choiceNode; the generator fans those out into one option per choice (below).
+      const pinsByCluster = {};
+      pins.forEach(p => { if (p.clusterId) (pinsByCluster[p.clusterId] = pinsByCluster[p.clusterId] || []).push(p); });
       const partsById = {};
       allApprovedDesigns.forEach(p => { partsById[p.id] = p; if (p.itemId) partsById[p.itemId] = p; if (p.legacyErpId) partsById[p.legacyErpId] = p; });
       const classifyCat = (pt) => { const t = String(pt || '').toUpperCase(); if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE'; if (t.includes('BRACKET')) return 'BRACKET'; if (t.includes('FINIAL')) return 'FINIAL'; if (t.includes('RING')) return 'RING'; if (t.includes('POLE') || t.includes('ROD')) return 'POLE'; return ''; };
@@ -628,16 +632,31 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // De-union: each distinct (part, position, location) placement is its OWN option, so the
       // position splits you make in Node Grouping are never merged back together. Each option
       // carries its position + location tags so steps can be organized per position.
+      const mkOpt = (map, cat, partId, partName, position, location) => {
+          const key = [partId, position, location].join('|');
+          return map[key] = map[key] || { optId: `OPT-${cat}-${String(partId).replace(/[^A-Za-z0-9]/g, '').slice(0, 28)}-${position || 'X'}-${location || 'X'}`, partId, partName, position, location, nodes: new Set() };
+      };
       const groupPlacements = (cat, filterFn) => {
           const map = {};
           clusters.filter(c => catOf(c) === cat && (!filterFn || filterFn(c))).forEach(cl => {
-              const pin = pinByCluster[cl.id];
-              const partId = pin?.partId || cl.name;
-              const partName = pin?.partName || cl.name;
               const position = (cl.position || '').toUpperCase();
               const location = (cl.location || '').toUpperCase();
-              const key = [partId, position, location].join('|');
-              const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(partId).replace(/[^A-Za-z0-9]/g, '').slice(0, 28)}-${position || 'X'}-${location || 'X'}`, partId, partName, position, location, nodes: new Set() };
+              // Assembly-Builder cluster = many choices stacked in one cluster, each pin carrying its
+              // own choiceNode (that choice's node subtree). Fan those out to ONE option per choice so
+              // the configurator offers Ball Finial / End Cap / French Return… instead of one lumped
+              // "FINIALS+RETURNS" option — each choice shows only its own geometry (choiceNode controls
+              // its whole subtree by ancestor match). ≥2 choice pins = Assembly-Builder cluster.
+              const choicePins = (pinsByCluster[cl.id] || []).filter(p => p.choiceNode && String(p.choiceNode).trim());
+              if (choicePins.length >= 2) {
+                  choicePins.forEach(p => {
+                      const e = mkOpt(map, cat, p.partId || cl.name, p.partName || p.partId || cl.name, position, location);
+                      e.nodes.add(String(p.choiceNode).trim());
+                  });
+                  return;
+              }
+              // Legacy / single-choice cluster → one option for the whole cluster (unchanged).
+              const pin = pinByCluster[cl.id];
+              const e = mkOpt(map, cat, pin?.partId || cl.name, pin?.partName || cl.name, position, location);
               (cl.nodes || cl.meshes || []).forEach(n => { if (n) e.nodes.add(n); });
           });
           return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0 }));
