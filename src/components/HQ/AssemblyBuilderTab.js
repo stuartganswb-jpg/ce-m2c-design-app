@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
+import { buildCodeIndex, matchItemByName } from '../Shared/itemCodeMatch';
 
 // Step-by-step assembly builder: the designer uploads ONE .glb per slot (all the choices for that slot
 // stacked inside the file). We KNOW each slot's position/category/location, so there's nothing to
@@ -96,6 +97,15 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [assignBusy, setAssignBusy] = useState(false);
     const loaderRef = useRef(null);
     if (!loaderRef.current) loaderRef.current = makeLoader();
+    // Master-Library ERP-code index for auto-matching item #s from node names (designer's convention:
+    // node name = "<ITEM#> <POSITION>"). Fetched once, cached for the session.
+    const codeIndexRef = useRef(null);
+    const ensureCodeIndex = async () => {
+        if (codeIndexRef.current) return codeIndexRef.current;
+        const snap = await getDocs(collection(db, 'Approved_Designs'));
+        codeIndexRef.current = buildCodeIndex(snap.docs.map(d => { const x = d.data(); return { legacyErpId: x.legacyErpId, itemId: x.itemId }; }));
+        return codeIndexRef.current;
+    };
 
     const addLog = (m, t = 'info') => setLog(p => [{ t: new Date().toLocaleTimeString(), m, type: t }, ...p].slice(0, 40));
 
@@ -118,12 +128,16 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
             const scene = gltf.scene;
             const parts = topLevelParts(scene);
-            const items = {}; parts.forEach(p => { items[p] = ''; });
+            // Auto-prefill each choice's item # from the Master Library by node name ("<ITEM#> <POS>"
+            // convention) — the designer's naming does the data entry; hardware matches nothing → blank.
+            const index = await ensureCodeIndex().catch(() => null);
+            const items = {}; let hit = 0;
+            parts.forEach(p => { const m = index ? matchItemByName(p, index) : null; items[p] = m ? m.code : ''; if (m) hit++; });
             setLayers(prev => {
                 if (prev[slot.id]?.url) URL.revokeObjectURL(prev[slot.id].url);
                 return { ...prev, [slot.id]: { scene, url, fileName: file.name, parts, items, offset: { x: 0, y: 0, z: 0 } } };
             });
-            addLog(`Loaded ${slot.label}: ${file.name} — ${parts.length} part(s)`, 'success');
+            addLog(`Loaded ${slot.label}: ${file.name} — ${parts.length} part(s), ${hit} item #(s) auto-matched`, 'success');
         } catch (e) { addLog(`Failed to load ${file.name}: ${e.message || e}`, 'error'); alert('Could not read that .glb:\n' + (e.message || e)); }
         setBusy('');
     };
@@ -341,18 +355,27 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 if (!g) { const want = new Set((cl.nodes || []).map(norm)); let best = null, bestScore = 0; scene.traverse(n => { if (n.isMesh) return; let sc = 0; n.traverse(d => { if (want.has(norm(d.name))) sc++; }); if (sc > bestScore) { bestScore = sc; best = n; } }); if (bestScore > 0) g = best; }
                 return g;
             };
+            // Auto-match: existing pin wins, else derive the item # from the node name against the
+            // Master Library ("<ITEM#> <POSITION>" naming). Hardware matches nothing → stays blank.
+            const index = await ensureCodeIndex().catch(() => null);
+            let matched = 0;
             const rows = clusters.map(cl => {
                 const grp = findGrp(cl);
                 const kids = grp ? (grp.children || []).map(c => c.name).filter(Boolean) : [];
                 return {
                     clusterId: cl.id, clusterName: cl.name, category: (cl.category || '').toUpperCase(), position: (cl.position || '').toUpperCase(),
                     found: !!grp,
-                    choices: kids.map(nm => ({ nodeName: nm, label: choiceLabel(nm), itemNo: pinByNode[nm]?.partId || '' }))
+                    choices: kids.map(nm => {
+                        const label = choiceLabel(nm);
+                        let itemNo = pinByNode[nm]?.partId || '';
+                        if (!itemNo && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
+                        return { nodeName: nm, label, itemNo };
+                    })
                 };
             });
             setAssignData({ asmId: data.itemId || assignId, asmName: data.itemName || assignId, rows });
             const missing = rows.filter(r => !r.found).length;
-            addLog(`Loaded ${rows.length} cluster(s), ${rows.reduce((s, r) => s + r.choices.length, 0)} choice node(s) from "${data.itemName}".${missing ? ` ⚠ ${missing} cluster(s) had no group match.` : ''}`, missing ? 'error' : 'success');
+            addLog(`Loaded ${rows.length} cluster(s), ${rows.reduce((s, r) => s + r.choices.length, 0)} choice node(s) from "${data.itemName}" — ${matched} item #(s) auto-matched from node names.${missing ? ` ⚠ ${missing} cluster(s) had no group match.` : ''}`, missing ? 'error' : 'success');
             if (missing) addLog(`Scene top nodes: ${(scene.children || []).flatMap(c => [c.name, ...(c.children || []).map(k => k.name)]).filter(Boolean).slice(0, 24).join(' | ')}`, 'info');
         } catch (e) { console.error(e); addLog(`Load choices failed: ${e.message || e}`, 'error'); alert('Load failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
