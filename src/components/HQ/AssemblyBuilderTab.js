@@ -243,6 +243,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const clusters = (data.nodeClusters || []).map(c => ({ ...c }));
             if (!cadUrl) throw new Error('This assembly has no cadUrl (.glb) to repair.');
             if (!clusters.length) throw new Error('This assembly has no nodeClusters to repair.');
+            // Already repaired? Node names are unique — re-running would just re-namespace pointlessly and
+            // fail the name lookup (groups are now prefixed). Stop with a friendly nudge.
+            if (data.manufacturingSpecs?.nodeNamesRepairedAt) {
+                setRepairBusy(false);
+                return alert(`"${target.itemName}" was already repaired — its node names are unique, nothing to fix.\n\nNext step: use the "Assign item numbers to choices" card below (Load Choices) to give each finial an item # so the choices split into individual options.`);
+            }
 
             const buf = await (await fetch(cadUrl)).arrayBuffer();
             const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
@@ -252,9 +258,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const clusterTopMap = {}; // clusterId -> { originalTopLevelName: newName }
             let matched = 0;
             clusters.forEach((cl, i) => {
-                // Find this cluster's slot group by its (unique) name; fall back to a normalized match.
-                let grp = scene.getObjectByName(cl.name);
-                if (!grp) { const want = norm(cl.name); scene.traverse(n => { if (!grp && !n.isMesh && norm(n.name) === want) grp = n; }); }
+                // Find this cluster's slot group by its stored group-node name (nodes[0]) or cluster name;
+                // fall back to a normalized match over both.
+                let grp = scene.getObjectByName((cl.nodes && cl.nodes[0]) || cl.name) || scene.getObjectByName(cl.name);
+                if (!grp) { const wants = new Set([norm((cl.nodes && cl.nodes[0]) || ''), norm(cl.name)].filter(Boolean)); scene.traverse(n => { if (!grp && !n.isMesh && wants.has(norm(n.name))) grp = n; }); }
                 if (!grp) { addLog(`⚠ no group node for cluster "${cl.name}" — left as-is`, 'error'); return; }
                 matched++;
                 const prefix = `S${i}-${norm(cl.name)}`.slice(0, 44);
@@ -326,8 +333,16 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // Prefill from any existing pins (keyed by choiceNode).
             const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', data.itemId || assignId)));
             const pinByNode = {}; pinSnap.docs.forEach(d => { const p = d.data(); if (p.choiceNode) pinByNode[p.choiceNode] = p; });
+            const norm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+            const findGrp = (cl) => {
+                let g = scene.getObjectByName((cl.nodes && cl.nodes[0]) || cl.name) || scene.getObjectByName(cl.name);
+                if (!g) { const wants = new Set([norm(cl.nodes && cl.nodes[0]), norm(cl.name)].filter(Boolean)); scene.traverse(n => { if (!g && !n.isMesh && wants.has(norm(n.name))) g = n; }); }
+                // Last resort: the scene node whose subtree contains the most of this cluster's node names.
+                if (!g) { const want = new Set((cl.nodes || []).map(norm)); let best = null, bestScore = 0; scene.traverse(n => { if (n.isMesh) return; let sc = 0; n.traverse(d => { if (want.has(norm(d.name))) sc++; }); if (sc > bestScore) { bestScore = sc; best = n; } }); if (bestScore > 0) g = best; }
+                return g;
+            };
             const rows = clusters.map(cl => {
-                const grp = scene.getObjectByName((cl.nodes && cl.nodes[0]) || cl.name) || scene.getObjectByName(cl.name);
+                const grp = findGrp(cl);
                 const kids = grp ? (grp.children || []).map(c => c.name).filter(Boolean) : [];
                 return {
                     clusterId: cl.id, clusterName: cl.name, category: (cl.category || '').toUpperCase(), position: (cl.position || '').toUpperCase(),
@@ -336,7 +351,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 };
             });
             setAssignData({ asmId: data.itemId || assignId, asmName: data.itemName || assignId, rows });
-            addLog(`Loaded ${rows.length} cluster(s), ${rows.reduce((s, r) => s + r.choices.length, 0)} choice node(s) from "${data.itemName}".`, 'success');
+            const missing = rows.filter(r => !r.found).length;
+            addLog(`Loaded ${rows.length} cluster(s), ${rows.reduce((s, r) => s + r.choices.length, 0)} choice node(s) from "${data.itemName}".${missing ? ` ⚠ ${missing} cluster(s) had no group match.` : ''}`, missing ? 'error' : 'success');
+            if (missing) addLog(`Scene top nodes: ${(scene.children || []).flatMap(c => [c.name, ...(c.children || []).map(k => k.name)]).filter(Boolean).slice(0, 24).join(' | ')}`, 'info');
         } catch (e) { console.error(e); addLog(`Load choices failed: ${e.message || e}`, 'error'); alert('Load failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
     };
