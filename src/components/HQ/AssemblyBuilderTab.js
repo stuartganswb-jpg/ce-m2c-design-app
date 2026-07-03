@@ -91,6 +91,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [repairList, setRepairList] = useState([]);   // existing assemblies you can repair
     const [repairId, setRepairId] = useState('');
     const [repairBusy, setRepairBusy] = useState(false);
+    const [assignId, setAssignId] = useState('');       // assembly whose choices we're assigning item #s to
+    const [assignData, setAssignData] = useState(null); // { asmId, asmName, rows:[{clusterId,clusterName,category,position,found,choices:[{nodeName,label,itemNo}]}] }
+    const [assignBusy, setAssignBusy] = useState(false);
     const loaderRef = useRef(null);
     if (!loaderRef.current) loaderRef.current = makeLoader();
 
@@ -302,6 +305,62 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         setRepairBusy(false);
     };
 
+    // ASSIGN ITEM NUMBERS to an existing assembly's stacked choices — for assemblies built without
+    // item #s (0 pins), so the CPQ generator has nothing to split the choices by. Reads the .glb, lists
+    // each cluster's top-level child nodes (= its choices), and lets you type an item # per real choice
+    // (leave shared hardware like screws/standoffs blank → stays always-on). Writes one assembly_pin per
+    // filled choice with choiceNode = that node, so the generator fans them out into individual options.
+    const choiceLabel = (nm) => String(nm || '').split('__').pop().replace(/^\d+_?/, '') || String(nm || '');
+    const handleLoadChoices = async () => {
+        if (!assignId) return alert('Pick an assembly.');
+        setAssignBusy(true);
+        try {
+            const snap = await getDoc(doc(db, 'Approved_Designs', assignId));
+            const data = snap.data() || {};
+            const cadUrl = data.manufacturingSpecs?.cadUrl;
+            const clusters = data.nodeClusters || [];
+            if (!cadUrl) throw new Error('This assembly has no .glb (cadUrl).');
+            const buf = await (await fetch(cadUrl)).arrayBuffer();
+            const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
+            const scene = gltf.scene;
+            // Prefill from any existing pins (keyed by choiceNode).
+            const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', data.itemId || assignId)));
+            const pinByNode = {}; pinSnap.docs.forEach(d => { const p = d.data(); if (p.choiceNode) pinByNode[p.choiceNode] = p; });
+            const rows = clusters.map(cl => {
+                const grp = scene.getObjectByName((cl.nodes && cl.nodes[0]) || cl.name) || scene.getObjectByName(cl.name);
+                const kids = grp ? (grp.children || []).map(c => c.name).filter(Boolean) : [];
+                return {
+                    clusterId: cl.id, clusterName: cl.name, category: (cl.category || '').toUpperCase(), position: (cl.position || '').toUpperCase(),
+                    found: !!grp,
+                    choices: kids.map(nm => ({ nodeName: nm, label: choiceLabel(nm), itemNo: pinByNode[nm]?.partId || '' }))
+                };
+            });
+            setAssignData({ asmId: data.itemId || assignId, asmName: data.itemName || assignId, rows });
+            addLog(`Loaded ${rows.length} cluster(s), ${rows.reduce((s, r) => s + r.choices.length, 0)} choice node(s) from "${data.itemName}".`, 'success');
+        } catch (e) { console.error(e); addLog(`Load choices failed: ${e.message || e}`, 'error'); alert('Load failed:\n\n' + (e.message || e)); }
+        setAssignBusy(false);
+    };
+    const setChoiceItem = (ci, cj, val) => setAssignData(prev => { const rows = prev.rows.map((r, i) => i !== ci ? r : { ...r, choices: r.choices.map((c, j) => j !== cj ? c : { ...c, itemNo: val }) }); return { ...prev, rows }; });
+    const handleSaveItemNumbers = async () => {
+        if (!assignData) return;
+        setAssignBusy(true);
+        try {
+            let n = 0;
+            for (const r of assignData.rows) {
+                for (const ch of r.choices) {
+                    if (!ch.itemNo || !ch.itemNo.trim()) continue;
+                    const partId = ch.itemNo.trim().toUpperCase();
+                    const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName });
+                    n++;
+                }
+            }
+            addLog(`✅ Saved ${n} choice pin(s).`, 'success');
+            alert(`✅ Wrote ${n} item number(s) as choice pins.\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ item-numbered choices fan out into individual options (Ball Finial / End Cap / …). Choices you left blank stay as always-on shared geometry.`);
+        } catch (e) { console.error(e); addLog(`Save failed: ${e.message || e}`, 'error'); alert('Save failed:\n\n' + (e.message || e)); }
+        setAssignBusy(false);
+    };
+
     // ---- styles ----
     const card = { background: '#fff', border: '1px solid var(--line)', borderRadius: '2px' };
     const lbl = { fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' };
@@ -349,6 +408,52 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 <button onClick={handleRepairNodeNames} disabled={repairBusy || !repairId} style={{ padding: '11px 22px', background: repairBusy ? 'var(--paper-2)' : 'var(--ink)', color: repairBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: repairBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                     {repairBusy ? '⚙ Repairing…' : '⚙ Repair Node Names'}
                 </button>
+            </div>
+
+            {/* Assign item numbers to an existing assembly's choices (for assemblies built with 0 pins). */}
+            <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: '240px' }}>
+                        <span style={{ ...lbl, color: 'var(--brass)' }}>Assign item numbers to choices</span>
+                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>For an assembly built without item numbers: lists each cluster's stacked choices from the .glb. Type an item # per real choice; leave shared hardware (screws / standoffs) blank. Clusters with 2+ item-numbered choices fan out into individual options after you regenerate the flow.</span>
+                    </div>
+                    <div style={{ minWidth: '240px' }}>
+                        <span style={lbl}>Assembly</span>
+                        <select value={assignId} onChange={e => { setAssignId(e.target.value); setAssignData(null); }} style={{ ...sel, width: '100%', padding: '9px' }}>
+                            <option value="">Select an assembly…</option>
+                            {repairList.map(a => <option key={a.id} value={a.id}>{a.itemName || a.id}</option>)}
+                        </select>
+                    </div>
+                    <button onClick={handleLoadChoices} disabled={assignBusy || !assignId} style={{ padding: '11px 18px', background: assignBusy ? 'var(--paper-2)' : 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: assignBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                        {assignBusy ? '⚙ Loading…' : 'Load Choices'}
+                    </button>
+                </div>
+
+                {assignData && (
+                    <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '10px', maxHeight: '46vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {assignData.rows.filter(r => r.choices.length > 0).map((r, ci) => {
+                            const realCi = assignData.rows.indexOf(r);
+                            return (
+                                <div key={r.clusterId} style={{ border: '1px solid var(--line)', borderRadius: '2px', padding: '10px 12px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
+                                        {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 150px', gap: '6px 10px', alignItems: 'center' }}>
+                                        {r.choices.map((c, cj) => (
+                                            <React.Fragment key={c.nodeName}>
+                                                <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
+                                                <input value={c.itemNo} onChange={e => setChoiceItem(realCi, cj, e.target.value)} placeholder="item # (blank = hardware)" style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)' }} />
+                                            </React.Fragment>
+                                        ))}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                        <button onClick={handleSaveItemNumbers} disabled={assignBusy} style={{ padding: '12px', background: assignBusy ? 'var(--paper-2)' : '#3a7d44', color: assignBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: assignBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600 }}>
+                            {assignBusy ? 'Saving…' : '⬇ Save Item Numbers as Choice Pins'}
+                        </button>
+                    </div>
+                )}
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: '18px', alignItems: 'start' }}>
