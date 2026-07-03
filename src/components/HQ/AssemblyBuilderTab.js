@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { db, storage } from '../../firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, getDocs, updateDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
 import { ref as sRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
@@ -88,12 +88,23 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [layers, setLayers] = useState({});
     const [busy, setBusy] = useState('');
     const [log, setLog] = useState([]);
+    const [repairList, setRepairList] = useState([]);   // existing assemblies you can repair
+    const [repairId, setRepairId] = useState('');
+    const [repairBusy, setRepairBusy] = useState(false);
     const loaderRef = useRef(null);
     if (!loaderRef.current) loaderRef.current = makeLoader();
 
     const addLog = (m, t = 'info') => setLog(p => [{ t: new Date().toLocaleTimeString(), m, type: t }, ...p].slice(0, 40));
 
     useEffect(() => () => { Object.values(layers).forEach(l => l.url && URL.revokeObjectURL(l.url)); }, []); // eslint-disable-line
+
+    // Existing brand assemblies (for the node-name repair tool below).
+    useEffect(() => {
+        if (!activeBrand) return;
+        const qy = query(collection(db, 'Approved_Designs'), where('brandId', '==', activeBrand), where('partClass', '==', 'Assembly'));
+        const unsub = onSnapshot(qy, snap => setRepairList(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.itemName || '').localeCompare(String(b.itemName || '')))));
+        return () => unsub();
+    }, [activeBrand]);
 
     const onUpload = async (slot, file) => {
         if (!file) return;
@@ -209,6 +220,88 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         setBusy('');
     };
 
+    // REPAIR an assembly built before the unique-name fix: its clusters share generic node names
+    // ("Body1", screw names, …) across slots, so the 3D engine can't tell them apart. Each slot is
+    // still its OWN named group inside the merged .glb (the group name = the cluster name), so we can
+    // find each group, re-namespace its whole subtree to unique names, rewrite that cluster's node
+    // list, re-export/upload the .glb, and remap the pins — WITHOUT re-uploading files or touching any
+    // tags / item numbers. Old .glb is kept as a backup. Runs in the authenticated app (App Check ok).
+    const handleRepairNodeNames = async () => {
+        if (!repairId) return alert('Pick an assembly to repair.');
+        const target = repairList.find(a => a.id === repairId);
+        if (!target) return;
+        if (!window.confirm(`Repair node names on "${target.itemName}"?\n\nRewrites the merged .glb so every slot gets unique node names (fixes clusters sharing names / bleeding together) and updates its clusters — WITHOUT re-uploading files or changing your tags or item numbers. The old .glb is kept as a backup.`)) return;
+        setRepairBusy(true);
+        try {
+            addLog(`Repairing "${target.itemName}"…`, 'info');
+            const snap = await getDoc(doc(db, 'Approved_Designs', repairId));
+            const data = snap.data() || {};
+            const cadUrl = data.manufacturingSpecs?.cadUrl;
+            const clusters = (data.nodeClusters || []).map(c => ({ ...c }));
+            if (!cadUrl) throw new Error('This assembly has no cadUrl (.glb) to repair.');
+            if (!clusters.length) throw new Error('This assembly has no nodeClusters to repair.');
+
+            const buf = await (await fetch(cadUrl)).arrayBuffer();
+            const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
+            const scene = gltf.scene;
+            const norm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+            const clusterTopMap = {}; // clusterId -> { originalTopLevelName: newName }
+            let matched = 0;
+            clusters.forEach((cl, i) => {
+                // Find this cluster's slot group by its (unique) name; fall back to a normalized match.
+                let grp = scene.getObjectByName(cl.name);
+                if (!grp) { const want = norm(cl.name); scene.traverse(n => { if (!grp && !n.isMesh && norm(n.name) === want) grp = n; }); }
+                if (!grp) { addLog(`⚠ no group node for cluster "${cl.name}" — left as-is`, 'error'); return; }
+                matched++;
+                const prefix = `S${i}-${norm(cl.name)}`.slice(0, 44);
+                const newNames = [];
+                const topMap = {};
+                let ni = 0;
+                const rename = (node, isRoot) => {
+                    const orig = node.name || '';
+                    const nn = isRoot ? prefix : `${prefix}__${ni++}${orig ? '_' + orig.replace(/[^A-Za-z0-9]/g, '').slice(0, 24) : ''}`;
+                    if (!isRoot && node.parent === grp && orig && !(orig in topMap)) topMap[orig] = nn;
+                    node.name = nn;
+                    newNames.push(nn);
+                };
+                rename(grp, true);
+                grp.traverse(n => { if (n !== grp) rename(n, false); });
+                cl.nodes = [...new Set(newNames)];
+                clusterTopMap[cl.id] = topMap;
+            });
+            if (!matched) throw new Error('Could not find any slot groups in the .glb by cluster name — this assembly may not have been built by the Assembly Builder. Nothing changed.');
+
+            addLog('Re-exporting repaired .glb…', 'info');
+            const glbBuffer = await new Promise((res, rej) => new GLTFExporter().parse(scene, r => res(r), e => rej(e), { binary: true }));
+            const blob = new Blob([glbBuffer], { type: 'model/gltf-binary' });
+            const path = `assemblies/${activeBrand}_${String(target.itemName || 'asm').replace(/[^a-z0-9]/gi, '_')}_repaired_${Date.now()}.glb`;
+            const up = uploadBytesResumable(sRef(storage, path), blob);
+            const newCadUrl = await new Promise((res, rej) => up.on('state_changed', null, rej, async () => res(await getDownloadURL(up.snapshot.ref))));
+
+            await updateDoc(doc(db, 'Approved_Designs', repairId), {
+                nodeClusters: clusters,
+                'manufacturingSpecs.cadUrl': newCadUrl,
+                'manufacturingSpecs.cadUrlBackup': cadUrl,
+                'manufacturingSpecs.nodeNamesRepairedAt': Date.now(),
+                updatedAt: Date.now()
+            });
+
+            // Remap each pin's choiceNode to its renamed node.
+            let pinFixed = 0;
+            const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', data.itemId || repairId)));
+            for (const pd of pinSnap.docs) {
+                const pin = pd.data();
+                const tm = clusterTopMap[pin.clusterId];
+                if (tm && pin.choiceNode && tm[pin.choiceNode]) { await updateDoc(pd.ref, { choiceNode: tm[pin.choiceNode] }); pinFixed++; }
+            }
+
+            addLog(`✅ Repaired "${target.itemName}" — ${matched}/${clusters.length} clusters re-namespaced, ${pinFixed} pin(s) remapped.`, 'success');
+            alert(`✅ Repaired "${target.itemName}".\n\n${matched} of ${clusters.length} clusters now have unique node names (no more shared "Body1" collisions). Tags + item numbers untouched; the old .glb is kept as a backup.\n\nHard-refresh (⌘⇧R), then re-open it in Node Grouping — the groups should be clean. Any cluster logged as "no group node" was hand-added and needs a manual look.`);
+        } catch (e) { console.error(e); addLog(`Repair failed: ${e.message || e}`, 'error'); alert('Repair failed:\n\n' + (e.message || e)); }
+        setRepairBusy(false);
+    };
+
     // ---- styles ----
     const card = { background: '#fff', border: '1px solid var(--line)', borderRadius: '2px' };
     const lbl = { fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' };
@@ -238,6 +331,24 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 </div>
                 <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', flex: 1, minWidth: '220px' }}>{TEMPLATES[template].hint}</span>
                 <span style={{ ...lbl, color: 'var(--brass)' }}>Every slot optional — upload only what's used; the flow builds from filled slots</span>
+            </div>
+
+            {/* Repair tool — fix an assembly built before the unique-node-name fix (no re-upload). */}
+            <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: '240px' }}>
+                    <span style={{ ...lbl, color: 'var(--brass)' }}>Repair node names (built before the fix)</span>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>If a built assembly's clusters share node names and bleed together in Node Grouping, this re-namespaces every slot's nodes uniquely and rewrites the clusters — no re-upload, tags &amp; item numbers untouched, old .glb kept as backup.</span>
+                </div>
+                <div style={{ minWidth: '260px' }}>
+                    <span style={lbl}>Assembly</span>
+                    <select value={repairId} onChange={e => setRepairId(e.target.value)} style={{ ...sel, width: '100%', padding: '9px' }}>
+                        <option value="">Select an assembly…</option>
+                        {repairList.map(a => <option key={a.id} value={a.id}>{a.itemName || a.id}</option>)}
+                    </select>
+                </div>
+                <button onClick={handleRepairNodeNames} disabled={repairBusy || !repairId} style={{ padding: '11px 22px', background: repairBusy ? 'var(--paper-2)' : 'var(--ink)', color: repairBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: repairBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                    {repairBusy ? '⚙ Repairing…' : '⚙ Repair Node Names'}
+                </button>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: '18px', alignItems: 'start' }}>
