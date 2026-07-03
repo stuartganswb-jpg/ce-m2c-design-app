@@ -145,19 +145,36 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             combined.name = assemblyName.toUpperCase().trim();
             const clusters = [], pins = [];
             const asmId = `${activeBrand.toUpperCase()}-ASM-${Date.now()}`;
-            filledSlots.forEach(slot => {
+            filledSlots.forEach((slot, slotIdx) => {
                 const layer = layers[slot.id];
                 const g = layer.scene.clone(true);
                 g.position.set(layer.offset.x, layer.offset.y, layer.offset.z);
-                const groupName = `${slot.label.toUpperCase().replace(/\s+/g, '-')}`;
-                g.name = groupName;
+                const pretty = `${slot.label.toUpperCase().replace(/\s+/g, '-')}`;
+                // CRITICAL: rename EVERY node in this slot to a slot-unique name before we collect names
+                // or export. GLB exporters reuse generic names ("Scene", "Object_0", "mesh_0", material
+                // names) across files, so without this two slots' clusters list the SAME node names and
+                // the 3D engine (which matches visibility by name) can't tell them apart — that's what
+                // makes some groups correct and others bleed together. A per-slot prefix guarantees each
+                // cluster owns a distinct namespace, and renaming BEFORE export keeps the stored cluster
+                // node names in exact sync with the .glb. cluster.name stays the pretty label (display +
+                // generator fallback partId). topMap remaps each choice's top-level name for its pin.
+                const prefix = `S${slotIdx}-${pretty}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 44);
+                g.name = prefix;
+                const topMap = {};
+                let ni = 0;
+                g.traverse(node => {
+                    if (node === g) return;
+                    const orig = node.name || '';
+                    const nn = `${prefix}__${ni++}${orig ? '_' + orig.replace(/[^A-Za-z0-9]/g, '').slice(0, 24) : ''}`;
+                    if (node.parent === g && orig && !(orig in topMap)) topMap[orig] = nn;
+                    node.name = nn;
+                });
                 combined.add(g);
-                const nodeNames = [groupName, ...allNodeNames(g)];
                 const clusterId = `CLUSTER-${slot.id}-${Date.now()}`;
-                clusters.push({ id: clusterId, name: groupName, nodes: [...new Set(nodeNames)], category: slot.category, position: slot.position, location: slot.location || '' });
-                // One BOM pin per choice that has an item # entered.
+                clusters.push({ id: clusterId, name: pretty, nodes: [prefix, ...allNodeNames(g)], category: slot.category, position: slot.position, location: slot.location || '' });
+                // One BOM pin per choice that has an item # entered; choiceNode points at the renamed node.
                 Object.entries(layer.items).forEach(([part, itemNo]) => {
-                    if (itemNo && itemNo.trim()) pins.push({ assemblyId: asmId, clusterId, partId: itemNo.trim().toUpperCase(), defaultQty: 1, choiceNode: part });
+                    if (itemNo && itemNo.trim()) pins.push({ assemblyId: asmId, clusterId, partId: itemNo.trim().toUpperCase(), defaultQty: 1, choiceNode: topMap[part] || part });
                 });
             });
 
