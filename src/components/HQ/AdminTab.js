@@ -802,6 +802,18 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // parts is handled separately via includedParts / hiddenByPos.)
       const newHidden = (asm.nodeClusters || []).filter(c => c.hidden).map(c => c.id);
 
+      // Diagnostic so a lumped (un-fanned-out) choosable step is instantly explainable: per category,
+      // how many clusters vs pins vs pins-carrying-a-choiceNode. Assembly-Builder fan-out needs ≥2
+      // choice-pins in ONE cluster; "0 choice-pin(s)" almost always means no item # was entered per
+      // choice, so there's nothing telling the generator the finials are separate options.
+      const pinDiag = ['FINIAL', 'RING', 'BRACKET', 'BACKPLATE'].map(cat => {
+          const cs = clusters.filter(c => catOf(c) === cat);
+          if (!cs.length) return null;
+          const pn = cs.reduce((s, c) => s + (pinsByCluster[c.id] || []).length, 0);
+          const cp = cs.reduce((s, c) => s + (pinsByCluster[c.id] || []).filter(p => p.choiceNode && String(p.choiceNode).trim()).length, 0);
+          return `${cat}: ${cs.length} cluster(s), ${pn} pin(s), ${cp} choice-pin(s)`;
+      }).filter(Boolean).join('\n• ');
+
       // ── IN-PLACE REGENERATE ──────────────────────────────────────────────────────────────────
       // Rebuild the STEPS on the existing flow (same id) from the current tags + latest generator
       // logic, then copy per-option prices back by (step title, optId) so nothing priced is lost.
@@ -839,7 +851,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           });
           try {
               await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig }));
-              alert(`✅ Regenerated "${oldFlow.name}" in place — ${mergedSteps.length} steps rebuilt from current tags + latest generator logic.\n\nCarried over your per-option settings (price, projection, layer, hides-bracket, finishes) where the option still exists (${Object.keys(oldOptByKey).length} option(s) matched). Flow settings (name, IDs, fab shape/projection, rollup) left untouched. Review any new/changed steps, set prices on anything new, then test.`);
+              alert(`✅ Regenerated "${oldFlow.name}" in place — ${mergedSteps.length} steps rebuilt from current tags + latest generator logic.\n\nCarried over your per-option settings (price, projection, layer, hides-bracket, finishes) where the option still exists (${Object.keys(oldOptByKey).length} option(s) matched). Flow settings (name, IDs, fab shape/projection, rollup) left untouched. Review any new/changed steps, set prices on anything new, then test.\n\n[diagnostic — why choices may be lumped]\n• ${pinDiag}`);
           } catch (err) { console.error("Regenerate failed:", err); alert("Regenerate failed: " + (err?.message || err)); }
           return;
       }
@@ -855,7 +867,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;
           const bayLabel = { STRAIGHT: 'Straight Pole', FRENCH_RETURN: '1" French Return', MITERED: 'Mitered Bay', BOW: 'Curved Bay' }[genBayConfig] || genBayConfig;
-          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Bay configuration: ${bayLabel} → fabShape ${bay.fabShape} + ${bay.calc}\n• Pole materials (center run): ${centerPole.length}${endPole.length ? `\n• End-pole segments: ${endPole.length} → wired into the L/R End Treatment steps (bend vs straight follows each end's pick)` : ''}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} (each position's plates are a 2nd chooser on its bracket step; ${looseBackplates.length} standalone)\n• Finials: ${finial.length} (End Treatment always emitted — carries the Miter/Bend/Flush return options)\n\n${centerPole.length <= 1 ? 'Single pole material → material + length/finish combined into ONE step. ' : ''}fabShape + pole calculator are kept in sync so Vision Hardware math matches. Review + set prices/projection, then test. Nothing was deleted.`);
+          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Bay configuration: ${bayLabel} → fabShape ${bay.fabShape} + ${bay.calc}\n• Pole materials (center run): ${centerPole.length}${endPole.length ? `\n• End-pole segments: ${endPole.length} → wired into the L/R End Treatment steps (bend vs straight follows each end's pick)` : ''}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} (each position's plates are a 2nd chooser on its bracket step; ${looseBackplates.length} standalone)\n• Finials: ${finial.length} (End Treatment always emitted — carries the Miter/Bend/Flush return options)\n\n${centerPole.length <= 1 ? 'Single pole material → material + length/finish combined into ONE step. ' : ''}fabShape + pole calculator are kept in sync so Vision Hardware math matches. Review + set prices/projection, then test. Nothing was deleted.\n\n[diagnostic — why choices may be lumped]\n• ${pinDiag}`);
       } catch (err) { console.error("Generate failed:", err); alert("Generate failed: " + (err?.message || err)); }
   };
 
