@@ -651,6 +651,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   choicePins.forEach(p => {
                       const e = mkOpt(map, cat, p.partId || cl.name, p.partName || p.partId || cl.name, position, location);
                       e.nodes.add(String(p.choiceNode).trim());
+                      // Fee choice (e.g. a french-return bend marked FEE in the Assembly Builder assign
+                      // tool): keep the geometry + selection, but emit it partId-less like the built-in
+                      // Miter/Bend fee options so it bills as a fee — never a BOM line.
+                      if (p.isFee) { e.isFee = true; e.partId = ''; e.partName = `${p.partName || 'Charge'} (fee — set price)`; }
                   });
                   return;
               }
@@ -659,7 +663,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               const e = mkOpt(map, cat, pin?.partId || cl.name, pin?.partName || cl.name, position, location);
               (cl.nodes || cl.meshes || []).forEach(n => { if (n) e.nodes.add(n); });
           });
-          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0 }));
+          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.isFee ? { isFee: true } : {}) }));
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 

@@ -99,6 +99,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [codeOptions, setCodeOptions] = useState([]); // alphabetical Master-Library codes for the item # picker
     const assignGenRef = useRef(0);                      // invalidates in-flight thumbnail runs on reload
     const [zoomThumb, setZoomThumb] = useState(null);    // { url, label } — enlarged thumbnail overlay
+    const assignSceneRef = useRef(null);                 // loaded scene kept for split/thumbnails
     const loaderRef = useRef(null);
     if (!loaderRef.current) loaderRef.current = makeLoader();
     // Master-Library ERP-code index for auto-matching item #s from node names (designer's convention:
@@ -384,60 +385,93 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     found: !!grp,
                     choices: kids.map(nm => {
                         const label = choiceLabel(nm);
-                        let itemNo = pinByNode[nm]?.partId || '';
-                        if (!itemNo && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
-                        return { nodeName: nm, label, itemNo, thumb: '' };
+                        const pin = pinByNode[nm];
+                        let itemNo = pin?.partId || '';
+                        if (pin?.isFee) itemNo = '';                       // fee pins show via the FEE toggle, not the item field
+                        if (!itemNo && !pin?.isFee && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
+                        return { nodeName: nm, label, itemNo, isFee: !!pin?.isFee, thumb: '' };
                     })
                 };
             });
+            assignSceneRef.current = scene;
             setAssignData({ asmId: data.itemId || assignId, asmName: data.itemName || assignId, rows });
             const missing = rows.filter(r => !r.found).length;
             addLog(`Loaded ${rows.length} cluster(s), ${rows.reduce((s, r) => s + r.choices.length, 0)} choice node(s) from "${data.itemName}" — ${matched} item #(s) auto-matched from node names.${missing ? ` ⚠ ${missing} cluster(s) had no group match.` : ''}`, missing ? 'error' : 'success');
-            // Render a small thumbnail per choice node (sequential — each snapshot opens+closes its own
-            // GL context) so unmatched parts can be identified by eye. Progressive: rows fill in as
-            // they finish; a new Load Choices invalidates the in-flight run via assignGenRef.
-            const gen = ++assignGenRef.current;
-            (async () => {
-                for (let ci = 0; ci < rows.length; ci++) {
-                    for (let cj = 0; cj < rows[ci].choices.length; cj++) {
-                        if (assignGenRef.current !== gen) return;
-                        try {
-                            const g = isolateCluster(scene, [rows[ci].choices[cj].nodeName]);
-                            if (!g.children.length) continue;
-                            // 448px source: crisp enough for the click-to-zoom overlay, displayed at 44px.
-                            const blob = await snapshotPNG(g, 448);
-                            const thumbUrl = URL.createObjectURL(blob);
-                            if (assignGenRef.current !== gen) { URL.revokeObjectURL(thumbUrl); return; }
-                            setAssignData(prev => {
-                                if (!prev) return prev;
-                                const nrows = prev.rows.map((r, i) => i !== ci ? r : { ...r, choices: r.choices.map((c, j) => j !== cj ? c : { ...c, thumb: thumbUrl }) });
-                                return { ...prev, rows: nrows };
-                            });
-                        } catch { /* a node with no snapshot just keeps its placeholder */ }
-                    }
-                }
-            })();
+            genThumbs(rows.flatMap(r => r.choices.map(c => c.nodeName)), ++assignGenRef.current);
             if (missing) addLog(`Scene top nodes: ${(scene.children || []).flatMap(c => [c.name, ...(c.children || []).map(k => k.name)]).filter(Boolean).slice(0, 24).join(' | ')}`, 'info');
         } catch (e) { console.error(e); addLog(`Load choices failed: ${e.message || e}`, 'error'); alert('Load failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
     };
-    const setChoiceItem = (ci, cj, val) => setAssignData(prev => { const rows = prev.rows.map((r, i) => i !== ci ? r : { ...r, choices: r.choices.map((c, j) => j !== cj ? c : { ...c, itemNo: val }) }); return { ...prev, rows }; });
+    // Patch one choice by (clusterId, nodeName) — name-keyed so rows stay correct after a split
+    // reshuffles indices.
+    const setChoicePatch = (clusterId, nodeName, patch) => setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => r.clusterId !== clusterId ? r : { ...r, choices: r.choices.map(c => c.nodeName === nodeName ? { ...c, ...patch } : c) }) } : prev);
+
+    // Render thumbnails for the given node names, sequentially (each snapshot opens+closes its own GL
+    // context), keyed by nodeName so in-flight results land correctly even after splits. A newer run
+    // (bumped assignGenRef) cancels an older one.
+    const genThumbs = (nodeNames, gen) => {
+        const scene = assignSceneRef.current;
+        if (!scene) return;
+        (async () => {
+            for (const nm of nodeNames) {
+                if (assignGenRef.current !== gen) return;
+                try {
+                    const g = isolateCluster(scene, [nm]);
+                    if (!g.children.length) continue;
+                    // 448px source: crisp enough for the click-to-zoom overlay, displayed at 44px.
+                    const blob = await snapshotPNG(g, 448);
+                    const thumbUrl = URL.createObjectURL(blob);
+                    if (assignGenRef.current !== gen) { URL.revokeObjectURL(thumbUrl); return; }
+                    setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => ({ ...r, choices: r.choices.map(c => c.nodeName === nm ? { ...c, thumb: thumbUrl } : c) })) } : prev);
+                } catch { /* a node with no snapshot just keeps its placeholder */ }
+            }
+        })();
+    };
+
+    // SPLIT a choice that's really several items merged under one wrapper node (e.g. a whole stack of
+    // backplates exported as one root): replace the row with the wrapper's named child nodes, each its
+    // own choice with auto-match + thumbnail. Client-side only until Save.
+    const splitChoice = (clusterId, nodeName) => {
+        const scene = assignSceneRef.current;
+        if (!scene) return alert('Load choices first.');
+        const node = scene.getObjectByName(nodeName);
+        const kids = node ? (node.children || []).map(c => c.name).filter(Boolean) : [];
+        if (!kids.length) return alert('This node has no named sub-parts to split into — it is a single mesh.');
+        const index = codeIndexRef.current?.brand === activeBrand ? codeIndexRef.current.index : null;
+        setAssignData(prev => prev ? {
+            ...prev,
+            rows: prev.rows.map(r => r.clusterId !== clusterId ? r : {
+                ...r,
+                choices: r.choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
+                    const label = choiceLabel(nm);
+                    const m = index ? matchItemByName(label, index) : null;
+                    return { nodeName: nm, label, itemNo: m ? m.code : '', isFee: false, thumb: '' };
+                }))
+            })
+        } : prev);
+        addLog(`Split "${choiceLabel(nodeName)}" into ${kids.length} sub-part(s).`, 'info');
+        genThumbs(kids, assignGenRef.current);
+    };
     const handleSaveItemNumbers = async () => {
         if (!assignData) return;
         setAssignBusy(true);
         try {
-            let n = 0;
+            let n = 0, fees = 0;
             for (const r of assignData.rows) {
                 for (const ch of r.choices) {
-                    if (!ch.itemNo || !ch.itemNo.trim()) continue;
-                    const partId = ch.itemNo.trim().toUpperCase();
+                    const hasItem = ch.itemNo && ch.itemNo.trim();
+                    if (!hasItem && !ch.isFee) continue;
+                    // Fee choice (e.g. a french-return bend): renders its geometry as a selectable option
+                    // but bills as a fee, not a BOM item. With no item # typed it gets a synthetic
+                    // FEE-<label> partId so the pin id stays unique; the generator emits it partId-less.
+                    const partId = hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${(ch.label || 'CHARGE').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18)}`;
                     const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName });
-                    n++;
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, ...(ch.isFee ? { isFee: true } : {}) });
+                    n++; if (ch.isFee) fees++;
                 }
             }
-            addLog(`✅ Saved ${n} choice pin(s).`, 'success');
-            alert(`✅ Wrote ${n} item number(s) as choice pins.\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ item-numbered choices fan out into individual options (Ball Finial / End Cap / …). Choices you left blank stay as always-on shared geometry.`);
+            addLog(`✅ Saved ${n} choice pin(s) (${fees} fee).`, 'success');
+            alert(`✅ Wrote ${n} choice pin(s)${fees ? ` — ${fees} marked as FEE (renders its geometry, bills as a fee, no BOM item)` : ''}.\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ choices fan out into individual options. Choices you left blank (and not fee) stay as always-on shared geometry.`);
         } catch (e) { console.error(e); addLog(`Save failed: ${e.message || e}`, 'error'); alert('Save failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
     };
@@ -512,21 +546,27 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
 
                 {assignData && (
                     <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '10px', maxHeight: '46vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        {assignData.rows.filter(r => r.choices.length > 0).map((r, ci) => {
-                            const realCi = assignData.rows.indexOf(r);
+                        {assignData.rows.filter(r => r.choices.length > 0).map((r) => {
                             return (
                                 <div key={r.clusterId} style={{ border: '1px solid var(--line)', borderRadius: '2px', padding: '10px 12px' }}>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
                                         {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>
                                     </div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '48px 1fr 210px', gap: '6px 10px', alignItems: 'center' }}>
-                                        {r.choices.map((c, cj) => (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '48px 1fr 210px 52px', gap: '6px 10px', alignItems: 'center' }}>
+                                        {r.choices.map((c) => (
                                             <React.Fragment key={c.nodeName}>
                                                 {c.thumb
                                                     ? <img src={c.thumb} alt="" title="Click to enlarge" onClick={() => setZoomThumb({ url: c.thumb, label: `${r.clusterName} · ${c.label}${c.itemNo ? ` · ${c.itemNo}` : ''}` })} style={{ width: '44px', height: '44px', objectFit: 'contain', background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px', cursor: 'zoom-in' }} />
                                                     : <span style={{ width: '44px', height: '44px', border: '1px dashed var(--line)', borderRadius: '2px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)' }}>…</span>}
-                                                <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
-                                                <input value={c.itemNo} list="ab-item-codes" onChange={e => setChoiceItem(realCi, cj, e.target.value)} placeholder="item # — type to search (blank = hardware)" style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.itemNo ? 'var(--brass)' : 'var(--line)' }} />
+                                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                                                    <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
+                                                    <button onClick={() => splitChoice(r.clusterId, c.nodeName)} title="This row is really several parts merged under one wrapper node — split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>⤢ split</button>
+                                                </span>
+                                                <input value={c.itemNo} list="ab-item-codes" disabled={c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — no item #' : 'item # — type to search (blank = hardware)'} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
+                                                <label title="Fee choice (e.g. a french-return bend): shows this geometry as a selectable option, bills as a fee — no item # / BOM line. Position comes from the cluster's tag." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                    <input type="checkbox" checked={!!c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '' } : {}) })} style={{ cursor: 'pointer' }} />
+                                                    fee
+                                                </label>
                                             </React.Fragment>
                                         ))}
                                     </div>
