@@ -1128,6 +1128,29 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       let total = baseAssemblyPrice;
       const allParts = [...libraryParts, ...liveAssemblies];
 
+      // Finish → item-variant resolver. The mill base item ("H1-75RBP-V", no slash) usually carries
+      // no price; the sellable SKU is finish-specific: paints (P01, P02, …) share ONE "/P" item,
+      // EP finishes are stocked as exact "/EP5" items, other codes may have exact "/<CODE>" SKUs.
+      // Try exact first, then the "/P" paint rollup, else stay on the base.
+      const byCode = new Map();
+      allParts.forEach(p => { [p.legacyErpId, p.itemId].forEach(c => { const k = String(c || '').trim().toUpperCase(); if (k && k !== 'PENDING' && !byCode.has(k)) byCode.set(k, p); }); });
+      const finishVariantOf = (basePart, finishCode) => {
+          if (!basePart || !finishCode) return basePart;
+          const baseCode = String((basePart.legacyErpId && basePart.legacyErpId !== 'PENDING' ? basePart.legacyErpId : basePart.itemId) || '').trim().toUpperCase();
+          if (!baseCode || baseCode.includes('/')) return basePart; // already a finished variant
+          const fc = String(finishCode).trim().toUpperCase();
+          const cands = [`${baseCode}/${fc}`];
+          if (/^P\d/.test(fc)) cands.push(`${baseCode}/P`);
+          for (const cand of cands) { const hit = byCode.get(cand); if (hit) return hit; }
+          return basePart;
+      };
+      const finishCodeForStep = (stepId) => {
+          const fid = dynamicConfigParams[`${stepId}__finish`];
+          if (!fid) return '';
+          const f = globalFinishes.find(x => x.id === fid) || outsourceFinishes.find(x => x.id === fid);
+          return f ? String(f.code || f.name || '').toUpperCase() : '';
+      };
+
       (activeFlow.steps || []).forEach(step => {
           const selectedValue = dynamicConfigParams[step.id];
           
@@ -1166,10 +1189,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   const styleOpt = step.type === 'STYLE_SWAP' ? (step.styleOptions || []).find(o => (o.optId || o.partId) === selectedValue) : null;
                   resolvedPartId = styleOpt ? (styleOpt.partId || selectedValue) : selectedValue;
 
-                  const partObj = allParts.find(p => p.id === resolvedPartId) ||
+                  let partObj = allParts.find(p => p.id === resolvedPartId || p.itemId === resolvedPartId || p.legacyErpId === resolvedPartId) ||
                                   dynamicAssets.find(a => a.id === resolvedPartId) ||
                                   globalFinishes.find(f => f.id === resolvedPartId) ||
                                   outsourceFinishes.find(f => f.id === resolvedPartId);
+
+                  // Swap to the finish-specific SKU (…/P for paints, exact …/EPn for stocked EP) so the
+                  // BOM identity AND the price come from the item that's actually sold.
+                  if (partObj && (partObj.legacyErpId || partObj.itemId)) {
+                      const variant = finishVariantOf(partObj, finishCodeForStep(step.id));
+                      if (variant !== partObj) { partObj = variant; resolvedPartId = variant.itemId || variant.id; }
+                  }
 
                   resolvedErpId = partObj?.legacyErpId || partObj?.itemId || styleOpt?.legacyErpId || null;
 
@@ -1182,8 +1212,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       else if (partObj.basePrice) optionNativePrice = parseFloat(partObj.basePrice);
                   }
 
-                  // Choose / Swap Style: price at the per-option base price set in the builder.
-                  if (styleOpt && styleOpt.price !== undefined && styleOpt.price !== '') optionNativePrice = parseFloat(styleOpt.price) || 0;
+                  // Choose / Swap Style: an author-set option price OVERRIDES the item price — but only a
+                  // real one. Generated options default to 0, and letting that 0 win is what blanked out
+                  // all base pricing; 0/blank now means "price from the (finish-variant) item".
+                  if (styleOpt && styleOpt.price !== undefined && styleOpt.price !== '' && parseFloat(styleOpt.price) > 0) optionNativePrice = parseFloat(styleOpt.price) || 0;
 
                   if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
                       const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
@@ -1230,6 +1262,33 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               }
 
               total += lineTotal;
+          }
+
+          // Secondary chooser (backplate) is its OWN priced BOM line, with the same finish-variant
+          // swap (the plate shares the bracket step's finish). Deliberately outside the main gate:
+          // on a return the bracket selection is cleared but the return backplate stays selected.
+          const subSel = dynamicConfigParams[`${step.id}__sub`];
+          if (subSel && Array.isArray(step.subOptions)) {
+              const subOpt = step.subOptions.find(o => (o.optId || o.partId) === subSel);
+              if (subOpt) {
+                  const subBase = allParts.find(p => p.id === subOpt.partId || p.itemId === subOpt.partId || p.legacyErpId === subOpt.partId);
+                  const subPart = subBase ? finishVariantOf(subBase, finishCodeForStep(step.id)) : null;
+                  let subPrice = (subOpt.price !== undefined && subOpt.price !== '' && parseFloat(subOpt.price) > 0)
+                      ? parseFloat(subOpt.price)
+                      : (subPart ? (parseFloat(subPart.manufacturingSpecs?.basePrice ?? subPart.basePrice) || 0) : 0);
+                  if (step.useClientPricing && jobData.customerId && subPart?.clientPricing) {
+                      const cp = subPart.clientPricing.find(c => c.customerId === jobData.customerId);
+                      if (cp && cp.price !== undefined && cp.price !== '') subPrice = parseFloat(cp.price);
+                  }
+                  breakdown.push({
+                      name: `${step.subLabel || 'Backplate'} (${subPart?.itemName || subOpt.partName})`,
+                      qty: qty, price: subPrice, total: subPrice * qty,
+                      partHandling: step.partHandling || '',
+                      partId: subPart?.itemId || subPart?.id || subOpt.partId,
+                      legacyErpId: subPart?.legacyErpId || subPart?.itemId || null
+                  });
+                  total += subPrice * qty;
+              }
           }
       });
 

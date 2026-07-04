@@ -152,15 +152,26 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           let nsId = masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED';
           let finishedErpId = '';
           let finishUnmapped = '';
-          const finishId = job.cpqData.configuration?.[`${stepId}__finish`];
+          // The finish selection lives on the BASE step id — sub lines (backplates) share the bracket
+          // step's finish, so strip the __sub suffix before looking it up.
+          const baseStepId = stepId.endsWith('__sub') ? stepId.slice(0, -5) : stepId;
+          const finishId = job.cpqData.configuration?.[`${baseStepId}__finish`];
           if (finishId) {
               const outFinish = outsourceFinishes.find(f => f.id === finishId);
               const finishObj = outFinish || globalFinishes.find(f => f.id === finishId); // outsourced or in-house
               const finishCode = finishCodeOf(finishObj);
               if (finishCode) {
                   const baseErp = String(masterPart.legacyErpId || masterPart.itemId || '').toUpperCase();
-                  const candidateErpId = `${baseErp}/${finishCode}`;
-                  const finishedPart = libraryParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === candidateErpId);
+                  // Exact "/<CODE>" first (EP finishes are stocked as exact SKUs, e.g. /EP5); paints
+                  // (P01, P02, …) share ONE "/P" item, so fall back to it when no exact SKU exists.
+                  const candidates = [`${baseErp}/${finishCode}`];
+                  if (/^P\d/.test(finishCode)) candidates.push(`${baseErp}/P`);
+                  let candidateErpId = candidates[0];
+                  let finishedPart = null;
+                  for (const cand of candidates) {
+                      const hit = libraryParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === cand);
+                      if (hit) { candidateErpId = cand; finishedPart = hit; break; }
+                  }
                   const isStocked = !!finishedPart?.manufacturingSpecs?.isStocked;
                   if (outFinish || isStocked) { // consume the finished assembly (outsourced, or stocked in-house)
                       finishedErpId = candidateErpId;
