@@ -177,7 +177,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const choices = names.map(nm => {
                 const m = index ? matchItemByName(nm, index) : null;
                 if (m) hit++;
-                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', isFee: false, isHidden: false, isBasic: false, thumb: '' };
+                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', isFee: false, isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
             });
             setLayers(prev => {
                 if (prev[slot.id]?.url) URL.revokeObjectURL(prev[slot.id].url);
@@ -251,7 +251,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 ...prev[slotId],
                 choices: prev[slotId].choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
                     const m = index ? matchItemByName(nm, index) : null;
-                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', isFee: false, isHidden: false, isBasic: false, thumb: '' };
+                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', isFee: false, isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
                 }))
             }
         } : prev);
@@ -350,7 +350,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         choiceNode: node, targetNode: node, choiceSort: idx,
                         ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}),
                         ...(ch.isHidden ? { isHiddenPart: true } : {}),
-                        ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}),
+                        ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}),
                         ...(hasItem && !ch.isFee && !ch.isHidden ? libLinkFields(ch.itemNo) : {})
                     });
                 });
@@ -531,7 +531,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // Display the ERP code (a linked pin's partId is the library itemId, not the code).
                     let itemNo = flagged ? '' : ((pin?.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId)) ? pin.legacyErpId : (pin?.partId || ''));
                     if (!itemNo && !flagged && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
-                    return { nodeName: nm, label, itemNo, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, thumb: '' };
+                    return { nodeName: nm, label, itemNo, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, usesReturnPlates: !!pin?.usesReturnPlates, thumb: '' };
                 });
                 // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
@@ -623,7 +623,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 choices: r.choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
                     const label = choiceLabel(nm);
                     const m = index ? matchItemByName(label, index) : null;
-                    return { nodeName: nm, label, itemNo: m ? m.code : '', isFee: false, thumb: '' };
+                    return { nodeName: nm, label, itemNo: m ? m.code : '', isFee: false, isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
                 }))
             })
         } : prev);
@@ -657,7 +657,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const partId = ch.isHidden ? `HIDDEN-${slug}` : (hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${slug}`);
                     const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
                     for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(hasItem && !ch.isFee && !ch.isHidden ? libLinkFields(ch.itemNo) : {}) });
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(hasItem && !ch.isFee && !ch.isHidden ? libLinkFields(ch.itemNo) : {}) });
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
@@ -796,16 +796,20 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                 <input value={c.itemNo} list="ab-item-codes" disabled={c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — no item #' : 'item # — type to search (blank = hardware)'} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
                                                 <span style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                                                     <label title="Fee choice (e.g. a french-return bend): shows this geometry as a selectable option, bills as a fee — no item # / BOM line. Position comes from the cluster's tag." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                        <input type="checkbox" checked={!!c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '', isHidden: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />
+                                                        <input type="checkbox" checked={!!c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '', isHidden: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />
                                                         fee
                                                     </label>
                                                     <label title="Hide this node in EVERY configuration (stray/duplicate geometry that should never render). Takes effect after regenerating the flow." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isHidden ? '#d9534f' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                        <input type="checkbox" checked={!!c.isHidden} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { itemNo: '', isFee: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />
+                                                        <input type="checkbox" checked={!!c.isHidden} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { itemNo: '', isFee: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />
                                                         hide
                                                     </label>
                                                     <label title="Basic bracket: takes NO backplate — when the customer selects this bracket, the backplate picker greys out and stays None. Keep the item # filled; this flag just disables the plate pairing." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isBasic ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                        <input type="checkbox" checked={!!c.isBasic} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isBasic: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false } : {}) })} style={{ cursor: 'pointer' }} />
+                                                        <input type="checkbox" checked={!!c.isBasic} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isBasic: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />
                                                         basic
+                                                    </label>
+                                                    <label title="This bracket pairs with the RETURN backplates (e.g. In Line brackets): while it's the selected bracket, the backplate list shows the return plates instead of the regular ones. Subtle visual change, real BOM change." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.usesReturnPlates ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                        <input type="checkbox" checked={!!c.usesReturnPlates} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { usesReturnPlates: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />
+                                                        rtn-bp
                                                     </label>
                                                 </span>
                                                 <span style={{ display: 'flex', gap: '2px' }}>
@@ -892,13 +896,16 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                     <input value={c.itemNo} list="ab-item-codes" disabled={c.isFee || c.isHidden} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — no item #' : (c.isHidden ? 'hidden' : 'item # — type to search')} style={{ ...inp, padding: '4px 7px', fontSize: '0.75rem', fontFamily: 'var(--mono)', borderColor: (c.isFee || c.isHidden) ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: (c.isFee || c.isHidden) ? 0.5 : 1 }} />
                                                     <span style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
                                                         <label title="Fee choice (e.g. a french-return bend): selectable option that bills as a fee — no item # / BOM line." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                            <input type="checkbox" checked={!!c.isFee} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '', isHidden: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />fee
+                                                            <input type="checkbox" checked={!!c.isFee} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '', isHidden: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />fee
                                                         </label>
                                                         <label title="Force-hidden in every configuration (stray geometry that should never render)." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isHidden ? '#d9534f' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                            <input type="checkbox" checked={!!c.isHidden} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { itemNo: '', isFee: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />hide
+                                                            <input type="checkbox" checked={!!c.isHidden} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { itemNo: '', isFee: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />hide
                                                         </label>
                                                         <label title="Basic bracket: takes NO backplate — the backplate picker greys to None when this bracket is selected. Keep the item # filled." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isBasic ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                            <input type="checkbox" checked={!!c.isBasic} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isBasic: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false } : {}) })} style={{ cursor: 'pointer' }} />basic
+                                                            <input type="checkbox" checked={!!c.isBasic} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isBasic: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />basic
+                                                        </label>
+                                                        <label title="This bracket pairs with the RETURN backplates (e.g. In Line brackets): while it's the selected bracket, the backplate list shows the return plates instead of the regular ones. Subtle visual change, real BOM change." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.usesReturnPlates ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                            <input type="checkbox" checked={!!c.usesReturnPlates} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { usesReturnPlates: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />rtn-bp
                                                         </label>
                                                     </span>
                                                     <span style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>

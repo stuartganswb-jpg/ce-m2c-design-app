@@ -713,8 +713,10 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   // Sort the library by ITEM # (legacy ERP id) using a natural/numeric compare so it's easy to scan by
   // number (e.g. H1-2 before H1-10), not by description.
   const libCode = (p) => (p.legacyErpId && p.legacyErpId !== 'PENDING' && p.legacyErpId !== 'N/A') ? p.legacyErpId : (p.itemId || p.id || '');
+  // Fee/Charge + Alias entities are pinnable too — excluding them forced people to recreate the
+  // same fee over and over because existing ones never showed in the picker.
   const filteredLibrary = libraryParts.filter(p =>
-      (p.partClass === 'Inventory' || p.partClass === 'Assembly') &&
+      ['Inventory', 'Assembly', 'Fee', 'Alias'].includes(p.partClass) &&
       ((p.itemName && p.itemName.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (p.legacyErpId && p.legacyErpId.toLowerCase().includes(searchQuery.toLowerCase())))
   ).sort((a, b) => String(libCode(a)).localeCompare(String(libCode(b)), undefined, { numeric: true, sensitivity: 'base' }));

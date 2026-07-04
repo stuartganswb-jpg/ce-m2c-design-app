@@ -1039,12 +1039,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               const hasReturnOnly = s.subOptions.some(o => o.returnOnly);
               const retn = hasReturnOnly && isReturnChosenForPos(s.position);
               if (retn && next[s.id]) { delete next[s.id]; changed = true; }
+              // Plate scoping follows the CURRENT bracket too: a usesReturnPlates bracket (In Line)
+              // wants the return plates even with no return chosen on that end.
+              const mainOpt = next[s.id] && (s.styleOptions || []).find(x => (x.optId || x.partId) === next[s.id]);
+              const wantReturn = retn || !!(mainOpt && mainOpt.usesReturnPlates);
               const sel = next[`${s.id}__sub`];
               if (sel && hasReturnOnly) {
                   const o = s.subOptions.find(x => (x.optId || x.partId) === sel);
-                  if (o && ((retn && !o.returnOnly) || (!retn && o.returnOnly))) { delete next[`${s.id}__sub`]; changed = true; }
+                  if (o && ((wantReturn && !o.returnOnly) || (!wantReturn && o.returnOnly))) { delete next[`${s.id}__sub`]; changed = true; }
               }
-              const mainOpt = next[s.id] && (s.styleOptions || []).find(x => (x.optId || x.partId) === next[s.id]);
               if (mainOpt && (mainOpt.isBasic || /basic/i.test(mainOpt.partName || '')) && next[`${s.id}__sub`]) { delete next[`${s.id}__sub`]; changed = true; }
           });
           return changed ? next : prev;
@@ -2013,12 +2016,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               const selMainOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === dynamicConfigParams[currentStep.id]);
                               const selLoc = selMainOpt?.location;
                               let subs = currentStep.subOptions.filter(o => !selLoc || !o.location || o.location === selLoc);
-                              // Return-aware scoping: while this side's End Treatment is a return, offer ONLY
-                              // the return backplates; otherwise hide them (they occupy the same spot as the
-                              // regular plates, so both showing at once was ambiguous).
+                              // Return-aware scoping: the RETURN backplates show while this side's End
+                              // Treatment is a return OR the selected bracket is flagged usesReturnPlates
+                              // (e.g. In Line brackets share the return plates); regular plates otherwise —
+                              // never both, they occupy the same spot.
                               if (currentStep.subOptions.some(o => o.returnOnly)) {
-                                  const retn = isReturnChosenForPos(currentStep.position);
-                                  subs = subs.filter(o => retn ? o.returnOnly : !o.returnOnly);
+                                  const wantReturn = isReturnChosenForPos(currentStep.position) || !!selMainOpt?.usesReturnPlates;
+                                  subs = subs.filter(o => wantReturn ? o.returnOnly : !o.returnOnly);
                               }
                               // Basic brackets take no backplate — grey the picker and pin it to None.
                               const noPlate = basicNoBackplate(currentStep);
