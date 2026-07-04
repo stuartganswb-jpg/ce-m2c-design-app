@@ -1018,12 +1018,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // side's End Treatment is a return — only the (return) backplate remains to choose. Engages only on
   // steps whose sub-options carry returnOnly, so manual flows are untouched.
   const returnLocksBracket = (step) => !!(step && Array.isArray(step.subOptions) && step.subOptions.some(o => o.returnOnly) && isReturnChosenForPos(step.position));
-  // Basic brackets take no backplate: when the selected bracket style is a "Basic" one, the backplate
-  // pick greys out and stays None.
+  // Basic brackets take no backplate: when the selected bracket is flagged isBasic (the explicit
+  // per-option checkbox in the Assembly Builder assign tool — foolproof) or is literally named
+  // "Basic …" (fallback for hand-authored options), the backplate pick greys out and stays None.
   const basicNoBackplate = (step) => {
       const sel = dynamicConfigParams[step?.id];
       const o = sel && (step.styleOptions || []).find(x => (x.optId || x.partId) === sel);
-      return !!(o && /basic/i.test(o.partName || ''));
+      return !!(o && (o.isBasic || /basic/i.test(o.partName || '')));
   };
   // Keep selections consistent with the rules above: a return clears the bracket style; a mode flip
   // (return ↔ not) clears a backplate from the other mode; a basic bracket clears any backplate.
@@ -1042,7 +1043,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (o && ((retn && !o.returnOnly) || (!retn && o.returnOnly))) { delete next[`${s.id}__sub`]; changed = true; }
               }
               const mainOpt = next[s.id] && (s.styleOptions || []).find(x => (x.optId || x.partId) === next[s.id]);
-              if (mainOpt && /basic/i.test(mainOpt.partName || '') && next[`${s.id}__sub`]) { delete next[`${s.id}__sub`]; changed = true; }
+              if (mainOpt && (mainOpt.isBasic || /basic/i.test(mainOpt.partName || '')) && next[`${s.id}__sub`]) { delete next[`${s.id}__sub`]; changed = true; }
           });
           return changed ? next : prev;
       });
