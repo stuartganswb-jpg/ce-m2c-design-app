@@ -646,7 +646,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               // the configurator offers Ball Finial / End Cap / French Return… instead of one lumped
               // "FINIALS+RETURNS" option — each choice shows only its own geometry (choiceNode controls
               // its whole subtree by ancestor match). ≥2 choice pins = Assembly-Builder cluster.
-              const choicePins = (pinsByCluster[cl.id] || []).filter(p => p.choiceNode && String(p.choiceNode).trim());
+              const choicePins = (pinsByCluster[cl.id] || []).filter(p => p.choiceNode && String(p.choiceNode).trim() && !p.isHiddenPart);
               if (choicePins.length >= 2) {
                   // Cluster-scoped options: the SAME part can live in two clusters at one position (a
                   // plate in both the regular backplate stack AND the RETURN backplate cluster), so key
@@ -655,10 +655,16 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   // plates only while that end's treatment is a return (and hides the regular ones) —
                   // the stronger rule needed when returns keep the bracket step. Options keep the
                   // author's arrow order via choiceSort.
-                  const returnOnly = /bend|return|miter|mitre|french/i.test(String(cl.name || ''));
+                  // returnOnly by cluster name OR the part's own name ("… for Returns", MTR) — the
+                  // latter catches return plates a designer left inside a regular/center backplate
+                  // stack, so they still scope to returns only (and never show at CENTER, which has
+                  // no End Treatment) even before the stray is cleaned out of the cluster.
+                  const RETURNISH = /bend|return|miter|mitre|mtr|french/i;
+                  const clusterReturnish = RETURNISH.test(String(cl.name || ''));
                   const cshort = String(cl.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6);
                   [...choicePins].sort((a, b) => ((a.choiceSort ?? 9999) - (b.choiceSort ?? 9999)) || String(a.partName || '').localeCompare(String(b.partName || ''))).forEach(p => {
                       const pid = p.partId || cl.name;
+                      const returnOnly = clusterReturnish || RETURNISH.test(String(p.partName || ''));
                       const key = [cl.id, pid, position, location].join('|');
                       const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, nodes: new Set(), ...(returnOnly ? { returnOnly: true } : {}) };
                       e.nodes.add(String(p.choiceNode).trim());
@@ -748,7 +754,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // no separate field to track. Returns are recognized by keyword (french/return/bend/miter/...)
       // in the option's part name or id. bendNodes only matters if a distinct bend GEOMETRY is tagged
       // (not the case here — there's no separate bend segment). No L/R pole segments → behaves as before.
-      const BEND_RE = /bend|return|miter|mitre|curv|french|\bfr\b/i;
+      const BEND_RE = /bend|return|miter|mitre|mtr|curv|french|\bfr\b/i;
       const addEndTreatment = (opts, endPoleOpts = []) => {
           const present = [...new Set([...opts, ...endPoleOpts].map(o => o.position || ''))];
           const ordered = ['LEFT', 'CENTER', 'RIGHT', ''].filter(p => present.includes(p))
@@ -816,6 +822,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // + the flow-settings hidden-clusters editor both key on cluster ids. (BOM inclusion of those
       // parts is handled separately via includedParts / hiddenByPos.)
       const newHidden = (asm.nodeClusters || []).filter(c => c.hidden).map(c => c.id);
+      // Per-NODE force-hides: choices marked "hide" in the Assembly Builder assign tool (pins with
+      // isHiddenPart) — e.g. a stray part the designer left visible. Finer-grained than the
+      // cluster-level hiddenClusters; the runtime hides these names unconditionally.
+      const hiddenNodes = pins.filter(p => p.isHiddenPart && p.choiceNode).map(p => String(p.choiceNode).trim());
 
       // Diagnostic so a lumped (un-fanned-out) choosable step is instantly explainable: per category,
       // how many clusters vs pins vs pins-carrying-a-choiceNode. Assembly-Builder fan-out needs ≥2
@@ -865,7 +875,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               return next;
           });
           try {
-              await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig }));
+              await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, hiddenNodes, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig }));
               alert(`✅ Regenerated "${oldFlow.name}" in place — ${mergedSteps.length} steps rebuilt from current tags + latest generator logic.\n\nCarried over your per-option settings (price, projection, layer, hides-bracket, finishes) where the option still exists (${Object.keys(oldOptByKey).length} option(s) matched). Flow settings (name, IDs, fab shape/projection, rollup) left untouched. Review any new/changed steps, set prices on anything new, then test.\n\n[diagnostic — why choices may be lumped]\n• ${pinDiag}`);
           } catch (err) { console.error("Regenerate failed:", err); alert("Regenerate failed: " + (err?.message || err)); }
           return;
@@ -877,7 +887,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               id: flowId, brandId: activeBrand, name: `${String(asm.itemName || 'HARDWARE').toUpperCase()} — GENERATED`,
               legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id, bayConfig: bayConfigKey || genBayConfig,
               fabShape: bay.fabShape, fabEndStyle: bay.endStyle, fabProjection: '', defaultFinishOptions: [],
-              hiddenClusters: newHidden, steps
+              hiddenClusters: newHidden, hiddenNodes, steps
           }));
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;

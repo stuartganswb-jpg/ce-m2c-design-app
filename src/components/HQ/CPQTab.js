@@ -999,7 +999,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // returnOnly plates while a return is chosen, regular plates otherwise. Only flows whose
   // sub-options carry returnOnly (Assembly-Builder return clusters) engage this; manual flows and
   // the hides-bracket behavior are untouched.
-  const RETURN_PICK_RE = /bend|return|miter|mitre|french/i;
+  // "mtr" included — the designer's miter nodes are named "34X14 MTR …"; miter carries the exact
+  // same rules as the french return (same return backplates, same bracket replacement).
+  const RETURN_PICK_RE = /bend|return|miter|mitre|mtr|french/i;
   const isReturnChosenForPos = (pos) => {
       if (!pos) return false;
       const p = String(pos).toUpperCase();
@@ -1012,20 +1014,35 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           return !!(o && RETURN_PICK_RE.test(`${o.partName || ''} ${o.optId || ''}`));
       });
   };
-  // When the end treatment flips (return ↔ not), a backplate pick from the other mode is invalid —
-  // clear it so its geometry drops and the customer re-picks from the correctly scoped list.
+  // A return REPLACES the outer bracket: the bracket style pick greys out (and clears) while that
+  // side's End Treatment is a return — only the (return) backplate remains to choose. Engages only on
+  // steps whose sub-options carry returnOnly, so manual flows are untouched.
+  const returnLocksBracket = (step) => !!(step && Array.isArray(step.subOptions) && step.subOptions.some(o => o.returnOnly) && isReturnChosenForPos(step.position));
+  // Basic brackets take no backplate: when the selected bracket style is a "Basic" one, the backplate
+  // pick greys out and stays None.
+  const basicNoBackplate = (step) => {
+      const sel = dynamicConfigParams[step?.id];
+      const o = sel && (step.styleOptions || []).find(x => (x.optId || x.partId) === sel);
+      return !!(o && /basic/i.test(o.partName || ''));
+  };
+  // Keep selections consistent with the rules above: a return clears the bracket style; a mode flip
+  // (return ↔ not) clears a backplate from the other mode; a basic bracket clears any backplate.
   useEffect(() => {
       if (!activeFlow) return;
       setDynamicConfigParams(prev => {
           let changed = false; const next = { ...prev };
           (activeFlow.steps || []).forEach(s => {
-              if (!Array.isArray(s.subOptions) || !s.subOptions.some(o => o.returnOnly)) return;
+              if (!Array.isArray(s.subOptions) || !s.subOptions.length) return;
+              const hasReturnOnly = s.subOptions.some(o => o.returnOnly);
+              const retn = hasReturnOnly && isReturnChosenForPos(s.position);
+              if (retn && next[s.id]) { delete next[s.id]; changed = true; }
               const sel = next[`${s.id}__sub`];
-              if (!sel) return;
-              const o = s.subOptions.find(x => (x.optId || x.partId) === sel);
-              if (!o) return;
-              const retn = isReturnChosenForPos(s.position);
-              if ((retn && !o.returnOnly) || (!retn && o.returnOnly)) { delete next[`${s.id}__sub`]; changed = true; }
+              if (sel && hasReturnOnly) {
+                  const o = s.subOptions.find(x => (x.optId || x.partId) === sel);
+                  if (o && ((retn && !o.returnOnly) || (!retn && o.returnOnly))) { delete next[`${s.id}__sub`]; changed = true; }
+              }
+              const mainOpt = next[s.id] && (s.styleOptions || []).find(x => (x.optId || x.partId) === next[s.id]);
+              if (mainOpt && /basic/i.test(mainOpt.partName || '') && next[`${s.id}__sub`]) { delete next[`${s.id}__sub`]; changed = true; }
           });
           return changed ? next : prev;
       });
@@ -1795,6 +1812,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           const cl = (activeAssembly?.nodeClusters || []).find(c => c.id === cid);
           (cl?.nodes || cl?.meshes || []).forEach(n => { if (n) overrides[n] = false; });
       });
+      // Per-node force-hides (choices marked "hide" in the Assembly Builder assign tool).
+      (activeFlow.hiddenNodes || []).forEach(n => { if (n) overrides[String(n).trim()] = false; });
 
       return overrides;
   }, [dynamicConfigParams, activeFlow, activeAssembly]);
@@ -1974,8 +1993,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           )}
 
                           {((currentStep.type === 'DROPDOWN' && currentStep.dataSource) || currentStep.type === 'STYLE_SWAP') && (
-                              <select value={dynamicConfigParams[currentStep.id] || ''} onChange={(e) => handleStyleChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: currentStep.finishDataSource ? '12px' : '20px', outline: 'none' }}>
-                                  <option value="">{currentStep.type === 'STYLE_SWAP' ? '-- Choose Style --' : '-- Select Option --'}</option>
+                              <select value={dynamicConfigParams[currentStep.id] || ''} disabled={returnLocksBracket(currentStep)} onChange={(e) => handleStyleChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: currentStep.finishDataSource ? '12px' : '20px', outline: 'none', ...(returnLocksBracket(currentStep) ? { background: 'var(--paper-2)', color: 'var(--ink-soft)', cursor: 'not-allowed', opacity: 0.65 } : {}) }}>
+                                  <option value="">{returnLocksBracket(currentStep) ? 'Return selected — bracket replaced (choose the return backplate below)' : (currentStep.type === 'STYLE_SWAP' ? '-- Choose Style --' : '-- Select Option --')}</option>
                                   {getOptionsForStep(currentStep).map(opt => (
                                       <option key={opt.id} value={opt.id}>{opt.itemName}{opt.desc ? ` — ${opt.desc}` : ''}{renderOptionPrice(opt, currentStep)}</option>
                                   ))}
@@ -1998,11 +2017,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   const retn = isReturnChosenForPos(currentStep.position);
                                   subs = subs.filter(o => retn ? o.returnOnly : !o.returnOnly);
                               }
+                              // Basic brackets take no backplate — grey the picker and pin it to None.
+                              const noPlate = basicNoBackplate(currentStep);
                               return (
                               <div style={{ marginBottom: '20px' }}>
                                   <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>{currentStep.subLabel || 'Backplate'}</label>
-                                  <select value={dynamicConfigParams[`${currentStep.id}__sub`] || ''} onChange={(e) => handleParamChange(`${currentStep.id}__sub`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none' }}>
-                                      <option value="">-- None --</option>
+                                  <select value={noPlate ? '' : (dynamicConfigParams[`${currentStep.id}__sub`] || '')} disabled={noPlate} onChange={(e) => handleParamChange(`${currentStep.id}__sub`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none', ...(noPlate ? { background: 'var(--paper-2)', color: 'var(--ink-soft)', cursor: 'not-allowed', opacity: 0.65 } : {}) }}>
+                                      <option value="">{noPlate ? '-- None (basic bracket — no backplate) --' : '-- None --'}</option>
                                       {subs.map(o => { const d = partDescOf(o.partId, o.partName); return (
                                           <option key={o.optId} value={o.optId}>{o.partName}{d ? ` — ${d}` : ''}</option>
                                       ); })}

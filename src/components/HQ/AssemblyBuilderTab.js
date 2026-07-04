@@ -389,10 +389,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 const choices = kids.map(nm => {
                     const label = choiceLabel(nm);
                     const pin = pinByNode[nm];
-                    let itemNo = pin?.partId || '';
-                    if (pin?.isFee) itemNo = '';                       // fee pins show via the FEE toggle, not the item field
-                    if (!itemNo && !pin?.isFee && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
-                    return { nodeName: nm, label, itemNo, isFee: !!pin?.isFee, thumb: '' };
+                    const flagged = !!(pin?.isFee || pin?.isHiddenPart);
+                    let itemNo = flagged ? '' : (pin?.partId || '');   // fee/hidden pins show via their toggles, not the item field
+                    if (!itemNo && !flagged && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
+                    return { nodeName: nm, label, itemNo, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, thumb: '' };
                 });
                 // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
@@ -488,28 +488,29 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // and the next Load Choices). Fetch what exists, delete anything superseded or cleared.
             const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', assignData.asmId)));
             const byNode = {}; pinSnap.docs.forEach(d => { const p = d.data(); if (p.choiceNode) (byNode[p.choiceNode] = byNode[p.choiceNode] || []).push({ ref: d.ref, docId: d.id }); });
-            let n = 0, fees = 0, removed = 0;
+            let n = 0, fees = 0, hides = 0, removed = 0;
             for (const r of assignData.rows) {
                 for (let idx = 0; idx < r.choices.length; idx++) {
                     const ch = r.choices[idx];
                     const hasItem = ch.itemNo && ch.itemNo.trim();
                     const existing = byNode[ch.nodeName] || [];
-                    if (!hasItem && !ch.isFee) {
+                    if (!hasItem && !ch.isFee && !ch.isHidden) {
                         // Cleared back to blank (= hardware): remove any pin this node had.
                         for (const old of existing) { await deleteDoc(old.ref); removed++; }
                         continue;
                     }
-                    // Fee choice (e.g. a french-return bend): renders its geometry as a selectable option
-                    // but bills as a fee, not a BOM item. With no item # typed it gets a synthetic
-                    // FEE-<label> partId so the pin id stays unique; the generator emits it partId-less.
-                    const partId = hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${(ch.label || 'CHARGE').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18)}`;
+                    // Hidden choice: force-hidden in every configuration (stray/duplicate geometry).
+                    // Fee choice (e.g. a french-return bend): renders as a selectable option but bills
+                    // as a fee, not a BOM item. Synthetic partIds keep the pin doc id unique.
+                    const slug = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
+                    const partId = ch.isHidden ? `HIDDEN-${slug}` : (hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${slug}`);
                     const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
                     for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, choiceSort: idx, ...(ch.isFee ? { isFee: true } : {}) });
-                    n++; if (ch.isFee) fees++;
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, choiceSort: idx, ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}) });
+                    n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
-            addLog(`✅ Saved ${n} choice pin(s) (${fees} fee${removed ? `, ${removed} stale removed` : ''}).`, 'success');
+            addLog(`✅ Saved ${n} choice pin(s) (${fees} fee, ${hides} hidden${removed ? `, ${removed} stale removed` : ''}).`, 'success');
             alert(`✅ Wrote ${n} choice pin(s)${fees ? ` — ${fees} marked as FEE (renders its geometry, bills as a fee, no BOM item)` : ''}.\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ choices fan out into individual options. Choices you left blank (and not fee) stay as always-on shared geometry.`);
         } catch (e) { console.error(e); addLog(`Save failed: ${e.message || e}`, 'error'); alert('Save failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
@@ -602,10 +603,16 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                     <button onClick={() => splitChoice(r.clusterId, c.nodeName)} title="This row is really several parts merged under one wrapper node — split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>⤢ split</button>
                                                 </span>
                                                 <input value={c.itemNo} list="ab-item-codes" disabled={c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — no item #' : 'item # — type to search (blank = hardware)'} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
-                                                <label title="Fee choice (e.g. a french-return bend): shows this geometry as a selectable option, bills as a fee — no item # / BOM line. Position comes from the cluster's tag." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                    <input type="checkbox" checked={!!c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '' } : {}) })} style={{ cursor: 'pointer' }} />
-                                                    fee
-                                                </label>
+                                                <span style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                                    <label title="Fee choice (e.g. a french-return bend): shows this geometry as a selectable option, bills as a fee — no item # / BOM line. Position comes from the cluster's tag." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                        <input type="checkbox" checked={!!c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '', isHidden: false } : {}) })} style={{ cursor: 'pointer' }} />
+                                                        fee
+                                                    </label>
+                                                    <label title="Hide this node in EVERY configuration (stray/duplicate geometry that should never render). Takes effect after regenerating the flow." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isHidden ? '#d9534f' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                        <input type="checkbox" checked={!!c.isHidden} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { itemNo: '', isFee: false } : {}) })} style={{ cursor: 'pointer' }} />
+                                                        hide
+                                                    </label>
+                                                </span>
                                                 <span style={{ display: 'flex', gap: '2px' }}>
                                                     <button onClick={() => moveChoice(r.clusterId, c.nodeName, -1)} title="Move up — order is saved and drives the option order in the configurator (match Left/Right sides)" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '9px', padding: '2px 5px', borderRadius: '2px' }}>▲</button>
                                                     <button onClick={() => moveChoice(r.clusterId, c.nodeName, 1)} title="Move down" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '9px', padding: '2px 5px', borderRadius: '2px' }}>▼</button>
