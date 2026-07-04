@@ -111,6 +111,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const assignGenRef = useRef(0);                      // invalidates in-flight thumbnail runs on reload
     const [zoomThumb, setZoomThumb] = useState(null);    // { url, label } — enlarged thumbnail overlay
     const assignSceneRef = useRef(null);                 // loaded scene kept for split/thumbnails
+    const [syncId, setSyncId] = useState('');            // assembly whose pins we're linking to the library
+    const [syncBusy, setSyncBusy] = useState(false);
     const loaderRef = useRef(null);
     if (!loaderRef.current) loaderRef.current = makeLoader();
     // Master-Library ERP-code index for auto-matching item #s from node names (designer's convention:
@@ -125,8 +127,19 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             .filter(x => !activeBrand || x.brandId === activeBrand || (Array.isArray(x.sharedBrands) && x.sharedBrands.includes(activeBrand)))
             .map(x => ({ legacyErpId: x.legacyErpId, itemId: x.itemId, itemName: x.itemName }));
         const index = buildCodeIndex(parts);
-        codeIndexRef.current = { brand: activeBrand, index };
+        const byNorm = new Map(); index.forEach(e => byNorm.set(e.norm, e));
+        codeIndexRef.current = { brand: activeBrand, index, byNorm };
         return index;
+    };
+    // Library-link fields for a typed/matched item # — the shape Visual Assembly writes for an
+    // existing library part, so builder pins read as LINKED (not new/leftover) everywhere. partName
+    // stays the ERP code (CPQ appends the description for display); partId follows VA's convention
+    // of the part's itemId. Returns {} when the code isn't in the brand library (typo → plain pin).
+    const libLinkFields = (code) => {
+        const e = codeIndexRef.current?.byNorm?.get(normCode(code));
+        if (!e) return {};
+        const erp = (e.erp && e.erp !== 'PENDING') ? e.erp : e.code;
+        return { partId: e.itemId || e.code, partName: erp, legacyErpId: erp, isExistingLibraryPart: true, status: 'SPECS_LOCKED' };
     };
 
     const addLog = (m, t = 'info') => setLog(p => [{ t: new Date().toLocaleTimeString(), m, type: t }, ...p].slice(0, 40));
@@ -328,12 +341,17 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     if (!hasItem && !ch.isFee && !ch.isHidden) return; // blank = shared hardware, no pin
                     const slug = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
                     const partId = ch.isHidden ? `HIDDEN-${slug}` : (hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${slug}`);
+                    const node = topMap[ch.nodeName] || ch.nodeName;
                     pins.push({
                         assemblyId: asmId, clusterId, partId, partName: ch.label || partId, defaultQty: 1,
-                        choiceNode: topMap[ch.nodeName] || ch.nodeName, choiceSort: idx,
+                        // targetNode mirrors choiceNode so Visual Assembly's node-thumbnail + pin
+                        // display work on builder pins; libLinkFields marks matched items as LINKED
+                        // library parts (isExistingLibraryPart etc.) instead of new/leftover.
+                        choiceNode: node, targetNode: node, choiceSort: idx,
                         ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}),
                         ...(ch.isHidden ? { isHiddenPart: true } : {}),
-                        ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {})
+                        ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}),
+                        ...(hasItem && !ch.isFee && !ch.isHidden ? libLinkFields(ch.itemNo) : {})
                     });
                 });
             });
@@ -505,7 +523,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const label = choiceLabel(nm);
                     const pin = pinByNode[nm];
                     const flagged = !!(pin?.isFee || pin?.isHiddenPart);
-                    let itemNo = flagged ? '' : (pin?.partId || '');   // fee/hidden pins show via their toggles, not the item field
+                    // Display the ERP code (a linked pin's partId is the library itemId, not the code).
+                    let itemNo = flagged ? '' : ((pin?.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId)) ? pin.legacyErpId : (pin?.partId || ''));
                     if (!itemNo && !flagged && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
                     return { nodeName: nm, label, itemNo, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, thumb: '' };
                 });
@@ -633,7 +652,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const partId = ch.isHidden ? `HIDDEN-${slug}` : (hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${slug}`);
                     const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
                     for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, choiceSort: idx, ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}) });
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(hasItem && !ch.isFee && !ch.isHidden ? libLinkFields(ch.itemNo) : {}) });
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
@@ -641,6 +660,46 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             alert(`✅ Wrote ${n} choice pin(s)${fees ? ` — ${fees} marked as FEE (renders its geometry, bills as a fee, no BOM item)` : ''}.\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ choices fan out into individual options. Choices you left blank (and not fee) stay as always-on shared geometry.`);
         } catch (e) { console.error(e); addLog(`Save failed: ${e.message || e}`, 'error'); alert('Save failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
+    };
+
+    // SYNC BOM ↔ LIBRARY: retrofit pins that were written before pins carried the Visual-Assembly
+    // link fields — they show as "new/leftover" (brass) there even though the item #s are real.
+    // Resolves every item pin against the brand library (tolerantly, by id/itemId/legacyErpId) and
+    // stamps the linked shape VA writes itself (partId=itemId, legacyErpId, isExistingLibraryPart,
+    // specs, SPECS_LOCKED) + targetNode=choiceNode so per-choice node thumbnails work. Fee/hidden
+    // pins keep their role (only gain targetNode). Item #s, flags, and order are never changed.
+    const handleSyncPinsToLibrary = async () => {
+        if (!syncId) return alert('Pick an assembly.');
+        const target = repairList.find(a => a.id === syncId);
+        setSyncBusy(true);
+        try {
+            const snap = await getDocs(collection(db, 'Approved_Designs'));
+            const partsAll = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(x => !activeBrand || x.brandId === activeBrand || (Array.isArray(x.sharedBrands) && x.sharedBrands.includes(activeBrand)));
+            const byNorm = new Map();
+            partsAll.forEach(p => { [p.legacyErpId, p.itemId, p.id].forEach(c => { if (!c || c === 'PENDING') return; const n = normCode(c); if (n.length >= 4 && !byNorm.has(n)) byNorm.set(n, p); }); });
+            const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', target?.itemId || syncId)));
+            let linked = 0, already = 0, flagged = 0; const unresolved = [];
+            for (const d of pinSnap.docs) {
+                const pin = d.data();
+                const patch = {};
+                if (!pin.targetNode && pin.choiceNode) patch.targetNode = pin.choiceNode;
+                if (pin.isFee || pin.isHiddenPart) { flagged++; }
+                else if (pin.isExistingLibraryPart) { already++; }
+                else {
+                    const part = byNorm.get(normCode(pin.partId)) || byNorm.get(normCode(pin.legacyErpId)) || byNorm.get(normCode(pin.partName));
+                    if (part) {
+                        const erp = (part.legacyErpId && part.legacyErpId !== 'PENDING') ? part.legacyErpId : (part.itemId || part.id);
+                        Object.assign(patch, { partId: part.itemId || part.id, partName: erp, legacyErpId: erp, isExistingLibraryPart: true, specs: part.manufacturingSpecs || {}, status: 'SPECS_LOCKED' });
+                        linked++;
+                    } else unresolved.push(pin.partName || pin.partId);
+                }
+                if (Object.keys(patch).length) await updateDoc(d.ref, patch);
+            }
+            addLog(`✅ Library sync "${target?.itemName}": ${linked} linked, ${already} already linked, ${flagged} fee/hidden, ${unresolved.length} unresolved.`, unresolved.length ? 'error' : 'success');
+            alert(`✅ Synced "${target?.itemName}" BOM to the Master Library.\n\n• ${linked} pin(s) linked to existing parts — no longer "new/leftover" in Visual Assembly\n• ${already} already linked · ${flagged} fee/hidden left as-is\n${unresolved.length ? `• ⚠ ${unresolved.length} not found in the ${String(activeBrand || '').toUpperCase()} library (typo? other brand?): ${[...new Set(unresolved)].slice(0, 8).join(', ')}${unresolved.length > 8 ? ', …' : ''}` : '• Every item pin resolved.'}\n\nThumbnails: NODE THUMB in Visual Assembly now renders just that choice's node and stamps the library item.`);
+        } catch (e) { console.error(e); alert('Sync failed:\n\n' + (e.message || e)); }
+        setSyncBusy(false);
     };
 
     // ---- styles ----
@@ -760,6 +819,24 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         <span style={{ fontFamily: 'var(--sans)', fontSize: '0.78rem', color: 'var(--ink-soft)', textAlign: 'center' }}>Safe to save in passes — saved numbers come back prefilled on the next Load Choices; blanks just don't create pins yet.</span>
                     </div>
                 )}
+            </div>
+
+            {/* Sync BOM ↔ Library: link an assembly's pins to their existing Master-Library parts. */}
+            <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: '240px' }}>
+                    <span style={{ ...lbl, color: 'var(--brass)' }}>Sync BOM ↔ Library</span>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>If Visual Assembly shows this assembly's items as new/leftover (brass) even though the item #s are real: links every pin to its existing Master-Library part (name, ERP id, specs) and wires per-choice node thumbnails. Item #s, flags &amp; order unchanged.</span>
+                </div>
+                <div style={{ minWidth: '260px' }}>
+                    <span style={lbl}>Assembly</span>
+                    <select value={syncId} onChange={e => setSyncId(e.target.value)} style={{ ...sel, width: '100%', padding: '9px' }}>
+                        <option value="">Select an assembly…</option>
+                        {repairList.map(a => <option key={a.id} value={a.id}>{a.itemName || a.id}</option>)}
+                    </select>
+                </div>
+                <button onClick={handleSyncPinsToLibrary} disabled={syncBusy || !syncId} style={{ padding: '11px 22px', background: syncBusy ? 'var(--paper-2)' : 'var(--ink)', color: syncBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: syncBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                    {syncBusy ? '⚙ Syncing…' : '⚙ Link Pins to Library'}
+                </button>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: '18px', alignItems: 'start' }}>

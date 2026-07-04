@@ -662,9 +662,11 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       const cadUrl = activeAssembly?.manufacturingSpecs?.cadUrl;
       if (!cadUrl) return alert("This assembly has no 3D CAD (.glb) to render from.");
       const cluster = activeAssembly?.nodeClusters?.find(c => c.id === pin.clusterId);
-      const nodes = (cluster?.nodes?.length)
-          ? cluster.nodes
-          : (pin.targetNode ? pin.targetNode.split(',').map(s => s.trim()).filter(Boolean) : []);
+      // Pin's own targetNode FIRST: Assembly-Builder pins point at ONE choice inside a multi-choice
+      // cluster, so cluster.nodes would render the whole stack instead of this item. Legacy pins'
+      // targetNode equals the cluster's node list, so their behavior is unchanged.
+      const pinNodes = pin.targetNode ? pin.targetNode.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const nodes = pinNodes.length ? pinNodes : (cluster?.nodes?.length ? cluster.nodes : []);
       if (!nodes.length) return alert("This item isn't linked to a 3D node or cluster yet — pin it to a node/cluster first.");
       setThumbBusy(pin.id);
       try {
@@ -675,7 +677,12 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           const sref = ref(storage, `component_images/${activeBrand}_${pin.partId || pin.id}_${Date.now()}.png`);
           await uploadBytes(sref, png);
           const url = await getDownloadURL(sref);
-          if (pin.partId) await updateDoc(doc(db, "Approved_Designs", pin.partId), { finalImageUrl: url, componentImageUrl: url });
+          // Resolve the library doc tolerantly — pin.partId may be the doc id, the itemId, or a raw
+          // ERP code (Assembly-Builder pins). A blind updateDoc on a code that isn't a doc id was the
+          // "Failed to render node thumbnail" error; an unmatched part now just skips the stamp.
+          const masterDoc = libraryParts.find(p => p.id === pin.partId || p.itemId === pin.partId || p.legacyErpId === pin.partId
+              || (pin.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId) && (p.legacyErpId === pin.legacyErpId || p.itemId === pin.legacyErpId)));
+          if (masterDoc) await updateDoc(doc(db, "Approved_Designs", masterDoc.id), { finalImageUrl: url, componentImageUrl: url });
           if (pin.clusterId && Array.isArray(activeAssembly?.nodeClusters)) {
               const updated = activeAssembly.nodeClusters.map(c => c.id === pin.clusterId ? { ...c, imageUrl: url } : c);
               await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updated });

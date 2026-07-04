@@ -19,7 +19,9 @@ export function buildCodeIndex(parts) {
             const n = normCode(code);
             if (n.length < 4 || seen.has(n)) return;
             seen.add(n);
-            out.push({ code: String(code), norm: n, name: p.itemName || '' });
+            // itemId/erp ride along so pins can be written fully LINKED to the library part
+            // (Visual Assembly's isExistingLibraryPart shape) at build/assign time.
+            out.push({ code: String(code), norm: n, name: p.itemName || '', itemId: p.itemId || '', erp: p.legacyErpId || '' });
         });
     });
     return out.sort((a, b) => b.norm.length - a.norm.length);
