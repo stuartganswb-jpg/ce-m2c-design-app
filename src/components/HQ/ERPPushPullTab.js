@@ -173,7 +173,12 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       if (hit) { candidateErpId = cand; finishedPart = hit; break; }
                   }
                   const isStocked = !!finishedPart?.manufacturingSpecs?.isStocked;
-                  if (outFinish || isStocked) { // consume the finished assembly (outsourced, or stocked in-house)
+                  // "/P" is structural, not flag-driven: paint finishes ALWAYS consume the stocked
+                  // phosphated "/P" item, which is then painted in-house — no per-item Stocked flag
+                  // needed. Exact finished SKUs (EP…, SG, CP = ready-to-ship) still route through the
+                  // outsourced-or-Stocked(custitem27) gate.
+                  const isPaintRollup = !!finishedPart && candidateErpId.endsWith('/P');
+                  if (outFinish || isStocked || isPaintRollup) { // consume the finished item
                       finishedErpId = candidateErpId;
                       if (finishedPart && finishedPart.netSuiteInternalId) {
                           nsId = finishedPart.netSuiteInternalId;
