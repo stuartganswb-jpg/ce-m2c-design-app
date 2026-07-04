@@ -7,8 +7,9 @@
 // "Assign item numbers to choices" tool — so nobody types item numbers line by line.
 export const normCode = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-// parts: [{ legacyErpId, itemId }] → index sorted longest-first so the first prefix hit is the
-// longest (H1-75RBP-H beats H1-75RBP). Codes under 4 chars are dropped — too short to be safe.
+// parts: [{ legacyErpId, itemId, itemName }] → index sorted longest-first so the first prefix hit is
+// the longest (H1-75RBP-H beats H1-75RBP). Codes under 4 chars are dropped — too short to be safe.
+// `name` rides along for pickers/labels.
 export function buildCodeIndex(parts) {
     const seen = new Set();
     const out = [];
@@ -18,7 +19,7 @@ export function buildCodeIndex(parts) {
             const n = normCode(code);
             if (n.length < 4 || seen.has(n)) return;
             seen.add(n);
-            out.push({ code: String(code), norm: n });
+            out.push({ code: String(code), norm: n, name: p.itemName || '' });
         });
     });
     return out.sort((a, b) => b.norm.length - a.norm.length);

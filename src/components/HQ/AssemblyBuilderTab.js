@@ -9,6 +9,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
 import { buildCodeIndex, matchItemByName } from '../Shared/itemCodeMatch';
+import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
 
 // Step-by-step assembly builder: the designer uploads ONE .glb per slot (all the choices for that slot
 // stacked inside the file). We KNOW each slot's position/category/location, so there's nothing to
@@ -93,8 +94,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [repairId, setRepairId] = useState('');
     const [repairBusy, setRepairBusy] = useState(false);
     const [assignId, setAssignId] = useState('');       // assembly whose choices we're assigning item #s to
-    const [assignData, setAssignData] = useState(null); // { asmId, asmName, rows:[{clusterId,clusterName,category,position,found,choices:[{nodeName,label,itemNo}]}] }
+    const [assignData, setAssignData] = useState(null); // { asmId, asmName, rows:[{clusterId,clusterName,category,position,found,choices:[{nodeName,label,itemNo,thumb}]}] }
     const [assignBusy, setAssignBusy] = useState(false);
+    const [codeOptions, setCodeOptions] = useState([]); // alphabetical Master-Library codes for the item # picker
+    const assignGenRef = useRef(0);                      // invalidates in-flight thumbnail runs on reload
     const loaderRef = useRef(null);
     if (!loaderRef.current) loaderRef.current = makeLoader();
     // Master-Library ERP-code index for auto-matching item #s from node names (designer's convention:
@@ -103,7 +106,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const ensureCodeIndex = async () => {
         if (codeIndexRef.current) return codeIndexRef.current;
         const snap = await getDocs(collection(db, 'Approved_Designs'));
-        codeIndexRef.current = buildCodeIndex(snap.docs.map(d => { const x = d.data(); return { legacyErpId: x.legacyErpId, itemId: x.itemId }; }));
+        codeIndexRef.current = buildCodeIndex(snap.docs.map(d => { const x = d.data(); return { legacyErpId: x.legacyErpId, itemId: x.itemId, itemName: x.itemName }; }));
         return codeIndexRef.current;
     };
 
@@ -358,6 +361,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // Auto-match: existing pin wins, else derive the item # from the node name against the
             // Master Library ("<ITEM#> <POSITION>" naming). Hardware matches nothing → stays blank.
             const index = await ensureCodeIndex().catch(() => null);
+            if (index) setCodeOptions([...index].sort((a, b) => a.code.localeCompare(b.code)));
             let matched = 0;
             const rows = clusters.map(cl => {
                 const grp = findGrp(cl);
@@ -369,13 +373,36 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         const label = choiceLabel(nm);
                         let itemNo = pinByNode[nm]?.partId || '';
                         if (!itemNo && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
-                        return { nodeName: nm, label, itemNo };
+                        return { nodeName: nm, label, itemNo, thumb: '' };
                     })
                 };
             });
             setAssignData({ asmId: data.itemId || assignId, asmName: data.itemName || assignId, rows });
             const missing = rows.filter(r => !r.found).length;
             addLog(`Loaded ${rows.length} cluster(s), ${rows.reduce((s, r) => s + r.choices.length, 0)} choice node(s) from "${data.itemName}" — ${matched} item #(s) auto-matched from node names.${missing ? ` ⚠ ${missing} cluster(s) had no group match.` : ''}`, missing ? 'error' : 'success');
+            // Render a small thumbnail per choice node (sequential — each snapshot opens+closes its own
+            // GL context) so unmatched parts can be identified by eye. Progressive: rows fill in as
+            // they finish; a new Load Choices invalidates the in-flight run via assignGenRef.
+            const gen = ++assignGenRef.current;
+            (async () => {
+                for (let ci = 0; ci < rows.length; ci++) {
+                    for (let cj = 0; cj < rows[ci].choices.length; cj++) {
+                        if (assignGenRef.current !== gen) return;
+                        try {
+                            const g = isolateCluster(scene, [rows[ci].choices[cj].nodeName]);
+                            if (!g.children.length) continue;
+                            const blob = await snapshotPNG(g, 128);
+                            const thumbUrl = URL.createObjectURL(blob);
+                            if (assignGenRef.current !== gen) { URL.revokeObjectURL(thumbUrl); return; }
+                            setAssignData(prev => {
+                                if (!prev) return prev;
+                                const nrows = prev.rows.map((r, i) => i !== ci ? r : { ...r, choices: r.choices.map((c, j) => j !== cj ? c : { ...c, thumb: thumbUrl }) });
+                                return { ...prev, rows: nrows };
+                            });
+                        } catch { /* a node with no snapshot just keeps its placeholder */ }
+                    }
+                }
+            })();
             if (missing) addLog(`Scene top nodes: ${(scene.children || []).flatMap(c => [c.name, ...(c.children || []).map(k => k.name)]).filter(Boolean).slice(0, 24).join(' | ')}`, 'info');
         } catch (e) { console.error(e); addLog(`Load choices failed: ${e.message || e}`, 'error'); alert('Load failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
@@ -478,20 +505,29 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
                                         {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>
                                     </div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 150px', gap: '6px 10px', alignItems: 'center' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '48px 1fr 210px', gap: '6px 10px', alignItems: 'center' }}>
                                         {r.choices.map((c, cj) => (
                                             <React.Fragment key={c.nodeName}>
+                                                {c.thumb
+                                                    ? <img src={c.thumb} alt="" style={{ width: '44px', height: '44px', objectFit: 'contain', background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px' }} />
+                                                    : <span style={{ width: '44px', height: '44px', border: '1px dashed var(--line)', borderRadius: '2px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)' }}>…</span>}
                                                 <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
-                                                <input value={c.itemNo} onChange={e => setChoiceItem(realCi, cj, e.target.value)} placeholder="item # (blank = hardware)" style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)' }} />
+                                                <input value={c.itemNo} list="ab-item-codes" onChange={e => setChoiceItem(realCi, cj, e.target.value)} placeholder="item # — type to search (blank = hardware)" style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.itemNo ? 'var(--brass)' : 'var(--line)' }} />
                                             </React.Fragment>
                                         ))}
                                     </div>
                                 </div>
                             );
                         })}
+                        {/* Searchable item-# picker source: type in any item field to filter this
+                            alphabetical Master-Library list (native datalist). */}
+                        <datalist id="ab-item-codes">
+                            {codeOptions.map(o => <option key={o.code} value={o.code}>{o.name}</option>)}
+                        </datalist>
                         <button onClick={handleSaveItemNumbers} disabled={assignBusy} style={{ padding: '12px', background: assignBusy ? 'var(--paper-2)' : '#3a7d44', color: assignBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: assignBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600 }}>
                             {assignBusy ? 'Saving…' : '⬇ Save Item Numbers as Choice Pins'}
                         </button>
+                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.78rem', color: 'var(--ink-soft)', textAlign: 'center' }}>Safe to save in passes — saved numbers come back prefilled on the next Load Choices; blanks just don't create pins yet.</span>
                     </div>
                 )}
             </div>
