@@ -648,12 +648,23 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               // its whole subtree by ancestor match). ≥2 choice pins = Assembly-Builder cluster.
               const choicePins = (pinsByCluster[cl.id] || []).filter(p => p.choiceNode && String(p.choiceNode).trim());
               if (choicePins.length >= 2) {
-                  choicePins.forEach(p => {
-                      const e = mkOpt(map, cat, p.partId || cl.name, p.partName || p.partId || cl.name, position, location);
+                  // Cluster-scoped options: the SAME part can live in two clusters at one position (a
+                  // plate in both the regular backplate stack AND the RETURN backplate cluster), so key
+                  // per cluster — picking one copy must never light the other. Clusters named
+                  // bend/return/miter/french are marked returnOnly: the CPQ sub-picker shows those
+                  // plates only while that end's treatment is a return (and hides the regular ones) —
+                  // the stronger rule needed when returns keep the bracket step. Options keep the
+                  // author's arrow order via choiceSort.
+                  const returnOnly = /bend|return|miter|mitre|french/i.test(String(cl.name || ''));
+                  const cshort = String(cl.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6);
+                  [...choicePins].sort((a, b) => ((a.choiceSort ?? 9999) - (b.choiceSort ?? 9999)) || String(a.partName || '').localeCompare(String(b.partName || ''))).forEach(p => {
+                      const pid = p.partId || cl.name;
+                      const key = [cl.id, pid, position, location].join('|');
+                      const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, nodes: new Set(), ...(returnOnly ? { returnOnly: true } : {}) };
                       e.nodes.add(String(p.choiceNode).trim());
-                      // Fee choice (e.g. a french-return bend marked FEE in the Assembly Builder assign
-                      // tool): keep the geometry + selection, but emit it partId-less like the built-in
-                      // Miter/Bend fee options so it bills as a fee — never a BOM line.
+                      // Fee choice (e.g. a french-return bend marked FEE in the assign tool): keep the
+                      // geometry + selection, but emit it partId-less like the built-in Miter/Bend fee
+                      // options so it bills as a fee — never a BOM line.
                       if (p.isFee) { e.isFee = true; e.partId = ''; e.partName = `${p.partName || 'Charge'} (fee — set price)`; }
                   });
                   return;
@@ -663,7 +674,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               const e = mkOpt(map, cat, pin?.partId || cl.name, pin?.partName || cl.name, position, location);
               (cl.nodes || cl.meshes || []).forEach(n => { if (n) e.nodes.add(n); });
           });
-          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.isFee ? { isFee: true } : {}) }));
+          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}) }));
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 

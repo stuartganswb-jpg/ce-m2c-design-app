@@ -994,6 +994,43 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       });
   }, [engineFlags, activeFlow]);
 
+  // Return-aware backplate scoping: is the End Treatment at this position currently a return
+  // (french/bent/mitered)? Drives which backplate sub-options show on that side's bracket step —
+  // returnOnly plates while a return is chosen, regular plates otherwise. Only flows whose
+  // sub-options carry returnOnly (Assembly-Builder return clusters) engage this; manual flows and
+  // the hides-bracket behavior are untouched.
+  const RETURN_PICK_RE = /bend|return|miter|mitre|french/i;
+  const isReturnChosenForPos = (pos) => {
+      if (!pos) return false;
+      const p = String(pos).toUpperCase();
+      return (activeFlow?.steps || []).some(s => {
+          if ((s.position || '').toUpperCase() !== p || !/end treatment/i.test(s.title || '')) return false;
+          const sel = dynamicConfigParams[s.id];
+          if (!sel) return false;
+          if (/^OPT-(BEND|MITER)/i.test(sel)) return true;
+          const o = (s.styleOptions || []).find(x => (x.optId || x.partId) === sel);
+          return !!(o && RETURN_PICK_RE.test(`${o.partName || ''} ${o.optId || ''}`));
+      });
+  };
+  // When the end treatment flips (return ↔ not), a backplate pick from the other mode is invalid —
+  // clear it so its geometry drops and the customer re-picks from the correctly scoped list.
+  useEffect(() => {
+      if (!activeFlow) return;
+      setDynamicConfigParams(prev => {
+          let changed = false; const next = { ...prev };
+          (activeFlow.steps || []).forEach(s => {
+              if (!Array.isArray(s.subOptions) || !s.subOptions.some(o => o.returnOnly)) return;
+              const sel = next[`${s.id}__sub`];
+              if (!sel) return;
+              const o = s.subOptions.find(x => (x.optId || x.partId) === sel);
+              if (!o) return;
+              const retn = isReturnChosenForPos(s.position);
+              if ((retn && !o.returnOnly) || (!retn && o.returnOnly)) { delete next[`${s.id}__sub`]; changed = true; }
+          });
+          return changed ? next : prev;
+      });
+  }, [dynamicConfigParams, activeFlow]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleDimensionChange = (stepId, key, value, template) => {
       setDimensionInputs(prev => {
           const current = prev[stepId] || { length: '', type: 'O2O', wallA: '', wallB: '', wallC: '' };
@@ -1953,7 +1990,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               // matching plates show (e.g. wall plates when a wall arm is selected).
                               const selMainOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === dynamicConfigParams[currentStep.id]);
                               const selLoc = selMainOpt?.location;
-                              const subs = currentStep.subOptions.filter(o => !selLoc || !o.location || o.location === selLoc);
+                              let subs = currentStep.subOptions.filter(o => !selLoc || !o.location || o.location === selLoc);
+                              // Return-aware scoping: while this side's End Treatment is a return, offer ONLY
+                              // the return backplates; otherwise hide them (they occupy the same spot as the
+                              // regular plates, so both showing at once was ambiguous).
+                              if (currentStep.subOptions.some(o => o.returnOnly)) {
+                                  const retn = isReturnChosenForPos(currentStep.position);
+                                  subs = subs.filter(o => retn ? o.returnOnly : !o.returnOnly);
+                              }
                               return (
                               <div style={{ marginBottom: '20px' }}>
                                   <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>{currentStep.subLabel || 'Backplate'}</label>

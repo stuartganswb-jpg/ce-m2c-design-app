@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { db, storage } from '../../firebase';
-import { doc, setDoc, getDoc, getDocs, updateDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
 import { ref as sRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
@@ -377,20 +377,29 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const index = await ensureCodeIndex().catch(() => null);
             if (index) setCodeOptions([...index].sort((a, b) => a.code.localeCompare(b.code)));
             let matched = 0;
+            // Auto-expand to wherever pins were SAVED: if a wrapper was split and its children pinned,
+            // re-listing the unsplit wrapper would show blank rows and look like the work was lost
+            // (the pins are in the DB, just not displayed). Descend until each leaf either carries a
+            // pin itself or has no pinned descendants.
+            const pinnedUnder = (node) => { let hit = false; node.traverse(d => { if (d !== node && pinByNode[d.name]) hit = true; }); return hit; };
+            const leafNames = (node) => (pinByNode[node.name] || !pinnedUnder(node)) ? [node.name] : (node.children || []).filter(c => c.name).flatMap(leafNames);
             const rows = clusters.map(cl => {
                 const grp = findGrp(cl);
-                const kids = grp ? (grp.children || []).map(c => c.name).filter(Boolean) : [];
+                const kids = grp ? (grp.children || []).filter(c => c.name).flatMap(leafNames) : [];
+                const choices = kids.map(nm => {
+                    const label = choiceLabel(nm);
+                    const pin = pinByNode[nm];
+                    let itemNo = pin?.partId || '';
+                    if (pin?.isFee) itemNo = '';                       // fee pins show via the FEE toggle, not the item field
+                    if (!itemNo && !pin?.isFee && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
+                    return { nodeName: nm, label, itemNo, isFee: !!pin?.isFee, thumb: '' };
+                });
+                // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
+                choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
                 return {
                     clusterId: cl.id, clusterName: cl.name, category: (cl.category || '').toUpperCase(), position: (cl.position || '').toUpperCase(),
                     found: !!grp,
-                    choices: kids.map(nm => {
-                        const label = choiceLabel(nm);
-                        const pin = pinByNode[nm];
-                        let itemNo = pin?.partId || '';
-                        if (pin?.isFee) itemNo = '';                       // fee pins show via the FEE toggle, not the item field
-                        if (!itemNo && !pin?.isFee && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
-                        return { nodeName: nm, label, itemNo, isFee: !!pin?.isFee, thumb: '' };
-                    })
+                    choices
                 };
             });
             assignSceneRef.current = scene;
@@ -405,6 +414,24 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     // Patch one choice by (clusterId, nodeName) — name-keyed so rows stay correct after a split
     // reshuffles indices.
     const setChoicePatch = (clusterId, nodeName, patch) => setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => r.clusterId !== clusterId ? r : { ...r, choices: r.choices.map(c => c.nodeName === nodeName ? { ...c, ...patch } : c) }) } : prev);
+
+    // Reorder a choice within its cluster (▲▼). The order is saved as choiceSort and drives the
+    // generated option order, so Left/Right sides can be made to list identically.
+    const moveChoice = (clusterId, nodeName, dir) => setAssignData(prev => {
+        if (!prev) return prev;
+        return {
+            ...prev,
+            rows: prev.rows.map(r => {
+                if (r.clusterId !== clusterId) return r;
+                const i = r.choices.findIndex(c => c.nodeName === nodeName);
+                const j = i + dir;
+                if (i < 0 || j < 0 || j >= r.choices.length) return r;
+                const choices = [...r.choices];
+                [choices[i], choices[j]] = [choices[j], choices[i]];
+                return { ...r, choices };
+            })
+        };
+    });
 
     // Render thumbnails for the given node names, sequentially (each snapshot opens+closes its own GL
     // context), keyed by nodeName so in-flight results land correctly even after splits. A newer run
@@ -456,21 +483,33 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         if (!assignData) return;
         setAssignBusy(true);
         try {
-            let n = 0, fees = 0;
+            // True SYNC, not append-only: the pin doc id embeds the partId, so renumbering a choice
+            // would otherwise leave the old pin behind (stale duplicates that confuse the generator
+            // and the next Load Choices). Fetch what exists, delete anything superseded or cleared.
+            const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', assignData.asmId)));
+            const byNode = {}; pinSnap.docs.forEach(d => { const p = d.data(); if (p.choiceNode) (byNode[p.choiceNode] = byNode[p.choiceNode] || []).push({ ref: d.ref, docId: d.id }); });
+            let n = 0, fees = 0, removed = 0;
             for (const r of assignData.rows) {
-                for (const ch of r.choices) {
+                for (let idx = 0; idx < r.choices.length; idx++) {
+                    const ch = r.choices[idx];
                     const hasItem = ch.itemNo && ch.itemNo.trim();
-                    if (!hasItem && !ch.isFee) continue;
+                    const existing = byNode[ch.nodeName] || [];
+                    if (!hasItem && !ch.isFee) {
+                        // Cleared back to blank (= hardware): remove any pin this node had.
+                        for (const old of existing) { await deleteDoc(old.ref); removed++; }
+                        continue;
+                    }
                     // Fee choice (e.g. a french-return bend): renders its geometry as a selectable option
                     // but bills as a fee, not a BOM item. With no item # typed it gets a synthetic
                     // FEE-<label> partId so the pin id stays unique; the generator emits it partId-less.
                     const partId = hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${(ch.label || 'CHARGE').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18)}`;
                     const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, ...(ch.isFee ? { isFee: true } : {}) });
+                    for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, choiceSort: idx, ...(ch.isFee ? { isFee: true } : {}) });
                     n++; if (ch.isFee) fees++;
                 }
             }
-            addLog(`✅ Saved ${n} choice pin(s) (${fees} fee).`, 'success');
+            addLog(`✅ Saved ${n} choice pin(s) (${fees} fee${removed ? `, ${removed} stale removed` : ''}).`, 'success');
             alert(`✅ Wrote ${n} choice pin(s)${fees ? ` — ${fees} marked as FEE (renders its geometry, bills as a fee, no BOM item)` : ''}.\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ choices fan out into individual options. Choices you left blank (and not fee) stay as always-on shared geometry.`);
         } catch (e) { console.error(e); addLog(`Save failed: ${e.message || e}`, 'error'); alert('Save failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
@@ -552,7 +591,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
                                         {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>
                                     </div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '48px 1fr 210px 52px', gap: '6px 10px', alignItems: 'center' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '48px 1fr 210px 52px 46px', gap: '6px 10px', alignItems: 'center' }}>
                                         {r.choices.map((c) => (
                                             <React.Fragment key={c.nodeName}>
                                                 {c.thumb
@@ -567,6 +606,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                     <input type="checkbox" checked={!!c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '' } : {}) })} style={{ cursor: 'pointer' }} />
                                                     fee
                                                 </label>
+                                                <span style={{ display: 'flex', gap: '2px' }}>
+                                                    <button onClick={() => moveChoice(r.clusterId, c.nodeName, -1)} title="Move up — order is saved and drives the option order in the configurator (match Left/Right sides)" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '9px', padding: '2px 5px', borderRadius: '2px' }}>▲</button>
+                                                    <button onClick={() => moveChoice(r.clusterId, c.nodeName, 1)} title="Move down" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '9px', padding: '2px 5px', borderRadius: '2px' }}>▼</button>
+                                                </span>
                                             </React.Fragment>
                                         ))}
                                     </div>
