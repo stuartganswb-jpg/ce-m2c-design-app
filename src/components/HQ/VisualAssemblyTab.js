@@ -460,11 +460,12 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       // REASSIGN mode: swap the newly-created part onto the EXISTING pin (keep its cluster/node/qty),
       // instead of dropping a new pin. This is what was silently failing before.
       if (reassignPinId) {
+        // Fee role follows the created entity: a new Fee/Charge keeps the pin billing as a fee.
+        const isFeeEntity = newDoc.partClass === 'Fee' || newDoc.isFee === true || String(newDoc.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE';
         await updateDoc(doc(db, "assembly_pins", reassignPinId), {
           partName: newPartName.toUpperCase(), partId: newMasterId, legacyErpId: "PENDING",
           isExistingLibraryPart: false, specs: newDoc.manufacturingSpecs || {}, status: "NEEDS_SPECS",
-          // A real (even new) part supersedes any fee/hidden role the pin carried.
-          isFee: false, isHiddenPart: false
+          isFee: isFeeEntity, isHiddenPart: false
         });
         setDrawerOpen(false); setReassignPinId(null);
         setNewPartSpecs({ productType: '', collection: '', uom: 'EA', partHandling: '', dynamicDicts: {}, customData: {} });
@@ -496,12 +497,14 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
     // and quantity are kept; only the part (name / item# / specs) changes. No delete / re-pin.
     if (reassignPinId) {
       try {
+        // The pin's fee role FOLLOWS the part it's assigned to: a Fee/Charge entity (partClass Fee /
+        // productType FEE) keeps the pin billing as a fee — geometry renders, separate charge, no
+        // physical BOM unit. A normal item clears the fee role. Hidden is always cleared by a reassign.
+        const isFeePart = part.partClass === 'Fee' || part.isFee === true || String(part.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE';
         await updateDoc(doc(db, "assembly_pins", reassignPinId), {
           partName: part.itemName, partId: part.itemId, legacyErpId: part.legacyErpId || "N/A",
           isExistingLibraryPart: true, specs: part.manufacturingSpecs || {}, status: "SPECS_LOCKED",
-          // Assigning a REAL library part supersedes any fee/hidden role the pin had (e.g. a
-          // french-return bend saved as a fee in the Assembly Builder) — it's a BOM item now.
-          isFee: false, isHiddenPart: false
+          isFee: isFeePart, isHiddenPart: false
         });
         setDrawerOpen(false); setReassignPinId(null);
       } catch (e) { console.error('reassign failed', e); alert('Reassign failed — check console.'); }
@@ -690,7 +693,13 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
           const masterDoc = libraryParts.find(p => p.id === pin.partId || p.itemId === pin.partId || p.legacyErpId === pin.partId
               || (pin.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId) && (p.legacyErpId === pin.legacyErpId || p.itemId === pin.legacyErpId)));
           if (masterDoc) await updateDoc(doc(db, "Approved_Designs", masterDoc.id), { finalImageUrl: url, componentImageUrl: url });
-          if (pin.clusterId && Array.isArray(activeAssembly?.nodeClusters)) {
+          // The pin keeps its OWN image — this is what its BOM rows show, so fee/pending pins with no
+          // master doc still get a correct per-choice thumbnail.
+          if (pin.id) await updateDoc(doc(db, "assembly_pins", pin.id), { thumbUrl: url });
+          // cluster.imageUrl is shared by every pin in the cluster — only stamp it when this render
+          // WAS the whole cluster (no per-choice targetNode); stamping it from a per-choice render is
+          // what made one pin's thumbnail bleed onto its neighbors.
+          if (!pinNodes.length && pin.clusterId && Array.isArray(activeAssembly?.nodeClusters)) {
               const updated = activeAssembly.nodeClusters.map(c => c.id === pin.clusterId ? { ...c, imageUrl: url } : c);
               await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { nodeClusters: updated });
           }
@@ -1194,9 +1203,12 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
                         {pins.length === 0 && <div style={{ textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', fontFamily: 'var(--serif)' }}>Drop pins on the image to build the BOM.</div>}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             {pins.map(pin => {
-                                const libraryMatch = libraryParts.find(p => p.id === pin.partId);
+                                const libraryMatch = libraryParts.find(p => p.id === pin.partId || p.itemId === pin.partId || p.legacyErpId === pin.partId);
                                 const cluster = activeAssembly?.nodeClusters?.find(c => c.id === pin.clusterId);
-                                const hasThumb = libraryMatch?.finalImageUrl || libraryMatch?.componentImageUrl || cluster?.imageUrl;
+                                // Per-pin sources first. cluster.imageUrl is ONE image shared by every pin
+                                // in the cluster — valid only for whole-cluster pins; letting a per-choice
+                                // pin fall back to it made one thumbnail "change" its neighbors.
+                                const hasThumb = pin.thumbUrl || libraryMatch?.finalImageUrl || libraryMatch?.componentImageUrl || (!pin.targetNode ? cluster?.imageUrl : '');
                                 const isLoc = locatingClusterId === (pin.clusterId || pin.id);
                                 const canThumb = !!(activeAssembly?.manufacturingSpecs?.cadUrl && ((cluster?.nodes?.length) || pin.targetNode));
                                 const thumbing = thumbBusy === pin.id;

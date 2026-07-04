@@ -1011,7 +1011,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           if (!sel) return false;
           if (/^OPT-(BEND|MITER)/i.test(sel)) return true;
           const o = (s.styleOptions || []).find(x => (x.optId || x.partId) === sel);
-          return !!(o && RETURN_PICK_RE.test(`${o.partName || ''} ${o.optId || ''}`));
+          // targetNode included so a return renamed to a fee entity (name without keywords) is still
+          // recognized by its geometry node ("…34X14RNDBENDLEFT…" / "…MTR…").
+          return !!(o && RETURN_PICK_RE.test(`${o.partName || ''} ${o.optId || ''} ${o.targetNode || ''}`));
       });
   };
   // A return REPLACES the outer bracket: the bracket style pick greys out (and clears) while that

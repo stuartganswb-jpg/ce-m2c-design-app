@@ -671,7 +671,13 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       // Fee choice (e.g. a french-return bend marked FEE in the assign tool): keep the
                       // geometry + selection, but emit it partId-less like the built-in Miter/Bend fee
                       // options so it bills as a fee — never a BOM line.
-                      if (p.isFee) { e.isFee = true; e.partId = ''; e.partName = `${p.partName || 'Charge'} (fee — set price)`; }
+                      // Fee = the pin's flag OR the assigned part being a Fee/Charge entity (partClass
+                      // Fee / productType FEE) — e.g. a bend reassigned to CE-FEE-#### in Visual
+                      // Assembly. Emitted partId-less like the built-in Miter/Bend fee options: geometry
+                      // renders, bills as its own separate charge, never a physical BOM unit.
+                      const feePart = partsById[p.partId];
+                      const feeish = p.isFee || feePart?.partClass === 'Fee' || String(feePart?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE';
+                      if (feeish) { e.isFee = true; e.partId = ''; e.partName = `${p.partName || 'Charge'} (fee — set price)`; }
                       // Basic-bracket flag (assign tool): this bracket takes no backplate — the CPQ
                       // runtime greys the backplate picker to None while it's the selection.
                       if (p.isBasic) e.isBasic = true;
@@ -777,7 +783,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               // so it can hide on a return even when every option this side is a return.
               const gmap = {};
               group.forEach(o => {
-                  const isReturn = BEND_RE.test(`${o.partName || ''} ${o.optId || ''}`);
+                  // targetNode included: a return renamed to a fee entity (e.g. "CE-FEE-5138") loses
+                  // the keyword in its NAME, but its geometry node ("…34X14RNDBENDLEFT…") still says so.
+                  const isReturn = BEND_RE.test(`${o.partName || ''} ${o.optId || ''} ${o.targetNode || ''}`);
                   const nodes = [o.targetNode, isReturn ? '' : straightNodes].filter(Boolean).join(', ');
                   if (nodes) gmap[o.optId] = nodes;
               });

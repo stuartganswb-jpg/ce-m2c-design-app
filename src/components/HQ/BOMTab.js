@@ -788,8 +788,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 style={{ background: '#fff', border: `1px solid ${isSelected ? 'var(--brass)' : 'var(--line)'}`, display: 'flex', cursor: 'pointer', transition: 'all 0.2s ease', boxShadow: isSelected ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}
                             >
                                 <div style={{ width: '80px', height: '80px', background: 'var(--paper-2)', borderRight: '1px solid var(--line)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                                    {(master.finalImageUrl || master.componentImageUrl) ? (
-                                        <img src={master.finalImageUrl || master.componentImageUrl} alt="Part" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                    {(item.thumbUrl || master.finalImageUrl || master.componentImageUrl) ? (
+                                        <img src={item.thumbUrl || master.finalImageUrl || master.componentImageUrl} alt="Part" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                     ) : (
                                         <span style={{ fontSize: '1.2rem', color: 'var(--ink-soft)', opacity: 0.5 }}>⚙️</span>
                                     )}
