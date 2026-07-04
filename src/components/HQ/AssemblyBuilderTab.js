@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
-import { buildCodeIndex, matchItemByName } from '../Shared/itemCodeMatch';
+import { buildCodeIndex, matchItemByName, normCode } from '../Shared/itemCodeMatch';
 import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
 
 // Step-by-step assembly builder: the designer uploads ONE .glb per slot (all the choices for that slot
@@ -43,6 +43,8 @@ const STANDARD_SLOTS = [
     { id: 'center_backplate', label: 'Center Backplate', category: 'BACKPLATE', position: 'CENTER', location: 'WALL', desc: '2nd chooser on the center bracket step.' },
     { id: 'right_bracket', label: 'Right Bracket', category: 'BRACKET', position: 'RIGHT', location: 'WALL', desc: 'Right mounting bracket.' },
     { id: 'right_backplate', label: 'Right Backplate', category: 'BACKPLATE', position: 'RIGHT', location: 'WALL', desc: 'Rides as a 2nd chooser on the right bracket step.' },
+    { id: 'left_return_backplate', label: 'Left RETURN Backplate', category: 'BACKPLATE', position: 'LEFT', location: 'WALL', desc: 'Backplates offered ONLY when the LEFT end is a french/bent/mitered return (the RETURN in this label is what scopes them). Regular plates hide while a return is chosen.' },
+    { id: 'right_return_backplate', label: 'Right RETURN Backplate', category: 'BACKPLATE', position: 'RIGHT', location: 'WALL', desc: 'Backplates offered ONLY when the RIGHT end is a return. Keep RETURN in the label — that is what scopes them.' },
     { id: 'left_end', label: 'Left End — finials + returns', category: 'FINIAL', position: 'LEFT', location: '', desc: 'Stack ALL left-end choices in one file: finials + french/bent/mitered returns. Name the return choices with "return"/"french" so they hide the left long half.' },
     { id: 'right_end', label: 'Right End — finials + returns', category: 'FINIAL', position: 'RIGHT', location: '', desc: 'Stack ALL right-end choices: finials + returns. Name returns with "return"/"french" so they hide the right long half.' },
 ];
@@ -73,10 +75,19 @@ const makeLoader = () => {
     return loader;
 };
 
-// Top-level named parts in a loaded scene = the CHOICES for that slot.
-const topLevelParts = (scene) => {
-    const out = [];
-    (scene.children || []).forEach(c => { if (c.name) out.push(c.name); });
+// The CHOICES in a slot .glb. Exporters differ: some files list every choice as its own scene root
+// (LEFT BACKPLATE → 16 roots), others wrap everything in ONE file-named root (CENTER BACKPLATE →
+// 1 root, 25 plates inside) — which used to surface as a single unusable "choice". AUTO-UNWRAP:
+// while there's exactly one named container holding 2+ named children, descend into it. Deeper
+// mixed nesting is handled per-row with the ⤢ split button.
+const slotChoiceNames = (scene) => {
+    let level = (scene.children || []).filter(c => c.name);
+    let guard = 0;
+    while (level.length === 1 && guard++ < 4) {
+        const kids = (level[0].children || []).filter(c => c.name);
+        if (kids.length >= 2) level = kids; else break;
+    }
+    let out = level.map(c => c.name);
     if (!out.length) scene.traverse(o => { if (o.isMesh && o.name) out.push(o.name); });
     return [...new Set(out)];
 };
@@ -144,27 +155,96 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const url = URL.createObjectURL(new Blob([buf]));
             const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
             const scene = gltf.scene;
-            const parts = topLevelParts(scene);
+            const names = slotChoiceNames(scene);
             // Auto-prefill each choice's item # from the Master Library by node name ("<ITEM#> <POS>"
             // convention) — the designer's naming does the data entry; hardware matches nothing → blank.
             const index = await ensureCodeIndex().catch(() => null);
-            const items = {}; let hit = 0;
-            parts.forEach(p => { const m = index ? matchItemByName(p, index) : null; items[p] = m ? m.code : ''; if (m) hit++; });
+            if (index) setCodeOptions([...index].sort((a, b) => a.code.localeCompare(b.code)));
+            let hit = 0;
+            const choices = names.map(nm => {
+                const m = index ? matchItemByName(nm, index) : null;
+                if (m) hit++;
+                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', isFee: false, isHidden: false, isBasic: false, thumb: '' };
+            });
             setLayers(prev => {
                 if (prev[slot.id]?.url) URL.revokeObjectURL(prev[slot.id].url);
-                return { ...prev, [slot.id]: { scene, url, fileName: file.name, parts, items, offset: { x: 0, y: 0, z: 0 } } };
+                return { ...prev, [slot.id]: { scene, url, fileName: file.name, choices, offset: { x: 0, y: 0, z: 0 } } };
             });
-            addLog(`Loaded ${slot.label}: ${file.name} — ${parts.length} part(s), ${hit} item #(s) auto-matched`, 'success');
+            addLog(`Loaded ${slot.label}: ${file.name} — ${names.length} choice(s), ${hit} item #(s) auto-matched`, 'success');
+            genSlotThumbs(slot.id, scene, names);
         } catch (e) { addLog(`Failed to load ${file.name}: ${e.message || e}`, 'error'); alert('Could not read that .glb:\n' + (e.message || e)); }
         setBusy('');
     };
 
-    const setItem = (slotId, part, val) => setLayers(prev => ({ ...prev, [slotId]: { ...prev[slotId], items: { ...prev[slotId].items, [part]: val } } }));
     const nudge = (slotId, axis, val) => setLayers(prev => ({ ...prev, [slotId]: { ...prev[slotId], offset: { ...prev[slotId].offset, [axis]: Number(val) || 0 } } }));
     const removeLayer = (slotId) => setLayers(prev => { const n = { ...prev }; if (n[slotId]?.url) URL.revokeObjectURL(n[slotId].url); delete n[slotId]; return n; });
-    const addSlot = () => setSlots(s => [...s, { id: `slot_${Date.now()}`, label: 'New Slot', category: 'OTHER', position: 'SHARED', location: '', desc: '' }]);
+    const addSlot = () => setSlots(s => [...s, { id: `slot_${Date.now()}`, label: 'New Slot', category: 'OTHER', position: 'SHARED', location: '', desc: 'Type a descriptive label (e.g. "Left Return Backplate") — category & position tag themselves from it.' }]);
     const patchSlot = (id, patch) => setSlots(s => s.map(x => x.id === id ? { ...x, ...patch } : x));
     const removeSlot = (id) => { removeLayer(id); setSlots(s => s.filter(x => x.id !== id)); };
+
+    // Smart "+ Slot": infer category/position from the label as it's typed ("Left Return Backplate" →
+    // BACKPLATE · LEFT) so custom slots never ship with the OTHER/SHARED default mis-tag. Stops
+    // guessing the moment the user touches category/position by hand (manualMeta).
+    const inferSlotMeta = (label) => {
+        const L = String(label || '').toUpperCase();
+        let category = '';
+        if (/BACKPLATE|BACK PLATE|COVER PLATE/.test(L)) category = 'BACKPLATE';
+        else if (/BRACKET|ARM\b/.test(L)) category = 'BRACKET';
+        else if (/FINIAL|\bEND\b/.test(L)) category = 'FINIAL';
+        else if (/RING/.test(L)) category = 'RING';
+        else if (/POLE|ROD\b/.test(L)) category = 'POLE';
+        let position = '';
+        if (/LEFT/.test(L)) position = 'LEFT';
+        else if (/RIGHT/.test(L)) position = 'RIGHT';
+        else if (/CENTER|CENTRE|MIDDLE/.test(L)) position = 'CENTER';
+        else if (/FRONT/.test(L)) position = 'FRONT';
+        else if (/\bBACK\b/.test(L) && !/BACKPLATE|BACK PLATE/.test(L)) position = 'BACK';
+        return { category, position };
+    };
+    const patchSlotLabel = (id, label) => setSlots(s => s.map(x => {
+        if (x.id !== id) return x;
+        const next = { ...x, label };
+        if (!x.manualMeta) {
+            const inf = inferSlotMeta(label);
+            if (inf.category) next.category = inf.category;
+            if (inf.position) next.position = inf.position;
+            if ((inf.category === 'BACKPLATE' || inf.category === 'BRACKET') && !next.location) next.location = 'WALL';
+        }
+        return next;
+    }));
+
+    // Per-choice editing in the uploader — same surface as the assign tool (patch by nodeName, ▲▼
+    // ordering that Build persists as choiceSort, and ⤢ split for wrapper nodes holding several parts).
+    const setSlotChoicePatch = (slotId, nodeName, patch) => setLayers(prev => prev[slotId] ? { ...prev, [slotId]: { ...prev[slotId], choices: prev[slotId].choices.map(c => c.nodeName === nodeName ? { ...c, ...patch } : c) } } : prev);
+    const moveSlotChoice = (slotId, nodeName, dir) => setLayers(prev => {
+        const layer = prev[slotId];
+        if (!layer) return prev;
+        const i = layer.choices.findIndex(c => c.nodeName === nodeName);
+        const j = i + dir;
+        if (i < 0 || j < 0 || j >= layer.choices.length) return prev;
+        const choices = [...layer.choices];
+        [choices[i], choices[j]] = [choices[j], choices[i]];
+        return { ...prev, [slotId]: { ...layer, choices } };
+    });
+    const splitSlotChoice = (slotId, nodeName) => {
+        const layer = layers[slotId];
+        const node = layer?.scene?.getObjectByName(nodeName);
+        const kids = node ? (node.children || []).map(c => c.name).filter(Boolean) : [];
+        if (!kids.length) return alert('This node has no named sub-parts to split into — it is a single mesh.');
+        const index = codeIndexRef.current?.brand === activeBrand ? codeIndexRef.current.index : null;
+        setLayers(prev => prev[slotId] ? {
+            ...prev,
+            [slotId]: {
+                ...prev[slotId],
+                choices: prev[slotId].choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
+                    const m = index ? matchItemByName(nm, index) : null;
+                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', isFee: false, isHidden: false, isBasic: false, thumb: '' };
+                }))
+            }
+        } : prev);
+        addLog(`Split "${nodeName}" into ${kids.length} sub-part(s).`, 'info');
+        genSlotThumbs(slotId, layer.scene, kids);
+    };
 
     // Switch workflow template. If anything's already uploaded, confirm first (uploads are cleared
     // because the new template's slots have different ids). Nothing here touches saved data.
@@ -182,7 +262,27 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const build = async () => {
         if (!assemblyName.trim()) return alert('Name the assembly first.');
         if (!filledSlots.length) return alert('Upload at least one slot .glb first.');
-        if (!window.confirm(`Build "${assemblyName}" from ${filledSlots.length} slot file(s)?\n\nThis merges them into one .glb, creates the assembly with ${filledSlots.length} cluster(s), and writes its BOM.`)) return;
+        // ── PREFLIGHT ── catch the whole "built with 0 pins / mis-tagged slots / typo'd item #s"
+        // class of failure BEFORE anything is written. Warnings don't block — you confirm through them.
+        const index = codeIndexRef.current?.brand === activeBrand ? codeIndexRef.current.index : await ensureCodeIndex().catch(() => null);
+        const knownNorms = new Set((index || []).map(e => e.norm));
+        const HARDWARE_RE = /screw|standoff|stand-off|washer|\bnut\b|bolt|rivet|spring|grommet/i;
+        const warnings = [];
+        filledSlots.forEach(slot => {
+            const ch = layers[slot.id].choices || [];
+            const suspicious = ch.filter(c => !(c.itemNo && c.itemNo.trim()) && !c.isFee && !c.isHidden && !HARDWARE_RE.test(c.label) && /\d/.test(c.label) && c.label.replace(/[^A-Za-z0-9]/g, '').length >= 6);
+            if (suspicious.length) warnings.push(`• ${slot.label}: ${suspicious.length} BLANK choice(s) that look like real parts (${suspicious.slice(0, 3).map(c => c.label).join(', ')}${suspicious.length > 3 ? ', …' : ''})`);
+            const unknown = ch.filter(c => c.itemNo && c.itemNo.trim() && index && !knownNorms.has(normCode(c.itemNo)));
+            if (unknown.length) warnings.push(`• ${slot.label}: item #(s) not in the ${String(activeBrand || '').toUpperCase()} library (typo?): ${unknown.map(c => c.itemNo).join(', ')}`);
+            if (!slot.category || slot.category === 'OTHER') warnings.push(`• ${slot.label}: category is OTHER — the flow generator will misfile this cluster. Tag it.`);
+            if (/RETURN/i.test(slot.label) && /PLATE/i.test(slot.label) && slot.category !== 'BACKPLATE') warnings.push(`• ${slot.label}: labeled a return backplate but category is ${slot.category || '—'} — should be BACKPLATE.`);
+        });
+        const summary = filledSlots.map(s => {
+            const ch = layers[s.id].choices || [];
+            const pinned = ch.filter(c => (c.itemNo && c.itemNo.trim()) || c.isFee || c.isHidden).length;
+            return `• ${s.label}: ${ch.length} choice(s) — ${pinned} pinned (item/fee/hide), ${ch.length - pinned} blank`;
+        }).join('\n');
+        if (!window.confirm(`Build "${assemblyName}" from ${filledSlots.length} slot file(s)?\n\nPREFLIGHT\n${summary}\n${warnings.length ? `\n⚠ CHECK FIRST\n${warnings.join('\n')}\n` : '\n✓ No issues detected.\n'}\nBlank choices stay as always-visible shared geometry. Continue?`)) return;
         setBusy('build');
         try {
             // 1) Combine every layer into one scene, each slot wrapped in a named group = its cluster.
@@ -205,21 +305,36 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 // generator fallback partId). topMap remaps each choice's top-level name for its pin.
                 const prefix = `S${slotIdx}-${pretty}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 44);
                 g.name = prefix;
+                // Map each CHOICE node's original name → its renamed name (choices may sit a level
+                // deeper than the group after auto-unwrap/split, so match by name set, not by parent).
+                // Traversal is parent-first, so a top-level choice wins over a same-named deep dupe.
+                const choiceSet = new Set((layer.choices || []).map(c => c.nodeName));
                 const topMap = {};
                 let ni = 0;
                 g.traverse(node => {
                     if (node === g) return;
                     const orig = node.name || '';
                     const nn = `${prefix}__${ni++}${orig ? '_' + orig.replace(/[^A-Za-z0-9]/g, '').slice(0, 24) : ''}`;
-                    if (node.parent === g && orig && !(orig in topMap)) topMap[orig] = nn;
+                    if (orig && choiceSet.has(orig) && !(orig in topMap)) topMap[orig] = nn;
                     node.name = nn;
                 });
                 combined.add(g);
                 const clusterId = `CLUSTER-${slot.id}-${Date.now()}`;
                 clusters.push({ id: clusterId, name: pretty, nodes: [prefix, ...allNodeNames(g)], category: slot.category, position: slot.position, location: slot.location || '' });
-                // One BOM pin per choice that has an item # entered; choiceNode points at the renamed node.
-                Object.entries(layer.items).forEach(([part, itemNo]) => {
-                    if (itemNo && itemNo.trim()) pins.push({ assemblyId: asmId, clusterId, partId: itemNo.trim().toUpperCase(), defaultQty: 1, choiceNode: topMap[part] || part });
+                // Full pin schema — identical to the assign tool, so a built assembly needs NO
+                // follow-up pass: item / fee / hidden / basic flags + the arrow order (choiceSort).
+                (layer.choices || []).forEach((ch, idx) => {
+                    const hasItem = ch.itemNo && ch.itemNo.trim();
+                    if (!hasItem && !ch.isFee && !ch.isHidden) return; // blank = shared hardware, no pin
+                    const slug = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
+                    const partId = ch.isHidden ? `HIDDEN-${slug}` : (hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${slug}`);
+                    pins.push({
+                        assemblyId: asmId, clusterId, partId, partName: ch.label || partId, defaultQty: 1,
+                        choiceNode: topMap[ch.nodeName] || ch.nodeName, choiceSort: idx,
+                        ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}),
+                        ...(ch.isHidden ? { isHiddenPart: true } : {}),
+                        ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {})
+                    });
                 });
             });
 
@@ -433,26 +548,38 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         };
     });
 
-    // Render thumbnails for the given node names, sequentially (each snapshot opens+closes its own GL
-    // context), keyed by nodeName so in-flight results land correctly even after splits. A newer run
-    // (bumped assignGenRef) cancels an older one.
-    const genThumbs = (nodeNames, gen) => {
-        const scene = assignSceneRef.current;
-        if (!scene) return;
+    // Sequential thumbnail renderer (each snapshot opens+closes its own GL context; 448px source is
+    // crisp enough for the click-to-zoom overlay at 44px display). Keyed by nodeName so in-flight
+    // results land correctly even after splits; isCancelled aborts a superseded run.
+    const snapThumbSeq = (scene, nodeNames, isCancelled, apply) => {
         (async () => {
             for (const nm of nodeNames) {
-                if (assignGenRef.current !== gen) return;
+                if (isCancelled()) return;
                 try {
                     const g = isolateCluster(scene, [nm]);
                     if (!g.children.length) continue;
-                    // 448px source: crisp enough for the click-to-zoom overlay, displayed at 44px.
                     const blob = await snapshotPNG(g, 448);
                     const thumbUrl = URL.createObjectURL(blob);
-                    if (assignGenRef.current !== gen) { URL.revokeObjectURL(thumbUrl); return; }
-                    setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => ({ ...r, choices: r.choices.map(c => c.nodeName === nm ? { ...c, thumb: thumbUrl } : c) })) } : prev);
+                    if (isCancelled()) { URL.revokeObjectURL(thumbUrl); return; }
+                    apply(nm, thumbUrl);
                 } catch { /* a node with no snapshot just keeps its placeholder */ }
             }
         })();
+    };
+    const genThumbs = (nodeNames, gen) => {
+        const scene = assignSceneRef.current;
+        if (!scene) return;
+        snapThumbSeq(scene, nodeNames, () => assignGenRef.current !== gen, (nm, thumbUrl) =>
+            setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => ({ ...r, choices: r.choices.map(c => c.nodeName === nm ? { ...c, thumb: thumbUrl } : c) })) } : prev));
+    };
+    // Slot-uploader thumbnails: same renderer, applied to a layer's choices (per-slot generation
+    // counter so re-uploading a slot cancels its older run).
+    const slotGenRef = useRef({});
+    const genSlotThumbs = (slotId, scene, nodeNames) => {
+        const gen = (slotGenRef.current[slotId] || 0) + 1;
+        slotGenRef.current[slotId] = gen;
+        snapThumbSeq(scene, nodeNames, () => slotGenRef.current[slotId] !== gen, (nm, thumbUrl) =>
+            setLayers(prev => prev[slotId] ? { ...prev, [slotId]: { ...prev[slotId], choices: prev[slotId].choices.map(c => c.nodeName === nm ? { ...c, thumb: thumbUrl } : c) } } : prev));
     };
 
     // SPLIT a choice that's really several items merged under one wrapper node (e.g. a whole stack of
@@ -627,11 +754,6 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                 </div>
                             );
                         })}
-                        {/* Searchable item-# picker source: type in any item field to filter this
-                            alphabetical Master-Library list (native datalist). */}
-                        <datalist id="ab-item-codes">
-                            {codeOptions.map(o => <option key={o.code} value={o.code}>{o.name}</option>)}
-                        </datalist>
                         <button onClick={handleSaveItemNumbers} disabled={assignBusy} style={{ padding: '12px', background: assignBusy ? 'var(--paper-2)' : '#3a7d44', color: assignBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: assignBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600 }}>
                             {assignBusy ? 'Saving…' : '⬇ Save Item Numbers as Choice Pins'}
                         </button>
@@ -652,10 +774,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         return (
                             <div key={slot.id} style={{ border: `1px solid ${layer ? 'var(--brass)' : 'var(--line)'}`, background: layer ? 'var(--paper)' : '#fff', padding: '12px', borderRadius: '2px' }}>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 0.9fr auto', gap: '8px', alignItems: 'center' }}>
-                                    <input value={slot.label} onChange={e => patchSlot(slot.id, { label: e.target.value })} style={{ ...inp, padding: '6px 8px', fontSize: '0.8rem', fontWeight: 500 }} />
-                                    <select value={slot.category} onChange={e => patchSlot(slot.id, { category: e.target.value })} style={sel}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
-                                    <select value={slot.position} onChange={e => patchSlot(slot.id, { position: e.target.value })} style={sel}>{POSITIONS.map(c => <option key={c}>{c}</option>)}</select>
-                                    <select value={slot.location} onChange={e => patchSlot(slot.id, { location: e.target.value })} style={sel}>{LOCATIONS.map(c => <option key={c} value={c}>{c || '—'}</option>)}</select>
+                                    <input value={slot.label} onChange={e => patchSlotLabel(slot.id, e.target.value)} style={{ ...inp, padding: '6px 8px', fontSize: '0.8rem', fontWeight: 500 }} />
+                                    <select value={slot.category} onChange={e => patchSlot(slot.id, { category: e.target.value, manualMeta: true })} style={sel}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
+                                    <select value={slot.position} onChange={e => patchSlot(slot.id, { position: e.target.value, manualMeta: true })} style={sel}>{POSITIONS.map(c => <option key={c}>{c}</option>)}</select>
+                                    <select value={slot.location} onChange={e => patchSlot(slot.id, { location: e.target.value, manualMeta: true })} style={sel}>{LOCATIONS.map(c => <option key={c} value={c}>{c || '—'}</option>)}</select>
                                     <button onClick={() => removeSlot(slot.id)} title="Remove slot" style={{ border: 'none', background: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.1rem' }}>×</button>
                                 </div>
                                 {slot.desc && (
@@ -669,18 +791,41 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                         {busy === slot.id ? 'Loading…' : (layer ? 'Replace .glb' : 'Upload .glb')}
                                         <input type="file" accept=".glb,.gltf" style={{ display: 'none' }} onChange={e => onUpload(slot, e.target.files[0])} />
                                     </label>
-                                    {layer && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{layer.fileName} · {layer.parts.length} choice(s)</span>}
+                                    {layer && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{layer.fileName} · {(layer.choices || []).length} choice(s)</span>}
                                     {layer && <button onClick={() => removeLayer(slot.id)} style={{ ...sel, cursor: 'pointer', marginLeft: 'auto' }}>clear</button>}
                                 </div>
                                 {layer && (
                                     <div style={{ marginTop: '10px', borderTop: '1px dashed var(--line)', paddingTop: '10px' }}>
-                                        <div style={{ ...lbl, marginBottom: '6px' }}>Choices → item # (each becomes a CPQ swap option + BOM line)</div>
-                                        {layer.parts.map(part => (
-                                            <div key={part} style={{ display: 'grid', gridTemplateColumns: '1fr 130px', gap: '8px', alignItems: 'center', marginBottom: '5px' }}>
-                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{part}</span>
-                                                <input value={layer.items[part]} onChange={e => setItem(slot.id, part, e.target.value)} placeholder="item #" style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)' }} />
-                                            </div>
-                                        ))}
+                                        <div style={{ ...lbl, marginBottom: '6px' }}>Choices → item # (each becomes a CPQ swap option + BOM line) · blank = shared hardware</div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 170px 54px 40px', gap: '5px 8px', alignItems: 'center' }}>
+                                            {(layer.choices || []).map(c => (
+                                                <React.Fragment key={c.nodeName}>
+                                                    {c.thumb
+                                                        ? <img src={c.thumb} alt="" title="Click to enlarge" onClick={() => setZoomThumb({ url: c.thumb, label: `${slot.label} · ${c.label}${c.itemNo ? ` · ${c.itemNo}` : ''}` })} style={{ width: '38px', height: '38px', objectFit: 'contain', background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px', cursor: 'zoom-in' }} />
+                                                        : <span style={{ width: '38px', height: '38px', border: '1px dashed var(--line)', borderRadius: '2px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)' }}>…</span>}
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
+                                                        <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
+                                                        <button onClick={() => splitSlotChoice(slot.id, c.nodeName)} title="Several parts merged under one wrapper node? Split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '1px 5px', borderRadius: '2px', flexShrink: 0 }}>⤢</button>
+                                                    </span>
+                                                    <input value={c.itemNo} list="ab-item-codes" disabled={c.isFee || c.isHidden} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — no item #' : (c.isHidden ? 'hidden' : 'item # — type to search')} style={{ ...inp, padding: '4px 7px', fontSize: '0.75rem', fontFamily: 'var(--mono)', borderColor: (c.isFee || c.isHidden) ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: (c.isFee || c.isHidden) ? 0.5 : 1 }} />
+                                                    <span style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                                                        <label title="Fee choice (e.g. a french-return bend): selectable option that bills as a fee — no item # / BOM line." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                            <input type="checkbox" checked={!!c.isFee} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '', isHidden: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />fee
+                                                        </label>
+                                                        <label title="Force-hidden in every configuration (stray geometry that should never render)." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isHidden ? '#d9534f' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                            <input type="checkbox" checked={!!c.isHidden} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { itemNo: '', isFee: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />hide
+                                                        </label>
+                                                        <label title="Basic bracket: takes NO backplate — the backplate picker greys to None when this bracket is selected. Keep the item # filled." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isBasic ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                            <input type="checkbox" checked={!!c.isBasic} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isBasic: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false } : {}) })} style={{ cursor: 'pointer' }} />basic
+                                                        </label>
+                                                    </span>
+                                                    <span style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                                        <button onClick={() => moveSlotChoice(slot.id, c.nodeName, -1)} title="Move up — order is saved (choiceSort) and drives the option order in the configurator" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '8px', padding: '1px 4px', borderRadius: '2px' }}>▲</button>
+                                                        <button onClick={() => moveSlotChoice(slot.id, c.nodeName, 1)} title="Move down" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '8px', padding: '1px 4px', borderRadius: '2px' }}>▼</button>
+                                                    </span>
+                                                </React.Fragment>
+                                            ))}
+                                        </div>
                                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
                                             <span style={lbl}>Nudge</span>
                                             {['x', 'y', 'z'].map(ax => (
@@ -721,6 +866,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     )}
                 </div>
             </div>
+
+            {/* Searchable item-# picker source, shared by the uploader AND the assign tool: type in
+                any item field to filter this alphabetical Master-Library list (native datalist). */}
+            <datalist id="ab-item-codes">
+                {codeOptions.map(o => <option key={o.code} value={o.code}>{o.name}</option>)}
+            </datalist>
 
             {/* Enlarged-thumbnail overlay: click any choice thumbnail to identify the part; click
                 anywhere (or ×) to close. */}
