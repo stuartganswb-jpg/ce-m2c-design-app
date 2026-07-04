@@ -98,27 +98,40 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [assignBusy, setAssignBusy] = useState(false);
     const [codeOptions, setCodeOptions] = useState([]); // alphabetical Master-Library codes for the item # picker
     const assignGenRef = useRef(0);                      // invalidates in-flight thumbnail runs on reload
+    const [zoomThumb, setZoomThumb] = useState(null);    // { url, label } — enlarged thumbnail overlay
     const loaderRef = useRef(null);
     if (!loaderRef.current) loaderRef.current = makeLoader();
     // Master-Library ERP-code index for auto-matching item #s from node names (designer's convention:
     // node name = "<ITEM#> <POSITION>"). Fetched once, cached for the session.
     const codeIndexRef = useRef(null);
     const ensureCodeIndex = async () => {
-        if (codeIndexRef.current) return codeIndexRef.current;
+        // Brand-scoped: only the active brand's items (own or shared) feed the picker + auto-match,
+        // so the search list isn't polluted with other brands' codes. Cache is keyed by brand.
+        if (codeIndexRef.current?.brand === activeBrand) return codeIndexRef.current.index;
         const snap = await getDocs(collection(db, 'Approved_Designs'));
-        codeIndexRef.current = buildCodeIndex(snap.docs.map(d => { const x = d.data(); return { legacyErpId: x.legacyErpId, itemId: x.itemId, itemName: x.itemName }; }));
-        return codeIndexRef.current;
+        const parts = snap.docs.map(d => d.data())
+            .filter(x => !activeBrand || x.brandId === activeBrand || (Array.isArray(x.sharedBrands) && x.sharedBrands.includes(activeBrand)))
+            .map(x => ({ legacyErpId: x.legacyErpId, itemId: x.itemId, itemName: x.itemName }));
+        const index = buildCodeIndex(parts);
+        codeIndexRef.current = { brand: activeBrand, index };
+        return index;
     };
 
     const addLog = (m, t = 'info') => setLog(p => [{ t: new Date().toLocaleTimeString(), m, type: t }, ...p].slice(0, 40));
 
     useEffect(() => () => { Object.values(layers).forEach(l => l.url && URL.revokeObjectURL(l.url)); }, []); // eslint-disable-line
 
-    // Existing brand assemblies (for the node-name repair tool below).
+    // Existing brand assemblies for the Repair + Assign dropdowns — MAINLINE only (routingType MAIN
+    // or recordType PRODUCT): this tool exists for main CPQ assemblies, so sub-assemblies/orphans
+    // would only clutter the pick list.
     useEffect(() => {
         if (!activeBrand) return;
         const qy = query(collection(db, 'Approved_Designs'), where('brandId', '==', activeBrand), where('partClass', '==', 'Assembly'));
-        const unsub = onSnapshot(qy, snap => setRepairList(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.itemName || '').localeCompare(String(b.itemName || '')))));
+        const unsub = onSnapshot(qy, snap => setRepairList(
+            snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(a => a.routingType === 'MAIN' || a.recordType === 'PRODUCT')
+                .sort((a, b) => String(a.itemName || '').localeCompare(String(b.itemName || '')))
+        ));
         return () => unsub();
     }, [activeBrand]);
 
@@ -391,7 +404,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         try {
                             const g = isolateCluster(scene, [rows[ci].choices[cj].nodeName]);
                             if (!g.children.length) continue;
-                            const blob = await snapshotPNG(g, 128);
+                            // 448px source: crisp enough for the click-to-zoom overlay, displayed at 44px.
+                            const blob = await snapshotPNG(g, 448);
                             const thumbUrl = URL.createObjectURL(blob);
                             if (assignGenRef.current !== gen) { URL.revokeObjectURL(thumbUrl); return; }
                             setAssignData(prev => {
@@ -509,7 +523,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                         {r.choices.map((c, cj) => (
                                             <React.Fragment key={c.nodeName}>
                                                 {c.thumb
-                                                    ? <img src={c.thumb} alt="" style={{ width: '44px', height: '44px', objectFit: 'contain', background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px' }} />
+                                                    ? <img src={c.thumb} alt="" title="Click to enlarge" onClick={() => setZoomThumb({ url: c.thumb, label: `${r.clusterName} · ${c.label}${c.itemNo ? ` · ${c.itemNo}` : ''}` })} style={{ width: '44px', height: '44px', objectFit: 'contain', background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px', cursor: 'zoom-in' }} />
                                                     : <span style={{ width: '44px', height: '44px', border: '1px dashed var(--line)', borderRadius: '2px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)' }}>…</span>}
                                                 <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
                                                 <input value={c.itemNo} list="ab-item-codes" onChange={e => setChoiceItem(realCi, cj, e.target.value)} placeholder="item # — type to search (blank = hardware)" style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.itemNo ? 'var(--brass)' : 'var(--line)' }} />
@@ -613,6 +627,18 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     )}
                 </div>
             </div>
+
+            {/* Enlarged-thumbnail overlay: click any choice thumbnail to identify the part; click
+                anywhere (or ×) to close. */}
+            {zoomThumb && (
+                <div onClick={() => setZoomThumb(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,14,0.72)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'zoom-out' }}>
+                    <div style={{ background: '#fff', borderRadius: '2px', padding: '18px 18px 14px', maxWidth: 'min(640px, 92vw)', textAlign: 'center', boxShadow: '0 18px 60px rgba(0,0,0,0.35)' }}>
+                        <img src={zoomThumb.url} alt="" style={{ width: 'min(560px, 84vw)', height: 'min(560px, 60vh)', objectFit: 'contain', background: 'var(--paper-2)', border: '1px solid var(--line)' }} />
+                        <div style={{ marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', wordBreak: 'break-all' }}>{zoomThumb.label}</div>
+                        <div style={{ marginTop: '4px', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em' }}>click anywhere to close</div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
