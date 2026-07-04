@@ -379,7 +379,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 builtFromLayers: filledSlots.map(s => ({ slot: s.label, file: layers[s.id].fileName })),
                 createdAt: Date.now(), updatedAt: Date.now(), author: currentUser || ''
             }, { merge: true });
-            for (const p of pins) await setDoc(doc(db, 'assembly_pins', `PIN-${asmId}-${p.clusterId}-${p.partId}`.replace(/[^A-Za-z0-9-]/g, '_')), { id: `PIN-${asmId}-${p.clusterId}`, ...p });
+            // Stored id MUST equal the real doc id — Visual Assembly addresses pins by pin.id for
+            // reassign/qty/delete, and a mismatched stored id makes those writes hit a nonexistent path.
+            for (const p of pins) {
+                const pid = `PIN-${asmId}-${p.clusterId}-${p.partId}`.replace(/[^A-Za-z0-9-]/g, '_');
+                await setDoc(doc(db, 'assembly_pins', pid), { id: pid, ...p });
+            }
 
             addLog(`✅ Built "${assemblyName}" — ${clusters.length} clusters, ${pins.length} BOM pin(s).`, 'success');
             alert(`✅ Assembly "${assemblyName}" built.\n\n${clusters.length} clusters (already tagged position + category), ${pins.length} BOM lines. It's ready in Visual Assembly / BOM / Vision — no Auto-Group needed. Generate its CPQ flow in System Admin when ready.`);

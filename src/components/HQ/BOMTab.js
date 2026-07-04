@@ -142,7 +142,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
     if (!selectedAssemblyId) { setBomPins([]); return; }
     const q = query(collection(db, "assembly_pins"), where("assemblyId", "==", selectedAssemblyId));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setBomPins(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      // Doc id LAST so a stale stored `id` field can never mask the real document.
+      setBomPins(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
     });
     return () => unsubscribe();
   }, [selectedAssemblyId]);
@@ -787,8 +788,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 style={{ background: '#fff', border: `1px solid ${isSelected ? 'var(--brass)' : 'var(--line)'}`, display: 'flex', cursor: 'pointer', transition: 'all 0.2s ease', boxShadow: isSelected ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}
                             >
                                 <div style={{ width: '80px', height: '80px', background: 'var(--paper-2)', borderRight: '1px solid var(--line)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                                    {master.finalImageUrl ? (
-                                        <img src={master.finalImageUrl} alt="Part" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                    {(master.finalImageUrl || master.componentImageUrl) ? (
+                                        <img src={master.finalImageUrl || master.componentImageUrl} alt="Part" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                     ) : (
                                         <span style={{ fontSize: '1.2rem', color: 'var(--ink-soft)', opacity: 0.5 }}>⚙️</span>
                                     )}

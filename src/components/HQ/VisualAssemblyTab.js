@@ -249,7 +249,9 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
   useEffect(() => {
     if (!selectedAssemblyId) return;
     const q = query(collection(db, "assembly_pins"), where("assemblyId", "==", selectedAssemblyId));
-    const unsubscribe = onSnapshot(q, (snapshot) => setPins(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
+    // Doc id LAST so it always wins — some builder-era pins stored a wrong `id` field, and letting it
+    // override doc.id made reassign/qty/delete write to a nonexistent path (silent no-op).
+    const unsubscribe = onSnapshot(q, (snapshot) => setPins(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }))));
     return () => unsubscribe();
   }, [selectedAssemblyId]);
 
@@ -460,7 +462,9 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       if (reassignPinId) {
         await updateDoc(doc(db, "assembly_pins", reassignPinId), {
           partName: newPartName.toUpperCase(), partId: newMasterId, legacyErpId: "PENDING",
-          isExistingLibraryPart: false, specs: newDoc.manufacturingSpecs || {}, status: "NEEDS_SPECS"
+          isExistingLibraryPart: false, specs: newDoc.manufacturingSpecs || {}, status: "NEEDS_SPECS",
+          // A real (even new) part supersedes any fee/hidden role the pin carried.
+          isFee: false, isHiddenPart: false
         });
         setDrawerOpen(false); setReassignPinId(null);
         setNewPartSpecs({ productType: '', collection: '', uom: 'EA', partHandling: '', dynamicDicts: {}, customData: {} });
@@ -494,7 +498,10 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       try {
         await updateDoc(doc(db, "assembly_pins", reassignPinId), {
           partName: part.itemName, partId: part.itemId, legacyErpId: part.legacyErpId || "N/A",
-          isExistingLibraryPart: true, specs: part.manufacturingSpecs || {}, status: "SPECS_LOCKED"
+          isExistingLibraryPart: true, specs: part.manufacturingSpecs || {}, status: "SPECS_LOCKED",
+          // Assigning a REAL library part supersedes any fee/hidden role the pin had (e.g. a
+          // french-return bend saved as a fee in the Assembly Builder) — it's a BOM item now.
+          isFee: false, isHiddenPart: false
         });
         setDrawerOpen(false); setReassignPinId(null);
       } catch (e) { console.error('reassign failed', e); alert('Reassign failed — check console.'); }
