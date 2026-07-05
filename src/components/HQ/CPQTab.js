@@ -554,7 +554,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const unsubParts = onSnapshot(query(collection(db, "Approved_Designs")), (snap) => {
           let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           docs = docs.filter(d => d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand)));
-          setLibraryParts(docs.filter(d => d.partClass === "Inventory"));
+          // Fee/Charge + Alias entities included: fee options price from the fee ENTITY's basePrice
+          // (e.g. CE-FEE-5138) — filtering to Inventory only left them unresolvable, so fees sat at $0.
+          setLibraryParts(docs.filter(d => ["Inventory", "Fee", "Alias"].includes(d.partClass)));
           setLiveAssemblies(docs.filter(d => d.partClass === "Assembly" || d.partClass === "Master Assembly"));
       });
 
