@@ -374,6 +374,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 id: asmId, itemId: asmId, itemName: assemblyName.toUpperCase().trim(),
                 brandId: activeBrand, sharedBrands: [activeBrand],
                 partClass: 'Assembly', routingType: 'MAIN', recordType: 'PRODUCT',
+                // Builder output is deliberately authored — stamp the Inception sign-offs so it flows
+                // everywhere that gates on approvals (e.g. Visual Assembly) without an Inception pass.
+                approvals: { designer: currentUser || 'BUILDER', technical: currentUser || 'BUILDER', machinist: currentUser || 'BUILDER' },
                 nodeClusters: clusters,
                 manufacturingSpecs: { cadUrl, status: 'BUILT_FROM_LAYERS' },
                 builtFromLayers: filledSlots.map(s => ({ slot: s.label, file: layers[s.id].fileName })),

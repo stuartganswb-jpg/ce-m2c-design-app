@@ -207,8 +207,11 @@ const VisualAssemblyTab = ({ currentUser, activeBrand, onProceed }) => {
       let docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       // Master Assembly list = MAINLINE only (a mainline assembly routingType MAIN, or a PRODUCT from
       // Inception). Orphans / sub-components / unrouted parts live in the BOM Engine / Master Library.
-      // Mainline AND fully APPROVED in Inception (all 3 sign-offs) — un-approved products don't flow here yet.
-      docs = docs.filter(d => ((d.routingType || '').toUpperCase() === 'MAIN' || (d.recordType || '').toUpperCase() === 'PRODUCT') && d.approvals && d.approvals.designer && d.approvals.technical && d.approvals.machinist);
+      // Mainline AND fully APPROVED in Inception (all 3 sign-offs) — un-approved products don't flow
+      // here yet. Assembly-Builder output (builtFromLayers) is deliberately authored and never passes
+      // through Inception, so it counts as approved.
+      docs = docs.filter(d => ((d.routingType || '').toUpperCase() === 'MAIN' || (d.recordType || '').toUpperCase() === 'PRODUCT')
+          && (d.builtFromLayers || (d.approvals && d.approvals.designer && d.approvals.technical && d.approvals.machinist)));
       docs.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setAssemblies(docs);
       if (docs.length > 0 && !selectedAssemblyId) setSelectedAssemblyId(docs[0].itemId);
