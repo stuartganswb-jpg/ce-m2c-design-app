@@ -677,7 +677,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       // renders, bills as its own separate charge, never a physical BOM unit.
                       const feePart = partsById[p.partId];
                       const feeish = p.isFee || feePart?.partClass === 'Fee' || String(feePart?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE';
-                      if (feeish) { e.isFee = true; e.partId = ''; e.partName = `${p.partName || 'Charge'} (fee — set price)`; }
+                      // Keep the partId: the CPQ prices the fee from the fee ENTITY's basePrice
+                      // (e.g. CE-FEE-5138) unless an option price is set; the ERP push skips
+                      // Fee-class parts so it still never becomes a NetSuite BOM line.
+                      if (feeish) { e.isFee = true; e.partName = `${p.partName || 'Charge'} (fee)`; }
                       // Basic-bracket flag (assign tool): this bracket takes no backplate — the CPQ
                       // runtime greys the backplate picker to None while it's the selection.
                       if (p.isBasic) e.isBasic = true;
@@ -787,9 +790,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               // so it can hide on a return even when every option this side is a return.
               const gmap = {};
               group.forEach(o => {
-                  // targetNode included: a return renamed to a fee entity (e.g. "CE-FEE-5138") loses
-                  // the keyword in its NAME, but its geometry node ("…34X14RNDBENDLEFT…") still says so.
-                  const isReturn = BEND_RE.test(`${o.partName || ''} ${o.optId || ''} ${o.targetNode || ''}`);
+                  // Geometry check uses only each node's LEAF label (after the "S5-<CLUSTER>__n_"
+                  // prefix): a return renamed to a fee entity ("CE-FEE-5138") is still recognized by
+                  // its node ("…34X14RNDBENDLEFT…"), but the cluster-name prefix ("…FINIALS-+-RETURNS")
+                  // must NOT count — it made every finial read as a return and detach the long rod.
+                  const leaves = String(o.targetNode || '').split(',').map(s => { const seg = String(s).trim().split('__').pop() || ''; return seg.replace(/^\d+_?/, ''); }).join(' ');
+                  const isReturn = BEND_RE.test(`${o.partName || ''} ${o.optId || ''} ${leaves}`);
                   const nodes = [o.targetNode, isReturn ? '' : straightNodes].filter(Boolean).join(', ');
                   if (nodes) gmap[o.optId] = nodes;
               });
@@ -819,7 +825,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // single material, this IS the combined "choose length + finish" step. The calculatorTemplate +
       // title follow the chosen bay configuration so the configurator math matches the flow's fabShape.
       const poleInc = takeIncluded(''); // shared/untagged hidden accessories ride the always-present pole step
-      add({ title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, geometryMap: {}, targetNodes: poleNodes, ...(poleInc ? { includedParts: poleInc } : {}) });
+      // linkedItemId = the pole ITEM (single-material case): this step's selection is the FINISH, so
+      // without it the pricing engine has no physical part to price the per-foot qty against.
+      add({ title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, geometryMap: {}, targetNodes: poleNodes, ...(centerPole.length === 1 && centerPole[0]?.partId ? { linkedItemId: centerPole[0].partId } : {}), ...(poleInc ? { includedParts: poleInc } : {}) });
       // End Treatment comes BEFORE the brackets on purpose: picking a return here can remove that end's
       // outer bracket step (returnHidesBracket), so the customer settles each end first and never picks
       // a bracket that then disappears. It's ALWAYS emitted — even with 0 finials it carries the Mitered

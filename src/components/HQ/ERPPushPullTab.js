@@ -141,6 +141,9 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           // lengths that are both the same steel pole) → resolve to the real part before building the line.
           const aliasId = masterPart.aliasOf || masterPart.manufacturingSpecs?.aliasOf;
           if (aliasId) { const real = matchPart(aliasId); if (real) masterPart = real; }
+          // Fee/Charge entities price the quote (their charge rides the rollup item's price) but are
+          // NOT physical NetSuite BOM components — skip instead of pushing an UNMAPPED item line.
+          if (masterPart.partClass === 'Fee' || String(masterPart.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE') return;
           // The demand lands on the finished assembly (base/CODE, e.g. H1-138BF/EP1 or H1-138BF/P) instead of the
           // bare base when the selected finish is either (a) OUTSOURCED — always consumes finished stock — or
           // (b) IN-HOUSE but the finished assembly is flagged "Stocked" in the library (held in stock, not

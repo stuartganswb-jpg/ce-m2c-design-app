@@ -1011,9 +1011,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           if (!sel) return false;
           if (/^OPT-(BEND|MITER)/i.test(sel)) return true;
           const o = (s.styleOptions || []).find(x => (x.optId || x.partId) === sel);
-          // targetNode included so a return renamed to a fee entity (name without keywords) is still
-          // recognized by its geometry node ("…34X14RNDBENDLEFT…" / "…MTR…").
-          return !!(o && RETURN_PICK_RE.test(`${o.partName || ''} ${o.optId || ''} ${o.targetNode || ''}`));
+          // Geometry check uses only each node's LEAF label (after the "S5-<CLUSTER>__n_" prefix):
+          // the prefix carries the cluster name, and "…RETURNS" in "LEFT-END—FINIALS-+-RETURNS" made
+          // EVERY option — finials included — read as a return (greyed brackets, broken renders).
+          const leaves = String(o?.targetNode || '').split(',').map(s => { const seg = String(s).trim().split('__').pop() || ''; return seg.replace(/^\d+_?/, ''); }).join(' ');
+          return !!(o && RETURN_PICK_RE.test(`${o.partName || ''} ${o.optId || ''} ${leaves}`));
       });
   };
   // A return REPLACES the outer bracket: the bracket style pick greys out (and clears) while that
@@ -1216,6 +1218,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // real one. Generated options default to 0, and letting that 0 win is what blanked out
                   // all base pricing; 0/blank now means "price from the (finish-variant) item".
                   if (styleOpt && styleOpt.price !== undefined && styleOpt.price !== '' && parseFloat(styleOpt.price) > 0) optionNativePrice = parseFloat(styleOpt.price) || 0;
+
+                  // Pole "Length & Finish" steps: the selection is the FINISH; the physical item is the
+                  // step's linkedItemId (stamped by the generator). Price the finish-variant of that
+                  // item per unit (qty = feet). Only fills in when nothing else priced the step.
+                  if (optionNativePrice === 0 && step.linkedItemId) {
+                      const linkedBase = allParts.find(p => p.id === step.linkedItemId || p.itemId === step.linkedItemId || p.legacyErpId === step.linkedItemId);
+                      if (linkedBase) {
+                          const selFinish = globalFinishes.find(f => f.id === selectedValue) || outsourceFinishes.find(f => f.id === selectedValue);
+                          const fc = selFinish ? String(selFinish.code || selFinish.name || '').toUpperCase() : finishCodeForStep(step.id);
+                          const linkedPart = finishVariantOf(linkedBase, fc);
+                          const lp = parseFloat(linkedPart.manufacturingSpecs?.basePrice ?? linkedPart.basePrice) || 0;
+                          if (lp > 0) {
+                              optionNativePrice = lp;
+                              resolvedPartId = linkedPart.itemId || linkedPart.id;
+                              resolvedErpId = linkedPart.legacyErpId || linkedPart.itemId || resolvedErpId;
+                              itemName = `${step.title} (${linkedPart.itemName})`;
+                          }
+                      }
+                  }
 
                   if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
                       const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
