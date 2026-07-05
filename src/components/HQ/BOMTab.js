@@ -300,6 +300,64 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       return { ...pin, masterPart: masterPart || null };
   });
 
+  // MASTER BOM SCAN — audit the selected assembly's BOM so nothing ghosts out of a quote or push:
+  // every pin resolves to a real library part (or is a legit fee/hidden), no orphan/duplicate pins,
+  // no cluster silently contributing zero BOM lines, priced parts actually carry prices + paint
+  // variants, no retired parts. Read-only; prints a report.
+  const handleMasterBomScan = () => {
+      if (!selectedAssemblyData) return alert('Select an assembly first.');
+      const clusters = selectedAssemblyData.nodeClusters || [];
+      const clusterById = {}; clusters.forEach(c => { clusterById[c.id] = c; });
+      const norm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9/]/g, '');
+      const byCode = new Map();
+      libraryParts.forEach(p => [p.id, p.itemId, p.legacyErpId].forEach(c => { const k = norm(c); if (k && k !== 'PENDING' && !byCode.has(k)) byCode.set(k, p); }));
+      const findPart = (key) => byCode.get(norm(key)) || null;
+
+      const ghosts = [], feeNoEntity = [], hiddenPins = [], orphanPins = [], dupNodes = [], noPrice = [], noType = [], retired = [], missingP = [];
+      const nodeCount = {};
+      bomPins.forEach(pin => {
+          const label = pin.partName || pin.partId || pin.id;
+          if (pin.choiceNode) { nodeCount[pin.choiceNode] = (nodeCount[pin.choiceNode] || 0) + 1; }
+          if (pin.clusterId && !clusterById[pin.clusterId]) orphanPins.push(label);
+          if (pin.isHiddenPart) { hiddenPins.push(label); return; }
+          const part = findPart(pin.partId) || (pin.legacyErpId ? findPart(pin.legacyErpId) : null);
+          if (!part) {
+              if (pin.isFee) feeNoEntity.push(label);       // fee with no entity: prices only via option price
+              else ghosts.push(`${label} (${pin.partId})`); // REAL problem: BOM line will not resolve
+              return;
+          }
+          if (pin.isFee) return; // fee entity resolved — price comes from it, no physical checks
+          const code = (part.legacyErpId && part.legacyErpId !== 'PENDING') ? part.legacyErpId : (part.itemId || part.id);
+          const specs = part.manufacturingSpecs || {};
+          if (specs.isRetired) retired.push(code);
+          const pt = specs.productType;
+          if (!pt || /uncategor/i.test(String(pt))) noType.push(code);
+          // Price can live on the base OR its finish variants — flag only when NONE carry a price.
+          const basePriced = parseFloat(specs.basePrice) > 0;
+          const pVar = byCode.get(norm(`${code}/P`));
+          const pPriced = pVar && parseFloat(pVar.manufacturingSpecs?.basePrice) > 0;
+          if (!basePriced && !pPriced) noPrice.push(code);
+          if (!String(code).includes('/') && !pVar) missingP.push(code);
+      });
+      Object.entries(nodeCount).forEach(([n, c]) => { if (c > 1) dupNodes.push(`${n} ×${c}`); });
+      const emptyClusters = clusters.filter(c => !c.hidden && !bomPins.some(p => p.clusterId === c.id)).map(c => c.name);
+
+      const sect = (title, arr, always) => (arr.length || always) ? `\n${title} (${arr.length})${arr.length ? ':\n  ' + arr.slice(0, 15).join('\n  ') + (arr.length > 15 ? `\n  …+${arr.length - 15} more` : '') : ''}` : '';
+      const problems = ghosts.length + orphanPins.length + dupNodes.length + emptyClusters.length + retired.length;
+      alert(`🔍 MASTER BOM SCAN — ${selectedAssemblyData.itemName}\n${bomPins.length} pin(s) · ${clusters.length} cluster(s) · ${hiddenPins.length} hidden · ${bomPins.filter(p => p.isFee).length} fee\n`
+          + (problems === 0 ? '\n✅ No structural problems — every pin resolves, no orphans/duplicates, no silent clusters.\n' : '')
+          + sect('❌ GHOST PINS — do not resolve to any library item (BOM/pricing will miss them)', ghosts)
+          + sect('❌ ORPHAN PINS — cluster no longer exists', orphanPins)
+          + sect('❌ DUPLICATE PINS on one node', dupNodes)
+          + sect('⚠ CLUSTERS WITH NO PINS — contribute zero BOM lines', emptyClusters)
+          + sect('⚠ RETIRED PARTS still pinned', retired)
+          + sect('⚠ NO PRICE on base OR /P variant', noPrice)
+          + sect('⚠ NO /P PAINT VARIANT in library (paint finishes will bill the unpriced base)', missingP)
+          + sect('⚠ NO PRODUCT TYPE (shows as NO TYPE)', noType)
+          + sect('ℹ FEE PINS WITHOUT A FEE ENTITY — price only via the option price', feeNoEntity)
+      );
+  };
+
   // Build + download the customer onboarding / price-list .xlsx for the selected main assembly.
   // Items come from the assembly's BOM pins → library parts; category + hidden come from its
   // nodeClusters; the finish band comes from the assembly's CPQ flow(s). A chosen customer fills the
@@ -865,6 +923,9 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                     <button onClick={handleGenerateOnboarding} disabled={onboarding} style={{ padding: '11px 22px', background: onboarding ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', border: 'none', cursor: onboarding ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                                         {onboarding ? '⚙ Building…' : '⬇ Generate Excel'}
+                                    </button>
+                                    <button onClick={handleMasterBomScan} title="Audit this assembly's BOM: ghost pins that resolve to no library item, orphan/duplicate pins, clusters contributing zero BOM lines, retired parts, missing prices and missing /P paint variants, missing product types. Read-only." style={{ padding: '11px 22px', background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                                        🔍 Master BOM Scan
                                     </button>
                                 </div>
 

@@ -10,6 +10,7 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
 import { buildCodeIndex, matchItemByName, normCode } from '../Shared/itemCodeMatch';
 import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
+import { downloadItemStarterTemplate, parseItemStarterWorkbook } from '../Shared/itemStarterXlsx';
 
 // Step-by-step assembly builder: the designer uploads ONE .glb per slot (all the choices for that slot
 // stacked inside the file). We KNOW each slot's position/category/location, so there's nothing to
@@ -113,6 +114,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const assignSceneRef = useRef(null);                 // loaded scene kept for split/thumbnails
     const [syncId, setSyncId] = useState('');            // assembly whose pins we're linking to the library
     const [syncBusy, setSyncBusy] = useState(false);
+    const [starterBusy, setStarterBusy] = useState(false); // Item Starter Kit upload in flight
     const loaderRef = useRef(null);
     if (!loaderRef.current) loaderRef.current = makeLoader();
     // Master-Library ERP-code index for auto-matching item #s from node names (designer's convention:
@@ -710,6 +712,61 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         setSyncBusy(false);
     };
 
+    // ITEM STARTER KIT: upload the filled template → create the items in the Master Library under a
+    // Project, so 1.6 auto-match / pickers find them immediately. Duplicate ERP ids (already in the
+    // brand library) are skipped, so an unedited sample row can never double a real item.
+    const handleStarterUpload = async (file) => {
+        if (!file) return;
+        setStarterBusy(true);
+        try {
+            const rows = await parseItemStarterWorkbook(file);
+            if (!rows.length) { alert('No item rows found (Item ID column empty?).'); setStarterBusy(false); return; }
+            await ensureCodeIndex();
+            const byNorm = codeIndexRef.current?.byNorm || new Map();
+            const parseBool = (v, dflt) => { const s = String(v || '').trim().toUpperCase(); if (!s) return dflt; return s === 'TRUE' || s === 'YES' || s === '1'; };
+            let created = 0; const skipped = [];
+            for (let i = 0; i < rows.length; i++) {
+                const r = rows[i];
+                const erp = r.itemId.toUpperCase();
+                if (byNorm.has(normCode(erp))) { skipped.push(erp); continue; }
+                const isFeeClass = /fee/i.test(r.entityClass || '');
+                const id = `${String(activeBrand || 'CE').toUpperCase()}-${isFeeClass ? 'FEE' : 'INV'}-${Date.now()}-${i}`;
+                const customData = {};
+                if (r.projection) customData.projection = r.projection;
+                if (r.backplateOrientation) customData.backplateOrientation = r.backplateOrientation.toUpperCase();
+                if (parseBool(r.isReturnBracket, false)) customData.isReturnBracket = true;
+                await setDoc(doc(db, 'Approved_Designs', id), {
+                    id, itemId: id, legacyErpId: erp, itemName: (r.name || erp).toUpperCase(),
+                    brandId: activeBrand, sharedBrands: [activeBrand],
+                    partClass: isFeeClass ? 'Fee' : 'Inventory', routingType: 'STANDARD',
+                    project: r.project || '', ...(isFeeClass ? { isFee: true } : {}),
+                    manufacturingSpecs: {
+                        productType: (r.productType || (isFeeClass ? 'FEE' : 'Uncategorized')).toUpperCase(),
+                        ...(r.basePrice ? { basePrice: r.basePrice } : {}),
+                        ...(r.cost ? { cost: r.cost } : {}),
+                        ...(r.weight ? { weight: r.weight } : {}),
+                        uom: r.uom || 'EA',
+                        ...(r.partHandling ? { partHandling: r.partHandling } : {}),
+                        ...(r.watchList ? { watchList: r.watchList.toUpperCase() } : {}),
+                        ...(r.collection ? { collections: [r.collection.toUpperCase()] } : {}),
+                        ...(r.paintSize ? { paintSize: r.paintSize.toUpperCase() } : {}),
+                        ...(r.vendorName ? { vendorName: r.vendorName } : {}),
+                        ...(r.vendorSku ? { vendorId: r.vendorSku } : {}),
+                        isInHouse: parseBool(r.isInHouse, true),
+                        isStocked: parseBool(r.isStocked, false),
+                        customData
+                    },
+                    createdAt: Date.now(), updatedAt: Date.now(), author: currentUser || ''
+                });
+                created++;
+            }
+            codeIndexRef.current = null; // refresh the auto-match index so new items are found immediately
+            addLog(`✅ Item Starter Kit: ${created} item(s) created${skipped.length ? `, ${skipped.length} skipped (already exist)` : ''}.`, 'success');
+            alert(`✅ Created ${created} item(s) in the ${String(activeBrand || '').toUpperCase()} library${rows[0]?.project ? ` under project "${rows[0].project}"` : ''}.\n${skipped.length ? `\nSkipped (already exist): ${skipped.slice(0, 10).join(', ')}${skipped.length > 10 ? ', …' : ''}\n` : ''}\nThey're live for 1.6 auto-match + pickers now. Prices/fields can be mass-edited later in tab 4.5.`);
+        } catch (e) { console.error(e); alert('Starter Kit upload failed:\n\n' + (e.message || e)); }
+        setStarterBusy(false);
+    };
+
     // ---- styles ----
     const card = { background: '#fff', border: '1px solid var(--line)', borderRadius: '2px' };
     const lbl = { fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' };
@@ -739,6 +796,19 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 </div>
                 <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', flex: 1, minWidth: '220px' }}>{TEMPLATES[template].hint}</span>
                 <span style={{ ...lbl, color: 'var(--brass)' }}>Every slot optional — upload only what's used; the flow builds from filled slots</span>
+            </div>
+
+            {/* Item Starter Kit — step 0: create the flow's items in the library before building. */}
+            <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: '260px' }}>
+                    <span style={{ ...lbl, color: 'var(--brass)' }}>Item Starter Kit (step 0)</span>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>Download the pre-filled template (every item kind a flow needs: pole + /P variant, rings, brackets, regular/return backplates, finials, fee entities — fields mirror tab 4.5), fill it in with your series + a Project name, and upload. Items are created in the library so auto-match finds them; existing ERP ids are skipped.</span>
+                </div>
+                <button onClick={() => downloadItemStarterTemplate(activeBrand)} style={{ padding: '11px 18px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>⬇ Download Template</button>
+                <label style={{ padding: '11px 18px', background: starterBusy ? 'var(--paper-2)' : 'var(--ink)', color: starterBusy ? 'var(--ink-soft)' : '#fff', cursor: starterBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                    {starterBusy ? '⚙ Creating…' : '⬆ Upload & Create Items'}
+                    <input type="file" accept=".xlsx" style={{ display: 'none' }} onChange={e => { handleStarterUpload(e.target.files[0]); e.target.value = ''; }} />
+                </label>
             </div>
 
             {/* Repair tool — fix an assembly built before the unique-node-name fix (no re-upload). */}
