@@ -461,13 +461,18 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       const label = part.legacyErpId && part.legacyErpId !== 'PENDING' ? part.legacyErpId : (part.itemId || part.id);
       if (!window.confirm(`Re-point this BOM component to "${part.itemName}" (${label})?\n\nThe pin keeps its position; only the linked library part changes. Remember to delete the leftover placeholder part from the library afterward.`)) return;
       try {
+          // Same contract as Visual Assembly's reassign: the pin's fee role FOLLOWS the part
+          // (Fee/Charge entity keeps it a fee; a normal item clears it), hidden is cleared, and the
+          // partial update preserves choiceNode/targetNode/choiceSort so 1.6 + CPQ stay intact.
+          const isFeePart = part.partClass === 'Fee' || part.isFee === true || String(part.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE';
           await updateDoc(doc(db, "assembly_pins", activeComponent.id), {
               partId: part.itemId || part.id,
               partName: part.itemName,
               legacyErpId: part.legacyErpId || 'N/A',
               specs: part.manufacturingSpecs || {},
               isExistingLibraryPart: true,
-              status: 'SPECS_LOCKED'
+              status: 'SPECS_LOCKED',
+              isFee: isFeePart, isHiddenPart: false
           });
           setActiveComponent(null); setReassignOpen(false); setReassignSearch("");
           alert(`Reassigned to ${part.itemName}.`);

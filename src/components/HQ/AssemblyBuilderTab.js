@@ -115,6 +115,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [syncId, setSyncId] = useState('');            // assembly whose pins we're linking to the library
     const [syncBusy, setSyncBusy] = useState(false);
     const [starterBusy, setStarterBusy] = useState(false); // Item Starter Kit upload in flight
+    const [extendId, setExtendId] = useState('');          // '' = build NEW; else append slots to this assembly
     const loaderRef = useRef(null);
     if (!loaderRef.current) loaderRef.current = makeLoader();
     // Master-Library ERP-code index for auto-matching item #s from node names (designer's convention:
@@ -275,7 +276,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const filledSlots = slots.filter(s => layers[s.id]);
 
     const build = async () => {
-        if (!assemblyName.trim()) return alert('Name the assembly first.');
+        const extendTarget = extendId ? repairList.find(a => a.id === extendId) : null;
+        if (!extendTarget && !assemblyName.trim()) return alert('Name the assembly first.');
         if (!filledSlots.length) return alert('Upload at least one slot .glb first.');
         // ── PREFLIGHT ── catch the whole "built with 0 pins / mis-tagged slots / typo'd item #s"
         // class of failure BEFORE anything is written. Warnings don't block — you confirm through them.
@@ -297,14 +299,37 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const pinned = ch.filter(c => (c.itemNo && c.itemNo.trim()) || c.isFee || c.isHidden).length;
             return `• ${s.label}: ${ch.length} choice(s) — ${pinned} pinned (item/fee/hide), ${ch.length - pinned} blank`;
         }).join('\n');
-        if (!window.confirm(`Build "${assemblyName}" from ${filledSlots.length} slot file(s)?\n\nPREFLIGHT\n${summary}\n${warnings.length ? `\n⚠ CHECK FIRST\n${warnings.join('\n')}\n` : '\n✓ No issues detected.\n'}\nBlank choices stay as always-visible shared geometry. Continue?`)) return;
+        if (!window.confirm(`${extendTarget ? `ADD ${filledSlots.length} slot(s) to "${extendTarget.itemName}" (existing slots/pins untouched)` : `Build "${assemblyName}" from ${filledSlots.length} slot file(s)`}?\n\nPREFLIGHT\n${summary}\n${warnings.length ? `\n⚠ CHECK FIRST\n${warnings.join('\n')}\n` : '\n✓ No issues detected.\n'}\nBlank choices stay as always-visible shared geometry. Continue?`)) return;
         setBusy('build');
         try {
-            // 1) Combine every layer into one scene, each slot wrapped in a named group = its cluster.
-            const combined = new THREE.Group();
-            combined.name = assemblyName.toUpperCase().trim();
+            // 1) Base scene: a fresh Group for a NEW assembly, or the EXISTING merged .glb when
+            // EXTENDING — new slots are appended as additional named groups; existing geometry,
+            // clusters, item #s and flags are untouched (same doc id → BOM/CPQ/flow links survive).
+            let combined, asmId, asmName;
+            let existingClusters = [], existingBuiltFrom = [], oldCadUrl = '';
+            if (extendTarget) {
+                const exSnap = await getDoc(doc(db, 'Approved_Designs', extendTarget.id));
+                const ex = exSnap.data() || {};
+                asmId = ex.itemId || extendTarget.id;
+                asmName = ex.itemName || extendTarget.id;
+                existingClusters = ex.nodeClusters || [];
+                existingBuiltFrom = ex.builtFromLayers || [];
+                oldCadUrl = ex.manufacturingSpecs?.cadUrl || '';
+                if (!oldCadUrl) throw new Error('This assembly has no .glb to extend.');
+                const baseBuf = await (await fetch(oldCadUrl)).arrayBuffer();
+                const baseGltf = await new Promise((res, rej) => loaderRef.current.parse(baseBuf, '', res, rej));
+                const s = baseGltf.scene;
+                if (s.children.length === 1 && !s.children[0].isMesh) combined = s.children[0];
+                else { combined = new THREE.Group(); combined.name = String(asmName).toUpperCase(); [...s.children].forEach(c => combined.add(c)); }
+            } else {
+                combined = new THREE.Group();
+                combined.name = assemblyName.toUpperCase().trim();
+                asmId = `${activeBrand.toUpperCase()}-ASM-${Date.now()}`;
+                asmName = assemblyName;
+            }
             const clusters = [], pins = [];
-            const asmId = `${activeBrand.toUpperCase()}-ASM-${Date.now()}`;
+            // Slot prefixes continue AFTER the existing clusters so namespaces can never collide.
+            const slotOffset = existingClusters.length;
             filledSlots.forEach((slot, slotIdx) => {
                 const layer = layers[slot.id];
                 const g = layer.scene.clone(true);
@@ -318,7 +343,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 // cluster owns a distinct namespace, and renaming BEFORE export keeps the stored cluster
                 // node names in exact sync with the .glb. cluster.name stays the pretty label (display +
                 // generator fallback partId). topMap remaps each choice's top-level name for its pin.
-                const prefix = `S${slotIdx}-${pretty}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 44);
+                const prefix = `S${slotOffset + slotIdx}-${pretty}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 44);
                 g.name = prefix;
                 // Map each CHOICE node's original name → its renamed name (choices may sit a level
                 // deeper than the group after auto-unwrap/split, so match by name set, not by parent).
@@ -366,24 +391,35 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const blob = new Blob([glbBuffer], { type: 'model/gltf-binary' });
 
             // 3) Upload to Storage.
-            const path = `assemblies/${activeBrand}_${assemblyName.replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.glb`;
+            const path = `assemblies/${activeBrand}_${String(asmName).replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.glb`;
             const task = uploadBytesResumable(sRef(storage, path), blob);
             const cadUrl = await new Promise((res, rej) => task.on('state_changed', null, rej, async () => res(await getDownloadURL(task.snapshot.ref))));
             addLog(`Uploaded combined model (${(blob.size / 1e6).toFixed(1)} MB).`, 'success');
 
-            // 4) Create the assembly doc (mainline PRODUCT) with clusters, then write BOM pins.
-            await setDoc(doc(db, 'Approved_Designs', asmId), {
-                id: asmId, itemId: asmId, itemName: assemblyName.toUpperCase().trim(),
-                brandId: activeBrand, sharedBrands: [activeBrand],
-                partClass: 'Assembly', routingType: 'MAIN', recordType: 'PRODUCT',
-                // Builder output is deliberately authored — stamp the Inception sign-offs so it flows
-                // everywhere that gates on approvals (e.g. Visual Assembly) without an Inception pass.
-                approvals: { designer: currentUser || 'BUILDER', technical: currentUser || 'BUILDER', machinist: currentUser || 'BUILDER' },
-                nodeClusters: clusters,
-                manufacturingSpecs: { cadUrl, status: 'BUILT_FROM_LAYERS' },
-                builtFromLayers: filledSlots.map(s => ({ slot: s.label, file: layers[s.id].fileName })),
-                createdAt: Date.now(), updatedAt: Date.now(), author: currentUser || ''
-            }, { merge: true });
+            // 4) Write the assembly doc. EXTEND = append clusters + swap cadUrl on the SAME doc (old
+            // .glb kept as backup; nothing existing is rewritten). NEW = create the mainline PRODUCT.
+            if (extendTarget) {
+                await updateDoc(doc(db, 'Approved_Designs', extendTarget.id), {
+                    nodeClusters: [...existingClusters, ...clusters],
+                    'manufacturingSpecs.cadUrl': cadUrl,
+                    'manufacturingSpecs.cadUrlBackup': oldCadUrl,
+                    builtFromLayers: [...existingBuiltFrom, ...filledSlots.map(s => ({ slot: s.label, file: layers[s.id].fileName }))],
+                    updatedAt: Date.now()
+                });
+            } else {
+                await setDoc(doc(db, 'Approved_Designs', asmId), {
+                    id: asmId, itemId: asmId, itemName: assemblyName.toUpperCase().trim(),
+                    brandId: activeBrand, sharedBrands: [activeBrand],
+                    partClass: 'Assembly', routingType: 'MAIN', recordType: 'PRODUCT',
+                    // Builder output is deliberately authored — stamp the Inception sign-offs so it flows
+                    // everywhere that gates on approvals (e.g. Visual Assembly) without an Inception pass.
+                    approvals: { designer: currentUser || 'BUILDER', technical: currentUser || 'BUILDER', machinist: currentUser || 'BUILDER' },
+                    nodeClusters: clusters,
+                    manufacturingSpecs: { cadUrl, status: 'BUILT_FROM_LAYERS' },
+                    builtFromLayers: filledSlots.map(s => ({ slot: s.label, file: layers[s.id].fileName })),
+                    createdAt: Date.now(), updatedAt: Date.now(), author: currentUser || ''
+                }, { merge: true });
+            }
             // Stored id MUST equal the real doc id — Visual Assembly addresses pins by pin.id for
             // reassign/qty/delete, and a mismatched stored id makes those writes hit a nonexistent path.
             for (const p of pins) {
@@ -391,8 +427,11 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 await setDoc(doc(db, 'assembly_pins', pid), { id: pid, ...p });
             }
 
-            addLog(`✅ Built "${assemblyName}" — ${clusters.length} clusters, ${pins.length} BOM pin(s).`, 'success');
-            alert(`✅ Assembly "${assemblyName}" built.\n\n${clusters.length} clusters (already tagged position + category), ${pins.length} BOM lines. It's ready in Visual Assembly / BOM / Vision — no Auto-Group needed. Generate its CPQ flow in System Admin when ready.`);
+            addLog(`✅ ${extendTarget ? 'Extended' : 'Built'} "${asmName}" — ${clusters.length} ${extendTarget ? 'NEW ' : ''}clusters, ${pins.length} BOM pin(s).`, 'success');
+            alert(extendTarget
+                ? `✅ Added ${clusters.length} slot(s) to "${asmName}" — existing slots, item #s and flags untouched (old .glb kept as backup).\n\nNow REGENERATE its CPQ flow (System Admin → "Regenerate Steps from Tags — keep prices") so the new choices appear, and hard-refresh other open tabs.`
+                : `✅ Assembly "${asmName}" built.\n\n${clusters.length} clusters (already tagged position + category), ${pins.length} BOM lines. It's ready in Visual Assembly / BOM / Vision — no Auto-Group needed. Generate its CPQ flow in System Admin when ready.`);
+            if (extendTarget) setExtendId('');
         } catch (e) { console.error(e); addLog(`Build failed: ${e.message || e}`, 'error'); alert('Build failed:\n\n' + (e.message || e)); }
         setBusy('');
     };
@@ -780,7 +819,13 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     <span style={{ ...lbl, color: 'var(--brass)' }}>Step-by-step layered assembly</span>
                     <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Assembly Builder</h2>
                 </div>
-                <input value={assemblyName} onChange={e => setAssemblyName(e.target.value)} placeholder="Assembly name / item #…" style={{ ...inp, minWidth: '260px' }} />
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <select value={extendId} onChange={e => setExtendId(e.target.value)} title="Extend an existing builder assembly: uploaded slots are APPENDED — existing geometry, clusters, item #s and flags are untouched (same doc, so BOM/CPQ/flow links survive). Leave on 'New assembly' to create fresh." style={{ ...sel, padding: '9px', minWidth: '250px' }}>
+                        <option value="">— New assembly —</option>
+                        {repairList.map(a => <option key={a.id} value={a.id}>➕ Extend: {a.itemName || a.id}</option>)}
+                    </select>
+                    <input value={extendId ? (repairList.find(a => a.id === extendId)?.itemName || '') : assemblyName} disabled={!!extendId} onChange={e => setAssemblyName(e.target.value)} placeholder="Assembly name / item #…" style={{ ...inp, minWidth: '260px', ...(extendId ? { background: 'var(--paper-2)', color: 'var(--ink-soft)' } : {}) }} />
+                </div>
             </div>
 
             {/* Workflow template picker — swaps the slot scaffold. Every slot is optional. */}
@@ -1002,7 +1047,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         );
                     })}
                     <button onClick={build} disabled={busy === 'build' || !filledSlots.length} style={{ marginTop: '8px', padding: '15px', background: busy === 'build' ? 'var(--paper-2)' : '#3a7d44', color: busy === 'build' ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: busy === 'build' ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600 }}>
-                        {busy === 'build' ? 'Building…' : `⚙ Build Assembly (${filledSlots.length} slot${filledSlots.length === 1 ? '' : 's'})`}
+                        {busy === 'build' ? 'Building…' : (extendId ? `⚙ Add ${filledSlots.length} Slot${filledSlots.length === 1 ? '' : 's'} to Assembly` : `⚙ Build Assembly (${filledSlots.length} slot${filledSlots.length === 1 ? '' : 's'})`)}
                     </button>
                 </div>
 

@@ -790,6 +790,9 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const handleAutoSaveSelected = async () => {
         const { plan } = autoSavePlan;
         if (plan.length === 0) return alert("No proposals are selected.");
+        // Assembly-Builder output already carries exact per-slot clusters + choice pins — auto-group
+        // proposals would overlay duplicate clusters and muddy the generated flow. Allow, but warn.
+        if (activeAssembly?.builtFromLayers && !window.confirm(`"${activeAssembly.itemName}" was built by the Assembly Builder (1.6) — its clusters and BOM pins are already exact.\n\nAuto-grouping ADDS more clusters on top and can duplicate coverage. Edit slots/choices in 1.6 instead unless you know you need this.\n\nSave these auto-group proposals anyway?`)) return;
         const stamp = Date.now();
         const updatedById = {};
         const additions = [];
