@@ -135,14 +135,13 @@ const erpOf = (p) => String(p?.legacyErpId || p?.itemId || '').toUpperCase();
 
 // An assembly build's COMPONENT (the raw base) is bin-tracked, so NetSuite can't auto-consume it —
 // it rejects with "configure the inventory detail in line 1 of the component list" unless the build
-// supplies each bin-tracked component's bin explicitly. This builds that `component` sublist: the
-// raw is consumed from `bin` (the cart/source bin it's staged in). Phosphate convert is 1:1 (one raw
-// per /P), so component qty = build qty. `componentInventoryDetail` is the assemblyBuild component's
-// inventory-assignment subrecord (distinct from the built unit's top-level inventoryDetail).
-const buildComponentSublist = (compNsId, qty, bin) => ({
+// states each bin-tracked component's bin. On the build the component `item` is READ-ONLY (fixed by
+// the BOM — setting it returns INVALID_VALUE), so we match the auto-populated component by its LINE
+// number (the raw base is line 1; the Phosphating charge doesn't need detail) and attach only the
+// bin assignment. `qty` = component consumed = build qty × per-unit bomquantity.
+const buildComponentSublist = (line, qty, bin) => ({
     items: [{
-        item: { id: compNsId },
-        quantity: qty,
+        line,
         componentInventoryDetail: {
             quantity: qty,
             inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: qty }] }
@@ -781,7 +780,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                     // The raw component is bin-tracked → the build MUST state which bin to consume it
                     // from (else NetSuite rejects on the component list). Consume the BOM's actual
                     // component from the base's source bin.
-                    component: buildComponentSublist(invComp.compId, compQty, consumeBin),
+                    component: buildComponentSublist(1, compQty, consumeBin),
                     // Lot/serial-numbered assemblies need an inventory number on the built units → send it via
                     // receiptInventoryNumber when a lot # is entered. Plain (untracked) assemblies omit this, and
                     // this /P assembly isn't bin-managed so no bin on the built units.
@@ -950,7 +949,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
                 method: 'POST',
-                payload: { item: { id: assembly.id }, subsidiary: { id: nsConfig.subsidiary }, quantity: line.qty, location: { id: nsConfig.location }, memo: `Phos convert ${convBatch.cartBin || ''}`.slice(0, 40), component: buildComponentSublist(invComp.compId, compQty, consumeBin) }
+                payload: { item: { id: assembly.id }, subsidiary: { id: nsConfig.subsidiary }, quantity: line.qty, location: { id: nsConfig.location }, memo: `Phos convert ${convBatch.cartBin || ''}`.slice(0, 40), component: buildComponentSublist(1, compQty, consumeBin) }
             };
             const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             const b = await r.json().catch(() => ({}));
