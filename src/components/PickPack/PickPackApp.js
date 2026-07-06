@@ -138,7 +138,7 @@ const erpOf = (p) => String(p?.legacyErpId || p?.itemId || '').toUpperCase();
 // (netsuite/ce_convert_build_restlet.js) that sources the BOM then sets the bin on the raw line.
 // After deploying it, set the Script internal id + Deploy id here.
 const NS_RESTLET_HOST = 'https://3728153.restlets.api.netsuite.com';
-const NS_CONVERT_RESTLET = { scriptId: '', deployId: '1' }; // TODO: fill scriptId from the deployment
+const NS_CONVERT_RESTLET = { scriptId: '2848', deployId: '1' }; // CE Convert RESTlet (customdeploy1)
 const convertRestletConfigured = () => !!NS_CONVERT_RESTLET.scriptId;
 
 // Build a phosphated /P assembly via the RESTlet: it consumes the bin-tracked raw from `bin` and
