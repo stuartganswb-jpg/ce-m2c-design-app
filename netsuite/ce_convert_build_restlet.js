@@ -22,7 +22,32 @@
  * REQUEST body (JSON): { itemId, quantity, subsidiary, location, bin, [binId], [statusId], [memo] }
  * RESPONSE: { success:true, id:<buildId>, componentsDetailed:n } | { success:false, error, name }
  */
-define(['N/record'], function (record) {
+define(['N/record', 'N/query'], function (record, query) {
+
+    // Resolve the live consume-from bin id + inventory status for a component item at a location. Reads
+    // actual on-hand (inventorybalance) so we consume from where the stock really is, with the status it
+    // carries — required because binnumber set by TEXT silently no-ops and Inventory Status is mandatory
+    // here. Prefers the requested cart bin (by id hint or by binnumber text), else the bin with the most.
+    function resolveBinStatus(itemId, locationId, binText, binIdHint) {
+        try {
+            var rows = query.runSuiteQL({
+                query: 'SELECT binnumber, inventorystatus, quantityonhand FROM inventorybalance WHERE item = ? AND location = ? AND quantityonhand > 0',
+                params: [parseInt(itemId, 10), parseInt(locationId, 10)]
+            }).asMappedResults();
+            if (!rows || !rows.length) return null;
+            var chosen = null, i;
+            if (binIdHint) { for (i = 0; i < rows.length; i++) { if (String(rows[i].binnumber) === String(binIdHint)) { chosen = rows[i]; break; } } }
+            if (!chosen && binText) {
+                var brows = query.runSuiteQL({
+                    query: 'SELECT id FROM bin WHERE UPPER(binnumber) = ? AND location = ?',
+                    params: [String(binText).toUpperCase(), parseInt(locationId, 10)]
+                }).asMappedResults();
+                if (brows && brows.length) { var bid = String(brows[0].id); for (i = 0; i < rows.length; i++) { if (String(rows[i].binnumber) === bid) { chosen = rows[i]; break; } } }
+            }
+            if (!chosen) { chosen = rows[0]; for (i = 1; i < rows.length; i++) { if (Number(rows[i].quantityonhand) > Number(chosen.quantityonhand)) chosen = rows[i]; } }
+            return { binId: chosen.binnumber, statusId: chosen.inventorystatus, onhand: Number(chosen.quantityonhand) };
+        } catch (qErr) { return null; }
+    }
 
     function post(body) {
         var step = 'init';
@@ -77,12 +102,19 @@ define(['N/record'], function (record) {
                 var lineDiag = { line: i, item: b.getCurrentSublistValue({ sublistId: 'component', fieldId: 'item' }), reqd: reqd, qLine: qLine, qBom: qBom, qtyUsed: qtyNeeded, detailed: false };
 
                 if (qtyNeeded > 0) {
+                    // Resolve the real bin id + status from live on-hand for THIS component item (prefer the
+                    // requested cart bin). binId/statusId from the request win if supplied.
+                    var lineItem = b.getCurrentSublistValue({ sublistId: 'component', fieldId: 'item' });
+                    var src = resolveBinStatus(lineItem, body.location, body.bin, body.binId);
+                    var useBinId = body.binId ? parseInt(body.binId, 10) : (src && src.binId ? parseInt(src.binId, 10) : null);
+                    var useStatus = body.statusId ? parseInt(body.statusId, 10) : (src && src.statusId ? parseInt(src.statusId, 10) : null);
+                    lineDiag.useBinId = useBinId; lineDiag.useStatus = useStatus; lineDiag.srcOnhand = src ? src.onhand : null;
                     try {
                         var inv = b.getCurrentSublistSubrecord({ sublistId: 'component', fieldId: 'componentinventorydetail' });
                         inv.selectNewLine({ sublistId: 'inventoryassignment' });
-                        if (body.binId) inv.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'binnumber', value: parseInt(body.binId, 10) });
+                        if (useBinId) inv.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'binnumber', value: useBinId });
                         else if (body.bin) inv.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'binnumber', text: String(body.bin) });
-                        if (body.statusId) inv.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'inventorystatus', value: parseInt(body.statusId, 10) });
+                        if (useStatus) inv.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'inventorystatus', value: useStatus });
                         inv.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'quantity', value: qtyNeeded });
                         inv.commitLine({ sublistId: 'inventoryassignment' });
                         b.commitLine({ sublistId: 'component' });
