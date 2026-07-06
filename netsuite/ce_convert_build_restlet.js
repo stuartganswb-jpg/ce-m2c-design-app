@@ -2,18 +2,18 @@
  * @NApiVersion 2.1
  * @NScriptType Restlet
  *
- * CE Convert Build RESTlet — builds a phosphated /P assembly and sets the bin-tracked raw component's
+ * CE Convert Build RESTlet -- builds a phosphated /P assembly and sets the bin-tracked raw component's
  * inventory detail. The plain REST record API can't do this (the component sublist is static and not
  * yet populated at create time), but SuiteScript can: it lets NetSuite auto-source the component list
  * from the BOM, then walks it and sets `componentinventorydetail` (the consume-from bin) on each line
  * that requires inventory detail. The WMS Pick&Pack Convert tab POSTs to this via the NetSuite proxy.
  *
  * DEPLOY (NetSuite UI, one time):
- *   1. Documents → Files → File Cabinet → SuiteScripts → upload this file.
- *   2. Customization → Scripting → Scripts → New → select the file → type RESTlet → Save.
+ *   1. Documents -> Files -> File Cabinet -> SuiteScripts -> upload this file.
+ *   2. Customization -> Scripting -> Scripts -> New -> select the file -> type RESTlet -> Save.
  *        Name: "CE Convert Build". Note the SCRIPT ID (e.g. customscript_ce_convert_build) and the
  *        internal Script id shown in the URL.
- *   3. On the script record → Deployments → New: Status = Released, Log Level = Debug (or Error),
+ *   3. On the script record -> Deployments -> New: Status = Released, Log Level = Debug (or Error),
  *        Roles = the same integration/TBA role the app's proxy uses. Save. Note the DEPLOY id (e.g. 1).
  *   4. On the deployment, the "External URL" / the script+deploy ids give:
  *        https://<ACCT>.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=<SCRIPT_INT_ID>&deploy=<DEPLOY_ID>
@@ -26,7 +26,7 @@ define(['N/record', 'N/query'], function (record, query) {
 
     // Resolve the live consume-from bin id + inventory status for a component item at a location. Reads
     // actual on-hand (inventorybalance) so we consume from where the stock really is, with the status it
-    // carries — required because binnumber set by TEXT silently no-ops and Inventory Status is mandatory
+    // carries -- required because binnumber set by TEXT silently no-ops and Inventory Status is mandatory
     // here. Prefers the requested cart bin (by id hint or by binnumber text), else the bin with the most.
     function resolveBinStatus(itemId, locationId, binText, binIdHint) {
         try {
@@ -60,7 +60,7 @@ define(['N/record', 'N/query'], function (record, query) {
             // Establish the SUBSIDIARY/LOCATION context BEFORE `item`. If `item` is set first, NetSuite
             // validates the assembly against the token role's DEFAULT subsidiary and rejects a valid
             // assembly with "Invalid Field Value <id> for the following field: item".
-            // Order = subsidiary → location → item, which is correct for both NetSuite wirings:
+            // Order = subsidiary -> location -> item, which is correct for both NetSuite wirings:
             //  - subsidiary editable & filters location: setting it first makes location + item valid.
             //  - subsidiary sourced from location (read-only): the set is caught/skipped and `location`
             //    then drives the subsidiary to the target. Either way the context is right before `item`.
@@ -71,7 +71,7 @@ define(['N/record', 'N/query'], function (record, query) {
                     if (String(curSub || '') !== String(body.subsidiary)) {
                         b.setValue({ fieldId: 'subsidiary', value: parseInt(body.subsidiary, 10) });
                     }
-                } catch (subErr) { /* read-only/sourced — `location` below will drive the context */ }
+                } catch (subErr) { /* read-only/sourced -- `location` below will drive the context */ }
             }
             if (body.location) { step = 'location'; b.setValue({ fieldId: 'location', value: parseInt(body.location, 10) }); }
 
@@ -84,10 +84,10 @@ define(['N/record', 'N/query'], function (record, query) {
             // Component list auto-sources from the BOM once item + quantity are set. Set the consume-from
             // bin on every bin/lot-tracked component (the raw). The `inventorydetailreq` flag is UNRELIABLE
             // in dynamic mode right after sourcing, and the per-line `quantity` field can read 0 before the
-            // line is touched — either made the old code skip line 1, so the raw had no inventory detail and
+            // line is touched -- either made the old code skip line 1, so the raw had no inventory detail and
             // NetSuite rejected the save ("configure the inventory detail in line 1"). So instead we ATTEMPT
             // to configure detail on every qty-bearing line and tolerate lines that don't support it (the
-            // Phosphating charge line throws on getCurrentSublistSubrecord → caught → skipped).
+            // Phosphating charge line throws on getCurrentSublistSubrecord -> caught -> skipped).
             step = 'components';
             var count = b.getLineCount({ sublistId: 'component' });
             var detailed = 0;
@@ -95,7 +95,7 @@ define(['N/record', 'N/query'], function (record, query) {
                 b.selectLine({ sublistId: 'component', line: i });
                 var reqd = b.getCurrentSublistValue({ sublistId: 'component', fieldId: 'inventorydetailreq' });
                 var needs = (reqd === true || reqd === 'T' || reqd === 1 || reqd === '1');
-                // Robust quantity: prefer the line quantity, else bomquantity × build qty, else build qty.
+                // Robust quantity: prefer the line quantity, else bomquantity x build qty, else build qty.
                 var qLine = Number(b.getCurrentSublistValue({ sublistId: 'component', fieldId: 'quantity' })) || 0;
                 var qBom = Number(b.getCurrentSublistValue({ sublistId: 'component', fieldId: 'bomquantity' })) || 0;
                 var qtyNeeded = qLine > 0 ? qLine : (qBom > 0 ? qBom * Number(body.quantity) : Number(body.quantity));
@@ -130,9 +130,9 @@ define(['N/record', 'N/query'], function (record, query) {
             }
 
             // RECEIVE side: a bin-tracked (or status-tracked) BUILT assembly needs a HEADER inventory detail
-            // saying which bin + status to put the finished units INTO — driven by the operator's put-away
+            // saying which bin + status to put the finished units INTO -- driven by the operator's put-away
             // bin (body.toBin). This is separate from the component consume detail above. Attempted in
-            // try/catch: if the assembly needs no detail the subrecord is absent or throws → skipped.
+            // try/catch: if the assembly needs no detail the subrecord is absent or throws -> skipped.
             step = 'built-detail';
             var builtDiag = { attempted: false };
             try {
@@ -176,7 +176,7 @@ define(['N/record', 'N/query'], function (record, query) {
                     ctx.location = b.getValue({ fieldId: 'location' });
                     ctx.item = b.getValue({ fieldId: 'item' });
                 }
-            } catch (ctxErr) { /* ignore — best-effort diagnostics */ }
+            } catch (ctxErr) { /* ignore -- best-effort diagnostics */ }
             return { success: false, step: step, error: (e && e.message) ? e.message : String(e), name: (e && e.name) || '', context: ctx, diag: diag };
         }
     }
