@@ -864,7 +864,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>QTY: {item.defaultQty}</div>
                                     </div>
                                     <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px' }}>
-                                        <span style={{ color: 'var(--ink)' }}>{item.partId}</span> | {specs.productType || "NO TYPE"}
+                                        {/* ERP item # first (the code people actually know), app id only as last resort. */}
+                                        <span style={{ color: 'var(--ink)' }}>{(master.legacyErpId && !['PENDING', 'N/A'].includes(master.legacyErpId) && master.legacyErpId)
+                                            || (item.legacyErpId && !['PENDING', 'N/A'].includes(item.legacyErpId) && item.legacyErpId)
+                                            || item.partId}</span> | {specs.productType || "NO TYPE"}
                                     </div>
                                     {isNew && <div style={{ fontSize: '9px', fontFamily: 'var(--mono)', color: '#d9534f', textTransform: 'uppercase', marginTop: '6px' }}>Needs Specs</div>}
                                 </div>

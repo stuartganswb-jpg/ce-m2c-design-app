@@ -1157,6 +1157,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       // Client pricing lookup. Entries may store the customer's ID or (older Library-editor entries)
       // the NAME — match both. cp.price is the "Client Cost" field = what THIS client pays us; only a
       // real value (>0) applies, so an empty/zero entry can never zero out a line.
+      // Tolerant part resolution (same approach as the rules engine + ERP push): exact
+      // id/itemId/ERP first, then longest ERP-code PREFIX — hardware options can carry a PROJECTED
+      // name ("FICERA1001 CEILING BRACKET LEFT") that only BEGINS with the real code; exact-only
+      // matching left those options unpriced while identical siblings priced fine.
+      const findLibPart = (key) => {
+          if (!key) return null;
+          const exact = allParts.find(p => p.id === key || p.itemId === key || p.legacyErpId === key);
+          if (exact) return exact;
+          const nk = String(key).toUpperCase().replace(/[^A-Z0-9]/g, '');
+          if (nk.length < 3) return null;
+          let best = null, bestLen = 0;
+          allParts.forEach(p => [p.legacyErpId, p.itemId].forEach(code => {
+              const nc = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+              if (nc.length >= 3 && nk.startsWith(nc) && nc.length > bestLen) { best = p; bestLen = nc.length; }
+          }));
+          return best;
+      };
       const custRec = jobData.customerId ? liveCustomers.find(c => c.id === jobData.customerId) : null;
       const custKeys = new Set([jobData.customerId, custRec?.name, custRec?.companyName].filter(Boolean).map(s => String(s).trim().toUpperCase()));
       const clientPriceFor = (part) => {
@@ -1184,7 +1201,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               let stepPrice = hasBasePrice ? parseFloat(step.basePrice) : 0;
               
               if (step.linkedItemId && step.useClientPricing) {
-                  const basePartObj = allParts.find(p => p.id === step.linkedItemId || p.itemId === step.linkedItemId || p.legacyErpId === step.linkedItemId);
+                  const basePartObj = findLibPart(step.linkedItemId);
                   const v = clientPriceFor(basePartObj);
                   if (v != null) stepPrice = v;
               }
@@ -1203,7 +1220,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   let partObj = allParts.find(p => p.id === resolvedPartId || p.itemId === resolvedPartId || p.legacyErpId === resolvedPartId) ||
                                   dynamicAssets.find(a => a.id === resolvedPartId) ||
                                   globalFinishes.find(f => f.id === resolvedPartId) ||
-                                  outsourceFinishes.find(f => f.id === resolvedPartId);
+                                  outsourceFinishes.find(f => f.id === resolvedPartId) ||
+                                  findLibPart(resolvedPartId) ||
+                                  (styleOpt ? findLibPart(styleOpt.partName) : null);
 
                   // Swap to the finish-specific SKU (…/P for paints, exact …/EPn for stocked EP) so the
                   // BOM identity AND the price come from the item that's actually sold. Keep the
@@ -1235,7 +1254,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // variant (BOM/push correctness); its base price applies only when nothing else —
                   // client price on the linked item, step base — has priced the step yet.
                   if (step.linkedItemId) {
-                      const linkedBase = allParts.find(p => p.id === step.linkedItemId || p.itemId === step.linkedItemId || p.legacyErpId === step.linkedItemId);
+                      const linkedBase = findLibPart(step.linkedItemId);
                       if (linkedBase) {
                           const selFinish = globalFinishes.find(f => f.id === selectedValue) || outsourceFinishes.find(f => f.id === selectedValue);
                           const fc = selFinish ? String(selFinish.code || selFinish.name || '').toUpperCase() : finishCodeForStep(step.id);
@@ -1300,7 +1319,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           if (subSel && Array.isArray(step.subOptions)) {
               const subOpt = step.subOptions.find(o => (o.optId || o.partId) === subSel);
               if (subOpt) {
-                  const subBase = allParts.find(p => p.id === subOpt.partId || p.itemId === subOpt.partId || p.legacyErpId === subOpt.partId);
+                  const subBase = findLibPart(subOpt.partId) || findLibPart(subOpt.partName);
                   const subPart = subBase ? finishVariantOf(subBase, finishCodeForStep(step.id)) : null;
                   let subPrice = (subOpt.price !== undefined && subOpt.price !== '' && parseFloat(subOpt.price) > 0)
                       ? parseFloat(subOpt.price)
