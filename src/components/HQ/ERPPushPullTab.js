@@ -69,14 +69,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       const result = { lines: [], stepsConsidered: 0, unresolved: [], hasConfig: false };
       if (!job || !job.cpqData) return result;
 
-      const flow = cpqFlows.find(f => f.id === job.flowId);
-      const flowSteps = flow?.steps || [];
-      const activeStepIds = new Set([
-          ...Object.keys(job.cpqData?.configuration || {}),
-          ...Object.keys(job.cpqData?.quantities || {})
-      ]);
-      result.hasConfig = activeStepIds.size > 0;
-
       // Resolve a CPQ selection to its real library part. STYLE_SWAP selections are per-instance
       // optIds whose styleOption carries a PROJECTED partId/partName (e.g. "FICERA1001 CEILING BRACKET
       // LEFT") that is NOT the doc id, and legacy parts have itemId != doc id — so without this, every
@@ -97,7 +89,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           return best;
       };
       // Find the styleOption (main step or backplate __sub) behind a selection id, to read its part link.
-      const findOpt = (stepId, selId) => {
+      const findOpt = (flowSteps, stepId, selId) => {
           const base = stepId.endsWith('__sub') ? stepId.slice(0, -5) : stepId;
           const st = flowSteps.find(s => s.id === base);
           if (!st) return null;
@@ -105,104 +97,154 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           return pool.find(o => (o.optId || o.partId) === selId) || null;
       };
 
-      activeStepIds.forEach(stepId => {
-          if (stepId.endsWith('__finish')) return; // finishes are applied, not physical BOM components
-          const step = flowSteps.find(s => s.id === stepId);
-          // Hidden BOM-only accessories (e.g. bushings) attached to this step in Node Grouping → auto-added
-          // to the BOM whenever this step is configured/selected. Never a customer choice; one per position.
-          (step?.includedParts || []).forEach(ip => {
-              const accPart = matchPart(ip.partId);
-              if (!accPart) { result.unresolved.push({ stepTitle: `${step?.title || stepId} · included`, partId: ip.partId }); return; }
-              result.lines.push({
-                  stepId: `${stepId}__inc__${ip.partId}`, masterPart: accPart, qty: parseInt(ip.qty) || 1,
-                  nsId: accPart.netSuiteInternalId || accPart.legacyErpId || accPart.itemId || 'UNMAPPED',
-                  finishedErpId: '', finishUnmapped: '', partCategory: accPart.manufacturingSpecs?.partHandling || 'Accessory', projection: ''
+      // Each configured assembly in the cart pushes its OWN components × its OWN qty. Older quotes (saved
+      // before per-item cartItems existed) fall back to the single merged configuration/quantities blob at
+      // qty 1. Iterating cartItems fixes two push bugs: (a) multiple assemblies on the same flow collapsed
+      // into one because the merged maps are keyed by stepId (last write wins), and (b) per-assembly
+      // component quantities were never multiplied by the number of assemblies ordered.
+      const carts = (Array.isArray(job.cpqData.cartItems) && job.cpqData.cartItems.length)
+          ? job.cpqData.cartItems.map(ci => ({
+              config: ci.dynamicConfigParams || {},
+              quantities: ci.stepQuantities || {},
+              dimensions: ci.dimensionInputs || {},
+              flowId: ci.flowId || job.flowId,
+              assemblyQty: parseInt(ci.qty) || 1
+            }))
+          : [{
+              config: job.cpqData.configuration || {},
+              quantities: job.cpqData.quantities || {},
+              dimensions: job.cpqData.dimensions || {},
+              flowId: job.flowId,
+              assemblyQty: 1
+            }];
+      result.hasConfig = carts.some(c => Object.keys(c.config).length > 0 || Object.keys(c.quantities).length > 0);
+
+      const rawLines = []; // per-assembly lines, aggregated by NetSuite item at the end
+
+      carts.forEach(cart => {
+          const flow = cpqFlows.find(f => f.id === cart.flowId);
+          const flowSteps = flow?.steps || [];
+          const activeStepIds = new Set([...Object.keys(cart.config), ...Object.keys(cart.quantities)]);
+
+          activeStepIds.forEach(stepId => {
+              if (stepId.endsWith('__finish')) return; // finishes are applied, not physical BOM components
+              const step = flowSteps.find(s => s.id === stepId);
+              const userSelectionId = cart.config?.[stepId];
+
+              // A step's quantity. Blank/undefined = a single-select step (qty 1). An explicit 0 means the
+              // step was OFFERED but NOT taken (e.g. an unselected Splice / Cut fee) — it contributes
+              // nothing: neither its part NOR its hidden includedParts. Firing includedParts for un-taken
+              // steps is what dragged phantom joiner/ring hardware into the push.
+              const qtyRaw = cart.quantities?.[stepId];
+              const qty = (qtyRaw === undefined || qtyRaw === null || qtyRaw === '') ? 1 : (parseInt(qtyRaw) || 0);
+              if (qty <= 0) return;
+
+              // Hidden BOM-only accessories (e.g. bushings) attached to this step in Node Grouping — auto-added
+              // to the BOM when the step is taken. Never a customer choice; qty scales with assemblies ordered.
+              (step?.includedParts || []).forEach(ip => {
+                  const accPart = matchPart(ip.partId);
+                  if (!accPart) { result.unresolved.push({ stepTitle: `${step?.title || stepId} · included`, partId: ip.partId }); return; }
+                  rawLines.push({
+                      stepId: `${stepId}__inc__${ip.partId}`, masterPart: accPart, qty: (parseInt(ip.qty) || 1) * cart.assemblyQty,
+                      nsId: accPart.netSuiteInternalId || accPart.legacyErpId || accPart.itemId || 'UNMAPPED',
+                      finishedErpId: '', finishUnmapped: '', partCategory: accPart.manufacturingSpecs?.partHandling || 'Accessory', projection: ''
+                  });
+              });
+
+              const targetPartId = step?.linkedItemId || step?.linkedPinId || userSelectionId;
+              if (!targetPartId) return;
+
+              result.stepsConsidered++;
+              // direct match first, then resolve through the selection's styleOption (projected name → code)
+              let masterPart = matchPart(targetPartId);
+              if (!masterPart) {
+                  const opt = findOpt(flowSteps, stepId, userSelectionId);
+                  masterPart = matchPart(opt?.partId) || matchPart(opt?.partName);
+              }
+              if (!masterPart) {
+                  result.unresolved.push({ stepTitle: step?.title || stepId, partId: targetPartId });
+                  return;
+              }
+              // ALIAS parts render as their own node but ARE the aliased real item in the BOM (e.g. two pole
+              // lengths that are both the same steel pole) → resolve to the real part before building the line.
+              const aliasId = masterPart.aliasOf || masterPart.manufacturingSpecs?.aliasOf;
+              if (aliasId) { const real = matchPart(aliasId); if (real) masterPart = real; }
+              // Fee/Charge entities price the quote (their charge rides the rollup item's price) but are
+              // NOT physical NetSuite BOM components — skip instead of pushing an UNMAPPED item line.
+              if (masterPart.partClass === 'Fee' || String(masterPart.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE') return;
+              // The demand lands on the finished assembly (base/CODE, e.g. H1-138BF/EP1 or H1-138BF/P) instead of the
+              // bare base when the selected finish is either (a) OUTSOURCED — always consumes finished stock — or
+              // (b) IN-HOUSE but the finished assembly is flagged "Stocked" in the library (held in stock, not
+              // finished-to-order). Otherwise (in-house finish-to-order) the line stays on the base and the floor
+              // makes + finishes it. Reading the Stocked flag off the FINISHED part means the same /P code is
+              // finish-to-order for most parts and stocked only where it's been checked. Pricing stays on the base
+              // part so the quote total is unchanged (rollup absorbs the balance); only the pushed ITEM id changes.
+              // If the finished assembly isn't in the library / NetSuite-mapped, we keep the base and flag it.
+              let nsId = masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED';
+              let finishedErpId = '';
+              let finishUnmapped = '';
+              // The finish selection lives on the BASE step id — sub lines (backplates) share the bracket
+              // step's finish, so strip the __sub suffix before looking it up.
+              const baseStepId = stepId.endsWith('__sub') ? stepId.slice(0, -5) : stepId;
+              const finishId = cart.config?.[`${baseStepId}__finish`];
+              if (finishId) {
+                  const outFinish = outsourceFinishes.find(f => f.id === finishId);
+                  const finishObj = outFinish || globalFinishes.find(f => f.id === finishId); // outsourced or in-house
+                  const finishCode = finishCodeOf(finishObj);
+                  if (finishCode) {
+                      const baseErp = String(masterPart.legacyErpId || masterPart.itemId || '').toUpperCase();
+                      // Exact "/<CODE>" first (EP finishes are stocked as exact SKUs, e.g. /EP5); paints
+                      // (P01, P02, …) share ONE "/P" item, so fall back to it when no exact SKU exists.
+                      const candidates = [`${baseErp}/${finishCode}`];
+                      if (/^P\d/.test(finishCode)) candidates.push(`${baseErp}/P`);
+                      let candidateErpId = candidates[0];
+                      let finishedPart = null;
+                      for (const cand of candidates) {
+                          const hit = libraryParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === cand);
+                          if (hit) { candidateErpId = cand; finishedPart = hit; break; }
+                      }
+                      const isStocked = !!finishedPart?.manufacturingSpecs?.isStocked;
+                      // "/P" is structural, not flag-driven: paint finishes ALWAYS consume the stocked
+                      // phosphated "/P" item, which is then painted in-house — no per-item Stocked flag
+                      // needed. Exact finished SKUs (EP…, SG, CP = ready-to-ship) still route through the
+                      // outsourced-or-Stocked(custitem27) gate.
+                      const isPaintRollup = !!finishedPart && candidateErpId.endsWith('/P');
+                      if (outFinish || isStocked || isPaintRollup) { // consume the finished item
+                          finishedErpId = candidateErpId;
+                          if (finishedPart && finishedPart.netSuiteInternalId) {
+                              nsId = finishedPart.netSuiteInternalId;
+                          } else {
+                              finishUnmapped = candidateErpId; // finished SKU has no NS id → fall back to base + warn
+                          }
+                      }
+                      // else: in-house finish-to-order → keep nsId = base; the floor makes + finishes it
+                  }
+              }
+              rawLines.push({
+                  stepId,
+                  masterPart,
+                  qty: qty * cart.assemblyQty,
+                  nsId,
+                  finishedErpId,   // non-empty when this line pushes a finished assembly (outsourced or stocked in-house)
+                  finishUnmapped,  // non-empty when a finished SKU couldn't be NS-resolved (fell back to base)
+                  partCategory: masterPart.manufacturingSpecs?.partHandling || '',
+                  projection: cart.dimensions?.[stepId]?.length || ''
               });
           });
-          const userSelectionId = job.cpqData.configuration?.[stepId];
-          let qty = job.cpqData.quantities?.[stepId];
-          if (qty === undefined || qty === null || qty === '') qty = 1;
-
-          const targetPartId = step?.linkedItemId || step?.linkedPinId || userSelectionId;
-          if (!targetPartId) return;
-
-          result.stepsConsidered++;
-          // direct match first, then resolve through the selection's styleOption (projected name → code)
-          let masterPart = matchPart(targetPartId);
-          if (!masterPart) {
-              const opt = findOpt(stepId, userSelectionId);
-              masterPart = matchPart(opt?.partId) || matchPart(opt?.partName);
-          }
-          if (!masterPart) {
-              result.unresolved.push({ stepTitle: step?.title || stepId, partId: targetPartId });
-              return;
-          }
-          // ALIAS parts render as their own node but ARE the aliased real item in the BOM (e.g. two pole
-          // lengths that are both the same steel pole) → resolve to the real part before building the line.
-          const aliasId = masterPart.aliasOf || masterPart.manufacturingSpecs?.aliasOf;
-          if (aliasId) { const real = matchPart(aliasId); if (real) masterPart = real; }
-          // Fee/Charge entities price the quote (their charge rides the rollup item's price) but are
-          // NOT physical NetSuite BOM components — skip instead of pushing an UNMAPPED item line.
-          if (masterPart.partClass === 'Fee' || String(masterPart.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE') return;
-          // The demand lands on the finished assembly (base/CODE, e.g. H1-138BF/EP1 or H1-138BF/P) instead of the
-          // bare base when the selected finish is either (a) OUTSOURCED — always consumes finished stock — or
-          // (b) IN-HOUSE but the finished assembly is flagged "Stocked" in the library (held in stock, not
-          // finished-to-order). Otherwise (in-house finish-to-order) the line stays on the base and the floor
-          // makes + finishes it. Reading the Stocked flag off the FINISHED part means the same /P code is
-          // finish-to-order for most parts and stocked only where it's been checked. Pricing stays on the base
-          // part so the quote total is unchanged (rollup absorbs the balance); only the pushed ITEM id changes.
-          // If the finished assembly isn't in the library / NetSuite-mapped, we keep the base and flag it.
-          let nsId = masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED';
-          let finishedErpId = '';
-          let finishUnmapped = '';
-          // The finish selection lives on the BASE step id — sub lines (backplates) share the bracket
-          // step's finish, so strip the __sub suffix before looking it up.
-          const baseStepId = stepId.endsWith('__sub') ? stepId.slice(0, -5) : stepId;
-          const finishId = job.cpqData.configuration?.[`${baseStepId}__finish`];
-          if (finishId) {
-              const outFinish = outsourceFinishes.find(f => f.id === finishId);
-              const finishObj = outFinish || globalFinishes.find(f => f.id === finishId); // outsourced or in-house
-              const finishCode = finishCodeOf(finishObj);
-              if (finishCode) {
-                  const baseErp = String(masterPart.legacyErpId || masterPart.itemId || '').toUpperCase();
-                  // Exact "/<CODE>" first (EP finishes are stocked as exact SKUs, e.g. /EP5); paints
-                  // (P01, P02, …) share ONE "/P" item, so fall back to it when no exact SKU exists.
-                  const candidates = [`${baseErp}/${finishCode}`];
-                  if (/^P\d/.test(finishCode)) candidates.push(`${baseErp}/P`);
-                  let candidateErpId = candidates[0];
-                  let finishedPart = null;
-                  for (const cand of candidates) {
-                      const hit = libraryParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === cand);
-                      if (hit) { candidateErpId = cand; finishedPart = hit; break; }
-                  }
-                  const isStocked = !!finishedPart?.manufacturingSpecs?.isStocked;
-                  // "/P" is structural, not flag-driven: paint finishes ALWAYS consume the stocked
-                  // phosphated "/P" item, which is then painted in-house — no per-item Stocked flag
-                  // needed. Exact finished SKUs (EP…, SG, CP = ready-to-ship) still route through the
-                  // outsourced-or-Stocked(custitem27) gate.
-                  const isPaintRollup = !!finishedPart && candidateErpId.endsWith('/P');
-                  if (outFinish || isStocked || isPaintRollup) { // consume the finished item
-                      finishedErpId = candidateErpId;
-                      if (finishedPart && finishedPart.netSuiteInternalId) {
-                          nsId = finishedPart.netSuiteInternalId;
-                      } else {
-                          finishUnmapped = candidateErpId; // finished SKU has no NS id → fall back to base + warn
-                      }
-                  }
-                  // else: in-house finish-to-order → keep nsId = base; the floor makes + finishes it
-              }
-          }
-          result.lines.push({
-              stepId,
-              masterPart,
-              qty: parseInt(qty) || 1,
-              nsId,
-              finishedErpId,   // non-empty when this line pushes a finished assembly (outsourced or stocked in-house)
-              finishUnmapped,  // non-empty when a finished SKU couldn't be NS-resolved (fell back to base)
-              partCategory: masterPart.manufacturingSpecs?.partHandling || '',
-              projection: job.cpqData.dimensions?.[stepId]?.length || ''
-          });
       });
+
+      // Aggregate identical resolved lines across assemblies (same NetSuite item + finished variant +
+      // projection) into one summed-quantity line, so 3× + 2× of the same pole become a single line. Keep
+      // UNMAPPED/PENDING lines distinct per part so their skip-warnings still name each one.
+      const agg = new Map();
+      rawLines.forEach(l => {
+          const unmapped = (l.nsId === 'UNMAPPED' || l.nsId === 'PENDING');
+          const key = `${l.nsId}|${l.finishedErpId}|${l.projection}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}`;
+          const cur = agg.get(key);
+          if (cur) cur.qty += l.qty;
+          else agg.set(key, { ...l });
+      });
+      result.lines = Array.from(agg.values());
       return result;
   };
 

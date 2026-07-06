@@ -860,6 +860,34 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setCurrentStepIndex(0);
   };
 
+  // Pull an already-added cart line back INTO the configurator to edit it — the cart item retains its
+  // full step selections/quantities/dimensions, so we restore them and remove it from the cart; finishing
+  // the config re-adds it (a fresh line). Without this there was no way back to a line once it was added.
+  const handleEditCartItem = (itemId) => {
+      const item = cart.find(c => c.id === itemId);
+      if (!item) return;
+      if (activeFlowId && (Object.keys(dynamicConfigParams).length || currentStepIndex > 0) &&
+          !window.confirm("You have a configuration in progress. Editing this cart line will replace it. Continue?")) return;
+      setActiveFlowId(item.flowId || "");
+      setActiveAssemblyId(item.assemblyId || "");
+      if (item.masterQuoteId) setActiveMasterQuoteId(item.masterQuoteId);
+      setDynamicConfigParams({ ...(item.dynamicConfigParams || {}) });
+      setStepQuantities({ ...(item.stepQuantities || {}) });
+      setDimensionInputs({ ...(item.dimensionInputs || {}) });
+      setAssemblyQty(parseInt(item.qty) || 1);
+      setActiveDraftSvg(item.draftSvg || null);
+      setCurrentStepIndex(0);
+      setCart(cart.filter(c => c.id !== itemId));
+      if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Drop a single line from the cart (the Clear-All button wipes everything; this removes just one).
+  const handleRemoveCartItem = (itemId) => {
+      const item = cart.find(c => c.id === itemId);
+      if (item && !window.confirm(`Remove "${item.assemblyName || 'this line'}"${item.sidemark ? ` [${item.sidemark}]` : ''} from the cart?`)) return;
+      setCart(cart.filter(c => c.id !== itemId));
+  };
+
   const handleDeleteDraft = async (id) => {
       if (window.confirm("Permanently delete this draft from the system?")) {
           try { await deleteDoc(doc(db, "cpq_drafts", id)); } 
@@ -2014,6 +2042,32 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
             <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_global_cart'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
         </div>
       </div>
+
+      {/* CART — configured lines, each editable/removable. Was previously only summarized as a count. */}
+      {cart.length > 0 && (
+        <div style={{ background: '#fff', border: '1px solid var(--brass)', padding: '20px 24px', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+            <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.15rem', color: 'var(--ink)' }}>Cart — Configured Lines ({cart.length})</h3>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em' }}>Edit re-opens a line in the configurator</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {cart.map(item => (
+              <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', border: '1px solid var(--line)', background: 'var(--paper-2)', borderRadius: '2px' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: 'var(--serif)', fontSize: '0.98rem', color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {item.assemblyName || 'Configured Item'} <span style={{ color: 'var(--ink-soft)' }}>[{item.sidemark || 'No Sidemark'}]</span>
+                  </div>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.06em', marginTop: '2px' }}>
+                    Qty {item.qty} · ${((item.pricing?.finalPrice || 0) * (item.qty || 1)).toFixed(2)}
+                  </div>
+                </div>
+                <button onClick={() => handleEditCartItem(item.id)} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Edit</button>
+                <button onClick={() => handleRemoveCartItem(item.id)} title="Remove from cart" style={{ padding: '8px 12px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>✕</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', gap: '20px', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)', opacity: activeMasterQuoteId ? 0.6 : 1, pointerEvents: activeMasterQuoteId ? 'auto' : 'auto' }}>
           <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.1em' }}>Active Customer:</div>
