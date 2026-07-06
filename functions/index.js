@@ -107,20 +107,40 @@ const generateNetSuiteHeader = (method, url, creds) => {
     const oauth_nonce = Math.random().toString(36).substring(2, 15);
     const oauth_timestamp = Math.floor(Date.now() / 1000).toString();
 
-    const baseString = `${method}&${oauthEncode(url)}&` + oauthEncode(
-        `oauth_consumer_key=${creds.consumerKey}&` +
-        `oauth_nonce=${oauth_nonce}&` +
-        `oauth_signature_method=HMAC-SHA256&` +
-        `oauth_timestamp=${oauth_timestamp}&` +
-        `oauth_token=${creds.tokenId}&` +
-        `oauth_version=1.0`
-    );
+    // OAuth 1.0a signature base string: METHOD & encode(base URL WITHOUT query) & encode(sorted params).
+    // The base URL must exclude the query string, and ALL query params must be folded into the sorted
+    // parameter list alongside the oauth_* params — otherwise a URL with query params (e.g. a RESTlet's
+    // ?script=&deploy=) signs wrong and NetSuite returns INVALID_LOGIN_ATTEMPT. SuiteTalk REST/SuiteQL
+    // URLs have no query, so this is backward-compatible with every existing call.
+    const qIdx = url.indexOf('?');
+    const baseUrl = qIdx === -1 ? url : url.slice(0, qIdx);
+    const params = {
+        oauth_consumer_key: creds.consumerKey,
+        oauth_nonce,
+        oauth_signature_method: 'HMAC-SHA256',
+        oauth_timestamp,
+        oauth_token: creds.tokenId,
+        oauth_version: '1.0',
+    };
+    if (qIdx !== -1) {
+        url.slice(qIdx + 1).split('&').filter(Boolean).forEach((pair) => {
+            const eq = pair.indexOf('=');
+            const k = decodeURIComponent(eq === -1 ? pair : pair.slice(0, eq));
+            const v = eq === -1 ? '' : decodeURIComponent(pair.slice(eq + 1));
+            params[k] = v;
+        });
+    }
+    const paramString = Object.keys(params).sort()
+        .map((k) => `${oauthEncode(k)}=${oauthEncode(params[k])}`)
+        .join('&');
+
+    const baseString = `${method}&${oauthEncode(baseUrl)}&${oauthEncode(paramString)}`;
 
     const signingKey = `${oauthEncode(creds.consumerSecret)}&${oauthEncode(creds.tokenSecret)}`;
     const hash = CryptoJS.HmacSHA256(baseString, signingKey);
     const oauth_signature = CryptoJS.enc.Base64.stringify(hash);
 
-    return `OAuth realm="${creds.account}", oauth_consumer_key="${creds.consumerKey}", oauth_token="${creds.tokenId}", oauth_nonce="${oauth_nonce}", oauth_timestamp="${oauth_timestamp}", oauth_signature_method="HMAC-SHA256", oauth_signature="${encodeURIComponent(oauth_signature)}", oauth_version="1.0"`;
+    return `OAuth realm="${creds.account}", oauth_consumer_key="${oauthEncode(creds.consumerKey)}", oauth_token="${oauthEncode(creds.tokenId)}", oauth_nonce="${oauthEncode(oauth_nonce)}", oauth_timestamp="${oauth_timestamp}", oauth_signature_method="HMAC-SHA256", oauth_signature="${oauthEncode(oauth_signature)}", oauth_version="1.0"`;
 };
 
 exports.netsuiteProxy = onRequest({
