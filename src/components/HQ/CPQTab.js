@@ -1154,6 +1154,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           const f = globalFinishes.find(x => x.id === fid) || outsourceFinishes.find(x => x.id === fid);
           return f ? String(f.code || f.name || '').toUpperCase() : '';
       };
+      // Client pricing lookup. Entries may store the customer's ID or (older Library-editor entries)
+      // the NAME — match both. cp.price is the "Client Cost" field = what THIS client pays us; only a
+      // real value (>0) applies, so an empty/zero entry can never zero out a line.
+      const custRec = jobData.customerId ? liveCustomers.find(c => c.id === jobData.customerId) : null;
+      const custKeys = new Set([jobData.customerId, custRec?.name, custRec?.companyName].filter(Boolean).map(s => String(s).trim().toUpperCase()));
+      const clientPriceFor = (part) => {
+          if (!jobData.customerId || !part || !Array.isArray(part.clientPricing)) return null;
+          const cp = part.clientPricing.find(c => custKeys.has(String(c.customerId || '').trim().toUpperCase()));
+          const v = cp ? parseFloat(cp.price) : NaN;
+          return Number.isFinite(v) && v > 0 ? v : null;
+      };
 
       (activeFlow.steps || []).forEach(step => {
           const selectedValue = dynamicConfigParams[step.id];
@@ -1172,14 +1183,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               
               let stepPrice = hasBasePrice ? parseFloat(step.basePrice) : 0;
               
-              if (step.linkedItemId && step.useClientPricing && jobData.customerId) {
-                  const basePartObj = allParts.find(p => p.id === step.linkedItemId);
-                  if (basePartObj && basePartObj.clientPricing) {
-                      const cp = basePartObj.clientPricing.find(c => c.customerId === jobData.customerId);
-                      if (cp && cp.price !== undefined && cp.price !== "") {
-                          stepPrice = parseFloat(cp.price); 
-                      }
-                  }
+              if (step.linkedItemId && step.useClientPricing) {
+                  const basePartObj = allParts.find(p => p.id === step.linkedItemId || p.itemId === step.linkedItemId || p.legacyErpId === step.linkedItemId);
+                  const v = clientPriceFor(basePartObj);
+                  if (v != null) stepPrice = v;
               }
 
               let multiplier = 1.0;
@@ -1199,7 +1206,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   outsourceFinishes.find(f => f.id === resolvedPartId);
 
                   // Swap to the finish-specific SKU (…/P for paints, exact …/EPn for stocked EP) so the
-                  // BOM identity AND the price come from the item that's actually sold.
+                  // BOM identity AND the price come from the item that's actually sold. Keep the
+                  // pre-variant part: client pricing is usually entered on the BASE item.
+                  const preVariantObj = partObj;
                   if (partObj && (partObj.legacyErpId || partObj.itemId)) {
                       const variant = finishVariantOf(partObj, finishCodeForStep(step.id));
                       if (variant !== partObj) { partObj = variant; resolvedPartId = variant.itemId || variant.id; }
@@ -1222,29 +1231,26 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (styleOpt && styleOpt.price !== undefined && styleOpt.price !== '' && parseFloat(styleOpt.price) > 0) optionNativePrice = parseFloat(styleOpt.price) || 0;
 
                   // Pole "Length & Finish" steps: the selection is the FINISH; the physical item is the
-                  // step's linkedItemId (stamped by the generator). Price the finish-variant of that
-                  // item per unit (qty = feet). Only fills in when nothing else priced the step.
-                  if (optionNativePrice === 0 && step.linkedItemId) {
+                  // step's linkedItemId (stamped by the generator). Identity always follows the finish
+                  // variant (BOM/push correctness); its base price applies only when nothing else —
+                  // client price on the linked item, step base — has priced the step yet.
+                  if (step.linkedItemId) {
                       const linkedBase = allParts.find(p => p.id === step.linkedItemId || p.itemId === step.linkedItemId || p.legacyErpId === step.linkedItemId);
                       if (linkedBase) {
                           const selFinish = globalFinishes.find(f => f.id === selectedValue) || outsourceFinishes.find(f => f.id === selectedValue);
                           const fc = selFinish ? String(selFinish.code || selFinish.name || '').toUpperCase() : finishCodeForStep(step.id);
                           const linkedPart = finishVariantOf(linkedBase, fc);
                           const lp = parseFloat(linkedPart.manufacturingSpecs?.basePrice ?? linkedPart.basePrice) || 0;
-                          if (lp > 0) {
-                              optionNativePrice = lp;
-                              resolvedPartId = linkedPart.itemId || linkedPart.id;
-                              resolvedErpId = linkedPart.legacyErpId || linkedPart.itemId || resolvedErpId;
-                              itemName = `${step.title} (${linkedPart.itemName})`;
-                          }
+                          if (optionNativePrice === 0 && stepPrice === 0 && lp > 0) optionNativePrice = lp;
+                          resolvedPartId = linkedPart.itemId || linkedPart.id;
+                          resolvedErpId = linkedPart.legacyErpId || linkedPart.itemId || resolvedErpId;
+                          itemName = `${step.title} (${linkedPart.itemName})`;
                       }
                   }
 
-                  if (step.useClientPricing && jobData.customerId && partObj?.clientPricing) {
-                      const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
-                      if (cp && cp.price !== undefined && cp.price !== "") {
-                          optionNativePrice = parseFloat(cp.price);
-                      }
+                  if (step.useClientPricing) {
+                      const v = clientPriceFor(partObj) ?? clientPriceFor(preVariantObj);
+                      if (v != null) optionNativePrice = v;
                   }
 
                   let upcharge = 0;
@@ -1299,9 +1305,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   let subPrice = (subOpt.price !== undefined && subOpt.price !== '' && parseFloat(subOpt.price) > 0)
                       ? parseFloat(subOpt.price)
                       : (subPart ? (parseFloat(subPart.manufacturingSpecs?.basePrice ?? subPart.basePrice) || 0) : 0);
-                  if (step.useClientPricing && jobData.customerId && subPart?.clientPricing) {
-                      const cp = subPart.clientPricing.find(c => c.customerId === jobData.customerId);
-                      if (cp && cp.price !== undefined && cp.price !== '') subPrice = parseFloat(cp.price);
+                  if (step.useClientPricing) {
+                      const v = clientPriceFor(subPart) ?? clientPriceFor(subBase);
+                      if (v != null) subPrice = v;
                   }
                   breakdown.push({
                       name: `${step.subLabel || 'Backplate'} (${subPart?.itemName || subOpt.partName})`,
@@ -1773,8 +1779,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       }
 
       if (currentStep.useClientPricing && jobData.customerId && partObj?.clientPricing) {
-          const cp = partObj.clientPricing.find(c => c.customerId === jobData.customerId);
-          if (cp && cp.price !== undefined && cp.price !== "") nativeP = parseFloat(cp.price);
+          // Tolerant match (entries may store customer NAME or id) + only real prices (>0) apply.
+          const rec = liveCustomers.find(c => c.id === jobData.customerId);
+          const keys = new Set([jobData.customerId, rec?.name, rec?.companyName].filter(Boolean).map(s => String(s).trim().toUpperCase()));
+          const cp = partObj.clientPricing.find(c => keys.has(String(c.customerId || '').trim().toUpperCase()));
+          const v = cp ? parseFloat(cp.price) : NaN;
+          if (Number.isFinite(v) && v > 0) nativeP = v;
       }
 
       let upP = currentStep.priceMap?.[opt.id] ? parseFloat(currentStep.priceMap[opt.id]) : 0;

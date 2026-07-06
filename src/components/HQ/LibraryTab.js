@@ -914,7 +914,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                             <label style={labelStyle}>Customer (Name - ID)</label>
                            <select value={newClientPricing.customerId} onChange={e => setNewClientPricing({...newClientPricing, customerId: e.target.value})} style={fieldStyle}>
                                 <option value="">Select Customer...</option>
-                                {liveCustomers.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                                {/* Store the customer ID (was the NAME — which the CPQ's id-based match never found). */}
+                                {liveCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
                             </select>
                         </div>
                         <div style={{ flex: 1.5 }}>

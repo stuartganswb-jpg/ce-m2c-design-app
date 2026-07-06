@@ -745,7 +745,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               const inc = takeIncluded(pos);
               add({
                   title: label ? `${label} ${base}` : base,
-                  type: 'STYLE_SWAP', partHandling: 'Custom', required: false, finishDataSource: 'master_finishes',
+                  type: 'STYLE_SWAP', partHandling: 'Custom', required: false, finishDataSource: 'master_finishes', useClientPricing: true,
                   position: pos, ...(stepRole ? { stepRole } : {}),
                   ...(clone && pos === 'CENTER' ? { isCenterClone: true, qtyHelperText: 'Number of center passing brackets' } : {}),
                   styleOptions: group, geometryMap: geom(group),
@@ -803,7 +803,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               if (straightNodes) gmap[`OPT-FLUSH-${sfx}`] = straightNodes;
               add({
                   title: label ? `${label} End Treatment` : 'End Treatment',
-                  type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, finishDataSource: 'master_finishes',
+                  type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, finishDataSource: 'master_finishes', useClientPricing: true,
                   // position lets an option flagged "hides bracket" (ticked per option in the step editor)
                   // disable THIS side's outer Bracket & Mount step in CPQTab. Off by default — a return
                   // that still needs its bracket/backplate (e.g. french-return backplates) keeps the step.
@@ -820,14 +820,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
 
       // Step 1 = Pole/Rod MATERIAL chooser — ONLY when there's more than one material. With a single
       // material the choice is fixed, so it folds into the combined Length & Finish step below.
-      if (centerPole.length > 1) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, styleOptions: centerPole, geometryMap: geom(centerPole) });
+      if (centerPole.length > 1) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, useClientPricing: true, styleOptions: centerPole, geometryMap: geom(centerPole) });
       // Length & Finish — always present (the core pole step; carries the pole geometry). When there's a
       // single material, this IS the combined "choose length + finish" step. The calculatorTemplate +
       // title follow the chosen bay configuration so the configurator math matches the flow's fabShape.
       const poleInc = takeIncluded(''); // shared/untagged hidden accessories ride the always-present pole step
       // linkedItemId = the pole ITEM (single-material case): this step's selection is the FINISH, so
       // without it the pricing engine has no physical part to price the per-foot qty against.
-      add({ title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, geometryMap: {}, targetNodes: poleNodes, ...(centerPole.length === 1 && centerPole[0]?.partId ? { linkedItemId: centerPole[0].partId } : {}), ...(poleInc ? { includedParts: poleInc } : {}) });
+      add({ title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(centerPole.length === 1 && centerPole[0]?.partId ? { linkedItemId: centerPole[0].partId } : {}), ...(poleInc ? { includedParts: poleInc } : {}) });
       // End Treatment comes BEFORE the brackets on purpose: picking a return here can remove that end's
       // outer bracket step (returnHidesBracket), so the customer settles each end first and never picks
       // a bracket that then disappears. It's ALWAYS emitted — even with 0 finials it carries the Mitered
@@ -836,7 +836,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // Part-chooser steps are emitted only when they actually have options — 0-choice steps are skipped.
       addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate', stepRole: 'BRACKET' }); // adds nothing if brackets is empty
       if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
-      if (rings.length) add({ title: 'Rings', type: 'STYLE_SWAP', partHandling: 'Small Parts', finishDataSource: 'master_finishes', qtyHelperText: 'Number of rings', styleOptions: rings, geometryMap: geom(rings) });
+      if (rings.length) add({ title: 'Rings', type: 'STYLE_SWAP', partHandling: 'Small Parts', finishDataSource: 'master_finishes', useClientPricing: true, qtyHelperText: 'Number of rings', styleOptions: rings, geometryMap: geom(rings) });
       // Fee steps — always kept, as-is.
       add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
       add({ title: 'Cut / Splice Fee', type: 'STATIC_FEE', qtyHelperText: 'Per cut / splice', basePrice: '0' });
