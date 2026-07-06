@@ -143,10 +143,10 @@ const convertRestletConfigured = () => !!NS_CONVERT_RESTLET.scriptId;
 
 // Build a phosphated /P assembly via the RESTlet: it consumes the bin-tracked raw from `bin` and
 // produces the /P (bin-untracked). Returns { success, id, componentsDetailed } or throws.
-const postConvertBuild = async ({ itemId, quantity, subsidiary, location, bin, memo }) => {
+const postConvertBuild = async ({ itemId, quantity, subsidiary, location, bin, toBin, memo }) => {
     if (!convertRestletConfigured()) throw new Error("The Convert RESTlet isn't configured yet. Deploy netsuite/ce_convert_build_restlet.js in NetSuite and give me its Script + Deploy ids.");
     const url = `${NS_RESTLET_HOST}/app/site/hosting/restlet.nl?script=${NS_CONVERT_RESTLET.scriptId}&deploy=${NS_CONVERT_RESTLET.deployId}`;
-    const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, memo } }) });
+    const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, toBin, memo } }) });
     const b = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
     if (b && b.success === false) {
@@ -758,12 +758,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (assembly.type && !/assembl/i.test(assembly.type)) { setIsSyncing(false); return alert(`${erpOf(target)} is type "${assembly.type}" in NetSuite, not an Assembly. An assembly build needs an Assembly/BOM item — set ${erpOf(target)} up as an assembly (with ${base.erpId} as a component), or tell me the correct assembly item id.`); }
             const assemblyId = assembly.id;
             dbg = `resolved ${erpOf(target)} -> id ${assemblyId} (type ${assembly.type || '?'})`;
-            // Build via the RESTlet — it sources the BOM and sets the raw component's bin server-side
-            // (the plain REST record API can't set a build's static component sublist at create time).
+            // Build via the RESTlet — it sources the BOM, sets the raw component's consume bin server-side,
+            // and receives the finished /P into destBin (the plain REST record API can't do either at create).
             const consumeBin = String(srcBin).trim().toUpperCase();
-            const built = await postConvertBuild({ itemId: assemblyId, quantity: qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, memo: memoText });
+            const receiveBin = String(destBin || '').trim().toUpperCase();
+            if (!receiveBin) { setIsSyncing(false); return alert(`${erpOf(target)} has no destination bin — set its home bin (or use the Convert cart, which takes a put-away bin per line). The /P is bin-tracked, so NetSuite needs a receive bin.`); }
+            const built = await postConvertBuild({ itemId: assemblyId, quantity: qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: receiveBin, memo: memoText });
 
-            alert(`✅ Assembly build #${built.id || ''} posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${consumeBin}).\n\nPlace the finished stock in bin ${destBin}. (This assembly isn't bin-tracked in NetSuite, so the bin is for your reference.)`);
+            alert(`✅ Assembly build #${built.id || ''} posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${consumeBin}, received into ${receiveBin}).`);
             writeLog(`Assembly Build (phosphate): +${qty} ${erpOf(target)} / -${qty} ${base.erpId}.${convertMemo.trim() ? ` Memo: ${convertMemo.trim()}` : ''}`, 'wms');
             setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot("");
             pullNetSuiteStock();
@@ -897,15 +899,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
         const newBin = (cartBinEdits[line.lineId] ?? line.newBin ?? '').trim().toUpperCase();
+        if (!newBin) return alert(`Enter a put-away bin for the finished ${line.targetErpId} on this line first — the /P is bin-tracked, so NetSuite needs a destination bin.`);
         try {
             setIsSyncing(true);
             const assembly = await resolveItemDetail(line.targetErpId);
             if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${line.targetErpId} in NetSuite by item id.`); }
             if (assembly.type && !/assembl/i.test(assembly.type)) { setIsSyncing(false); return alert(`${line.targetErpId} is type "${assembly.type}", not an Assembly.`); }
-            // Build via the RESTlet — it sources the BOM and sets the raw component's bin server-side.
-            // The raw is consumed from the CART bin it was staged into.
+            // Build via the RESTlet — it sources the BOM and sets the raw component's consume bin server-side,
+            // and receives the finished /P into the operator's put-away bin. Raw is consumed from the CART bin.
             const consumeBin = (convBatch.cartBin || cartBin || 'PHOS-CART').trim().toUpperCase();
-            await postConvertBuild({ itemId: assembly.id, quantity: line.qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, memo: `Phos convert ${convBatch.cartBin || ''}` });
+            await postConvertBuild({ itemId: assembly.id, quantity: line.qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: newBin, memo: `Phos convert ${convBatch.cartBin || ''}` });
             const lines = (convBatch.lines || []).map(l => l.lineId === line.lineId ? { ...l, status: 'converted', newBin, convertedAt: Date.now() } : l);
             await updateDoc(doc(db, "conversion_batches", convBatch.id), { lines, updatedAt: Date.now() });
             writeLog(`Phosphate convert: +${line.qty} ${line.targetErpId} / −${line.qty} ${line.rawErpId} (cart ${convBatch.cartBin || ''} → ${newBin || 'finished'}).`, 'wms');

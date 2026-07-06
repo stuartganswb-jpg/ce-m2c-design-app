@@ -129,8 +129,39 @@ define(['N/record', 'N/query'], function (record, query) {
                 diag.push(lineDiag);
             }
 
+            // RECEIVE side: a bin-tracked (or status-tracked) BUILT assembly needs a HEADER inventory detail
+            // saying which bin + status to put the finished units INTO — driven by the operator's put-away
+            // bin (body.toBin). This is separate from the component consume detail above. Attempted in
+            // try/catch: if the assembly needs no detail the subrecord is absent or throws → skipped.
+            step = 'built-detail';
+            var builtDiag = { attempted: false };
+            try {
+                var invB = b.getSubrecord({ fieldId: 'inventorydetail' });
+                if (invB) {
+                    builtDiag.attempted = true;
+                    var toBinId = body.toBinId ? parseInt(body.toBinId, 10) : null;
+                    if (!toBinId && body.toBin) {
+                        var rb = query.runSuiteQL({
+                            query: 'SELECT id FROM bin WHERE UPPER(binnumber) = ? AND location = ?',
+                            params: [String(body.toBin).toUpperCase(), parseInt(body.location, 10)]
+                        }).asMappedResults();
+                        if (rb && rb.length) toBinId = parseInt(rb[0].id, 10);
+                    }
+                    var recvStatus = body.toStatusId ? parseInt(body.toStatusId, 10) : (body.statusId ? parseInt(body.statusId, 10) : 1);
+                    invB.selectNewLine({ sublistId: 'inventoryassignment' });
+                    if (toBinId) invB.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'binnumber', value: toBinId });
+                    invB.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'inventorystatus', value: recvStatus });
+                    invB.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'quantity', value: Number(body.quantity) });
+                    invB.commitLine({ sublistId: 'inventoryassignment' });
+                    builtDiag.detailed = true; builtDiag.toBin = body.toBin || null; builtDiag.toBinId = toBinId; builtDiag.recvStatus = recvStatus;
+                }
+            } catch (bErr) {
+                builtDiag.error = (bErr && bErr.message) ? bErr.message : String(bErr);
+            }
+            diag.push({ builtDetail: builtDiag });
+
             // Diagnostic mode: return the sourced component structure WITHOUT saving (no build created).
-            if (body.diag) return { success: true, diagOnly: true, componentCount: count, componentsDetailed: detailed, diag: diag };
+            if (body.diag) return { success: true, diagOnly: true, componentCount: count, componentsDetailed: detailed, builtDetail: builtDiag, diag: diag };
 
             step = 'save';
             var id = b.save({ enableSourcing: true, ignoreMandatoryFields: false });
