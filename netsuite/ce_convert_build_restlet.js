@@ -31,22 +31,23 @@ define(['N/record'], function (record) {
             step = 'create';
             b = record.create({ type: record.Type.ASSEMBLY_BUILD, isDynamic: true });
 
-            // Set LOCATION first. In OneWorld the location drives the subsidiary context that the `item`
-            // field is validated against; if `item` is set before the context, NetSuite validates the
-            // assembly against the token role's DEFAULT subsidiary and rejects a valid assembly with
-            // "Invalid Field Value <id> for the following field: item". Location → subsidiary → item.
-            if (body.location) { step = 'location'; b.setValue({ fieldId: 'location', value: parseInt(body.location, 10) }); }
+            // Establish the SUBSIDIARY/LOCATION context BEFORE `item`. If `item` is set first, NetSuite
+            // validates the assembly against the token role's DEFAULT subsidiary and rejects a valid
+            // assembly with "Invalid Field Value <id> for the following field: item".
+            // Order = subsidiary → location → item, which is correct for both NetSuite wirings:
+            //  - subsidiary editable & filters location: setting it first makes location + item valid.
+            //  - subsidiary sourced from location (read-only): the set is caught/skipped and `location`
+            //    then drives the subsidiary to the target. Either way the context is right before `item`.
             if (body.subsidiary) {
                 step = 'subsidiary';
-                // On an assembly build subsidiary is usually sourced from location (read-only). Set it
-                // best-effort only when it isn't already the target, and never let a read-only field abort.
                 try {
                     var curSub = b.getValue({ fieldId: 'subsidiary' });
                     if (String(curSub || '') !== String(body.subsidiary)) {
                         b.setValue({ fieldId: 'subsidiary', value: parseInt(body.subsidiary, 10) });
                     }
-                } catch (subErr) { /* sourced/read-only — location already set the context */ }
+                } catch (subErr) { /* read-only/sourced — `location` below will drive the context */ }
             }
+            if (body.location) { step = 'location'; b.setValue({ fieldId: 'location', value: parseInt(body.location, 10) }); }
 
             step = 'item';
             b.setValue({ fieldId: 'item', value: parseInt(body.itemId, 10) });
