@@ -132,6 +132,23 @@ const emitLabel = (zpl, htmlSpec) => {
 // Bin / ERP-id helpers (raw items carry binLocation top-level after mapping; library docs nest it under manufacturingSpecs).
 const binOf = (p) => (p?.binLocation || p?.manufacturingSpecs?.binLocation || 'UNASSIGNED');
 const erpOf = (p) => String(p?.legacyErpId || p?.itemId || '').toUpperCase();
+
+// An assembly build's COMPONENT (the raw base) is bin-tracked, so NetSuite can't auto-consume it —
+// it rejects with "configure the inventory detail in line 1 of the component list" unless the build
+// supplies each bin-tracked component's bin explicitly. This builds that `component` sublist: the
+// raw is consumed from `bin` (the cart/source bin it's staged in). Phosphate convert is 1:1 (one raw
+// per /P), so component qty = build qty. `componentInventoryDetail` is the assemblyBuild component's
+// inventory-assignment subrecord (distinct from the built unit's top-level inventoryDetail).
+const buildComponentSublist = (compNsId, qty, bin) => ({
+    items: [{
+        item: { id: compNsId },
+        quantity: qty,
+        componentInventoryDetail: {
+            quantity: qty,
+            inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: qty }] }
+        }
+    }]
+});
 // A finish's code is the assembly suffix (H1-138EC + EP1 → H1-138EC/EP1). Some finish records carry the
 // identifier in `name` rather than `code`, so fall back to name — that's the suffix the assembly uses.
 const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
@@ -741,9 +758,13 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                     quantity: qty,
                     location: { id: nsConfig.location },
                     memo: memoText,
+                    // The raw component is bin-tracked → the build MUST state which bin to consume it
+                    // from (else NetSuite rejects on the component list). Consume from the base's source
+                    // bin. Phosphate convert is 1:1, so component qty = build qty.
+                    component: buildComponentSublist(base.netSuiteInternalId, qty, String(srcBin).trim().toUpperCase()),
                     // Lot/serial-numbered assemblies need an inventory number on the built units → send it via
                     // receiptInventoryNumber when a lot # is entered. Plain (untracked) assemblies omit this, and
-                    // this /P assembly isn't bin-managed so no bin. Components auto-consume from the BOM.
+                    // this /P assembly isn't bin-managed so no bin on the built units.
                     ...(convertLot.trim() ? {
                         inventoryDetail: {
                             quantity: qty,
@@ -900,10 +921,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const assembly = await resolveItemDetail(line.targetErpId);
             if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${line.targetErpId} in NetSuite by item id.`); }
             if (assembly.type && !/assembl/i.test(assembly.type)) { setIsSyncing(false); return alert(`${line.targetErpId} is type "${assembly.type}", not an Assembly.`); }
+            // Consume the raw component from the CART bin it was staged into (it's bin-tracked, so the
+            // build must state the bin — otherwise NetSuite rejects on the component list).
+            const compNsId = line.rawInternalId || (await resolveItemDetail(line.rawErpId))?.id;
+            if (!compNsId) { setIsSyncing(false); return alert(`Raw component ${line.rawErpId} has no NetSuite Internal ID — map it first (HQ → Mass Update).`); }
+            const consumeBin = (convBatch.cartBin || cartBin || 'PHOS-CART').trim().toUpperCase();
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
                 method: 'POST',
-                payload: { item: { id: assembly.id }, subsidiary: { id: nsConfig.subsidiary }, quantity: line.qty, location: { id: nsConfig.location }, memo: `Phos convert ${convBatch.cartBin || ''}`.slice(0, 40) }
+                payload: { item: { id: assembly.id }, subsidiary: { id: nsConfig.subsidiary }, quantity: line.qty, location: { id: nsConfig.location }, memo: `Phos convert ${convBatch.cartBin || ''}`.slice(0, 40), component: buildComponentSublist(compNsId, line.qty, consumeBin) }
             };
             const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             const b = await r.json().catch(() => ({}));
@@ -912,7 +938,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             await updateDoc(doc(db, "conversion_batches", convBatch.id), { lines, updatedAt: Date.now() });
             writeLog(`Phosphate convert: +${line.qty} ${line.targetErpId} / −${line.qty} ${line.rawErpId} (cart ${convBatch.cartBin || ''} → ${newBin || 'finished'}).`, 'wms');
             pullNetSuiteStock();
-        } catch (e) { console.error('convert line failed', e); alert("❌ NetSuite rejected the build:\n\n" + (e.message || e)); }
+        } catch (e) { console.error('convert line failed', e); alert("❌ NetSuite rejected the build:\n\n" + (e.message || e) + "\n\nIf it still mentions the component list / inventory detail, the raw isn't in the cart bin in NetSuite yet (stage it first), or the field name differs (componentInventoryDetail) — paste the error and I'll correct it."); }
         finally { setIsSyncing(false); }
     };
 
