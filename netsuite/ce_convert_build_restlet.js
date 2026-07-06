@@ -25,16 +25,38 @@
 define(['N/record'], function (record) {
 
     function post(body) {
+        var step = 'init';
+        var b = null;
         try {
-            var b = record.create({ type: record.Type.ASSEMBLY_BUILD, isDynamic: true });
+            step = 'create';
+            b = record.create({ type: record.Type.ASSEMBLY_BUILD, isDynamic: true });
+
+            // Set LOCATION first. In OneWorld the location drives the subsidiary context that the `item`
+            // field is validated against; if `item` is set before the context, NetSuite validates the
+            // assembly against the token role's DEFAULT subsidiary and rejects a valid assembly with
+            // "Invalid Field Value <id> for the following field: item". Location → subsidiary → item.
+            if (body.location) { step = 'location'; b.setValue({ fieldId: 'location', value: parseInt(body.location, 10) }); }
+            if (body.subsidiary) {
+                step = 'subsidiary';
+                // On an assembly build subsidiary is usually sourced from location (read-only). Set it
+                // best-effort only when it isn't already the target, and never let a read-only field abort.
+                try {
+                    var curSub = b.getValue({ fieldId: 'subsidiary' });
+                    if (String(curSub || '') !== String(body.subsidiary)) {
+                        b.setValue({ fieldId: 'subsidiary', value: parseInt(body.subsidiary, 10) });
+                    }
+                } catch (subErr) { /* sourced/read-only — location already set the context */ }
+            }
+
+            step = 'item';
             b.setValue({ fieldId: 'item', value: parseInt(body.itemId, 10) });
-            if (body.subsidiary) b.setValue({ fieldId: 'subsidiary', value: parseInt(body.subsidiary, 10) });
-            if (body.location) b.setValue({ fieldId: 'location', value: parseInt(body.location, 10) });
+            step = 'quantity';
             b.setValue({ fieldId: 'quantity', value: Number(body.quantity) });
-            if (body.memo) b.setValue({ fieldId: 'memo', value: String(body.memo).slice(0, 40) });
+            if (body.memo) { step = 'memo'; b.setValue({ fieldId: 'memo', value: String(body.memo).slice(0, 40) }); }
 
             // Component list auto-sources from the BOM once item + quantity are set. Set the bin on every
             // line that requires inventory detail (the bin-tracked raw); charge/service lines are skipped.
+            step = 'components';
             var count = b.getLineCount({ sublistId: 'component' });
             var detailed = 0;
             for (var i = 0; i < count; i++) {
@@ -56,10 +78,21 @@ define(['N/record'], function (record) {
                 detailed++;
             }
 
+            step = 'save';
             var id = b.save({ enableSourcing: true, ignoreMandatoryFields: false });
             return { success: true, id: id, componentsDetailed: detailed };
         } catch (e) {
-            return { success: false, error: (e && e.message) ? e.message : String(e), name: (e && e.name) || '' };
+            // Capture the record's context at the point of failure so a bad subsidiary/location/item is
+            // obvious from the app's error alert without needing the NetSuite Execution Log.
+            var ctx = {};
+            try {
+                if (b) {
+                    ctx.subsidiary = b.getValue({ fieldId: 'subsidiary' });
+                    ctx.location = b.getValue({ fieldId: 'location' });
+                    ctx.item = b.getValue({ fieldId: 'item' });
+                }
+            } catch (ctxErr) { /* ignore — best-effort diagnostics */ }
+            return { success: false, step: step, error: (e && e.message) ? e.message : String(e), name: (e && e.name) || '', context: ctx };
         }
     }
 

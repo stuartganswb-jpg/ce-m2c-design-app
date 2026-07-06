@@ -149,7 +149,13 @@ const postConvertBuild = async ({ itemId, quantity, subsidiary, location, bin, m
     const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, memo } }) });
     const b = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
-    if (b && b.success === false) throw new Error(b.error || 'RESTlet build failed');
+    if (b && b.success === false) {
+        const stepStr = b.step ? ` (at step: ${b.step})` : '';
+        const c = b.context;
+        const ctxStr = (c && (c.subsidiary != null || c.location != null || c.item != null))
+            ? ` [sub=${c.subsidiary ?? '?'} loc=${c.location ?? '?'} item=${c.item ?? '?'}]` : '';
+        throw new Error((b.error || 'RESTlet build failed') + stepStr + ctxStr);
+    }
     return b;
 };
 // A finish's code is the assembly suffix (H1-138EC + EP1 → H1-138EC/EP1). Some finish records carry the
