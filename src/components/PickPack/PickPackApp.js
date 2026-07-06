@@ -133,17 +133,25 @@ const emitLabel = (zpl, htmlSpec) => {
 const binOf = (p) => (p?.binLocation || p?.manufacturingSpecs?.binLocation || 'UNASSIGNED');
 const erpOf = (p) => String(p?.legacyErpId || p?.itemId || '').toUpperCase();
 
-// The assemblyBuild `component` sublist is STATIC (auto-derived from the BOM — you can't add/remove
-// lines, and each line's `item` is read-only). So to give the bin-tracked raw its bin we must echo
-// the FULL component list matched by line number, attaching `componentInventoryDetail` only to the
-// inventory line(s); charge/service lines (e.g. Phosphating, OthCharge) are passed through untouched.
-// Providing fewer lines than the BOM has = "add/remove on a static sublist" error. `comps` come from
-// fetchComponents (ordered inventory-first so line 1 = the raw, matching NetSuite's list + the error).
-const buildComponentSublist = (comps, buildQty, bin) => ({
-    items: comps.map(c => c.isInv
-        ? { line: c.line, componentInventoryDetail: { quantity: buildQty * c.bomQty, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: buildQty * c.bomQty }] } } }
-        : { line: c.line })
-});
+// The plain REST record API can't set a build's component bin (the component sublist is static and
+// unpopulated at create time), so the convert build runs through a SuiteScript RESTlet
+// (netsuite/ce_convert_build_restlet.js) that sources the BOM then sets the bin on the raw line.
+// After deploying it, set the Script internal id + Deploy id here.
+const NS_RESTLET_HOST = 'https://3728153.restlets.api.netsuite.com';
+const NS_CONVERT_RESTLET = { scriptId: '', deployId: '1' }; // TODO: fill scriptId from the deployment
+const convertRestletConfigured = () => !!NS_CONVERT_RESTLET.scriptId;
+
+// Build a phosphated /P assembly via the RESTlet: it consumes the bin-tracked raw from `bin` and
+// produces the /P (bin-untracked). Returns { success, id, componentsDetailed } or throws.
+const postConvertBuild = async ({ itemId, quantity, subsidiary, location, bin, memo }) => {
+    if (!convertRestletConfigured()) throw new Error("The Convert RESTlet isn't configured yet. Deploy netsuite/ce_convert_build_restlet.js in NetSuite and give me its Script + Deploy ids.");
+    const url = `${NS_RESTLET_HOST}/app/site/hosting/restlet.nl?script=${NS_CONVERT_RESTLET.scriptId}&deploy=${NS_CONVERT_RESTLET.deployId}`;
+    const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, memo } }) });
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
+    if (b && b.success === false) throw new Error(b.error || 'RESTlet build failed');
+    return b;
+};
 // A finish's code is the assembly suffix (H1-138EC + EP1 → H1-138EC/EP1). Some finish records carry the
 // identifier in `name` rather than `code`, so fall back to name — that's the suffix the assembly uses.
 const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
@@ -564,21 +572,6 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return row ? { id: String(row.id), type: String(row.itemtype || '') } : null;
     };
 
-    // The /P assembly's BOM has the raw base (inventory, bin-tracked) + a Phosphating service line
-    // (OthCharge, no inventory). Read it so the build supplies the EXACT component internal id NetSuite
-    // expects — the app's stored netSuiteInternalId can differ from the BOM member, which is what made
-    // the component `item` INVALID_VALUE. Returns { compId, bomQty } for the inventory component only.
-    const fetchComponents = async (assemblyErpId) => {
-        const nm = (assemblyErpId || '').trim().toUpperCase().replace(/'/g, "''");
-        // Inventory-tracked members first (line 1 = the raw base, matching NetSuite's component list +
-        // the "line 1" error), charges/services last.
-        const q = `SELECT ci.itemtype AS comp_type, m.bomquantity AS qty FROM item a JOIN assemblyitembom aib ON aib.assembly=a.id JOIN bom b ON b.id=aib.billofmaterials JOIN bomrevision br ON br.billofmaterials=b.id JOIN bomrevisioncomponentmember m ON m.bomrevision=br.id JOIN item ci ON ci.id=m.item WHERE UPPER(a.itemid)='${nm}' ORDER BY CASE WHEN ci.itemtype IN ('InvtPart','Assembly','Kit') THEN 0 ELSE 1 END, m.bomquantity DESC`;
-        const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } }) });
-        const b = await r.json().catch(() => ({}));
-        const rows = (r.ok && b.items) ? b.items : [];
-        return rows.map((x, i) => ({ line: i + 1, isInv: /invtpart|assembly|kit/i.test(String(x.comp_type || '')), bomQty: parseFloat(x.qty) || 1 }));
-    };
-
     const ensureBinExists = async (binNumber, locationId) => {
         const response = await fetch(FIREBASE_FUNCTION_URL, {
             method: 'POST',
@@ -759,44 +752,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (assembly.type && !/assembl/i.test(assembly.type)) { setIsSyncing(false); return alert(`${erpOf(target)} is type "${assembly.type}" in NetSuite, not an Assembly. An assembly build needs an Assembly/BOM item — set ${erpOf(target)} up as an assembly (with ${base.erpId} as a component), or tell me the correct assembly item id.`); }
             const assemblyId = assembly.id;
             dbg = `resolved ${erpOf(target)} -> id ${assemblyId} (type ${assembly.type || '?'})`;
-            // Echo the FULL component list (static sublist) with the bin on the inventory line(s).
-            const comps = await fetchComponents(erpOf(target));
-            if (!comps.some(c => c.isInv)) { setIsSyncing(false); return alert(`Couldn't read ${erpOf(target)}'s BOM components from NetSuite — confirm it's an Assembly with ${base.erpId} as a member.`); }
+            // Build via the RESTlet — it sources the BOM and sets the raw component's bin server-side
+            // (the plain REST record API can't set a build's static component sublist at create time).
             const consumeBin = String(srcBin).trim().toUpperCase();
-            const payload = {
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
-                method: 'POST',
-                payload: {
-                    item: { id: assemblyId }, // the assembly being built
-                    subsidiary: { id: nsConfig.subsidiary },
-                    quantity: qty,
-                    location: { id: nsConfig.location },
-                    memo: memoText,
-                    // The raw component is bin-tracked → the build MUST state which bin to consume it
-                    // from (else NetSuite rejects on the component list). Consume the BOM's actual
-                    // component from the base's source bin.
-                    component: buildComponentSublist(comps, qty, consumeBin),
-                    // Lot/serial-numbered assemblies need an inventory number on the built units → send it via
-                    // receiptInventoryNumber when a lot # is entered. Plain (untracked) assemblies omit this, and
-                    // this /P assembly isn't bin-managed so no bin on the built units.
-                    ...(convertLot.trim() ? {
-                        inventoryDetail: {
-                            quantity: qty,
-                            inventoryAssignment: { items: [{ receiptInventoryNumber: convertLot.trim(), quantity: qty }] }
-                        }
-                    } : {})
-                }
-            };
+            const built = await postConvertBuild({ itemId: assemblyId, quantity: qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, memo: memoText });
 
-            const response = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const result = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
-
-            alert(`✅ Assembly build posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${srcBin}).\n\nPlace the finished stock in bin ${destBin}. (This assembly isn't bin-tracked in NetSuite, so the bin is for your reference.)`);
+            alert(`✅ Assembly build #${built.id || ''} posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${consumeBin}).\n\nPlace the finished stock in bin ${destBin}. (This assembly isn't bin-tracked in NetSuite, so the bin is for your reference.)`);
             writeLog(`Assembly Build (phosphate): +${qty} ${erpOf(target)} / -${qty} ${base.erpId}.${convertMemo.trim() ? ` Memo: ${convertMemo.trim()}` : ''}`, 'wms');
             setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot("");
             pullNetSuiteStock();
@@ -935,19 +896,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const assembly = await resolveItemDetail(line.targetErpId);
             if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${line.targetErpId} in NetSuite by item id.`); }
             if (assembly.type && !/assembl/i.test(assembly.type)) { setIsSyncing(false); return alert(`${line.targetErpId} is type "${assembly.type}", not an Assembly.`); }
-            // Consume the raw component from the CART bin it was staged into (it's bin-tracked, so the
-            // build must state the bin). Use the BOM's ACTUAL component id (not the app's stored one).
-            const comps = await fetchComponents(line.targetErpId);
-            if (!comps.some(c => c.isInv)) { setIsSyncing(false); return alert(`Couldn't read ${line.targetErpId}'s BOM components from NetSuite. Confirm it's an Assembly with ${line.rawErpId} as a member.`); }
+            // Build via the RESTlet — it sources the BOM and sets the raw component's bin server-side.
+            // The raw is consumed from the CART bin it was staged into.
             const consumeBin = (convBatch.cartBin || cartBin || 'PHOS-CART').trim().toUpperCase();
-            const payload = {
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
-                method: 'POST',
-                payload: { item: { id: assembly.id }, subsidiary: { id: nsConfig.subsidiary }, quantity: line.qty, location: { id: nsConfig.location }, memo: `Phos convert ${convBatch.cartBin || ''}`.slice(0, 40), component: buildComponentSublist(comps, line.qty, consumeBin) }
-            };
-            const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-            const b = await r.json().catch(() => ({}));
-            if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
+            await postConvertBuild({ itemId: assembly.id, quantity: line.qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, memo: `Phos convert ${convBatch.cartBin || ''}` });
             const lines = (convBatch.lines || []).map(l => l.lineId === line.lineId ? { ...l, status: 'converted', newBin, convertedAt: Date.now() } : l);
             await updateDoc(doc(db, "conversion_batches", convBatch.id), { lines, updatedAt: Date.now() });
             writeLog(`Phosphate convert: +${line.qty} ${line.targetErpId} / −${line.qty} ${line.rawErpId} (cart ${convBatch.cartBin || ''} → ${newBin || 'finished'}).`, 'wms');
