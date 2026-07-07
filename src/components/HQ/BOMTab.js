@@ -57,6 +57,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [reassignSearch, setReassignSearch] = useState("");
   const [mismatchScan, setMismatchScan] = useState(null);    // cross-assembly placeholder-vs-real audit
   const [scanningMismatches, setScanningMismatches] = useState(false);
+  const [collectionAudit, setCollectionAudit] = useState(null); // parts pinned across / against collections
+  const [auditingCollections, setAuditingCollections] = useState(false);
 
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '' }); 
 
@@ -515,6 +517,58 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       } catch (e) { console.error('link failed', e); alert('Link failed — check console.'); }
   };
 
+  // Read-only audit: which BOM-pinned parts live across / against collection lines. A part pinned into
+  // assemblies of MORE THAN ONE collection, or pinned into an assembly whose collection its own tag does
+  // NOT share, is surfaced for review — it's what makes the Vision/CPQ pickers collection-scope a part
+  // out of a flow. Some are legitimately shared (universal hardware); others are mis-pins. You decide.
+  const colsOfPart = (p) => {
+      const specs = p?.manufacturingSpecs || {};
+      const arr = (Array.isArray(specs.collections) && specs.collections.length)
+          ? specs.collections
+          : (specs.customData?.collection ? [specs.customData.collection] : []);
+      return arr.map(c => String(c || '').toUpperCase().trim()).filter(Boolean);
+  };
+  const runCollectionAudit = async () => {
+      setAuditingCollections(true);
+      try {
+          const asmByItemId = {};
+          assemblies.forEach(a => { if (a.itemId) asmByItemId[a.itemId] = a; });
+
+          const snap = await getDocs(collection(db, "assembly_pins"));
+          const byPart = new Map(); // partId -> { part, partCols, asms:[{asm, asmCols}] }
+          snap.docs.forEach(d => {
+              const pin = { id: d.id, ...d.data() };
+              const asm = asmByItemId[pin.assemblyId];
+              if (!asm) return; // assembly not in this brand's library / not found
+              const part = libraryParts.find(p => p.id === pin.partId || p.itemId === pin.partId || p.legacyErpId === pin.partId || (pin.legacyErpId && p.legacyErpId === pin.legacyErpId));
+              if (!part) return; // unresolved pins are the "Find Part Mismatches" scan's job
+              const key = part.id;
+              if (!byPart.has(key)) byPart.set(key, { part, partCols: colsOfPart(part), asms: [] });
+              byPart.get(key).asms.push({ asm, asmCols: colsOfPart(asm) });
+          });
+
+          const real = (c) => c && c !== 'N/A';
+          const flagged = [];
+          byPart.forEach(({ part, partCols, asms }) => {
+              const asmColSet = new Set();
+              asms.forEach(a => a.asmCols.forEach(c => { if (real(c)) asmColSet.add(c); }));
+              const partTagged = partCols.filter(real);
+              // Assemblies whose (tagged) collection the part's own (tagged) collection doesn't share.
+              const mismatchAsms = asms.filter(a => {
+                  const ac = a.asmCols.filter(real);
+                  return ac.length && partTagged.length && !ac.some(c => partTagged.includes(c));
+              });
+              const multiCollection = asmColSet.size > 1;
+              if (multiCollection || mismatchAsms.length) {
+                  flagged.push({ part, partCols: partTagged, asms, multiCollection, mismatchCount: mismatchAsms.length, asmCollections: [...asmColSet].sort() });
+              }
+          });
+          flagged.sort((a, b) => (b.asmCollections.length - a.asmCollections.length) || (b.asms.length - a.asms.length) || String(a.part.itemName || '').localeCompare(String(b.part.itemName || '')));
+          setCollectionAudit(flagged);
+      } catch (e) { console.error('collection audit failed', e); alert('Collection audit failed — check console.'); }
+      finally { setAuditingCollections(false); }
+  };
+
   const handleSpecChange = (e) => setEditSpecs({ ...editSpecs, [e.target.name]: e.target.value });
   const handleAssemblySpecChange = (e) => setAssemblyDetails({ ...assemblyDetails, [e.target.name]: e.target.value });
   const handleParametricChange = (e) => setEditSpecs({ ...editSpecs, parametric: { ...editSpecs.parametric, [e.target.name]: e.target.type === 'checkbox' ? e.target.checked : e.target.value } });
@@ -763,6 +817,52 @@ const BOMTab = ({ currentUser, activeBrand }) => {
         </div>
       )}
 
+      {collectionAudit !== null && (
+        <div onClick={() => setCollectionAudit(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '820px', maxHeight: '84vh', borderRadius: '2px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.18)' }}>
+            <div style={{ padding: '22px 28px', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Cross-Collection Pin Audit</h3>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                  {collectionAudit.length} part{collectionAudit.length === 1 ? '' : 's'} pinned across / against collections
+                </span>
+              </div>
+              <button onClick={() => setCollectionAudit(null)} style={{ background: 'none', border: 'none', fontSize: '1.6rem', color: 'var(--ink-soft)', cursor: 'pointer' }}>×</button>
+            </div>
+            <div style={{ padding: '16px 28px', overflowY: 'auto' }}>
+              {collectionAudit.length === 0 ? (
+                <div style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>No cross-collection pins — every pinned part stays within its collection. ✓</div>
+              ) : collectionAudit.map(r => (
+                <div key={r.part.id} style={{ padding: '14px 0', borderBottom: '1px solid var(--line)' }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>{r.part.itemName || '(unnamed)'}</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', textTransform: 'uppercase' }}>{r.part.legacyErpId && r.part.legacyErpId !== 'PENDING' ? r.part.legacyErpId : (r.part.itemId || r.part.id)}</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>tagged: {r.partCols.length ? r.partCols.join(', ') : '— untagged —'}</span>
+                    {r.multiCollection && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#fff', background: '#b45309', padding: '2px 6px', textTransform: 'uppercase' }}>in {r.asmCollections.length} collections</span>}
+                    {r.mismatchCount > 0 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#fff', background: '#b91c1c', padding: '2px 6px', textTransform: 'uppercase' }}>tagged ≠ assembly</span>}
+                  </div>
+                  <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                    {r.asms.map((a, i) => {
+                      const ac = a.asmCols.filter(c => c && c !== 'N/A');
+                      const mism = ac.length && r.partCols.length && !ac.some(c => r.partCols.includes(c));
+                      return (
+                        <div key={i} style={{ display: 'flex', gap: '10px', fontSize: '0.82rem', color: mism ? '#b91c1c' : 'var(--ink-soft)' }}>
+                          <span style={{ minWidth: '280px' }}>{mism ? '⚠ ' : ''}in <b style={{ fontWeight: 500 }}>{a.asm.itemName || a.asm.itemId}</b></span>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', paddingTop: '2px' }}>{a.asmCols.length ? a.asmCols.join(', ') : '— untagged —'}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: '14px 28px', borderTop: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+              Read-only. ⚠ = the assembly's collection isn't among the part's tags. Fix by re-pinning in Node Grouping, or add the missing collection tag to the part / assembly in the Master Library.
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: '16px', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
           
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -809,6 +909,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
               <button onClick={runMismatchScan} disabled={scanningMismatches} title="Scan every assembly for BOM components linked to a placeholder part that matches a real library part." style={{ padding: '10px 14px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--ink)', cursor: scanningMismatches ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                   {scanningMismatches ? 'Scanning…' : '⚲ Find Part Mismatches'}
+              </button>
+
+              <button onClick={runCollectionAudit} disabled={auditingCollections} title="Read-only: list every BOM-pinned part that is pinned into assemblies of more than one collection, or into an assembly whose collection its own tag doesn't share. This is what makes Vision/CPQ scope a part out of a flow — review to catch mis-pins." style={{ padding: '10px 14px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--ink)', cursor: auditingCollections ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                  {auditingCollections ? 'Auditing…' : '⬖ Cross-Collection Pins'}
               </button>
 
               <button onClick={handleBulkThumbnails} disabled={bulkThumb.running} title="Render + save a thumbnail from the .glb for every filtered assembly that's missing an image (works after clusters are assigned)" style={{ padding: '10px 14px', border: '1px solid var(--ink)', background: bulkThumb.running ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', cursor: bulkThumb.running ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
