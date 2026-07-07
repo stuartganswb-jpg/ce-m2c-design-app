@@ -624,6 +624,16 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           const key = (cl.position || '').toUpperCase();
           (hiddenByPos[key] = hiddenByPos[key] || []).push({ partId, partName: pin?.partName || cl.name, qty: parseInt(pin?.defaultQty) || 1 });
       });
+      // Hidden CHOICES that carry a REAL item # (fasteners/standoffs the designer stacked inside a
+      // choosable cluster and hid in 1.6): same BOM-only semantics as hidden clusters — never an
+      // option, geometry force-hidden, but INCLUDED in the BOM at their cluster's position. Synthetic
+      // HIDDEN-… ids (pure stray-geometry hides with no item #) still contribute nothing.
+      (asm.nodeClusters || []).filter(c => !c.hidden).forEach(cl => {
+          (pinsByCluster[cl.id] || []).filter(p => p.isHiddenPart && p.partId && !String(p.partId).startsWith('HIDDEN-')).forEach(pin => {
+              const key = (cl.position || '').toUpperCase();
+              (hiddenByPos[key] = hiddenByPos[key] || []).push({ partId: pin.partId, partName: pin.partName || cl.name, qty: parseInt(pin.defaultQty) || 1 });
+          });
+      });
       const posGotHidden = new Set();
       const takeIncluded = (pos) => { const k = (pos || '').toUpperCase(); if (posGotHidden.has(k) || !(hiddenByPos[k] || []).length) return null; posGotHidden.add(k); return hiddenByPos[k]; };
 

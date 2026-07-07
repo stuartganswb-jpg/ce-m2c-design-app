@@ -217,6 +217,15 @@ export const validateAssemblyAlignment = ({ assembly, pins = [], parts = [], flo
         if (!part && !pin.isFee && !pin.isHiddenPart && !String(pin.partId || '').startsWith('FEE-') && !String(pin.partId || '').startsWith('HIDDEN-')) {
             push('ERROR', 'PIN', `Pin "${label}" doesn't resolve to a library part (${pin.partId}) — create/import the item (Item Starter Kit) or fix the item # in the 1.6 Assign tool.`);
         }
+        // Hidden choices are never options, so they need no endTreatment. But a hidden choice with only
+        // a synthetic HIDDEN-… id is GEOMETRY-ONLY — it will never reach the BOM. If it's real hardware
+        // (fasteners/standoffs), it needs its item # in 1.6 so the generator can include it.
+        if (pin.isHiddenPart) {
+            if (/^HIDDEN-/.test(String(pin.partId || ''))) {
+                push('INFO', 'PIN', `Hidden choice "${label}" carries no item # — geometry-only, it will NOT reach the BOM. If it's real hardware, add its item # in 1.6's Assign tool (keep HIDE checked) so it's included when this position is used.`);
+            }
+            return;
+        }
         // End-treatment choices must carry the explicit tag — name-regex is what breaks flows.
         if (catN === 'FINIAL') {
             const explicit = normalizeEndTreatment(pin.endTreatment) || normalizeEndTreatment(part?.manufacturingSpecs?.customData?.endTreatment || part?.manufacturingSpecs?.customData?.feeType) || (U(part?.manufacturingSpecs?.productType) === 'FINIAL' ? 'FINIAL' : '');

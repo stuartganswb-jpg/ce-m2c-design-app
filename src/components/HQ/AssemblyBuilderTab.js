@@ -381,7 +381,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const hasItem = ch.itemNo && ch.itemNo.trim();
                     if (!hasItem && !ch.isFee && !ch.isHidden) return; // blank = shared hardware, no pin
                     const slug = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
-                    const partId = ch.isHidden ? `HIDDEN-${slug}` : (hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${slug}`);
+                    // A hidden choice WITH an item # keeps the real id — the generator includes it in the
+                    // BOM (includedParts) at its cluster's position. HIDDEN-… synthetic = geometry-only.
+                    const partId = hasItem ? ch.itemNo.trim().toUpperCase() : (ch.isHidden ? `HIDDEN-${slug}` : `FEE-${slug}`);
                     const node = topMap[ch.nodeName] || ch.nodeName;
                     // endTreatment: the explicit per-choice tag (finial vs french/miter return vs inside
                     // mount). THE canonical signal — the generator/CPQ no longer have to sniff names.
@@ -396,7 +398,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}),
                         ...(ch.isHidden ? { isHiddenPart: true } : {}),
                         ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}),
-                        ...(hasItem && !ch.isFee && !ch.isHidden ? libLinkFields(ch.itemNo) : {})
+                        ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {})
                     });
                 });
             });
@@ -592,7 +594,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const pin = pinByNode[nm];
                     const flagged = !!(pin?.isFee || pin?.isHiddenPart);
                     // Display the ERP code (a linked pin's partId is the library itemId, not the code).
-                    let itemNo = flagged ? '' : ((pin?.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId)) ? pin.legacyErpId : (pin?.partId || ''));
+                    // Hidden pins CAN carry a real item # (BOM-included hardware) — show it; only the
+                    // synthetic HIDDEN-/FEE- placeholder ids stay blank.
+                    const synthetic = /^(HIDDEN|FEE)-/.test(String(pin?.partId || ''));
+                    let itemNo = pin?.isFee ? '' : ((pin?.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId)) ? pin.legacyErpId : (!synthetic && pin?.partId ? pin.partId : ''));
                     if (!itemNo && !flagged && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
                     // endTreatment: saved pin tag wins; unsaved end-cluster rows seed from the name.
                     const et = pin?.endTreatment || (isEndCluster ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '');
@@ -720,10 +725,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // Fee choice (e.g. a french-return bend): renders as a selectable option but bills
                     // as a fee, not a BOM item. Synthetic partIds keep the pin doc id unique.
                     const slug = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
-                    const partId = ch.isHidden ? `HIDDEN-${slug}` : (hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${slug}`);
+                    // A hidden choice WITH an item # keeps the real id — the generator includes it in the
+                    // BOM (includedParts) at its cluster's position. HIDDEN-… synthetic = geometry-only.
+                    const partId = hasItem ? ch.itemNo.trim().toUpperCase() : (ch.isHidden ? `HIDDEN-${slug}` : `FEE-${slug}`);
                     const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
                     for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(hasItem && !ch.isFee && !ch.isHidden ? libLinkFields(ch.itemNo) : {}) });
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
@@ -933,7 +940,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                     <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
                                                     <button onClick={() => splitChoice(r.clusterId, c.nodeName)} title="This row is really several parts merged under one wrapper node — split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>⤢ split</button>
                                                 </span>
-                                                <input value={c.itemNo} list="ab-item-codes" disabled={c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — no item #' : 'item # — type to search (blank = hardware)'} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
+                                                <input value={c.itemNo} list="ab-item-codes" disabled={c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — no item #' : (c.isHidden ? 'hidden — item # optional (adds it to the BOM)' : 'item # — type to search (blank = hardware)')} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
                                                 {normalizeCategory(r.category) === 'FINIAL' && (
                                                     <select value={c.endTreatment || ''} title="END TREATMENT — the explicit tag the generator + CPQ + Vision read (replaces name-sniffing). FINIAL = decorative end. FRENCH/MITER RETURN = fee, replaces this side's bracket + hides the long rod half. INSIDE MOUNT = real part, replaces the bracket." onChange={e => { const et = e.target.value; setChoicePatch(r.clusterId, c.nodeName, { endTreatment: et, ...(et === 'FRENCH_RETURN' || et === 'MITER_RETURN' ? { isFee: true, itemNo: '', isHidden: false, isBasic: false, usesReturnPlates: false } : { isFee: false }) }); }} style={{ ...inp, padding: '4px 6px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', width: '118px', borderColor: c.endTreatment && c.endTreatment !== 'FINIAL' ? 'var(--brass)' : 'var(--line)' }}>
                                                         <option value="">— end type —</option>
@@ -946,7 +953,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         fee
                                                     </label>
                                                     <label title="Hide this node in EVERY configuration (stray/duplicate geometry that should never render). Takes effect after regenerating the flow." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isHidden ? '#d9534f' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                        <input type="checkbox" checked={!!c.isHidden} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { itemNo: '', isFee: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />
+                                                        <input type="checkbox" checked={!!c.isHidden} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { isFee: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />
                                                         hide
                                                     </label>
                                                     <label title="Basic bracket: takes NO backplate — when the customer selects this bracket, the backplate picker greys out and stays None. Keep the item # filled; this flag just disables the plate pairing." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isBasic ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
@@ -1039,7 +1046,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
                                                         <button onClick={() => splitSlotChoice(slot.id, c.nodeName)} title="Several parts merged under one wrapper node? Split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '1px 5px', borderRadius: '2px', flexShrink: 0 }}>⤢</button>
                                                     </span>
-                                                    <input value={c.itemNo} list="ab-item-codes" disabled={c.isFee || c.isHidden} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — no item #' : (c.isHidden ? 'hidden' : 'item # — type to search')} style={{ ...inp, padding: '4px 7px', fontSize: '0.75rem', fontFamily: 'var(--mono)', borderColor: (c.isFee || c.isHidden) ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: (c.isFee || c.isHidden) ? 0.5 : 1 }} />
+                                                    <input value={c.itemNo} list="ab-item-codes" disabled={c.isFee} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — no item #' : (c.isHidden ? 'hidden — item # optional (adds to BOM)' : 'item # — type to search')} style={{ ...inp, padding: '4px 7px', fontSize: '0.75rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
                                                     {normalizeCategory(slot.category) === 'FINIAL' && (
                                                         <select value={c.endTreatment || ''} title="END TREATMENT — the explicit tag the generator + CPQ + Vision read (no more name-sniffing). FINIAL = decorative end. FRENCH/MITER RETURN = fee, replaces this side's bracket + hides the long rod half. INSIDE MOUNT = real part, replaces the bracket." onChange={e => { const et = e.target.value; setSlotChoicePatch(slot.id, c.nodeName, { endTreatment: et, ...(et === 'FRENCH_RETURN' || et === 'MITER_RETURN' ? { isFee: true, itemNo: '', isHidden: false, isBasic: false, usesReturnPlates: false } : { isFee: false }) }); }} style={{ ...inp, padding: '3px 5px', fontSize: '8px', fontFamily: 'var(--mono)', textTransform: 'uppercase', width: '106px', borderColor: c.endTreatment && c.endTreatment !== 'FINIAL' ? 'var(--brass)' : 'var(--line)' }}>
                                                             <option value="">— end type —</option>
@@ -1051,7 +1058,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                             <input type="checkbox" checked={!!c.isFee} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '', isHidden: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />fee
                                                         </label>
                                                         <label title="Force-hidden in every configuration (stray geometry that should never render)." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isHidden ? '#d9534f' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                            <input type="checkbox" checked={!!c.isHidden} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { itemNo: '', isFee: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />hide
+                                                            <input type="checkbox" checked={!!c.isHidden} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { isFee: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />hide
                                                         </label>
                                                         <label title="Basic bracket: takes NO backplate — the backplate picker greys to None when this bracket is selected. Keep the item # filled." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isBasic ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                             <input type="checkbox" checked={!!c.isBasic} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isBasic: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />basic
