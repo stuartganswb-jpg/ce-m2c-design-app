@@ -72,7 +72,9 @@ const guessLocation = (s) => {
 // nodeLocations / nodePositions / nodeCategories, edited in Mass Update) hasn't been set. Editing
 // the dictionary overrides these live; keeping them guarantees no regression if it's never touched.
 const DEFAULT_LOCATIONS = ['WALL', 'CEILING', 'END'];
-const DEFAULT_POSITIONS = ['LEFT', 'CENTER', 'RIGHT'];
+// FRONT/BACK = the two pole rows of a DOUBLE-bracket flow (canonical spec: Shared/assemblyTags.js) —
+// kept here so 1.5 can display + edit clusters built by 1.6's Double workflow without vocabulary loss.
+const DEFAULT_POSITIONS = ['LEFT', 'CENTER', 'RIGHT', 'FRONT', 'BACK'];
 const DEFAULT_CATEGORIES = ['BRACKET', 'POLE', 'FINIAL', 'BACKPLATE', 'RING'];
 // Normalize any name / id to a comparable key (drop case, spaces, punctuation).
 const normKey = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');

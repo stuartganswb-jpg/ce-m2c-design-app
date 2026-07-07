@@ -44,7 +44,8 @@ const WINDOW_LABELS = {
 const NODE_TAG_GROUPS = [
     { key: 'nodeCategories', label: 'Categories', def: ['BRACKET', 'POLE', 'FINIAL', 'BACKPLATE', 'RING'] },
     { key: 'nodeLocations', label: 'Locations (Mount)', def: ['WALL', 'CEILING', 'END'] },
-    { key: 'nodePositions', label: 'Positions', def: ['LEFT', 'CENTER', 'RIGHT'] },
+    // FRONT/BACK = the two pole rows of a DOUBLE-bracket flow (canonical spec: Shared/assemblyTags.js).
+    { key: 'nodePositions', label: 'Positions', def: ['LEFT', 'CENTER', 'RIGHT', 'FRONT', 'BACK'] },
 ];
 const NodeTagsPanel = ({ lists }) => {
     const [drafts, setDrafts] = useState({});

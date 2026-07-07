@@ -304,7 +304,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       if (!m || !bt) return true;
       if (m === 'OPEN') return bt.includes('WALL');
       if (m === 'CEILING') return bt.includes('CEIL');
-      if (m === 'INSIDE') return bt.includes('INSIDE') || bt.includes('IM');
+      // 'END' = the canonical spelling of inside-mount (Shared/assemblyTags.js); accept both dialects.
+      if (m === 'INSIDE') return bt.includes('INSIDE') || bt.includes('IM') || bt.includes('END');
       return true;
   };
   const isReturnBracketPart = (b) => !!b.manufacturingSpecs?.customData?.isReturnBracket;

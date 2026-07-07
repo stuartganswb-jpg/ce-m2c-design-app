@@ -1039,8 +1039,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           if ((s.position || '').toUpperCase() !== p || !/end treatment/i.test(s.title || '')) return false;
           const sel = dynamicConfigParams[s.id];
           if (!sel) return false;
-          if (/^OPT-(BEND|MITER)/i.test(sel)) return true;
           const o = (s.styleOptions || []).find(x => (x.optId || x.partId) === sel);
+          // CANONICAL: the option's explicit endTreatment tag (stamped by the generator from the 1.6
+          // per-choice select) decides directly — FRENCH/MITER return and INSIDE_MOUNT replace the
+          // bracket; FINIAL never does. Name/leaf regexes below are the legacy fallback only.
+          const et = String(o?.endTreatment || '').toUpperCase();
+          if (et) return et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT';
+          if (/^OPT-(BEND|MITER)/i.test(sel)) return true;
           // Geometry check uses only each node's LEAF label (after the "S5-<CLUSTER>__n_" prefix):
           // the prefix carries the cluster name, and "…RETURNS" in "LEFT-END—FINIALS-+-RETURNS" made
           // EVERY option — finials included — read as a return (greyed brackets, broken renders).

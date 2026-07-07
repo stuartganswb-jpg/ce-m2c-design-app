@@ -5,6 +5,7 @@ import { collection, onSnapshot, query, where, doc, updateDoc, getDocs } from "f
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
 import { loadGLBScene, snapshotPNG } from '../Shared/componentExport';
 import { generateOnboardingXlsx } from '../Shared/onboardingXlsx';
+import { validateAssemblyAlignment } from '../Shared/assemblyTags';
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -59,6 +60,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [scanningMismatches, setScanningMismatches] = useState(false);
   const [collectionAudit, setCollectionAudit] = useState(null); // parts pinned across / against collections
   const [auditingCollections, setAuditingCollections] = useState(false);
+  const [alignScan, setAlignScan] = useState(null);             // canonical tag-spec alignment audit (1.5/1.6 ↔ 2/3/CPQ/Vision)
+  const [aligningScan, setAligningScan] = useState(false);
 
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '' }); 
 
@@ -569,6 +572,48 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       finally { setAuditingCollections(false); }
   };
 
+  // Flow Alignment Scan — validates every clustered assembly (and its linked CPQ flows) against the
+  // canonical tag spec (Shared/assemblyTags.js): dialect vocab values, missing/contradicting cluster
+  // tags, pins whose return-ness only lives in a NAME, parts missing the specs Vision reads
+  // (bracketType / projection / parametric dims), and steps Vision can't classify. Read-only except
+  // the per-row FIX buttons (normalize a dialect value / apply a name-derived suggestion).
+  const runAlignmentScan = async () => {
+      setAligningScan(true);
+      try {
+          const pinSnap = await getDocs(collection(db, "assembly_pins"));
+          const pinsByAsm = {};
+          pinSnap.docs.forEach(d => {
+              const p = { id: d.id, ...d.data() };
+              if (!p.assemblyId) return;
+              (pinsByAsm[p.assemblyId] = pinsByAsm[p.assemblyId] || []).push(p);
+          });
+          const results = [];
+          assemblies.filter(a => (a.nodeClusters || []).length).forEach(a => {
+              const pins = pinsByAsm[a.itemId] || pinsByAsm[a.id] || [];
+              const issues = validateAssemblyAlignment({ assembly: a, pins, parts: libraryParts, flows: cpqFlows });
+              issues.forEach(i => results.push({ ...i, docId: a.id }));
+          });
+          const rank = { ERROR: 0, WARN: 1, INFO: 2 };
+          results.sort((x, y) => (rank[x.severity] - rank[y.severity]) || String(x.assemblyName).localeCompare(String(y.assemblyName)));
+          setAlignScan(results);
+      } catch (e) { console.error('alignment scan failed', e); alert('Alignment scan failed — check console.'); }
+      finally { setAligningScan(false); }
+  };
+  // One-click fix from the scan: patch a cluster's tag on the assembly doc, or a pin's tag.
+  const applyAlignFix = async (row) => {
+      try {
+          if (row.fix?.type === 'cluster') {
+              const asm = assemblies.find(a => a.id === row.docId);
+              if (!asm) return alert('Assembly not loaded.');
+              const clusters = (asm.nodeClusters || []).map(c => c.id === row.fix.clusterId ? { ...c, ...row.fix.patch } : c);
+              await updateDoc(doc(db, "Approved_Designs", row.docId), { nodeClusters: clusters });
+          } else if (row.fix?.type === 'pin') {
+              await updateDoc(doc(db, "assembly_pins", row.fix.pinId), row.fix.patch);
+          } else return;
+          setAlignScan(prev => (prev || []).filter(r => r !== row));
+      } catch (e) { console.error('align fix failed', e); alert('Fix failed — check console.'); }
+  };
+
   const handleSpecChange = (e) => setEditSpecs({ ...editSpecs, [e.target.name]: e.target.value });
   const handleAssemblySpecChange = (e) => setAssemblyDetails({ ...assemblyDetails, [e.target.name]: e.target.value });
   const handleParametricChange = (e) => setEditSpecs({ ...editSpecs, parametric: { ...editSpecs.parametric, [e.target.name]: e.target.type === 'checkbox' ? e.target.checked : e.target.value } });
@@ -817,6 +862,44 @@ const BOMTab = ({ currentUser, activeBrand }) => {
         </div>
       )}
 
+      {alignScan !== null && (
+        <div onClick={() => setAlignScan(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '900px', maxHeight: '86vh', borderRadius: '2px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.18)' }}>
+            <div style={{ padding: '22px 28px', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Flow Alignment Scan</h3>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                  {alignScan.filter(r => r.severity === 'ERROR').length} errors · {alignScan.filter(r => r.severity === 'WARN').length} warnings · {alignScan.filter(r => r.severity === 'INFO').length} info — canonical tag spec (1.5/1.6 ↔ tabs 2/3, CPQ, Vision)
+                </span>
+              </div>
+              <button onClick={() => setAlignScan(null)} style={{ background: 'none', border: 'none', fontSize: '1.6rem', color: 'var(--ink-soft)', cursor: 'pointer' }}>×</button>
+            </div>
+            <div style={{ padding: '14px 28px', overflowY: 'auto' }}>
+              {alignScan.length === 0 ? (
+                <div style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>Fully aligned — every cluster, pin, part and flow step reads canonically. ✓</div>
+              ) : (
+                [...new Set(alignScan.map(r => r.assemblyName))].map(an => (
+                  <div key={an} style={{ marginBottom: '14px' }}>
+                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.05rem', color: 'var(--ink)', padding: '6px 0', borderBottom: '1px solid var(--line)' }}>{an}</div>
+                    {alignScan.filter(r => r.assemblyName === an).map((r, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 0', borderBottom: '1px dotted var(--line)' }}>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', fontWeight: 700, color: '#fff', background: r.severity === 'ERROR' ? '#b91c1c' : r.severity === 'WARN' ? '#b45309' : 'var(--ink-soft)', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>{r.severity}</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', textTransform: 'uppercase', flexShrink: 0, width: '52px' }}>{r.area}</span>
+                        <span style={{ fontSize: '0.83rem', color: 'var(--ink)', flex: 1 }}>{r.text}</span>
+                        {r.fix && <button onClick={() => applyAlignFix(r)} style={{ padding: '5px 12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', flexShrink: 0 }}>Fix →</button>}
+                      </div>
+                    ))}
+                  </div>
+                ))
+              )}
+            </div>
+            <div style={{ padding: '12px 28px', borderTop: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+              Fix → applies the suggested tag (cluster or pin). After fixing pins/clusters, REGENERATE the flow (keep prices) so the steps re-stamp from tags.
+            </div>
+          </div>
+        </div>
+      )}
+
       {collectionAudit !== null && (
         <div onClick={() => setCollectionAudit(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '820px', maxHeight: '84vh', borderRadius: '2px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.18)' }}>
@@ -913,6 +996,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
               <button onClick={runCollectionAudit} disabled={auditingCollections} title="Read-only: list every BOM-pinned part that is pinned into assemblies of more than one collection, or into an assembly whose collection its own tag doesn't share. This is what makes Vision/CPQ scope a part out of a flow — review to catch mis-pins." style={{ padding: '10px 14px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--ink)', cursor: auditingCollections ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                   {auditingCollections ? 'Auditing…' : '⬖ Cross-Collection Pins'}
+              </button>
+
+              <button onClick={runAlignmentScan} disabled={aligningScan} title="Audit every clustered assembly + its CPQ flows against the canonical tag spec: dialect vocab (INSIDE/OPEN vs END/WALL), missing or name-contradicting cluster tags, end choices whose return-ness only lives in a NAME, parts missing bracketType/projection/dims (what Vision reads), and steps Vision can't classify. One-click fixes where safe." style={{ padding: '10px 14px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--ink)', cursor: aligningScan ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                  {aligningScan ? 'Scanning…' : '⚖ Flow Alignment Scan'}
               </button>
 
               <button onClick={handleBulkThumbnails} disabled={bulkThumb.running} title="Render + save a thumbnail from the .glb for every filtered assembly that's missing an image (works after clusters are assigned)" style={{ padding: '10px 14px', border: '1px solid var(--ink)', background: bulkThumb.running ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', cursor: bulkThumb.running ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>

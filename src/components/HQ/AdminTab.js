@@ -664,9 +664,16 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   const cshort = String(cl.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6);
                   [...choicePins].sort((a, b) => ((a.choiceSort ?? 9999) - (b.choiceSort ?? 9999)) || String(a.partName || '').localeCompare(String(b.partName || ''))).forEach(p => {
                       const pid = p.partId || cl.name;
-                      const returnOnly = clusterReturnish || RETURNISH.test(String(p.partName || ''));
+                      // Explicit endTreatment tag (1.6 per-choice select / pin.endTreatment) is CANONICAL:
+                      // it decides return-ness directly and rides onto the generated option so the CPQ
+                      // runtime + Vision read the tag instead of sniffing names. The RETURNISH regex is
+                      // the legacy fallback for pins tagged before the spec.
+                      const et = String(p.endTreatment || '').toUpperCase();
+                      const returnish = et ? (et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT')
+                          : (clusterReturnish || RETURNISH.test(String(p.partName || '')));
+                      const returnOnly = returnish;
                       const key = [cl.id, pid, position, location].join('|');
-                      const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, nodes: new Set(), ...(returnOnly ? { returnOnly: true } : {}) };
+                      const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnOnly ? { returnOnly: true } : {}) };
                       e.nodes.add(String(p.choiceNode).trim());
                       // Fee choice (e.g. a french-return bend marked FEE in the assign tool): keep the
                       // geometry + selection, but emit it partId-less like the built-in Miter/Bend fee
@@ -696,7 +703,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               const e = mkOpt(map, cat, pin?.partId || cl.name, pin?.partName || cl.name, position, location);
               (cl.nodes || cl.meshes || []).forEach(n => { if (n) e.nodes.add(n); });
           });
-          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}) }));
+          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}) }));
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 
@@ -790,12 +797,22 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               // so it can hide on a return even when every option this side is a return.
               const gmap = {};
               group.forEach(o => {
-                  // Geometry check uses only each node's LEAF label (after the "S5-<CLUSTER>__n_"
-                  // prefix): a return renamed to a fee entity ("CE-FEE-5138") is still recognized by
-                  // its node ("…34X14RNDBENDLEFT…"), but the cluster-name prefix ("…FINIALS-+-RETURNS")
-                  // must NOT count — it made every finial read as a return and detach the long rod.
-                  const leaves = String(o.targetNode || '').split(',').map(s => { const seg = String(s).trim().split('__').pop() || ''; return seg.replace(/^\d+_?/, ''); }).join(' ');
-                  const isReturn = BEND_RE.test(`${o.partName || ''} ${o.optId || ''} ${leaves}`);
+                  // The option's explicit endTreatment tag (from the 1.6 per-choice select, via the
+                  // pin) is CANONICAL: FRENCH/MITER return or INSIDE_MOUNT hides the long rod half,
+                  // FINIAL shows it. The name/leaf regex below is only the legacy fallback for
+                  // options generated from pre-spec pins.
+                  const et = String(o.endTreatment || '').toUpperCase();
+                  let isReturn;
+                  if (et) {
+                      isReturn = et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT';
+                  } else {
+                      // Geometry check uses only each node's LEAF label (after the "S5-<CLUSTER>__n_"
+                      // prefix): a return renamed to a fee entity ("CE-FEE-5138") is still recognized by
+                      // its node ("…34X14RNDBENDLEFT…"), but the cluster-name prefix ("…FINIALS-+-RETURNS")
+                      // must NOT count — it made every finial read as a return and detach the long rod.
+                      const leaves = String(o.targetNode || '').split(',').map(s => { const seg = String(s).trim().split('__').pop() || ''; return seg.replace(/^\d+_?/, ''); }).join(' ');
+                      isReturn = BEND_RE.test(`${o.partName || ''} ${o.optId || ''} ${leaves}`);
+                  }
                   const nodes = [o.targetNode, isReturn ? '' : straightNodes].filter(Boolean).join(', ');
                   if (nodes) gmap[o.optId] = nodes;
               });
@@ -809,8 +826,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   // that still needs its bracket/backplate (e.g. french-return backplates) keeps the step.
                   position: pos,
                   styleOptions: [...group,
-                      { optId: `OPT-MITER-${sfx}`, partId: '', partName: 'Mitered Return (fee — set price)', targetNode: bendNodes, price: 0 },
-                      { optId: `OPT-BEND-${sfx}`, partId: '', partName: 'Bent Return (fee — set price)', targetNode: bendNodes, price: 0 },
+                      { optId: `OPT-MITER-${sfx}`, partId: '', partName: 'Mitered Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'MITER_RETURN', isFee: true },
+                      { optId: `OPT-BEND-${sfx}`, partId: '', partName: 'Bent Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'FRENCH_RETURN', isFee: true },
                       { optId: `OPT-FLUSH-${sfx}`, partId: '', partName: 'Flush Cut', targetNode: straightNodes, price: 0 }],
                   geometryMap: gmap,
                   ...(inc ? { includedParts: inc } : {})

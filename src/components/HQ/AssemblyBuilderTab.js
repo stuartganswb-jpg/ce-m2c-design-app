@@ -11,6 +11,7 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
 import { buildCodeIndex, matchItemByName, normCode } from '../Shared/itemCodeMatch';
 import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
 import { downloadItemStarterTemplate, parseItemStarterWorkbook } from '../Shared/itemStarterXlsx';
+import { TAG_CATEGORIES, TAG_LOCATIONS, END_TREATMENTS, normalizeLocation, normalizePosition, normalizeCategory, suggestTagsFromName } from '../Shared/assemblyTags';
 
 // Step-by-step assembly builder: the designer uploads ONE .glb per slot (all the choices for that slot
 // stacked inside the file). We KNOW each slot's position/category/location, so there's nothing to
@@ -20,9 +21,12 @@ import { downloadItemStarterTemplate, parseItemStarterWorkbook } from '../Shared
 // pre-aligned.
 
 const DRACO = 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/';
-const CATEGORIES = ['POLE', 'RING', 'BRACKET', 'BACKPLATE', 'FINIAL', 'END', 'OTHER'];
+// Canonical tag vocabularies — shared with 1.5 / Vision / CPQ via Shared/assemblyTags.js.
+// (1.6 used to speak its own dialect: INSIDE/OPEN locations, END/OTHER categories — that drift
+// is what broke tag alignment across tabs. All writes below normalize to canonical.)
+const CATEGORIES = [...TAG_CATEGORIES.filter(c => c !== 'OTHER'), 'OTHER'];
 const POSITIONS = ['SHARED', 'LEFT', 'CENTER', 'RIGHT', 'FRONT', 'BACK'];
-const LOCATIONS = ['', 'WALL', 'CEILING', 'INSIDE', 'OPEN'];
+const LOCATIONS = ['', ...TAG_LOCATIONS];
 
 // Two authoring workflows. Every slot is OPTIONAL — upload only what this assembly uses; the CPQ
 // flow is generated from the slots you actually fill. `desc` is the on-screen note explaining the
@@ -177,10 +181,15 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const index = await ensureCodeIndex().catch(() => null);
             if (index) setCodeOptions([...index].sort((a, b) => a.code.localeCompare(b.code)));
             let hit = 0;
+            // End slots (category FINIAL) seed each choice's explicit endTreatment tag from its name —
+            // a one-time suggestion the user can override; other categories never carry the tag (a
+            // "RETURN backplate" must not be mistaken for a return CHOICE).
+            const isEndSlot = normalizeCategory(slot.category) === 'FINIAL';
             const choices = names.map(nm => {
                 const m = index ? matchItemByName(nm, index) : null;
                 if (m) hit++;
-                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', isFee: false, isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
+                const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
+                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
             });
             setLayers(prev => {
                 if (prev[slot.id]?.url) URL.revokeObjectURL(prev[slot.id].url);
@@ -248,13 +257,16 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         const kids = node ? (node.children || []).map(c => c.name).filter(Boolean) : [];
         if (!kids.length) return alert('This node has no named sub-parts to split into — it is a single mesh.');
         const index = codeIndexRef.current?.brand === activeBrand ? codeIndexRef.current.index : null;
+        const slotDef = slots.find(s => s.id === slotId);
+        const isEndSlot = normalizeCategory(slotDef?.category) === 'FINIAL';
         setLayers(prev => prev[slotId] ? {
             ...prev,
             [slotId]: {
                 ...prev[slotId],
                 choices: prev[slotId].choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
                     const m = index ? matchItemByName(nm, index) : null;
-                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', isFee: false, isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
+                    const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
+                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
                 }))
             }
         } : prev);
@@ -360,7 +372,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 });
                 combined.add(g);
                 const clusterId = `CLUSTER-${slot.id}-${Date.now()}`;
-                clusters.push({ id: clusterId, name: pretty, nodes: [prefix, ...allNodeNames(g)], category: slot.category, position: slot.position, location: slot.location || '' });
+                // Cluster tags are written CANONICAL (normalize the slot template values) so 1.5 /
+                // tab 2 / the generator / Vision all read the same vocabulary.
+                clusters.push({ id: clusterId, name: pretty, nodes: [prefix, ...allNodeNames(g)], category: normalizeCategory(slot.category) || slot.category, position: normalizePosition(slot.position) || slot.position, location: normalizeLocation(slot.location) || '' });
                 // Full pin schema — identical to the assign tool, so a built assembly needs NO
                 // follow-up pass: item / fee / hidden / basic flags + the arrow order (choiceSort).
                 (layer.choices || []).forEach((ch, idx) => {
@@ -369,12 +383,16 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const slug = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
                     const partId = ch.isHidden ? `HIDDEN-${slug}` : (hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${slug}`);
                     const node = topMap[ch.nodeName] || ch.nodeName;
+                    // endTreatment: the explicit per-choice tag (finial vs french/miter return vs inside
+                    // mount). THE canonical signal — the generator/CPQ no longer have to sniff names.
+                    const et = ch.endTreatment || '';
                     pins.push({
                         assemblyId: asmId, clusterId, partId, partName: ch.label || partId, defaultQty: 1,
                         // targetNode mirrors choiceNode so Visual Assembly's node-thumbnail + pin
                         // display work on builder pins; libLinkFields marks matched items as LINKED
                         // library parts (isExistingLibraryPart etc.) instead of new/leftover.
                         choiceNode: node, targetNode: node, choiceSort: idx,
+                        ...(et ? { endTreatment: et } : {}),
                         ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}),
                         ...(ch.isHidden ? { isHiddenPart: true } : {}),
                         ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}),
@@ -568,6 +586,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const rows = clusters.map(cl => {
                 const grp = findGrp(cl);
                 const kids = grp ? (grp.children || []).filter(c => c.name).flatMap(leafNames) : [];
+                const isEndCluster = normalizeCategory(cl.category) === 'FINIAL';
                 const choices = kids.map(nm => {
                     const label = choiceLabel(nm);
                     const pin = pinByNode[nm];
@@ -575,7 +594,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // Display the ERP code (a linked pin's partId is the library itemId, not the code).
                     let itemNo = flagged ? '' : ((pin?.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId)) ? pin.legacyErpId : (pin?.partId || ''));
                     if (!itemNo && !flagged && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
-                    return { nodeName: nm, label, itemNo, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, usesReturnPlates: !!pin?.usesReturnPlates, thumb: '' };
+                    // endTreatment: saved pin tag wins; unsaved end-cluster rows seed from the name.
+                    const et = pin?.endTreatment || (isEndCluster ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '');
+                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, usesReturnPlates: !!pin?.usesReturnPlates, thumb: '' };
                 });
                 // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
@@ -667,7 +688,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 choices: r.choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
                     const label = choiceLabel(nm);
                     const m = index ? matchItemByName(label, index) : null;
-                    return { nodeName: nm, label, itemNo: m ? m.code : '', isFee: false, isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
+                    const et = normalizeCategory(r.category) === 'FINIAL' ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '';
+                    return { nodeName: nm, label, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
                 }))
             })
         } : prev);
@@ -701,7 +723,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const partId = ch.isHidden ? `HIDDEN-${slug}` : (hasItem ? ch.itemNo.trim().toUpperCase() : `FEE-${slug}`);
                     const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
                     for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(hasItem && !ch.isFee && !ch.isHidden ? libLinkFields(ch.itemNo) : {}) });
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(hasItem && !ch.isFee && !ch.isHidden ? libLinkFields(ch.itemNo) : {}) });
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
@@ -901,7 +923,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
                                         {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>
                                     </div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '48px 1fr 210px 52px 46px', gap: '6px 10px', alignItems: 'center' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: normalizeCategory(r.category) === 'FINIAL' ? '48px 1fr 210px 122px 52px 46px' : '48px 1fr 210px 52px 46px', gap: '6px 10px', alignItems: 'center' }}>
                                         {r.choices.map((c) => (
                                             <React.Fragment key={c.nodeName}>
                                                 {c.thumb
@@ -912,6 +934,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                     <button onClick={() => splitChoice(r.clusterId, c.nodeName)} title="This row is really several parts merged under one wrapper node — split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>⤢ split</button>
                                                 </span>
                                                 <input value={c.itemNo} list="ab-item-codes" disabled={c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — no item #' : 'item # — type to search (blank = hardware)'} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
+                                                {normalizeCategory(r.category) === 'FINIAL' && (
+                                                    <select value={c.endTreatment || ''} title="END TREATMENT — the explicit tag the generator + CPQ + Vision read (replaces name-sniffing). FINIAL = decorative end. FRENCH/MITER RETURN = fee, replaces this side's bracket + hides the long rod half. INSIDE MOUNT = real part, replaces the bracket." onChange={e => { const et = e.target.value; setChoicePatch(r.clusterId, c.nodeName, { endTreatment: et, ...(et === 'FRENCH_RETURN' || et === 'MITER_RETURN' ? { isFee: true, itemNo: '', isHidden: false, isBasic: false, usesReturnPlates: false } : { isFee: false }) }); }} style={{ ...inp, padding: '4px 6px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', width: '118px', borderColor: c.endTreatment && c.endTreatment !== 'FINIAL' ? 'var(--brass)' : 'var(--line)' }}>
+                                                        <option value="">— end type —</option>
+                                                        {END_TREATMENTS.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
+                                                    </select>
+                                                )}
                                                 <span style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                                                     <label title="Fee choice (e.g. a french-return bend): shows this geometry as a selectable option, bills as a fee — no item # / BOM line. Position comes from the cluster's tag." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                         <input type="checkbox" checked={!!c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '', isHidden: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />
@@ -1001,7 +1029,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                 {layer && (
                                     <div style={{ marginTop: '10px', borderTop: '1px dashed var(--line)', paddingTop: '10px' }}>
                                         <div style={{ ...lbl, marginBottom: '6px' }}>Choices → item # (each becomes a CPQ swap option + BOM line) · blank = shared hardware</div>
-                                        <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 170px 54px 40px', gap: '5px 8px', alignItems: 'center' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: normalizeCategory(slot.category) === 'FINIAL' ? '40px 1fr 170px 110px 54px 40px' : '40px 1fr 170px 54px 40px', gap: '5px 8px', alignItems: 'center' }}>
                                             {(layer.choices || []).map(c => (
                                                 <React.Fragment key={c.nodeName}>
                                                     {c.thumb
@@ -1012,6 +1040,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <button onClick={() => splitSlotChoice(slot.id, c.nodeName)} title="Several parts merged under one wrapper node? Split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '1px 5px', borderRadius: '2px', flexShrink: 0 }}>⤢</button>
                                                     </span>
                                                     <input value={c.itemNo} list="ab-item-codes" disabled={c.isFee || c.isHidden} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — no item #' : (c.isHidden ? 'hidden' : 'item # — type to search')} style={{ ...inp, padding: '4px 7px', fontSize: '0.75rem', fontFamily: 'var(--mono)', borderColor: (c.isFee || c.isHidden) ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: (c.isFee || c.isHidden) ? 0.5 : 1 }} />
+                                                    {normalizeCategory(slot.category) === 'FINIAL' && (
+                                                        <select value={c.endTreatment || ''} title="END TREATMENT — the explicit tag the generator + CPQ + Vision read (no more name-sniffing). FINIAL = decorative end. FRENCH/MITER RETURN = fee, replaces this side's bracket + hides the long rod half. INSIDE MOUNT = real part, replaces the bracket." onChange={e => { const et = e.target.value; setSlotChoicePatch(slot.id, c.nodeName, { endTreatment: et, ...(et === 'FRENCH_RETURN' || et === 'MITER_RETURN' ? { isFee: true, itemNo: '', isHidden: false, isBasic: false, usesReturnPlates: false } : { isFee: false }) }); }} style={{ ...inp, padding: '3px 5px', fontSize: '8px', fontFamily: 'var(--mono)', textTransform: 'uppercase', width: '106px', borderColor: c.endTreatment && c.endTreatment !== 'FINIAL' ? 'var(--brass)' : 'var(--line)' }}>
+                                                            <option value="">— end type —</option>
+                                                            {END_TREATMENTS.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
+                                                        </select>
+                                                    )}
                                                     <span style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
                                                         <label title="Fee choice (e.g. a french-return bend): selectable option that bills as a fee — no item # / BOM line." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                             <input type="checkbox" checked={!!c.isFee} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { itemNo: '', isHidden: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />fee
