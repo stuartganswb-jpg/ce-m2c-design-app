@@ -179,7 +179,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // Auto-prefill each choice's item # from the Master Library by node name ("<ITEM#> <POS>"
             // convention) — the designer's naming does the data entry; hardware matches nothing → blank.
             const index = await ensureCodeIndex().catch(() => null);
-            if (index) setCodeOptions([...index].sort((a, b) => a.code.localeCompare(b.code)));
+            if (index) setCodeOptions(index.filter(e => e.code === e.erp && !/-\d{12,}/.test(e.code)).sort((a, b) => a.code.localeCompare(b.code))); // suggestions = real ERP codes only, never app-internal itemIds
             let hit = 0;
             // End slots (category FINIAL) seed each choice's explicit endTreatment tag from its name —
             // a one-time suggestion the user can override; other categories never carry the tag (a
@@ -577,7 +577,11 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // Auto-match: existing pin wins, else derive the item # from the node name against the
             // Master Library ("<ITEM#> <POSITION>" naming). Hardware matches nothing → stays blank.
             const index = await ensureCodeIndex().catch(() => null);
-            if (index) setCodeOptions([...index].sort((a, b) => a.code.localeCompare(b.code)));
+            if (index) setCodeOptions(index.filter(e => e.code === e.erp && !/-\d{12,}/.test(e.code)).sort((a, b) => a.code.localeCompare(b.code))); // suggestions = real ERP codes only, never app-internal itemIds
+            // Live translation itemId → CURRENT ERP code, so linked pins always display the record's
+            // item # even when the pin's stored legacyErpId predates the code being assigned.
+            const byItemId = new Map();
+            (index || []).forEach(e => { if (e.itemId && e.erp && e.erp !== 'PENDING') byItemId.set(e.itemId, e.erp); });
             let matched = 0;
             // Auto-expand to wherever pins were SAVED: if a wrapper was split and its children pinned,
             // re-listing the unsplit wrapper would show blank rows and look like the work was lost
@@ -596,8 +600,19 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // Display the ERP code (a linked pin's partId is the library itemId, not the code).
                     // Hidden pins CAN carry a real item # (BOM-included hardware) — show it; only the
                     // synthetic HIDDEN-/FEE- placeholder ids stay blank.
+                    // Chain: (1) LIVE library — pin.partId (itemId) → that part's current ERP code;
+                    // (2) the pin's stored legacyErpId when it's a real code (not N/A/PENDING and not
+                    // the internal id echoed back); (3) typed-code pins (partId IS the code, no
+                    // timestamp tail); else blank → node-name auto-match fills it. NEVER the app
+                    // internal id — it looked wrong and re-linked wrong.
                     const synthetic = /^(HIDDEN|FEE)-/.test(String(pin?.partId || ''));
-                    let itemNo = pin?.isFee ? '' : ((pin?.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId)) ? pin.legacyErpId : (!synthetic && pin?.partId ? pin.partId : ''));
+                    let itemNo = '';
+                    if (pin && !pin.isFee) {
+                        const liveErp = byItemId.get(pin.partId) || '';
+                        if (liveErp) itemNo = liveErp;
+                        else if (pin.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId) && pin.legacyErpId !== pin.partId) itemNo = pin.legacyErpId;
+                        else if (!synthetic && pin.partId && pin.legacyErpId === pin.partId && !/-\d{12,}/.test(pin.partId)) itemNo = pin.partId;
+                    }
                     if (!itemNo && !flagged && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
                     // endTreatment: saved pin tag wins; unsaved end-cluster rows seed from the name.
                     const et = pin?.endTreatment || (isEndCluster ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '');
