@@ -814,7 +814,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   const et = String(o.endTreatment || '').toUpperCase();
                   let isReturn;
                   if (et) {
-                      isReturn = et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT';
+                      // ROD DISPLAY ONLY: just true returns swap to the short rod (the bend replaces the
+                      // overhang). INSIDE_MOUNT renders like a FINIAL — the long rod stays — while still
+                      // replacing the bracket (that gating lives in CPQTab's isReturnChosenForPos).
+                      isReturn = et === 'FRENCH_RETURN' || et === 'MITER_RETURN';
                   } else {
                       // Geometry check uses only each node's LEAF label (after the "S5-<CLUSTER>__n_"
                       // prefix): a return renamed to a fee entity ("CE-FEE-5138") is still recognized by
