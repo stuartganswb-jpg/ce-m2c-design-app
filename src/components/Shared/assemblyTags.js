@@ -106,10 +106,12 @@ export const suggestTagsFromName = (name) => {
     else if (/\bRING/.test(t)) out.category = 'RING';
     else if (/POLE|\bROD\b|TUBE/.test(t)) out.category = 'POLE';
 
-    if (/MITER|MITRE|\bMTR\b/.test(t)) out.endTreatment = 'MITER_RETURN';
+    // MTR/IM/EC/CC also as embedded code suffixes ("H275INRODMTRLEFT", "H1-75IM", "H1-75EC") — word
+    // boundaries fail inside alphanumeric codes, so these use substring/suffix forms.
+    if (/MITER|MITRE|MTR/.test(t)) out.endTreatment = 'MITER_RETURN';
     else if (/FRENCH|BEND|BENT|RETURN|\bFR\b/.test(t)) out.endTreatment = 'FRENCH_RETURN';
-    else if (/INSIDE\s*MOUNT|\bFIIM\b/.test(t)) out.endTreatment = 'INSIDE_MOUNT';
-    else if (/FINIAL/.test(t)) out.endTreatment = 'FINIAL';
+    else if (/INSIDE\s*MOUNT|\bFIIM\b|\bIM\b|\dIM(?=$|[^A-Z0-9])|\dIM[-_ ]/.test(t)) out.endTreatment = 'INSIDE_MOUNT';
+    else if (/FINIAL|END\s*CAP|ENDCAP|\bCAP\b|\dEC(?=$|[^A-Z0-9])|\dCC(?=$|[^A-Z0-9])/.test(t)) out.endTreatment = 'FINIAL';
     return out;
 };
 
@@ -187,29 +189,41 @@ export const validateAssemblyAlignment = ({ assembly, pins = [], parts = [], flo
     const clusterIds = new Set(clusters.map(c => c.id));
     pins.forEach(pin => {
         const label = pin.partName || pin.partId || pin.id;
-        if (pin.clusterId && !clusterIds.has(pin.clusterId)) push('ERROR', 'PIN', `Pin "${label}" points at a cluster that no longer exists (${pin.clusterId})`);
+        if (pin.clusterId && !clusterIds.has(pin.clusterId)) {
+            // Stale leftovers from an earlier build/re-group: the generator ignores them, but they STILL
+            // pollute every consumer that reads pins by assemblyId — Vision's flowPins ("pinned" part
+            // lists), the BOM Engine component list, and the ERP push's pin lookups. Deleting is safe:
+            // the cluster they belonged to is gone.
+            push('ERROR', 'PIN', `Stale pin "${label}" points at a cluster that no longer exists (${pin.clusterId}) — leftover from an earlier build; it pollutes Vision's pinned-part lists and the BOM.`, pin.id ? { type: 'deletePin', pinId: pin.id } : null);
+            return; // don't double-report tag issues on a pin that should just be removed
+        }
         const cl = clusters.find(c => c.id === pin.clusterId);
         const catN = normalizeCategory(cl?.category);
         const part = findPart(pin.partId) || (pin.legacyErpId ? findPart(pin.legacyErpId) : null);
         if (!part && !pin.isFee && !pin.isHiddenPart && !String(pin.partId || '').startsWith('FEE-') && !String(pin.partId || '').startsWith('HIDDEN-')) {
-            push('ERROR', 'PIN', `Pin "${label}" doesn't resolve to a library part (${pin.partId})`);
+            push('ERROR', 'PIN', `Pin "${label}" doesn't resolve to a library part (${pin.partId}) — create/import the item (Item Starter Kit) or fix the item # in the 1.6 Assign tool.`);
         }
         // End-treatment choices must carry the explicit tag — name-regex is what breaks flows.
         if (catN === 'FINIAL') {
             const explicit = normalizeEndTreatment(pin.endTreatment) || normalizeEndTreatment(part?.manufacturingSpecs?.customData?.endTreatment || part?.manufacturingSpecs?.customData?.feeType) || (U(part?.manufacturingSpecs?.productType) === 'FINIAL' ? 'FINIAL' : '');
             const byName = suggestTagsFromName(label).endTreatment;
-            if (!explicit && byName) push('WARN', 'PIN', `End choice "${label}" has NO endTreatment tag — only its NAME (${byName}) makes it work. Tag it.`, { type: 'pin', pinId: pin.id, patch: { endTreatment: byName } });
-            if (!explicit && !byName) push('ERROR', 'PIN', `End choice "${label}" has no endTreatment tag and its name gives no hint — the generator can't tell finial from return.`);
+            if (!explicit && byName) push('WARN', 'PIN', `End choice "${label}" has NO endTreatment tag — only its NAME (${byName}) makes it work. Tag it.`, pin.id ? { type: 'pin', pinId: pin.id, patch: { endTreatment: byName } } : null);
+            if (!explicit && !byName) push('ERROR', 'PIN', `End choice "${label}" has no endTreatment tag and no name hint. Fix defaults it to FINIAL — change it in 1.6's Assign tool if it's really a return / inside mount.`, pin.id ? { type: 'pin', pinId: pin.id, patch: { endTreatment: 'FINIAL' } } : null);
         }
         if (catN === 'BRACKET' && part) {
             const mounts = bracketMountsOf(part);
-            if (!mounts.length) push('ERROR', 'PART', `Bracket "${part.itemName || label}" has no customData.bracketType — Vision's mount filter can't place it (arms won't populate).`);
+            if (!mounts.length) {
+                // Derivable: the cluster this bracket is pinned in carries the mount location, and the
+                // name often does too ("Inside Mount Bracket…"). Offer the derived value as a fix.
+                const derived = normalizeLocation(cl?.location) || suggestTagsFromName(part.itemName).location || suggestTagsFromName(label).location;
+                push('ERROR', 'PART', `Bracket "${part.itemName || label}" has no customData.bracketType — Vision's mount filter can't place it (arms won't populate).${derived ? ` Fix sets ${derived} (from its cluster/name).` : ''}`, derived && part.id ? { type: 'part', partDocId: part.id, patch: { 'manufacturingSpecs.customData.bracketType': derived } } : null);
+            }
             const proj = parseFloat(part.manufacturingSpecs?.customData?.projection);
-            if (!proj) push('WARN', 'PART', `Bracket "${part.itemName || label}" has no customData.projection — Vision can't auto-seed fabrication math.`);
+            if (!proj) push('WARN', 'PART', `Bracket "${part.itemName || label}" has no customData.projection — Vision can't auto-seed fabrication math. Enter it in the Master Library (customData.projection).`);
         }
         if (catN === 'BACKPLATE' && part) {
             const par = part.manufacturingSpecs?.parametric || {};
-            if (!parseFloat(par.width) && !parseFloat(par.length)) push('WARN', 'PART', `Backplate "${part.itemName || label}" has no parametric width/length — Vision O2O math falls back to defaults.`);
+            if (!parseFloat(par.width) && !parseFloat(par.length)) push('WARN', 'PART', `Backplate "${part.itemName || label}" has no parametric width/length — Vision O2O math falls back to defaults. Enter dims in the Master Library (parametric).`);
         }
     });
 
@@ -229,5 +243,14 @@ export const validateAssemblyAlignment = ({ assembly, pins = [], parts = [], flo
         });
     });
 
-    return issues;
+    // Dedupe: the same part pinned at several positions (or the same message per pin) collapses into one
+    // row with a count — the raw list repeated every part-level issue once per pin and drowned the signal.
+    const seen = new Map();
+    issues.forEach(i => {
+        const k = `${i.severity}|${i.area}|${i.text}`;
+        const cur = seen.get(k);
+        if (cur) { cur.count = (cur.count || 1) + 1; if (!cur.fix && i.fix) cur.fix = i.fix; }
+        else seen.set(k, { ...i, count: 1 });
+    });
+    return [...seen.values()];
 };

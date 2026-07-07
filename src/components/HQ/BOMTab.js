@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
-import { collection, onSnapshot, query, where, doc, updateDoc, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, updateDoc, deleteDoc, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
 import { loadGLBScene, snapshotPNG } from '../Shared/componentExport';
 import { generateOnboardingXlsx } from '../Shared/onboardingXlsx';
@@ -588,7 +588,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               (pinsByAsm[p.assemblyId] = pinsByAsm[p.assemblyId] || []).push(p);
           });
           const results = [];
-          assemblies.filter(a => (a.nodeClusters || []).length).forEach(a => {
+          // Scope: the SELECTED assembly when one is picked; otherwise whatever the filters show.
+          const scope = selectedAssemblyId
+              ? assemblies.filter(a => a.itemId === selectedAssemblyId || a.id === selectedAssemblyId)
+              : filteredAssemblies;
+          scope.filter(a => (a.nodeClusters || []).length).forEach(a => {
               const pins = pinsByAsm[a.itemId] || pinsByAsm[a.id] || [];
               const issues = validateAssemblyAlignment({ assembly: a, pins, parts: libraryParts, flows: cpqFlows });
               issues.forEach(i => results.push({ ...i, docId: a.id }));
@@ -599,7 +603,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       } catch (e) { console.error('alignment scan failed', e); alert('Alignment scan failed — check console.'); }
       finally { setAligningScan(false); }
   };
-  // One-click fix from the scan: patch a cluster's tag on the assembly doc, or a pin's tag.
+  // One-click fix from the scan: patch a cluster's tag on the assembly doc, a pin's tag, a part spec
+  // (dotted path, e.g. bracketType derived from the cluster), or delete a stale orphaned pin.
   const applyAlignFix = async (row) => {
       try {
           if (row.fix?.type === 'cluster') {
@@ -609,6 +614,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               await updateDoc(doc(db, "Approved_Designs", row.docId), { nodeClusters: clusters });
           } else if (row.fix?.type === 'pin') {
               await updateDoc(doc(db, "assembly_pins", row.fix.pinId), row.fix.patch);
+          } else if (row.fix?.type === 'part') {
+              await updateDoc(doc(db, "Approved_Designs", row.fix.partDocId), row.fix.patch);
+          } else if (row.fix?.type === 'deletePin') {
+              if (!window.confirm('Delete this stale pin? Its cluster no longer exists, so nothing references it — removing it cleans the BOM/Vision pin lists.')) return;
+              await deleteDoc(doc(db, "assembly_pins", row.fix.pinId));
           } else return;
           setAlignScan(prev => (prev || []).filter(r => r !== row));
       } catch (e) { console.error('align fix failed', e); alert('Fix failed — check console.'); }
@@ -869,7 +879,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               <div>
                 <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Flow Alignment Scan</h3>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
-                  {alignScan.filter(r => r.severity === 'ERROR').length} errors · {alignScan.filter(r => r.severity === 'WARN').length} warnings · {alignScan.filter(r => r.severity === 'INFO').length} info — canonical tag spec (1.5/1.6 ↔ tabs 2/3, CPQ, Vision)
+                  {alignScan.filter(r => r.severity === 'ERROR').length} errors · {alignScan.filter(r => r.severity === 'WARN').length} warnings · {alignScan.filter(r => r.severity === 'INFO').length} info — {selectedAssemblyId ? 'selected assembly' : 'filtered assemblies'} · canonical tag spec (1.5/1.6 ↔ tabs 2/3, CPQ, Vision)
                 </span>
               </div>
               <button onClick={() => setAlignScan(null)} style={{ background: 'none', border: 'none', fontSize: '1.6rem', color: 'var(--ink-soft)', cursor: 'pointer' }}>×</button>
@@ -885,7 +895,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 0', borderBottom: '1px dotted var(--line)' }}>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', fontWeight: 700, color: '#fff', background: r.severity === 'ERROR' ? '#b91c1c' : r.severity === 'WARN' ? '#b45309' : 'var(--ink-soft)', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>{r.severity}</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', textTransform: 'uppercase', flexShrink: 0, width: '52px' }}>{r.area}</span>
-                        <span style={{ fontSize: '0.83rem', color: 'var(--ink)', flex: 1 }}>{r.text}</span>
+                        <span style={{ fontSize: '0.83rem', color: 'var(--ink)', flex: 1 }}>{r.text}{(r.count || 1) > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', marginLeft: '6px' }}>×{r.count}</span>}</span>
                         {r.fix && <button onClick={() => applyAlignFix(r)} style={{ padding: '5px 12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', flexShrink: 0 }}>Fix →</button>}
                       </div>
                     ))}
