@@ -255,7 +255,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
           if (!pt.includes('BRACKET')) return false;
 
-          const isPinned = flowPins.some(pin => pin.partId === p.id || pin.legacyErpId === p.legacyErpId);
+          // Restrict to parts pinned to the flow's linked assembly. But if the flow has NO pins at all
+          // (not linked to a pinned assembly — e.g. Brimar Combined), fall back to the collection tags
+          // below so the pickers still populate from tags instead of showing nothing.
+          const isPinned = flowPins.length === 0 || flowPins.some(pin => pin.partId === p.id || pin.legacyErpId === p.legacyErpId);
           if (!isPinned) return false;
 
           const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
@@ -281,7 +284,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const bracketMatchesMount = (b, mount) => {
       const bt = (b.manufacturingSpecs?.customData?.bracketType || '').toUpperCase();
       const m = (mount || '').toUpperCase();
-      if (!m) return true;
+      // No mount set, OR a bracket with no bracketType tag (mount-agnostic) -> always eligible. Mounts
+      // default to 'OPEN', so without this an untagged bracket is silently dropped from every arm list
+      // (it can't match 'WALL') even though it's pinned to the flow — while backplates, which skip this
+      // filter, still show. That was the "backplates populate but arms don't" bug.
+      if (!m || !bt) return true;
       if (m === 'OPEN') return bt.includes('WALL');
       if (m === 'CEILING') return bt.includes('CEIL');
       if (m === 'INSIDE') return bt.includes('INSIDE') || bt.includes('IM');
@@ -299,7 +306,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const allBackplates = libraryParts.filter(p => {
       const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
       if (!pt.includes('BACKPLATE') && !pt.includes('BACK PLATE')) return false;
-      if (!flowPins.some(pin => pin.partId === p.id || pin.legacyErpId === p.legacyErpId)) return false;
+      // Same pin gate as brackets: pinned-only when the flow has pins, else fall back to collection tags.
+      if (flowPins.length > 0 && !flowPins.some(pin => pin.partId === p.id || pin.legacyErpId === p.legacyErpId)) return false;
       const cols = (p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : [])).map(c => c.toUpperCase());
       const sel = (quoteSelections.collection || "").toUpperCase();
       if (sel && cols.length > 0 && !cols.includes(sel) && !cols.includes('N/A')) return false;
