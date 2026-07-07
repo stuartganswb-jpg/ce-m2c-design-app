@@ -249,33 +249,46 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
 
   const safeProj = parseFloat(engData.proj) || 0;
 
+  // A part's collection tags, uppercased. The collection to SCOPE the fabrication pickers to is the
+  // operator's explicit pick, else the flow's linked assembly's collection tag — derived automatically so
+  // it works without manually choosing a collection. Some assemblies are pinned with cross-collection
+  // brackets, so without this scope the wrong arms leak into a flow (e.g. Brimar / Simple Elegance / 1"
+  // arms under a fabricut 3/4" flow).
+  const collectionOf = (p) => (p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : [])).map(c => (c || '').toUpperCase());
+  const scopeCollection = useMemo(() => {
+      if (quoteSelections.collection) return quoteSelections.collection.toUpperCase();
+      const asm = activeFlow?.linkedAssemblyId ? libraryParts.find(p => p.id === activeFlow.linkedAssemblyId) : null;
+      return (asm ? collectionOf(asm)[0] : '') || '';
+  }, [quoteSelections.collection, activeFlow, libraryParts]);
+  // In-scope test shared by the arm + backplate lists. hasPins = the flow's assembly has pins.
+  const partInScope = (p, hasPins) => {
+      const cols = collectionOf(p);
+      if (hasPins) {
+          // Pins are authoritative: show pinned parts, but drop a pinned part explicitly tagged to a
+          // DIFFERENT collection (a shared/dirty assembly mustn't leak cross-collection arms). Untagged
+          // pinned parts are kept — the pin is intentional.
+          if (!flowPins.some(pin => pin.partId === p.id || pin.legacyErpId === p.legacyErpId)) return false;
+          if (scopeCollection && cols.length > 0 && !cols.includes(scopeCollection) && !cols.includes('N/A')) return false;
+          return true;
+      }
+      // No pins: scope strictly by the flow's collection tag so a flow that isn't linked to a pinned
+      // assembly (e.g. Brimar Combined) still populates from tags, without dumping the whole brand in.
+      if (!scopeCollection) return false;
+      return cols.includes(scopeCollection) || cols.includes('N/A');
+  };
+
   const allBrackets = useMemo(() => {
       const step = getStepForCategory('BRACKET');
+      const hasPins = flowPins.length > 0;
       return libraryParts.filter(p => {
           const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
           if (!pt.includes('BRACKET')) return false;
-
-          // Restrict to parts pinned to the flow's linked assembly. But if the flow has NO pins at all
-          // (not linked to a pinned assembly — e.g. Brimar Combined), fall back to the collection tags
-          // below so the pickers still populate from tags instead of showing nothing.
-          const isPinned = flowPins.length === 0 || flowPins.some(pin => pin.partId === p.id || pin.legacyErpId === p.legacyErpId);
-          if (!isPinned) return false;
-
-          const collectionsArray = p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : []);
-          const upperCollections = collectionsArray.map(c => c.toUpperCase());
-          const selCollection = (quoteSelections.collection || "").toUpperCase();
-          
-          if (selCollection && upperCollections.length > 0 && !upperCollections.includes(selCollection)) {
-              if (!upperCollections.includes('N/A')) return false; 
-          }
-
-          if (step && step.allowedOptions?.length > 0) {
-              if (!step.allowedOptions.includes(p.id)) return false;
-          }
-
+          if (!partInScope(p, hasPins)) return false;
+          if (step && step.allowedOptions?.length > 0 && !step.allowedOptions.includes(p.id)) return false;
           return true;
       });
-  }, [libraryParts, quoteSelections.collection, activeFlow, flowPins]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [libraryParts, scopeCollection, activeFlow, flowPins]);
 
   // Narrow brackets by mount (open→wall, ceiling→ceiling, inside→inside) for the Outer/Left/
   // Right + Center pickers. Center excludes end-return brackets. Tolerant on the bracketType
@@ -302,16 +315,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const rightBrackets = keepSelected(allBrackets.filter(b => bracketMatchesMount(b, rightMount)), engData.bracketIdRight);
   const centerBrackets = keepSelected(allBrackets.filter(b => !isReturnBracketPart(b) && bracketMatchesMount(b, engData.mountCenter)), engData.bracketIdCenter);
 
-  // Backplates for the end-return arms (productType BACKPLATE, pinned to this flow + collection).
+  // Backplates for the end-return arms (productType BACKPLATE) — same pin + collection scope as the arms.
   const allBackplates = libraryParts.filter(p => {
       const pt = (p.manufacturingSpecs?.productType || '').toUpperCase();
       if (!pt.includes('BACKPLATE') && !pt.includes('BACK PLATE')) return false;
-      // Same pin gate as brackets: pinned-only when the flow has pins, else fall back to collection tags.
-      if (flowPins.length > 0 && !flowPins.some(pin => pin.partId === p.id || pin.legacyErpId === p.legacyErpId)) return false;
-      const cols = (p.manufacturingSpecs?.collections || (p.manufacturingSpecs?.customData?.collection ? [p.manufacturingSpecs.customData.collection] : [])).map(c => c.toUpperCase());
-      const sel = (quoteSelections.collection || "").toUpperCase();
-      if (sel && cols.length > 0 && !cols.includes(sel) && !cols.includes('N/A')) return false;
-      return true;
+      return partInScope(p, flowPins.length > 0);
   });
   const bpDims = (id) => { const par = libraryParts.find(p => p.id === id)?.manufacturingSpecs?.parametric || {}; return { w: parseFloat(par.width) || 0, l: parseFloat(par.length) || 0 }; };
 
