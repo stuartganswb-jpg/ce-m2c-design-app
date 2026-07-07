@@ -175,10 +175,24 @@ export const validateAssemblyAlignment = ({ assembly, pins = [], parts = [], flo
         }
         // Missing tags the generator/Vision need.
         const sugg = suggestTagsFromName(label);
-        if (!cat) push('ERROR', 'CLUSTER', `"${label}": no CATEGORY tag${sugg.category ? ` (name suggests ${sugg.category})` : ''}`, sugg.category ? { type: 'cluster', clusterId: c.id, patch: { category: sugg.category } } : null);
+        const isHidden = !!c.hidden;
+        // Hidden hardware (bushings/screws/fasteners): a HIDDEN cluster becomes includedParts on its
+        // position's step — its CATEGORY is unused by the generator, so hidden clusters don't need one.
+        // An UNTAGGED cluster that *looks* like hardware gets a one-click "mark HIDDEN" fix.
+        const HARDWAREISH = /BUSHING|SCREW|BOLT|WASHER|FASTENER|\bNUT\b|MMC\d|HARDWARE/i;
+        if (!cat && !isHidden) {
+            if (HARDWAREISH.test(label)) {
+                push('ERROR', 'CLUSTER', `"${label}": untagged and looks like hidden BOM hardware (bushing/screw) — Fix marks it HIDDEN (BOM-only; rides its position's step as an included part).`, { type: 'cluster', clusterId: c.id, patch: { hidden: true, ...(sugg.position ? { position: sugg.position } : {}) } });
+            } else {
+                push('ERROR', 'CLUSTER', `"${label}": no CATEGORY tag${sugg.category ? ` (name suggests ${sugg.category})` : ''}`, sugg.category ? { type: 'cluster', clusterId: c.id, patch: { category: sugg.category } } : null);
+            }
+        }
         const catN = normalizeCategory(cat);
         if (catN === 'BRACKET' && !normalizeLocation(loc)) push('ERROR', 'CLUSTER', `"${label}": BRACKET cluster has no mount LOCATION (WALL/CEILING/END)${sugg.location ? ` (name suggests ${sugg.location})` : ''}`, sugg.location ? { type: 'cluster', clusterId: c.id, patch: { location: sugg.location } } : null);
-        if ((catN === 'BRACKET' || catN === 'BACKPLATE' || catN === 'FINIAL') && !normalizePosition(pos)) push('ERROR', 'CLUSTER', `"${label}": ${catN} cluster has no POSITION tag${sugg.position ? ` (name suggests ${sugg.position})` : ''}`, sugg.position ? { type: 'cluster', clusterId: c.id, patch: { position: sugg.position } } : null);
+        if (!isHidden && (catN === 'BRACKET' || catN === 'BACKPLATE' || catN === 'FINIAL') && !normalizePosition(pos)) push('ERROR', 'CLUSTER', `"${label}": ${catN} cluster has no POSITION tag${sugg.position ? ` (name suggests ${sugg.position})` : ''}`, sugg.position ? { type: 'cluster', clusterId: c.id, patch: { position: sugg.position } } : null);
+        // A hidden cluster's included parts attach to a POSITION's step — untagged position = they
+        // can't ride the right step (LEFT bushings must follow the LEFT end).
+        if (isHidden && !normalizePosition(pos) && sugg.position) push('WARN', 'CLUSTER', `"${label}": HIDDEN cluster has no POSITION — its included parts attach to a position's step (name suggests ${sugg.position})`, { type: 'cluster', clusterId: c.id, patch: { position: sugg.position } });
         // Name/tag contradiction (the "HCUNEC1 RIGHT tagged LEFT" class of bug).
         if (sugg.position && normalizePosition(pos) && sugg.position !== normalizePosition(pos)) {
             push('WARN', 'CLUSTER', `"${label}": name says ${sugg.position} but tag says ${normalizePosition(pos)} — confirm which is right`, { type: 'cluster', clusterId: c.id, patch: { position: sugg.position } });
