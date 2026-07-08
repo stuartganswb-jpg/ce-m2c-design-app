@@ -901,7 +901,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       if (!activeSession?.quoteId) return alert("Please select a customer in the main header to initialize a session.");
       if (!sidemark) return alert("Please enter a Sidemark for this specific item.");
       if (!quoteFlowId) return alert("Please select a CPQ Flow in Step 1.");
-      if (engData.proj > 0 && !engData.bracketId) return alert("Please select a Bracket in the Fabrication Settings to proceed.");
+      // NO bracket requirement here (removed 2026-07-08 per Stuart): a french/miter return or an
+      // end-return arm ACTS as the bracket, and short poles (<60") may legitimately skip a center —
+      // demanding engData.bracketId blocked every return-end line. The save-gate button already
+      // guides the operator to settle the left end; the draft simply carries no bracketId when none
+      // applies and CPQ opens without a pre-selected bracket.
 
       setIsPushingToCPQ(true);
       const draftId = `DRAFT-${Date.now()}`;
