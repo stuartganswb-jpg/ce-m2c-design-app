@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
-import { collection, onSnapshot, query, where, doc, updateDoc, deleteDoc, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, deleteDoc, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
 import { loadGLBScene, snapshotPNG } from '../Shared/componentExport';
 import { generateOnboardingXlsx } from '../Shared/onboardingXlsx';
@@ -423,8 +423,34 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       setOnboarding(false);
   };
 
+  // Quick-create a Master Library part right from the BOM Engine — same doc shape as the 1.6 Item
+  // Starter Kit. Used when a BOM pin references an item that isn't in the library yet (and by the
+  // ＋ New Library Item button), so nobody has to detour through another tab. Sync/push it to
+  // NetSuite afterward (tab 11 write-back: exact item-id matches LINK, the rest CREATE — no dupes).
+  const createLibraryPart = async ({ code, name, productType }) => {
+      const erp = String(code || '').trim().toUpperCase();
+      if (!erp) return null;
+      const id = `${String(activeBrand || 'CE').toUpperCase()}-INV-${Date.now()}`;
+      const partDoc = {
+          id, itemId: id, legacyErpId: erp, itemName: String(name || erp).toUpperCase(),
+          brandId: activeBrand, sharedBrands: [activeBrand],
+          partClass: 'Inventory', routingType: 'STANDARD', project: '',
+          manufacturingSpecs: { productType: String(productType || 'Uncategorized').toUpperCase(), uom: 'EA', status: 'NEEDS_SPECS' }
+      };
+      await setDoc(doc(db, "Approved_Designs", id), partDoc);
+      return partDoc;
+  };
+
   const openComponentEditor = (bomItem) => {
-      if (!bomItem.masterPart) return alert("Master part not found. It may have been deleted.");
+      if (!bomItem.masterPart) {
+          const code = String(bomItem.partId || '').toUpperCase();
+          const guessType = (bomItem.partName || code).match(/BRACKET|BACKPLATE|FINIAL|RING|POLE|ROD/i)?.[0]?.toUpperCase() || '';
+          if (!window.confirm(`"${bomItem.partName || code}" (${code}) isn't in the Master Library.\n\nCreate it now as a new library item? You can fill its specs immediately after, then sync it to NetSuite (tab 11 write-back links exact matches / creates the rest — no duplicates).`)) return;
+          createLibraryPart({ code, name: bomItem.partName, productType: guessType })
+              .then(p => { if (p) openComponentEditor({ ...bomItem, masterPart: p }); })
+              .catch(e => { console.error('quick-create failed', e); alert('Create failed — check console.'); });
+          return;
+      }
       setActiveComponent(bomItem);
       setPdfFile(null); setCadFile(null); 
       
@@ -1010,6 +1036,22 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
               <button onClick={runAlignmentScan} disabled={aligningScan} title="Audit every clustered assembly + its CPQ flows against the canonical tag spec: dialect vocab (INSIDE/OPEN vs END/WALL), missing or name-contradicting cluster tags, end choices whose return-ness only lives in a NAME, parts missing bracketType/projection/dims (what Vision reads), and steps Vision can't classify. One-click fixes where safe." style={{ padding: '10px 14px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--ink)', cursor: aligningScan ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                   {aligningScan ? 'Scanning…' : '⚖ Flow Alignment Scan'}
+              </button>
+
+              <button onClick={async () => {
+                  const code = window.prompt('New library item — ERP item # (e.g. H2-75LBE):');
+                  if (!code || !code.trim()) return;
+                  const erp = code.trim().toUpperCase();
+                  const existing = libraryParts.find(p => String(p.legacyErpId || '').toUpperCase() === erp);
+                  if (existing) return alert(`"${erp}" already exists in the library: ${existing.itemName || existing.id}. No duplicate created.`);
+                  const name = window.prompt('Item name / description:', erp) || erp;
+                  const pt = window.prompt('Product type (BRACKET / BACKPLATE / FINIAL / POLE / RING / …):', '') || '';
+                  try {
+                      await createLibraryPart({ code: erp, name, productType: pt });
+                      alert(`✅ Created ${erp}. Fill its specs from any BOM row or the Master Library, then run tab 11's "Push Items → NetSuite" — exact item-id matches LINK (no duplicates), the rest are CREATED in NetSuite.`);
+                  } catch (e) { console.error('create failed', e); alert('Create failed — check console.'); }
+              }} title="Create a new Master Library item right here (same shape as the 1.6 Item Starter Kit). Sync to NetSuite from tab 11 afterward — exact item-id matches are linked, never duplicated." style={{ padding: '10px 14px', border: '1px solid var(--ink)', background: '#fff', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                  ＋ New Library Item
               </button>
 
               <button onClick={handleBulkThumbnails} disabled={bulkThumb.running} title="Render + save a thumbnail from the .glb for every filtered assembly that's missing an image (works after clusters are assigned)" style={{ padding: '10px 14px', border: '1px solid var(--ink)', background: bulkThumb.running ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', cursor: bulkThumb.running ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>

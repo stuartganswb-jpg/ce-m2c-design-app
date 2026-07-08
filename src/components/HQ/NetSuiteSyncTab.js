@@ -592,6 +592,23 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         const result = await response.json().catch(() => ({}));
         return { ok: response.ok, result };
     };
+    const restPost = async (recordType, payload) => {
+        const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${recordType}`;
+        const response = await fetch(FIREBASE_FUNCTION_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targetUrl, method: 'POST', payload })
+        });
+        const result = await response.json().catch(() => ({}));
+        return { ok: response.ok, result };
+    };
+    const suiteqlQuery = async (q) => {
+        const response = await fetch(FIREBASE_FUNCTION_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q } })
+        });
+        const result = await response.json().catch(() => ({}));
+        return response.ok ? (result.items || []) : null;
+    };
 
     const handlePushItemsToNetSuite = async () => {
         if (!window.confirm(`Push ${String(activeBrand || '').toUpperCase()} item updates (SKU, Name, Base Price, Weight) FROM the App TO NetSuite?\n\nThis overwrites those fields on the matched NetSuite items. Tags/flags are not sent (App-only). Tip: test ONE item via the Library's per-item push first.`)) return;
@@ -641,6 +658,48 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 }
             }
             addLog(`✅ Write-back done: ${updated} updated${coreOnly ? ` (${coreOnly} core-only after a field was dropped)` : ''}, ${failed} failed.`, failed ? 'warn' : 'success');
+
+            // --- UNMAPPED items: MERGE-or-CREATE (never duplicate) ---
+            // Items with a real item # but no NetSuite link: (1) look up the EXACT itemid in NetSuite —
+            // if it exists, just LINK it (store the internal id; no duplicate created); (2) if it
+            // doesn't exist, CREATE it (Inventory items only) and store the new internal id.
+            const unmapped = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(p => (p.brandId === activeBrand || (p.sharedBrands || []).includes(activeBrand))
+                    && !p.netSuiteInternalId
+                    && p.legacyErpId && p.legacyErpId !== 'PENDING' && p.legacyErpId !== 'N/A');
+            if (unmapped.length && window.confirm(`${unmapped.length} item(s) have an item # but NO NetSuite link.\n\nProcess them now? Exact item-id matches in NetSuite are LINKED (merged — never duplicated); the rest are CREATED as new NetSuite items (Inventory class only).`)) {
+                let linked = 0, created = 0, skipped = 0, cfailed = 0;
+                const subId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || '2';
+                for (const p of unmapped) {
+                    const code = String(p.legacyErpId).toUpperCase().replace(/'/g, "''");
+                    const rows = await suiteqlQuery(`SELECT id, itemid FROM item WHERE UPPER(itemid) = '${code}'`);
+                    if (rows === null) { cfailed++; addLog(`  ✗ ${p.legacyErpId}: NetSuite lookup failed — skipped.`, 'error'); continue; }
+                    if (rows.length) {
+                        await setDoc(doc(db, "Approved_Designs", p.id), { netSuiteInternalId: String(rows[0].id) }, { merge: true });
+                        linked++; addLog(`  ⛓ ${p.legacyErpId}: exists in NetSuite (id ${rows[0].id}) — LINKED, no duplicate.`, 'success');
+                        continue;
+                    }
+                    if (p.partClass !== 'Inventory') { skipped++; addLog(`  ○ ${p.legacyErpId}: not in NetSuite, but only Inventory-class items are auto-created (this is ${p.partClass || 'unclassified'}). Create it in NetSuite manually, then re-run to link.`, 'warn'); continue; }
+                    const specs = p.manufacturingSpecs || {};
+                    const body = { itemid: p.legacyErpId, displayname: p.itemName || p.legacyErpId, subsidiary: { items: [{ id: subId }] } };
+                    const bp = parseFloat(specs.basePrice); if (!isNaN(bp) && bp > 0) body.custitem9 = bp;
+                    let { ok, result } = await restPost('inventoryitem', body);
+                    // Common create blockers, retried tolerantly: mandatory tax schedule → default '1';
+                    // subsidiary shape variations → single-ref form.
+                    if (!ok && /taxschedule|tax schedule/i.test(JSON.stringify(result))) ({ ok, result } = await restPost('inventoryitem', { ...body, taxschedule: { id: '1' } }));
+                    if (!ok && /subsidiary/i.test(JSON.stringify(result))) ({ ok, result } = await restPost('inventoryitem', { ...body, taxschedule: { id: '1' }, subsidiary: { id: subId } }));
+                    if (ok) {
+                        // REST POST returns the new record; re-look up by itemid when the id isn't echoed.
+                        let newId = result?.id;
+                        if (!newId) { const back = await suiteqlQuery(`SELECT id FROM item WHERE UPPER(itemid) = '${code}'`); newId = back?.[0]?.id; }
+                        if (newId) await setDoc(doc(db, "Approved_Designs", p.id), { netSuiteInternalId: String(newId), netSuiteRecordType: 'inventoryitem' }, { merge: true });
+                        created++; addLog(`  ＋ ${p.legacyErpId}: CREATED in NetSuite${newId ? ` (id ${newId})` : ''}.`, 'success');
+                    } else {
+                        cfailed++; addLog(`  ✗ ${p.legacyErpId}: create failed — ${JSON.stringify(result).slice(0, 200)}`, 'error');
+                    }
+                }
+                addLog(`✅ Merge-or-create done: ${linked} linked (existing), ${created} created, ${skipped} skipped, ${cfailed} failed.`, cfailed ? 'warn' : 'success');
+            }
         } catch (e) { console.error(e); addLog(`❌ Write-back failed: ${e.message}`, 'error'); }
         setIsSyncing(false);
     };
