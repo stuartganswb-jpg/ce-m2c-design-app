@@ -231,7 +231,7 @@ export const validateAssemblyAlignment = ({ assembly, pins = [], parts = [], flo
             const explicit = normalizeEndTreatment(pin.endTreatment) || normalizeEndTreatment(part?.manufacturingSpecs?.customData?.endTreatment || part?.manufacturingSpecs?.customData?.feeType) || (U(part?.manufacturingSpecs?.productType) === 'FINIAL' ? 'FINIAL' : '');
             const byName = suggestTagsFromName(label).endTreatment;
             if (!explicit && byName) push('WARN', 'PIN', `End choice "${label}" has NO endTreatment tag — only its NAME (${byName}) makes it work. Tag it.`, pin.id ? { type: 'pin', pinId: pin.id, patch: { endTreatment: byName } } : null);
-            if (!explicit && !byName) push('ERROR', 'PIN', `End choice "${label}" has no endTreatment tag and no name hint. Fix defaults it to FINIAL — change it in 1.6's Assign tool if it's really a return / inside mount.`, pin.id ? { type: 'pin', pinId: pin.id, patch: { endTreatment: 'FINIAL' } } : null);
+            if (!explicit && !byName) push('ERROR', 'PIN', `End choice "${label}" has no endTreatment tag and no name hint. ⚠ Fix tags it FINIAL — use ONLY for finials/end caps. If this is actually a return or inside mount, set it in 1.6's Assign tool instead: a return mis-tagged FINIAL keeps the long rod AND stops the bracket from greying.`, pin.id ? { type: 'pin', pinId: pin.id, patch: { endTreatment: 'FINIAL' } } : null);
         }
         if (catN === 'BRACKET' && part) {
             const mounts = bracketMountsOf(part);

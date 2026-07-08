@@ -267,7 +267,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           // Pins are authoritative: show pinned parts, but drop a pinned part explicitly tagged to a
           // DIFFERENT collection (a shared/dirty assembly mustn't leak cross-collection arms). Untagged
           // pinned parts are kept — the pin is intentional.
-          if (!flowPins.some(pin => pin.partId === p.id || pin.legacyErpId === p.legacyErpId)) return false;
+          // legacyErpId matches ONLY on a REAL code — 'N/A'/'PENDING' placeholders used to match each
+          // other, which made every placeholder-coded record look "pinned" and leaked stray parts
+          // (e.g. cluster component-file assemblies) into the pickers. partId matches id/itemId/erp.
+          const realCode = (v) => v && v !== 'N/A' && v !== 'PENDING';
+          const pinned = flowPins.some(pin =>
+              (pin.partId && (pin.partId === p.id || pin.partId === p.itemId || (realCode(p.legacyErpId) && pin.partId === p.legacyErpId)))
+              || (realCode(pin.legacyErpId) && pin.legacyErpId === p.legacyErpId));
+          if (!pinned) return false;
           if (scopeCollection && cols.length > 0 && !cols.includes(scopeCollection) && !cols.includes('N/A')) return false;
           return true;
       }
