@@ -178,11 +178,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       if (detectedProj !== null && (hasPresetProj || !engData.bracketId)) setIsCustomProj(false);
   }, [activeFlow, flowPins, libraryParts]);
 
-  useEffect(() => {
-      if (bracketStep && engData.bracketId && dynamicConfigParams[bracketStep.id] !== engData.bracketId) {
-          setDynamicConfigParams(prev => ({ ...prev, [bracketStep.id]: engData.bracketId }));
-      }
-  }, [engData.bracketId, bracketStep, dynamicConfigParams]);
+  // (Old engData.bracketId → single-bracket-step sync removed: Fabrication Settings are now driven
+  // by the FLOW STEPS per position — see the flow-mirror block below bpDims — which writes the step
+  // selections directly, exactly like CPQ tab 8.)
 
   useEffect(() => {
       if (engData.bracketId) {
@@ -330,6 +328,125 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       return partInScope(p, flowPins.length > 0);
   });
   const bpDims = (id) => { const par = libraryParts.find(p => p.id === id)?.manufacturingSpecs?.parametric || {}; return { w: parseFloat(par.width) || 0, l: parseFloat(par.length) || 0 }; };
+
+  // ================= FLOW-MIRROR FABRICATION =================
+  // Fabrication Settings fields mirror the CPQ flow's steps 1:1, per position — End Style L/R = the
+  // Left/Right End Treatment steps' options; L/C/R Bracket = that position's Bracket & Mount step;
+  // L/C/R Backplate = that step's sub-chooser. Selections are stored as the STEP selections
+  // (dynamicConfigParams[stepId] = optId — the same shape CPQ uses and the push carries), and engData
+  // (part ids / end styles / mounts) is DERIVED from them for the fab math. Grey rules are copied
+  // from CPQTab: a chosen return greys+clears that side's bracket (when the step carries returnOnly
+  // plates), return plates scope in/out, a basic bracket greys the plate. Works identically for
+  // 1.5- and 1.6-built assemblies because it reads only the generated steps' canonical tags.
+  const flowSteps = activeFlow?.steps || [];
+  const upperS = (s) => String(s || '').toUpperCase();
+  const endStepFor = (pos) => flowSteps.find(s => /end treatment/i.test(s.title || '') && upperS(s.position) === pos);
+  const bracketStepFor = (pos) => flowSteps.find(s => (s.stepRole === 'BRACKET' || /bracket/i.test(s.title || '')) && !/end treatment/i.test(s.title || '') && upperS(s.position) === pos);
+  const stepEndL = endStepFor('LEFT'), stepEndR = endStepFor('RIGHT');
+  const stepBrL = bracketStepFor('LEFT'), stepBrR = bracketStepFor('RIGHT'), stepBrC = bracketStepFor('CENTER');
+  const flowDriven = !!(stepEndL || stepEndR || stepBrL || stepBrR || stepBrC);
+  const optOf = (step, sel) => step ? ((step.styleOptions || []).find(o => (o.optId || o.partId) === sel) || null) : null;
+  const optSel = (step) => optOf(step, step ? dynamicConfigParams[step.id] : null);
+  const subOf = (step, sel) => step ? ((step.subOptions || []).find(o => (o.optId || o.partId) === sel) || null) : null;
+  const optIsReturn = (o) => {
+      const t = upperS(o?.endTreatment);
+      if (t) return t === 'FRENCH_RETURN' || t === 'MITER_RETURN' || t === 'INSIDE_MOUNT';
+      if (!o) return false;
+      if (/^OPT-(BEND|MITER)/i.test(o.optId || '')) return true;
+      return /bend|return|miter|mitre|mtr|french/i.test(String(o.partName || ''));
+  };
+  const endStyleOf = (o) => {
+      const t = upperS(o?.endTreatment);
+      if (t === 'FRENCH_RETURN') return 'RETURN_BEND';
+      if (t === 'MITER_RETURN') return 'RETURN_MITER';
+      if (t === 'INSIDE_MOUNT') return 'FLUSH';
+      if (t === 'FINIAL') return 'FINIAL';
+      if (/^OPT-FLUSH/i.test(o?.optId || '')) return 'FLUSH';
+      if (/^OPT-BEND/i.test(o?.optId || '')) return 'RETURN_BEND';
+      if (/^OPT-MITER/i.test(o?.optId || '')) return 'RETURN_MITER';
+      return o ? 'FINIAL' : '';
+  };
+  const partOfOpt = (o) => { if (!o) return null; const find = (k) => k && libraryParts.find(p => p.id === k || p.itemId === k || p.legacyErpId === k); return find(o.partId) || find(o.partName) || null; };
+  const optLabel = (o) => { const p = partOfOpt(o); return p ? `${p.itemName}${p.legacyErpId && p.legacyErpId !== 'PENDING' ? ` - ${p.legacyErpId}` : ''}` : (o.partName || o.optId); };
+  const returnChosenAt = (pos) => pos === 'LEFT' ? optIsReturn(optSel(stepEndL)) : pos === 'RIGHT' ? optIsReturn(optSel(stepEndR)) : false;
+  const brLockedAt = (step, pos) => !!(step && (step.subOptions || []).some(o => o.returnOnly) && returnChosenAt(pos));
+  const basicSelAt = (step) => { const o = optSel(step); return !!(o && (o.isBasic || /basic/i.test(o.partName || ''))); };
+  const subPoolAt = (step, pos) => {
+      const subs = step?.subOptions || [];
+      if (!subs.some(o => o.returnOnly)) return subs;
+      const want = returnChosenAt(pos) || !!(optSel(step)?.usesReturnPlates);
+      return subs.filter(o => want ? o.returnOnly : !o.returnOnly);
+  };
+  const pickStep = (stepId, optId) => setDynamicConfigParams(prev => { const next = { ...prev }; if (optId) next[stepId] = optId; else delete next[stepId]; return next; });
+
+  // Seed step selections from restored engData part ids (drafts saved before the flow-driven pickers).
+  useEffect(() => {
+      if (!flowDriven) return;
+      setDynamicConfigParams(prev => {
+          const next = { ...prev }; let ch = false;
+          [[stepBrL, engData.bracketId], [stepBrR, engData.bracketIdRight], [stepBrC, engData.bracketIdCenter]].forEach(([st, pid]) => {
+              if (!st || !pid || next[st.id]) return;
+              const o = (st.styleOptions || []).find(x => { const p = partOfOpt(x); return p && p.id === pid; });
+              if (o) { next[st.id] = o.optId || o.partId; ch = true; }
+          });
+          return ch ? next : prev;
+      });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFlow, engData.bracketId, engData.bracketIdRight, engData.bracketIdCenter, libraryParts]);
+
+  // CPQ-mirror auto-clear: return greys+clears the bracket; basic bracket clears the plate; a plate
+  // from the wrong mode (return ↔ regular) clears on flip.
+  useEffect(() => {
+      if (!flowDriven) return;
+      setDynamicConfigParams(prev => {
+          let changed = false; const next = { ...prev };
+          [['LEFT', stepBrL], ['RIGHT', stepBrR], ['CENTER', stepBrC]].forEach(([pos, st]) => {
+              if (!st) return;
+              const endSt = pos === 'LEFT' ? stepEndL : pos === 'RIGHT' ? stepEndR : null;
+              const endOpt = endSt ? optOf(endSt, next[endSt.id]) : null;
+              const locked = !!((st.subOptions || []).some(o => o.returnOnly) && optIsReturn(endOpt));
+              if (locked && next[st.id]) { delete next[st.id]; changed = true; }
+              const bo = optOf(st, next[st.id]);
+              const basic = !!(bo && (bo.isBasic || /basic/i.test(bo.partName || '')));
+              if (basic && next[`${st.id}__sub`]) { delete next[`${st.id}__sub`]; changed = true; }
+              const subs = st.subOptions || [];
+              if (subs.some(o => o.returnOnly) && next[`${st.id}__sub`]) {
+                  const want = optIsReturn(endOpt) || !!bo?.usesReturnPlates;
+                  const so = subOf(st, next[`${st.id}__sub`]);
+                  if (so && ((want && !so.returnOnly) || (!want && so.returnOnly))) { delete next[`${st.id}__sub`]; changed = true; }
+              }
+          });
+          return changed ? next : prev;
+      });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dynamicConfigParams, activeFlow]);
+
+  // Derive engData (fab math inputs) FROM the step selections: part ids for dims, end styles, and
+  // the INSIDE mount flip for inside-mount ends.
+  useEffect(() => {
+      if (!flowDriven) return;
+      setEngData(prev => {
+          const u = { ...prev }; let ch = false;
+          [[stepBrL, 'bracketId'], [stepBrR, 'bracketIdRight'], [stepBrC, 'bracketIdCenter']].forEach(([st, key]) => {
+              if (!st) return; const o = optOf(st, dynamicConfigParams[st.id]); const pid = o ? (partOfOpt(o)?.id || '') : '';
+              if ((prev[key] || '') !== pid) { u[key] = pid; ch = true; }
+          });
+          [[stepBrL, 'backplateIdLeft'], [stepBrR, 'backplateIdRight'], [stepBrC, 'backplateIdCenter']].forEach(([st, key]) => {
+              if (!st) return; const o = subOf(st, dynamicConfigParams[`${st.id}__sub`]); const pid = o ? (partOfOpt(o)?.id || '') : '';
+              if ((prev[key] || '') !== pid) { u[key] = pid; ch = true; }
+          });
+          [[stepEndL, 'endStyle', 'mountLeft'], [stepEndR, 'endStyleRight', 'mountRight']].forEach(([st, key, mkey]) => {
+              if (!st) return; const o = optOf(st, dynamicConfigParams[st.id]); if (!o) return;
+              const style = endStyleOf(o);
+              if (style && prev[key] !== style) { u[key] = style; ch = true; }
+              const im = upperS(o.endTreatment) === 'INSIDE_MOUNT';
+              if (prev.shape === 'STRAIGHT') { const want = im ? 'INSIDE' : (prev[mkey] === 'INSIDE' ? 'OPEN' : prev[mkey]); if (prev[mkey] !== want) { u[mkey] = want; ch = true; } }
+          });
+          return ch ? u : prev;
+      });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dynamicConfigParams, activeFlow, libraryParts]);
+  // ================= END FLOW-MIRROR =================
 
   // --- HARDWARE MATH CALCULATIONS (RESTORED) ---
   const rad = (deg) => (deg * Math.PI) / 180;
@@ -978,51 +1095,72 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                             <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Left End Bracket{leftMount ? ` · ${leftMount}` : ''} (Auto-Syncs Dims)</label>
-                                    <select value={engData.bracketId || ''} onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))} style={fieldStyle}>
-                                        <option value="">{quoteFlowId ? '-- Select --' : '-- Select CPQ Flow First --'}</option>
-                                        {leftBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
-                                    </select>
+                                    {stepBrL ? (
+                                        <select value={dynamicConfigParams[stepBrL.id] || ''} disabled={brLockedAt(stepBrL, 'LEFT')} onChange={e => pickStep(stepBrL.id, e.target.value)} style={{ ...fieldStyle, opacity: brLockedAt(stepBrL, 'LEFT') ? 0.45 : 1 }}>
+                                            <option value="">{brLockedAt(stepBrL, 'LEFT') ? '— replaced by the return —' : '-- Select --'}</option>
+                                            {(stepBrL.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                        </select>
+                                    ) : (
+                                        <select value={engData.bracketId || ''} onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))} style={fieldStyle}>
+                                            <option value="">{quoteFlowId ? '-- Select --' : '-- Select CPQ Flow First --'}</option>
+                                            {leftBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
+                                        </select>
+                                    )}
                                 </div>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Right End Bracket{rightMount ? ` · ${rightMount}` : ''}</label>
-                                    <select value={engData.bracketIdRight || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdRight: e.target.value }))} style={fieldStyle}>
-                                        <option value="">-- Select --</option>
-                                        {rightBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
-                                    </select>
+                                    {stepBrR ? (
+                                        <select value={dynamicConfigParams[stepBrR.id] || ''} disabled={brLockedAt(stepBrR, 'RIGHT')} onChange={e => pickStep(stepBrR.id, e.target.value)} style={{ ...fieldStyle, opacity: brLockedAt(stepBrR, 'RIGHT') ? 0.45 : 1 }}>
+                                            <option value="">{brLockedAt(stepBrR, 'RIGHT') ? '— replaced by the return —' : '-- Select --'}</option>
+                                            {(stepBrR.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                        </select>
+                                    ) : (
+                                        <select value={engData.bracketIdRight || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdRight: e.target.value }))} style={fieldStyle}>
+                                            <option value="">-- Select --</option>
+                                            {rightBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
+                                        </select>
+                                    )}
                                 </div>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Center Bracket · passing</label>
-                                    <select value={engData.bracketIdCenter || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdCenter: e.target.value }))} style={fieldStyle}>
-                                        <option value="">-- Select Center Style --</option>
-                                        {centerBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
-                                    </select>
+                                    {stepBrC ? (
+                                        <select value={dynamicConfigParams[stepBrC.id] || ''} onChange={e => pickStep(stepBrC.id, e.target.value)} style={fieldStyle}>
+                                            <option value="">-- Select Center Style --</option>
+                                            {(stepBrC.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                        </select>
+                                    ) : (
+                                        <select value={engData.bracketIdCenter || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdCenter: e.target.value }))} style={fieldStyle}>
+                                            <option value="">-- Select Center Style --</option>
+                                            {centerBrackets.map(b => <option key={b.id} value={b.id}>{b.itemName} {b.legacyErpId && b.legacyErpId !== 'PENDING' ? `- ${b.legacyErpId}` : ''}</option>)}
+                                        </select>
+                                    )}
                                 </div>
                             </div>
                             {/* Backplate step — the end-return arms attach at the MIDDLE of these, so each side's
                                 half-dimension (width if vertical / length if horizontal) feeds the Total System O2O.
                                 Selection + captured dims here; the O2O contribution is wired after the formula is confirmed. */}
                             <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
-                                <div style={{ flex: 1 }}>
-                                    <label style={labelStyle}>Left Backplate</label>
-                                    <select value={engData.backplateIdLeft || ''} onChange={e => setEngData(prev => ({ ...prev, backplateIdLeft: e.target.value }))} style={fieldStyle}>
-                                        <option value="">-- Select Backplate --</option>
-                                        {allBackplates.map(b => { const d = bpDims(b.id); return <option key={b.id} value={b.id}>{b.itemName}{(d.l || d.w) ? ` · ${d.l}L × ${d.w}W` : ''}</option>; })}
-                                    </select>
-                                </div>
-                                <div style={{ flex: 1 }}>
-                                    <label style={labelStyle}>Right Backplate</label>
-                                    <select value={engData.backplateIdRight || ''} onChange={e => setEngData(prev => ({ ...prev, backplateIdRight: e.target.value }))} style={fieldStyle}>
-                                        <option value="">-- Select Backplate --</option>
-                                        {allBackplates.map(b => { const d = bpDims(b.id); return <option key={b.id} value={b.id}>{b.itemName}{(d.l || d.w) ? ` · ${d.l}L × ${d.w}W` : ''}</option>; })}
-                                    </select>
-                                </div>
-                                <div style={{ flex: 1 }}>
-                                    <label style={labelStyle}>Center Backplate</label>
-                                    <select value={engData.backplateIdCenter || ''} onChange={e => setEngData(prev => ({ ...prev, backplateIdCenter: e.target.value }))} style={fieldStyle}>
-                                        <option value="">-- Select Backplate --</option>
-                                        {allBackplates.map(b => { const d = bpDims(b.id); return <option key={b.id} value={b.id}>{b.itemName}{(d.l || d.w) ? ` · ${d.l}L × ${d.w}W` : ''}</option>; })}
-                                    </select>
-                                </div>
+                                {[['Left Backplate', stepBrL, 'LEFT', 'backplateIdLeft'], ['Right Backplate', stepBrR, 'RIGHT', 'backplateIdRight'], ['Center Backplate', stepBrC, 'CENTER', 'backplateIdCenter']].map(([lbl, st, pos, legacyKey]) => (
+                                    <div key={lbl} style={{ flex: 1 }}>
+                                        <label style={labelStyle}>{lbl}</label>
+                                        {st ? (() => {
+                                            const basic = basicSelAt(st);
+                                            const pool = subPoolAt(st, pos);
+                                            const none = !(st.subOptions || []).length;
+                                            return (
+                                                <select value={dynamicConfigParams[`${st.id}__sub`] || ''} disabled={basic || none} onChange={e => pickStep(`${st.id}__sub`, e.target.value)} style={{ ...fieldStyle, opacity: (basic || none) ? 0.45 : 1 }}>
+                                                    <option value="">{basic ? '— basic bracket · no backplate —' : none ? '— no backplates on this step —' : '-- Select Backplate --'}</option>
+                                                    {pool.map(o => { const p = partOfOpt(o); const d = p ? bpDims(p.id) : { w: 0, l: 0 }; return <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}{(d.l || d.w) ? ` · ${d.l}L × ${d.w}W` : ''}</option>; })}
+                                                </select>
+                                            );
+                                        })() : (
+                                            <select value={engData[legacyKey] || ''} onChange={e => setEngData(prev => ({ ...prev, [legacyKey]: e.target.value }))} style={fieldStyle}>
+                                                <option value="">-- Select Backplate --</option>
+                                                {allBackplates.map(b => { const d = bpDims(b.id); return <option key={b.id} value={b.id}>{b.itemName}{(d.l || d.w) ? ` · ${d.l}L × ${d.w}W` : ''}</option>; })}
+                                            </select>
+                                        )}
+                                    </div>
+                                ))}
                             </div>
                             <button onClick={handleAutoPlaceBrackets} disabled={engData.shape !== 'STRAIGHT'} title={engData.shape !== 'STRAIGHT' ? 'Auto-place currently supports straight poles' : 'Place end + center brackets automatically — then slide / edit / remove them in the Engineering view'} style={{ padding: '12px 16px', background: engData.shape === 'STRAIGHT' ? 'var(--brass)' : 'var(--paper-2)', color: engData.shape === 'STRAIGHT' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: engData.shape === 'STRAIGHT' ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⚙ Auto-Place Brackets · ends + centers (edit in Engineering view)</button>
                             <div style={{ display: 'flex', gap: '16px' }}>
@@ -1031,22 +1169,36 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     <input type="number" step="0.125" value={engData.proj} onChange={e => setEngData({...engData, proj: parseFloat(e.target.value)||0})} style={fieldStyle} />
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <label style={labelStyle}>End Style · Left</label>
-                                    <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={fieldStyle}>
-                                        <option value="FLUSH">Flush Cut</option>
-                                        <option value="FINIAL">Finials</option>
-                                        <option value="RETURN_MITER">Miter Return</option>
-                                        <option value="RETURN_BEND">Bent Return (FR)</option>
-                                    </select>
+                                    <label style={labelStyle}>End Style · Left{stepEndL ? ' · from flow' : ''}</label>
+                                    {stepEndL ? (
+                                        <select value={dynamicConfigParams[stepEndL.id] || ''} onChange={e => pickStep(stepEndL.id, e.target.value)} style={fieldStyle}>
+                                            <option value="">-- Choose End Treatment --</option>
+                                            {(stepEndL.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                        </select>
+                                    ) : (
+                                        <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={fieldStyle}>
+                                            <option value="FLUSH">Flush Cut</option>
+                                            <option value="FINIAL">Finials</option>
+                                            <option value="RETURN_MITER">Miter Return</option>
+                                            <option value="RETURN_BEND">Bent Return (FR)</option>
+                                        </select>
+                                    )}
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                    <label style={labelStyle}>End Style · Right</label>
-                                    <select value={engData.endStyleRight || engData.endStyle} onChange={e => setEngData({...engData, endStyleRight: e.target.value})} style={fieldStyle}>
-                                        <option value="FLUSH">Flush Cut</option>
-                                        <option value="FINIAL">Finials</option>
-                                        <option value="RETURN_MITER">Miter Return</option>
-                                        <option value="RETURN_BEND">Bent Return (FR)</option>
-                                    </select>
+                                    <label style={labelStyle}>End Style · Right{stepEndR ? ' · from flow' : ''}</label>
+                                    {stepEndR ? (
+                                        <select value={dynamicConfigParams[stepEndR.id] || ''} onChange={e => pickStep(stepEndR.id, e.target.value)} style={fieldStyle}>
+                                            <option value="">-- Choose End Treatment --</option>
+                                            {(stepEndR.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                        </select>
+                                    ) : (
+                                        <select value={engData.endStyleRight || engData.endStyle} onChange={e => setEngData({...engData, endStyleRight: e.target.value})} style={fieldStyle}>
+                                            <option value="FLUSH">Flush Cut</option>
+                                            <option value="FINIAL">Finials</option>
+                                            <option value="RETURN_MITER">Miter Return</option>
+                                            <option value="RETURN_BEND">Bent Return (FR)</option>
+                                        </select>
+                                    )}
                                 </div>
                             </div>
                             {/* These dims auto-fill from the selected bracket / master library — collapsed by
