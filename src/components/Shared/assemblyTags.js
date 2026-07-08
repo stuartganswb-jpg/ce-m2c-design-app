@@ -199,6 +199,13 @@ export const validateAssemblyAlignment = ({ assembly, pins = [], parts = [], flo
         }
     });
 
+    // Structural guard: a clustered mainline assembly with NO POLE cluster means the rod/bend
+    // geometry fell out of nodeClusters[] (a re-group or re-build replaced the list) — the flow
+    // still renders from its OLD step targets, but REGENERATING now would strip the pole step.
+    if (clusters.length && !clusters.some(c => normalizeCategory(c.category) === 'POLE')) {
+        push('ERROR', 'CLUSTER', `No POLE cluster on this assembly — the rod (and any bend) geometry isn't clustered. DO NOT regenerate its flow until the pole/bend clusters are restored in 1.5 (the .glb still has the geometry).`);
+    }
+
     // Pins.
     const clusterIds = new Set(clusters.map(c => c.id));
     pins.forEach(pin => {
