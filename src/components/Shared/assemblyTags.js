@@ -320,6 +320,17 @@ export const validateAssemblyAlignment = ({ assembly, pins = [], parts = [], flo
             const title = U(s.title);
             const known = /POLE|TUBE|ROD|BRACKET|FINIAL|RING|SPLICE|END TREATMENT|FINISH|COLOR|PATINA|LENGTH/.test(title) || U(s.dataSource) === 'MASTER_FINISHES';
             if (!known) push('WARN', 'FLOW', `Flow "${f.name}" step "${s.title}": Vision can't classify this step from its title — it won't map to a Fabrication Settings field.`);
+            // STALE-FLOW tripwire: two subOptions of the SAME part both flagged returnOnly at one step
+            // = the inline copy is still return-tagged in the FLOW. Either the inl-only pins were tagged
+            // AFTER the last regenerate, or the regenerate ran on a stale browser bundle (the generator
+            // runs client-side). Hard-refresh (⌘⇧R), confirm the pins are saved, and Regenerate again.
+            {
+                const byPart = {};
+                (s.subOptions || []).forEach(o => { if (o.returnOnly) { const k = String(o.partId || o.partName || ''); (byPart[k] = byPart[k] || []).push(o); } });
+                Object.entries(byPart).forEach(([k, arr]) => {
+                    if (arr.length >= 2) push('ERROR', 'FLOW', `Flow "${f.name}" step "${s.title}": ${arr.length} copies of "${k}" are ALL in the return pool — the inline copy is still return-tagged in the flow. Hard-refresh (⌘⇧R), verify the inl-only pins are SAVED in 1.6, then Regenerate (keep prices). This error disappears when the flow was built by the current rules.`);
+                });
+            }
             // Return-ness only matters on END TREATMENT steps (finial vs return vs inside mount gating).
             // On a BRACKET step an "inside mount" option IS the bracket — no gating, so no warning.
             if (/end treatment/i.test(s.title || '')) {
