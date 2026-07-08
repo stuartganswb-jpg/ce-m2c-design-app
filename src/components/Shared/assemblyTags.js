@@ -285,6 +285,33 @@ export const validateAssemblyAlignment = ({ assembly, pins = [], parts = [], flo
         }
     });
 
+    // INLINE-copy detection (Fabricut pattern): the same plate part pinned in BOTH a RETURN-named/
+    // flagged cluster (outer copy) AND a regular cluster at some position = the regular-cluster copy
+    // is the INLINE-bracket duplicate. Without inl-only it inherits return-ness from the part's
+    // library name ("… for Returns") and pollutes the return pool — one click fixes each copy.
+    {
+        const RETURNISHX = /bend|return|miter|mitre|mtr|french/i;
+        const clById = {}; clusters.forEach(c => { clById[c.id] = c; });
+        const plateCopies = new Map(); // partKey -> { inReturn: bool, others: [pin] }
+        pins.forEach(pin => {
+            const cl = clById[pin.clusterId];
+            if (!cl || normalizeCategory(cl.category) !== 'BACKPLATE' || pin.isHiddenPart) return;
+            const key = normC(pin.legacyErpId && pin.legacyErpId !== 'N/A' && pin.legacyErpId !== 'PENDING' ? pin.legacyErpId : pin.partId);
+            if (!key) return;
+            const entry = plateCopies.get(key) || { inReturn: false, others: [] };
+            const isReturnCluster = !!cl.returnOnly || RETURNISHX.test(String(cl.name || ''));
+            if (isReturnCluster || pin.returnOnly === true) entry.inReturn = true;
+            else if (!pin.inlineOnly && !cl.inlineOnly) entry.others.push(pin);
+            plateCopies.set(key, entry);
+        });
+        plateCopies.forEach((entry, key) => {
+            if (!entry.inReturn) return;
+            entry.others.forEach(pin => {
+                push('WARN', 'PIN', `"${pin.partName || key}" is the INLINE copy of a shared return plate (its outer copy lives in a RETURN cluster). Fix tags it inl-only — shown only with In Line brackets; without it, the part name drags it into the return pool too. Regenerate after.`, pin.id ? { type: 'pin', pinId: pin.id, patch: { inlineOnly: true } } : null);
+            });
+        });
+    }
+
     // Linked CPQ flows.
     flows.filter(f => f.linkedAssemblyId === assembly.id || f.linkedAssemblyId === assembly.itemId).forEach(f => {
         if (!f.fabShape) push('WARN', 'FLOW', `Flow "${f.name}": no fabShape (STRAIGHT/MITERED/BOW) — Vision bay preset won't seed.`);

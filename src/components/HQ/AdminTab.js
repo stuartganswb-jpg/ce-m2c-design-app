@@ -664,18 +664,20 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               const flagsFor = (p) => {
                   const feePart = partsById[p.partId];
                   const et = String(p.endTreatment || '').toUpperCase();
+                  // EXPLICIT pool flags beat the name heuristics: an explicitly-INLINE copy must not
+                  // also read as a return plate just because the shared part's library name says
+                  // "for Returns" (Fabricut's inline RBP/RCP copies) — that put BOTH copies in the
+                  // return pool. Name-derived return-ness applies only when no inline flag exists.
+                  const inlineish = !!(p.inlineOnly || cl.inlineOnly);
+                  const explicitRtn = p.returnOnly === true || !!cl.returnOnly;
+                  const nameRtn = RETURNISH.test(String(cl.name || '')) || RETURNISH.test(String(p.partName || '')) || RETURNISH.test(String(feePart?.itemName || ''));
                   const returnish = et ? (et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT')
-                      : (clusterReturnish || p.returnOnly === true || RETURNISH.test(String(p.partName || '')) || RETURNISH.test(String(feePart?.itemName || '')));
+                      : (inlineish ? false : (explicitRtn || nameRtn));
                   const feeish = p.isFee || feePart?.partClass === 'Fee' || String(feePart?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE';
                   // END RETURN ARM (Flat Iron pattern): a BRACKET choice that IS the end treatment — the
                   // arm mimics the miter. Selecting it greys that side's End Treatment step in CPQ/Vision.
                   // Canonical source = the part's customData.isReturnBracket; pin.isReturnArm overrides.
                   const returnArm = !!(p.isReturnArm || cl.isReturnArm || feePart?.manufacturingSpecs?.customData?.isReturnBracket);
-                  // inlineOnly (plates): the INLINE-bracket copies of shared return-style plates —
-                  // offered only while a usesReturnPlates (In Line) bracket is selected. Distinct from
-                  // returnOnly (the outer, return-position copies). Flows without inline copies fall
-                  // back to returnOnly at runtime, so Brimar/Flat Iron behave exactly as before.
-                  const inlineish = !!(p.inlineOnly || cl.inlineOnly);
                   return { et, returnish, feeish, feePart, returnArm, inlineish };
               };
               if (choicePins.length >= 2) {
@@ -727,8 +729,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   if (feeish) { e.isFee = true; e.partName = `${pin.partName || 'Charge'} (fee)`; }
                   if (pin.isBasic) e.isBasic = true;
                   if (pin.usesReturnPlates || cl.usesReturnPlates) e.usesReturnPlates = true;
-              } else if (clusterReturnish) {
-                  e.returnOnly = true; // unpinned cluster named …RETURN… still scopes to returns
+              } else if (clusterReturnish && !cl.inlineOnly) {
+                  e.returnOnly = true; // unpinned cluster named …RETURN… still scopes to returns (unless flagged INLINE)
               }
               if (!pin && cl.isReturnArm) e.isReturnArm = true; // 1.5 cluster toggle, no pin yet
               if (!pin && cl.inlineOnly) e.inlineOnly = true;
