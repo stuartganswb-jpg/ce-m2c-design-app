@@ -1010,7 +1010,10 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                 <ambientLight intensity={0.5} />
                                 <directionalLight position={[10, 10, 5]} intensity={1} />
                                 <OrbitControls makeDefault enablePan={true} />
-                                <Bounds fit clip observe margin={1.2}>
+                                {/* NOTE: no `observe` — it re-fit the camera on EVERY scene change (chip toggles,
+                                    hover highlights, snapshot updates), making the view snap back and forth against
+                                    the user's orbit. Fit once on load; the user drives the camera after that. */}
+                                <Bounds fit clip margin={1.2}>
                                     <SelectableModel 
                                         url={activeAssembly.manufacturingSpecs.cadUrl} 
                                         selectedNodes={selectedNodes} 

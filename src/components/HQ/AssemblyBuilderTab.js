@@ -623,7 +623,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     if (!itemNo && !flagged && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
                     // endTreatment: saved pin tag wins; unsaved end-cluster rows seed from the name.
                     const et = pin?.endTreatment || (isEndCluster ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '');
-                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, usesReturnPlates: !!pin?.usesReturnPlates, isReturnArm: !!pin?.isReturnArm, returnOnly: !!pin?.returnOnly, thumb: '' };
+                    // 1.5 cluster flags SEED the checkboxes when the pin doesn't carry them yet (returnOnly on
+                    // BACKPLATE clusters, isReturnArm on BRACKET clusters) — tagging in Node Grouping shows up
+                    // here automatically; saving stamps it onto the pins so both stay in sync.
+                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, usesReturnPlates: !!pin?.usesReturnPlates, isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), thumb: '' };
                 });
                 // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
