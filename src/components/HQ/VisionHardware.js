@@ -433,13 +433,18 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       if (!flowDriven) return;
       setEngData(prev => {
           const u = { ...prev }; let ch = false;
-          [[stepBrL, 'bracketId'], [stepBrR, 'bracketIdRight'], [stepBrC, 'bracketIdCenter']].forEach(([st, key]) => {
-              if (!st) return; const o = optOf(st, dynamicConfigParams[st.id]); const pid = o ? (partOfOpt(o)?.id || '') : '';
-              if ((prev[key] || '') !== pid) { u[key] = pid; ch = true; }
+          // One-way writes: a step SELECTION sets the engData part id; NO selection leaves engData
+          // alone (drafts / auto-derived values survive). Clearing happens only when the step was
+          // return-locked — the return legitimately removed the bracket.
+          [[stepBrL, 'bracketId', 'LEFT'], [stepBrR, 'bracketIdRight', 'RIGHT'], [stepBrC, 'bracketIdCenter', '']].forEach(([st, key, pos]) => {
+              if (!st) return; const o = optOf(st, dynamicConfigParams[st.id]);
+              if (o) { const pid = partOfOpt(o)?.id || ''; if (pid && (prev[key] || '') !== pid) { u[key] = pid; ch = true; } }
+              else if (pos && brLockedAt(st, pos) && prev[key]) { u[key] = ''; ch = true; }
           });
-          [[stepBrL, 'backplateIdLeft'], [stepBrR, 'backplateIdRight'], [stepBrC, 'backplateIdCenter']].forEach(([st, key]) => {
-              if (!st) return; const o = subOf(st, dynamicConfigParams[`${st.id}__sub`]); const pid = o ? (partOfOpt(o)?.id || '') : '';
-              if ((prev[key] || '') !== pid) { u[key] = pid; ch = true; }
+          [[stepBrL, 'backplateIdLeft', 'LEFT'], [stepBrR, 'backplateIdRight', 'RIGHT'], [stepBrC, 'backplateIdCenter', 'CENTER']].forEach(([st, key]) => {
+              if (!st) return; const o = subOf(st, dynamicConfigParams[`${st.id}__sub`]);
+              if (o) { const pid = partOfOpt(o)?.id || ''; if (pid && (prev[key] || '') !== pid) { u[key] = pid; ch = true; } }
+              else if (basicSelAt(st) && prev[key]) { u[key] = ''; ch = true; }
           });
           [[stepEndL, 'endStyle', 'mountLeft'], [stepEndR, 'endStyleRight', 'mountRight']].forEach(([st, key, mkey]) => {
               if (!st) return; const o = optOf(st, dynamicConfigParams[st.id]); if (!o) return;
@@ -1619,9 +1624,20 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                   </div>
                   
                   <div style={{ padding: '30px', background: 'var(--paper-2)', borderTop: '1px solid var(--line)' }}>
-                      <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeFlow || !engData.bracketId} style={{ width: '100%', padding: '16px', background: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? 'var(--paper)' : 'var(--ink)', color: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: (isPushingToCPQ || !activeFlow || !engData.bracketId) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
-                          {isPushingToCPQ ? 'Saving Draft...' : 'Save Line & Draw Next'}
-                      </button>
+                      {(() => {
+                          // The left end is "settled" by ANY of: a bracket pick (legacy engData or a flow-step
+                          // selection), OR a chosen return / end-return-arm — which REPLACE the bracket, so
+                          // demanding engData.bracketId then would block every french-return line forever.
+                          const leftSettled = !!engData.bracketId
+                              || !!(stepBrL && dynamicConfigParams[stepBrL.id])
+                              || returnChosenAt('LEFT') || armChosenAt('LEFT');
+                          const blocked = isPushingToCPQ || !activeFlow || !leftSettled;
+                          return (
+                              <button onClick={handlePushToCPQ} disabled={blocked} style={{ width: '100%', padding: '16px', background: blocked ? 'var(--paper)' : 'var(--ink)', color: blocked ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: blocked ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                                  {isPushingToCPQ ? 'Saving Draft...' : (!activeFlow ? 'Select a CPQ Flow first' : !leftSettled ? 'Pick a Left bracket OR a return/arm end first' : 'Save Line & Draw Next')}
+                              </button>
+                          );
+                      })()}
                   </div>
               </div>
           )}
