@@ -639,13 +639,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
 
       const clusters = (asm.nodeClusters || []).filter(c => catOf(c) && !c.hidden);
       if (!clusters.length) return alert("No usable clusters — none have a Category tag or a classifiable part. Tag them in Node Grouping first (or set the parts' Product Type).");
-      // De-union: each distinct (part, position, location) placement is its OWN option, so the
-      // position splits you make in Node Grouping are never merged back together. Each option
-      // carries its position + location tags so steps can be organized per position.
-      const mkOpt = (map, cat, partId, partName, position, location) => {
-          const key = [partId, position, location].join('|');
-          return map[key] = map[key] || { optId: `OPT-${cat}-${String(partId).replace(/[^A-Za-z0-9]/g, '').slice(0, 28)}-${position || 'X'}-${location || 'X'}`, partId, partName, position, location, nodes: new Set() };
-      };
+      // De-union: every option is CLUSTER-scoped (see both paths in groupPlacements) — each cluster
+      // placement is its own option with its own flags/geometry, so position splits and same-part
+      // regular-vs-RETURN plate copies are never merged back together.
       const groupPlacements = (cat, filterFn) => {
           const map = {};
           clusters.filter(c => catOf(c) === cat && (!filterFn || filterFn(c))).forEach(cl => {
@@ -705,8 +701,16 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               }
               // Single-choice cluster → one option for the whole cluster, with the SAME flag stamping
               // as the fan-out path (endTreatment / fee / returnOnly / basic / rtn-bp from the pin).
+              // CLUSTER-SCOPED key, same as the fan-out path: the SAME part can live in two clusters
+              // at one position (Flat Iron's FIHBP outer=RETURN plate AND inner=regular plate, both
+              // WALL·LEFT) — a part+position key MERGED them into one option that unioned their flags
+              // AND geometry, so picking either lit both plates and return scoping couldn't separate
+              // them. Keyed per cluster, each copy is its own option with its own flags/nodes.
               const pin = pinByCluster[cl.id];
-              const e = mkOpt(map, cat, pin?.partId || cl.name, pin?.partName || cl.name, position, location);
+              const pid = pin?.partId || cl.name;
+              const cshortL = String(cl.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6);
+              const keyL = [cl.id, pid, position, location].join('|');
+              const e = map[keyL] = map[keyL] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshortL}`, partId: pid, partName: pin?.partName || cl.name, position, location, nodes: new Set() };
               (cl.nodes || cl.meshes || []).forEach(n => { if (n) e.nodes.add(n); });
               if (pin) {
                   const { et, returnish, feeish, returnArm } = flagsFor(pin);
