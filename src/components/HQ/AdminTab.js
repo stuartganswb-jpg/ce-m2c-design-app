@@ -701,7 +701,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       if (returnArm) e.isReturnArm = true;
                       if (inlineish) e.inlineOnly = true;
                       if (p.isBasic) e.isBasic = true;
-                      if (p.usesReturnPlates) e.usesReturnPlates = true;
+                      if (p.usesReturnPlates || cl.usesReturnPlates) e.usesReturnPlates = true;
                   });
                   return;
               }
@@ -726,12 +726,13 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   if (returnish) e.returnOnly = true;
                   if (feeish) { e.isFee = true; e.partName = `${pin.partName || 'Charge'} (fee)`; }
                   if (pin.isBasic) e.isBasic = true;
-                  if (pin.usesReturnPlates) e.usesReturnPlates = true;
+                  if (pin.usesReturnPlates || cl.usesReturnPlates) e.usesReturnPlates = true;
               } else if (clusterReturnish) {
                   e.returnOnly = true; // unpinned cluster named …RETURN… still scopes to returns
               }
               if (!pin && cl.isReturnArm) e.isReturnArm = true; // 1.5 cluster toggle, no pin yet
               if (!pin && cl.inlineOnly) e.inlineOnly = true;
+              if (!pin && cl.usesReturnPlates) e.usesReturnPlates = true;
           });
           return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}) }));
       };
