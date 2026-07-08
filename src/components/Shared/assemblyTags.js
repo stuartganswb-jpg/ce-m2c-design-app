@@ -208,15 +208,38 @@ export const validateAssemblyAlignment = ({ assembly, pins = [], parts = [], flo
 
     // Pins.
     const clusterIds = new Set(clusters.map(c => c.id));
+    // Orphaned pins: RELINK-first. When an assembly is RE-GROUPED, every cluster gets a new id and
+    // ALL its pins go "stale" — but they are the LIVE BOM (Brimar's french returns were lost to a
+    // blind delete). Match each orphan to a current cluster by the part code / name prefix embedded
+    // in cluster names ("FICERA1001 …" ↔ pin FICERA) and offer a clusterId relink; each cluster is
+    // claimed once so multiple instances of the same part zip 1:1. Delete is offered only when no
+    // current cluster matches (a true leftover).
+    const normC = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const claimed = new Set(pins.filter(p => clusterIds.has(p.clusterId)).map(p => p.clusterId));
     pins.forEach(pin => {
         const label = pin.partName || pin.partId || pin.id;
         if (pin.clusterId && !clusterIds.has(pin.clusterId)) {
-            // Stale leftovers from an earlier build/re-group: the generator ignores them, but they STILL
-            // pollute every consumer that reads pins by assemblyId — Vision's flowPins ("pinned" part
-            // lists), the BOM Engine component list, and the ERP push's pin lookups. Deleting is safe:
-            // the cluster they belonged to is gone.
-            push('ERROR', 'PIN', `Stale pin "${label}" points at a cluster that no longer exists (${pin.clusterId}) — leftover from an earlier build; it pollutes Vision's pinned-part lists and the BOM.`, pin.id ? { type: 'deletePin', pinId: pin.id } : null);
-            return; // don't double-report tag issues on a pin that should just be removed
+            let target = null;
+            const erp = (pin.legacyErpId && pin.legacyErpId !== 'N/A' && pin.legacyErpId !== 'PENDING') ? pin.legacyErpId : '';
+            const code = normC(erp || pin.partId);
+            if (code.length >= 3) {
+                const cands = clusters.filter(c => !claimed.has(c.id) && normC(c.name).startsWith(code));
+                if (cands.length) target = cands[0];
+            }
+            if (!target) {
+                const nm = normC(pin.partName).slice(0, 14);
+                if (nm.length >= 6) {
+                    const cands = clusters.filter(c => !claimed.has(c.id) && (normC(c.name).startsWith(nm) || nm.startsWith(normC(c.name).slice(0, 10))));
+                    if (cands.length === 1) target = cands[0];
+                }
+            }
+            if (target && pin.id) {
+                claimed.add(target.id);
+                push('ERROR', 'PIN', `Orphaned pin "${label}" — its cluster was replaced by a re-group. Fix RELINKS it to current cluster "${target.name}" (keeps the BOM intact; never delete a re-grouped assembly's pins).`, { type: 'pin', pinId: pin.id, patch: { clusterId: target.id } });
+            } else {
+                push('ERROR', 'PIN', `Stale pin "${label}" points at a cluster that no longer exists (${pin.clusterId}) and no current cluster matches it — delete ONLY if you're sure it's a true leftover (it currently pollutes the BOM list and Vision's pinned-part scoping).`, pin.id ? { type: 'deletePin', pinId: pin.id } : null);
+            }
+            return; // don't double-report tag issues on an orphaned pin
         }
         const cl = clusters.find(c => c.id === pin.clusterId);
         const catN = normalizeCategory(cl?.category);
@@ -265,11 +288,15 @@ export const validateAssemblyAlignment = ({ assembly, pins = [], parts = [], flo
             const title = U(s.title);
             const known = /POLE|TUBE|ROD|BRACKET|FINIAL|RING|SPLICE|END TREATMENT|FINISH|COLOR|PATINA|LENGTH/.test(title) || U(s.dataSource) === 'MASTER_FINISHES';
             if (!known) push('WARN', 'FLOW', `Flow "${f.name}" step "${s.title}": Vision can't classify this step from its title — it won't map to a Fabrication Settings field.`);
-            (s.styleOptions || []).forEach(o => {
-                const et = normalizeEndTreatment(o.endTreatment);
-                const byName = suggestTagsFromName(o.partName || o.optId).endTreatment;
-                if (!et && byName && byName !== 'FINIAL') push('WARN', 'FLOW', `Flow "${f.name}" step "${s.title}" option "${o.partName}": return-ness is only name-derived (${byName}). Regenerate after tagging pins.`);
-            });
+            // Return-ness only matters on END TREATMENT steps (finial vs return vs inside mount gating).
+            // On a BRACKET step an "inside mount" option IS the bracket — no gating, so no warning.
+            if (/end treatment/i.test(s.title || '')) {
+                (s.styleOptions || []).forEach(o => {
+                    const et = normalizeEndTreatment(o.endTreatment);
+                    const byName = suggestTagsFromName(o.partName || o.optId).endTreatment;
+                    if (!et && byName && byName !== 'FINIAL') push('WARN', 'FLOW', `Flow "${f.name}" step "${s.title}" option "${o.partName}": return-ness is only name-derived (${byName}). Regenerate after tagging pins.`);
+                });
+            }
         });
     });
 
