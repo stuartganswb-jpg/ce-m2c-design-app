@@ -6,6 +6,44 @@ import VisionHardware from './VisionHardware';
 import VisionPillow from './VisionPillow';
 import VisionLighting from './VisionLighting';
 
+// Searchable customer combobox — replaces the native <select>, whose keystroke type-ahead jumped to
+// the first match per letter and reset its buffer mid-word (typing "Melanie…" bounced Mel G → Arvita).
+// Type freely, the list filters live (name OR id, contains-match) and sorts ALPHABETICALLY by name.
+const CustomerCombobox = ({ value, onChange, customers, placeholder }) => {
+    const [search, setSearch] = useState('');
+    const [open, setOpen] = useState(false);
+    useEffect(() => {
+        const c = value ? customers.find(x => x.id === value) : null;
+        setSearch(c ? `${c.name} (${c.id})` : '');
+    }, [value, customers]);
+    const term = search.toLowerCase();
+    const list = [...customers]
+        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+        .filter(c => !term || String(c.name || '').toLowerCase().includes(term) || String(c.id || '').toLowerCase().includes(term));
+    return (
+        <div style={{ position: 'relative' }}>
+            <input
+                type="text" value={search} placeholder={placeholder}
+                onChange={e => { setSearch(e.target.value); setOpen(true); if (e.target.value === '') onChange(''); }}
+                onFocus={e => { setOpen(true); e.target.select(); }}
+                onBlur={() => setTimeout(() => setOpen(false), 200)}
+                style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper)', boxSizing: 'border-box' }}
+            />
+            {open && (
+                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1px solid var(--line)', maxHeight: '260px', overflowY: 'auto', zIndex: 10000, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
+                    {list.length === 0 && <div style={{ padding: '12px', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem' }}>No matches…</div>}
+                    {list.map(c => (
+                        <div key={c.id} onMouseDown={() => { onChange(c.id); setSearch(`${c.name} (${c.id})`); setOpen(false); }}
+                            style={{ padding: '11px 12px', borderBottom: '1px solid var(--line)', cursor: 'pointer', background: value === c.id ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', fontSize: '0.9rem' }}>
+                            {c.name} <span style={{ color: 'var(--ink-soft)', fontSize: '0.75rem' }}>({c.id})</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
 const CATEGORIES_BY_BRAND = {
   ce: [{ id: 'HARDWARE', label: 'Drapery Hardware' }],
   m2c: [{ id: 'HARDWARE', label: 'Drapery Hardware' }, { id: 'LIGHTING', label: 'Custom Lighting' }],
@@ -123,20 +161,18 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px 24px', display: 'flex', alignItems: 'flex-end', gap: '20px', borderRadius: '2px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}>
           <div style={{ flex: 1 }}>
               <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' }}>1. Select Customer (Initializes Session)</label>
-              <select
+              <CustomerCombobox
                   value={sessionCustomerId}
-                  onChange={e => {
-                      setSessionCustomerId(e.target.value);
+                  customers={liveCustomers}
+                  placeholder="Type to search customers…"
+                  onChange={(id) => {
+                      setSessionCustomerId(id);
                       // Generate a new global quote ID the moment a customer is picked
-                      if (!sessionQuoteId && e.target.value) setSessionQuoteId(`QUOTE-${Date.now()}`);
+                      if (!sessionQuoteId && id) setSessionQuoteId(`QUOTE-${Date.now()}`);
                       // Clear session if deselected
-                      if (!e.target.value) setSessionQuoteId(null); 
+                      if (!id) setSessionQuoteId(null);
                   }}
-                  style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: 'var(--paper)', cursor: 'pointer' }}
-              >
-                  <option value="">-- Choose Customer --</option>
-                  {liveCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
-              </select>
+              />
           </div>
           <div style={{ flex: 1 }}>
               <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px', letterSpacing: '.1em' }}>2. Project / Job Name (Optional)</label>

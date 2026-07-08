@@ -2107,7 +2107,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               disabled={!!activeMasterQuoteId}
           >
               <option value="">-- Select Customer to Activate Live Client Pricing --</option>
-              {combinedCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
+              {[...combinedCustomers].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))).map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
           </select>
           {activeMasterQuoteId ? (
               <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>Locked by active Global Job: {activeMasterQuoteId}</span>
@@ -2624,7 +2624,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>* Verify Customer</label>
                         <select value={jobData.customerId} onChange={e => setJobData({...jobData, customerId: e.target.value})} disabled={!!activeMasterQuoteId} style={{ width: '100%', padding: '12px', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', background: activeMasterQuoteId ? 'transparent' : '#fff', fontFamily: 'var(--sans)', cursor: activeMasterQuoteId ? 'not-allowed' : 'pointer' }}>
                             <option value="">-- Choose Customer --</option>
-                            {combinedCustomers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
+                            {[...combinedCustomers].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))).map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
                         </select>
                     </div>
 
