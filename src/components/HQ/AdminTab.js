@@ -657,6 +657,22 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               // "FINIALS+RETURNS" option — each choice shows only its own geometry (choiceNode controls
               // its whole subtree by ancestor match). ≥2 choice pins = Assembly-Builder cluster.
               const choicePins = (pinsByCluster[cl.id] || []).filter(p => p.choiceNode && String(p.choiceNode).trim() && !p.isHiddenPart);
+              // Shared flag derivation — BOTH paths (fan-out AND single-choice) stamp the same flags.
+              // The single-choice path used to stamp NOTHING, so one-part-per-cluster assemblies
+              // (Brimar style) lost endTreatment/isFee/returnOnly on every option: returns didn't grey
+              // brackets, fee entities didn't bill, return plates didn't scope. returnOnly also
+              // consults the resolved LIBRARY part's name ("Mounting Base for 1\" French Return") —
+              // linked pins carry the ERP code as partName, so the pin name alone can't tell.
+              const RETURNISH = /bend|return|miter|mitre|mtr|french/i;
+              const clusterReturnish = RETURNISH.test(String(cl.name || ''));
+              const flagsFor = (p) => {
+                  const feePart = partsById[p.partId];
+                  const et = String(p.endTreatment || '').toUpperCase();
+                  const returnish = et ? (et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT')
+                      : (clusterReturnish || RETURNISH.test(String(p.partName || '')) || RETURNISH.test(String(feePart?.itemName || '')));
+                  const feeish = p.isFee || feePart?.partClass === 'Fee' || String(feePart?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE';
+                  return { et, returnish, feeish, feePart };
+              };
               if (choicePins.length >= 2) {
                   // Cluster-scoped options: the SAME part can live in two clusters at one position (a
                   // plate in both the regular backplate stack AND the RETURN backplate cluster), so key
@@ -665,53 +681,38 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   // plates only while that end's treatment is a return (and hides the regular ones) —
                   // the stronger rule needed when returns keep the bracket step. Options keep the
                   // author's arrow order via choiceSort.
-                  // returnOnly by cluster name OR the part's own name ("… for Returns", MTR) — the
-                  // latter catches return plates a designer left inside a regular/center backplate
-                  // stack, so they still scope to returns only (and never show at CENTER, which has
-                  // no End Treatment) even before the stray is cleaned out of the cluster.
-                  const RETURNISH = /bend|return|miter|mitre|mtr|french/i;
-                  const clusterReturnish = RETURNISH.test(String(cl.name || ''));
                   const cshort = String(cl.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6);
                   [...choicePins].sort((a, b) => ((a.choiceSort ?? 9999) - (b.choiceSort ?? 9999)) || String(a.partName || '').localeCompare(String(b.partName || ''))).forEach(p => {
                       const pid = p.partId || cl.name;
-                      // Explicit endTreatment tag (1.6 per-choice select / pin.endTreatment) is CANONICAL:
-                      // it decides return-ness directly and rides onto the generated option so the CPQ
-                      // runtime + Vision read the tag instead of sniffing names. The RETURNISH regex is
-                      // the legacy fallback for pins tagged before the spec.
-                      const et = String(p.endTreatment || '').toUpperCase();
-                      const returnish = et ? (et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT')
-                          : (clusterReturnish || RETURNISH.test(String(p.partName || '')));
-                      const returnOnly = returnish;
+                      // Explicit endTreatment tag (1.6 per-choice select / pin.endTreatment) is CANONICAL;
+                      // name regexes are the legacy fallback (flagsFor).
+                      const { et, returnish, feeish } = flagsFor(p);
                       const key = [cl.id, pid, position, location].join('|');
-                      const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnOnly ? { returnOnly: true } : {}) };
+                      const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnish ? { returnOnly: true } : {}) };
                       e.nodes.add(String(p.choiceNode).trim());
-                      // Fee choice (e.g. a french-return bend marked FEE in the assign tool): keep the
-                      // geometry + selection, but emit it partId-less like the built-in Miter/Bend fee
-                      // options so it bills as a fee — never a BOM line.
-                      // Fee = the pin's flag OR the assigned part being a Fee/Charge entity (partClass
-                      // Fee / productType FEE) — e.g. a bend reassigned to CE-FEE-#### in Visual
-                      // Assembly. Emitted partId-less like the built-in Miter/Bend fee options: geometry
-                      // renders, bills as its own separate charge, never a physical BOM unit.
-                      const feePart = partsById[p.partId];
-                      const feeish = p.isFee || feePart?.partClass === 'Fee' || String(feePart?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE';
-                      // Keep the partId: the CPQ prices the fee from the fee ENTITY's basePrice
-                      // (e.g. CE-FEE-5138) unless an option price is set; the ERP push skips
-                      // Fee-class parts so it still never becomes a NetSuite BOM line.
+                      // Fee choice: geometry + selection kept, bills as a fee (entity-priced when the
+                      // partId is a Fee-class entity like CE-FEE-4594); ERP push never BOMs it.
                       if (feeish) { e.isFee = true; e.partName = `${p.partName || 'Charge'} (fee)`; }
-                      // Basic-bracket flag (assign tool): this bracket takes no backplate — the CPQ
-                      // runtime greys the backplate picker to None while it's the selection.
                       if (p.isBasic) e.isBasic = true;
-                      // usesReturnPlates (assign tool): this bracket pairs with the RETURN backplates
-                      // (e.g. In Line brackets) — the CPQ sub-picker shows the return plates while it's
-                      // the selected bracket, even with no return chosen on that end.
                       if (p.usesReturnPlates) e.usesReturnPlates = true;
                   });
                   return;
               }
-              // Legacy / single-choice cluster → one option for the whole cluster (unchanged).
+              // Single-choice cluster → one option for the whole cluster, with the SAME flag stamping
+              // as the fan-out path (endTreatment / fee / returnOnly / basic / rtn-bp from the pin).
               const pin = pinByCluster[cl.id];
               const e = mkOpt(map, cat, pin?.partId || cl.name, pin?.partName || cl.name, position, location);
               (cl.nodes || cl.meshes || []).forEach(n => { if (n) e.nodes.add(n); });
+              if (pin) {
+                  const { et, returnish, feeish } = flagsFor(pin);
+                  if (et) e.endTreatment = et;
+                  if (returnish) e.returnOnly = true;
+                  if (feeish) { e.isFee = true; e.partName = `${pin.partName || 'Charge'} (fee)`; }
+                  if (pin.isBasic) e.isBasic = true;
+                  if (pin.usesReturnPlates) e.usesReturnPlates = true;
+              } else if (clusterReturnish) {
+                  e.returnOnly = true; // unpinned cluster named …RETURN… still scopes to returns
+              }
           });
           return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}) }));
       };
@@ -831,6 +832,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               });
               if (bendNodes) { gmap[`OPT-MITER-${sfx}`] = bendNodes; gmap[`OPT-BEND-${sfx}`] = bendNodes; }
               if (straightNodes) gmap[`OPT-FLUSH-${sfx}`] = straightNodes;
+              // Built-in Mitered/Bent fee options exist for flows whose returns are PURE bend-rod
+              // geometry (endPole segments). When this position already has its OWN modeled return
+              // choice (a pin tagged FRENCH/MITER return — e.g. Brimar's CE-FEE-4594 bend), the
+              // built-ins are redundant do-nothing duplicates — skip them.
+              const hasOwnReturn = group.some(o => {
+                  const t = String(o.endTreatment || '').toUpperCase();
+                  return t === 'FRENCH_RETURN' || t === 'MITER_RETURN';
+              });
               add({
                   title: label ? `${label} End Treatment` : 'End Treatment',
                   type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, finishDataSource: 'master_finishes', useClientPricing: true,
@@ -839,8 +848,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   // that still needs its bracket/backplate (e.g. french-return backplates) keeps the step.
                   position: pos,
                   styleOptions: [...group,
-                      { optId: `OPT-MITER-${sfx}`, partId: '', partName: 'Mitered Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'MITER_RETURN', isFee: true },
-                      { optId: `OPT-BEND-${sfx}`, partId: '', partName: 'Bent Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'FRENCH_RETURN', isFee: true },
+                      ...(hasOwnReturn ? [] : [
+                          { optId: `OPT-MITER-${sfx}`, partId: '', partName: 'Mitered Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'MITER_RETURN', isFee: true },
+                          { optId: `OPT-BEND-${sfx}`, partId: '', partName: 'Bent Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'FRENCH_RETURN', isFee: true }]),
                       { optId: `OPT-FLUSH-${sfx}`, partId: '', partName: 'Flush Cut', targetNode: straightNodes, price: 0 }],
                   geometryMap: gmap,
                   ...(inc ? { includedParts: inc } : {})
