@@ -52,6 +52,14 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         try {
             const targetBrand = Object.keys(BRAND_NETSUITE_MAP).find(key => BRAND_NETSUITE_MAP[key].subsidiary === nsSubsidiaryId?.toString()) || activeBrand;
 
+            // Expected count FIRST — the sync verifies against it at the end, so a truncated run
+            // (network drop, closed tab) can never pass silently again. Real CUSTOMERs only: the
+            // customer table also holds LEADs and PROSPECTs (M2C: 770 vs 1,037 vs 231), which were
+            // being imported as customers.
+            const cnt = await executeSuiteQL(`SELECT COUNT(*) AS n FROM customer WHERE subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND stage = 'CUSTOMER'`);
+            const expected = parseInt(cnt.items?.[0]?.n) || 0;
+            addLog(`NetSuite reports ${expected} active CUSTOMER-stage records for subsidiary ${nsSubsidiaryId} (leads/prospects excluded).`, 'info');
+
             let allRecords = [];
             let lastId = 0;
             let hasMore = true;
@@ -59,7 +67,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
             while (hasMore) {
                 addLog(`Fetching customer batch ${pageCount}...`, 'info');
-                const q = `SELECT id, companyname, email, phone, creditlimit, terms FROM customer WHERE subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND id > ${lastId} ORDER BY id ASC`;
+                const q = `SELECT id, companyname, email, phone, creditlimit, terms, stage FROM customer WHERE subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND stage = 'CUSTOMER' AND id > ${lastId} ORDER BY id ASC`;
                 const result = await executeSuiteQL(q);
                 const batch = result.items || [];
                 allRecords = allRecords.concat(batch);
@@ -73,33 +81,42 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 }
             }
 
-            addLog(`Downloaded ${allRecords.length} active customers. Writing to CRM Database...`, 'success');
+            addLog(`Downloaded ${allRecords.length} customers (expected ${expected}). Writing to CRM Database...`, allRecords.length === expected ? 'success' : 'warn');
 
+            // Batched writes (450/commit): the old one-await-per-doc loop took minutes for 2,000+
+            // rows and wrote LOW ids first — any interruption silently dropped the HIGH id range
+            // (exactly the "no customers from the upper range" symptom). Batches land in seconds.
             let successCount = 0;
-            for (const c of allRecords) {
-                const safeId = `CUST-${c.id}`;
-                const docRef = doc(db, "crm_records", safeId);
-                
-                await setDoc(docRef, {
-                    id: safeId,
-                    type: 'CUSTOMER',
-                    name: c.companyname || `Customer ${c.id}`,
-                    email: c.email || '',
-                    phone: c.phone || '',
-                    creditLimit: parseFloat(c.creditlimit) || 0,
-                    terms: c.terms || '',
-                    billingAddress: '',
-                    discountCode: '',
-                    contact: '',
-                    salesRep: '',
-                    notes: 'Imported from NetSuite',
-                    brandId: targetBrand,
-                    sharedBrands: [targetBrand],
-                    ytd: 0, mtd: 0, openOrders: 0
-                }, { merge: true });
-                successCount++;
+            for (let i = 0; i < allRecords.length; i += 450) {
+                const chunk = allRecords.slice(i, i + 450);
+                const wb = writeBatch(db);
+                chunk.forEach(c => {
+                    const safeId = `CUST-${c.id}`;
+                    wb.set(doc(db, "crm_records", safeId), {
+                        id: safeId,
+                        type: 'CUSTOMER',
+                        stage: c.stage || 'CUSTOMER',
+                        name: c.companyname || `Customer ${c.id}`,
+                        email: c.email || '',
+                        phone: c.phone || '',
+                        creditLimit: parseFloat(c.creditlimit) || 0,
+                        terms: c.terms || '',
+                        billingAddress: '',
+                        discountCode: '',
+                        contact: '',
+                        salesRep: '',
+                        notes: 'Imported from NetSuite',
+                        brandId: targetBrand,
+                        sharedBrands: [targetBrand],
+                        ytd: 0, mtd: 0, openOrders: 0
+                    }, { merge: true });
+                });
+                await wb.commit();
+                successCount += chunk.length;
+                addLog(`  … ${successCount}/${allRecords.length} written`, 'info');
             }
-            addLog(`✅ Successfully synced ${successCount} CRM records. mapped to brand: ${targetBrand}`, 'success');
+            if (successCount !== expected) addLog(`⚠️ Wrote ${successCount} but NetSuite reported ${expected} — re-run the sync; if it persists, tell Claude.`, 'warn');
+            addLog(`✅ Successfully synced ${successCount} CRM records (CUSTOMER stage only) mapped to brand: ${targetBrand}`, 'success');
 
         } catch (err) {
             console.error(err);
