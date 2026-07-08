@@ -671,7 +671,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   // arm mimics the miter. Selecting it greys that side's End Treatment step in CPQ/Vision.
                   // Canonical source = the part's customData.isReturnBracket; pin.isReturnArm overrides.
                   const returnArm = !!(p.isReturnArm || cl.isReturnArm || feePart?.manufacturingSpecs?.customData?.isReturnBracket);
-                  return { et, returnish, feeish, feePart, returnArm };
+                  // inlineOnly (plates): the INLINE-bracket copies of shared return-style plates —
+                  // offered only while a usesReturnPlates (In Line) bracket is selected. Distinct from
+                  // returnOnly (the outer, return-position copies). Flows without inline copies fall
+                  // back to returnOnly at runtime, so Brimar/Flat Iron behave exactly as before.
+                  const inlineish = !!(p.inlineOnly || cl.inlineOnly);
+                  return { et, returnish, feeish, feePart, returnArm, inlineish };
               };
               if (choicePins.length >= 2) {
                   // Cluster-scoped options: the SAME part can live in two clusters at one position (a
@@ -686,7 +691,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       const pid = p.partId || cl.name;
                       // Explicit endTreatment tag (1.6 per-choice select / pin.endTreatment) is CANONICAL;
                       // name regexes are the legacy fallback (flagsFor).
-                      const { et, returnish, feeish, returnArm } = flagsFor(p);
+                      const { et, returnish, feeish, returnArm, inlineish } = flagsFor(p);
                       const key = [cl.id, pid, position, location].join('|');
                       const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnish ? { returnOnly: true } : {}) };
                       e.nodes.add(String(p.choiceNode).trim());
@@ -694,6 +699,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       // partId is a Fee-class entity like CE-FEE-4594); ERP push never BOMs it.
                       if (feeish) { e.isFee = true; e.partName = `${p.partName || 'Charge'} (fee)`; }
                       if (returnArm) e.isReturnArm = true;
+                      if (inlineish) e.inlineOnly = true;
                       if (p.isBasic) e.isBasic = true;
                       if (p.usesReturnPlates) e.usesReturnPlates = true;
                   });
@@ -713,9 +719,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               const e = map[keyL] = map[keyL] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshortL}`, partId: pid, partName: pin?.partName || cl.name, position, location, nodes: new Set() };
               (cl.nodes || cl.meshes || []).forEach(n => { if (n) e.nodes.add(n); });
               if (pin) {
-                  const { et, returnish, feeish, returnArm } = flagsFor(pin);
+                  const { et, returnish, feeish, returnArm, inlineish } = flagsFor(pin);
                   if (et) e.endTreatment = et;
                   if (returnArm) e.isReturnArm = true;
+                  if (inlineish) e.inlineOnly = true;
                   if (returnish) e.returnOnly = true;
                   if (feeish) { e.isFee = true; e.partName = `${pin.partName || 'Charge'} (fee)`; }
                   if (pin.isBasic) e.isBasic = true;
@@ -724,8 +731,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   e.returnOnly = true; // unpinned cluster named …RETURN… still scopes to returns
               }
               if (!pin && cl.isReturnArm) e.isReturnArm = true; // 1.5 cluster toggle, no pin yet
+              if (!pin && cl.inlineOnly) e.inlineOnly = true;
           });
-          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}) }));
+          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}) }));
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 

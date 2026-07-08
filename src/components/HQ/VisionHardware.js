@@ -377,9 +377,16 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const basicSelAt = (step) => { const o = optSel(step); return !!(o && (o.isBasic || /basic/i.test(o.partName || ''))); };
   const subPoolAt = (step, pos) => {
       const subs = step?.subOptions || [];
-      if (!subs.some(o => o.returnOnly)) return subs;
-      const want = returnChosenAt(pos) || !!(optSel(step)?.usesReturnPlates || optSel(step)?.isReturnArm);
-      return subs.filter(o => want ? o.returnOnly : !o.returnOnly);
+      if (!subs.some(o => o.returnOnly || o.inlineOnly)) return subs;
+      // Three pools (see CPQTab): return chosen/arm -> returnOnly; In Line bracket -> inlineOnly
+      // (fallback returnOnly when the flow has no inline copies); else regular.
+      const sel = optSel(step);
+      const returnChosen = returnChosenAt(pos) || !!sel?.isReturnArm;
+      const inlineBracket = !!sel?.usesReturnPlates;
+      const hasInl = subs.some(o => o.inlineOnly);
+      return subs.filter(o => returnChosen ? o.returnOnly
+          : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
+          : (!o.returnOnly && !o.inlineOnly));
   };
   const pickStep = (stepId, optId) => setDynamicConfigParams(prev => { const next = { ...prev }; if (optId) next[stepId] = optId; else delete next[stepId]; return next; });
 
@@ -416,10 +423,15 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               const basic = !!(bo && (bo.isBasic || /basic/i.test(bo.partName || '')));
               if (basic && next[`${st.id}__sub`]) { delete next[`${st.id}__sub`]; changed = true; }
               const subs = st.subOptions || [];
-              if (subs.some(o => o.returnOnly) && next[`${st.id}__sub`]) {
-                  const want = optIsReturn(endOpt) || !!(bo?.usesReturnPlates || bo?.isReturnArm);
+              if (subs.some(o => o.returnOnly || o.inlineOnly) && next[`${st.id}__sub`]) {
+                  const returnChosen = optIsReturn(endOpt) || !!bo?.isReturnArm;
+                  const inlineBracket = !!bo?.usesReturnPlates;
+                  const hasInl = subs.some(o => o.inlineOnly);
                   const so = subOf(st, next[`${st.id}__sub`]);
-                  if (so && ((want && !so.returnOnly) || (!want && so.returnOnly))) { delete next[`${st.id}__sub`]; changed = true; }
+                  const inPool = so && (returnChosen ? so.returnOnly
+                      : inlineBracket ? (hasInl ? so.inlineOnly : so.returnOnly)
+                      : (!so.returnOnly && !so.inlineOnly));
+                  if (so && !inPool) { delete next[`${st.id}__sub`]; changed = true; }
               }
           });
           return changed ? next : prev;

@@ -189,7 +189,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 const m = index ? matchItemByName(nm, index) : null;
                 if (m) hit++;
                 const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, thumb: '' };
+                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, thumb: '' };
             });
             setLayers(prev => {
                 if (prev[slot.id]?.url) URL.revokeObjectURL(prev[slot.id].url);
@@ -266,7 +266,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 choices: prev[slotId].choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
                     const m = index ? matchItemByName(nm, index) : null;
                     const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, thumb: '' };
+                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, thumb: '' };
                 }))
             }
         } : prev);
@@ -397,7 +397,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         ...(et ? { endTreatment: et } : {}),
                         ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}),
                         ...(ch.isHidden ? { isHiddenPart: true } : {}),
-                        ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}),
+                        ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(ch.inlineOnly && !ch.isFee && !ch.isHidden ? { inlineOnly: true } : {}),
                         ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {})
                     });
                 });
@@ -626,7 +626,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // 1.5 cluster flags SEED the checkboxes when the pin doesn't carry them yet (returnOnly on
                     // BACKPLATE clusters, isReturnArm on BRACKET clusters) — tagging in Node Grouping shows up
                     // here automatically; saving stamps it onto the pins so both stay in sync.
-                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, usesReturnPlates: !!pin?.usesReturnPlates, isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), thumb: '' };
+                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, usesReturnPlates: !!pin?.usesReturnPlates, isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), inlineOnly: !!(pin?.inlineOnly || cl.inlineOnly), thumb: '' };
                 });
                 // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
@@ -719,7 +719,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const label = choiceLabel(nm);
                     const m = index ? matchItemByName(label, index) : null;
                     const et = normalizeCategory(r.category) === 'FINIAL' ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, thumb: '' };
+                    return { nodeName: nm, label, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, thumb: '' };
                 }))
             })
         } : prev);
@@ -755,7 +755,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const partId = hasItem ? ch.itemNo.trim().toUpperCase() : (ch.isHidden ? `HIDDEN-${slug}` : `FEE-${slug}`);
                     const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
                     for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(ch.inlineOnly && !ch.isFee && !ch.isHidden ? { inlineOnly: true } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
@@ -1001,6 +1001,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                             rtn-only
                                                         </label>
                                                     )}
+                                                    {normalizeCategory(r.category) === 'BACKPLATE' && (
+                                                        <label title="INLINE BACKPLATE: the INLINE-bracket copy of a shared return-style plate — offered ONLY while a rtn-bp (In Line) bracket is selected; the return-position copies (rtn-only) show for actual returns. Flows without inl-only plates fall back to rtn-only for In Line brackets." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.inlineOnly ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                            <input type="checkbox" checked={!!c.inlineOnly} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { inlineOnly: e.target.checked })} style={{ cursor: 'pointer' }} />
+                                                            inl-only
+                                                        </label>
+                                                    )}
                                                 </span>
                                                 <span style={{ display: 'flex', gap: '2px' }}>
                                                     <button onClick={() => moveChoice(r.clusterId, c.nodeName, -1)} title="Move up — order is saved and drives the option order in the configurator (match Left/Right sides)" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '9px', padding: '2px 5px', borderRadius: '2px' }}>▲</button>
@@ -1111,6 +1117,11 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         {normalizeCategory(slot.category) === 'BACKPLATE' && (
                                                             <label title="RETURN BACKPLATE: offered ONLY while this end is a return / end-return arm; regular plates hide then." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.returnOnly ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                                 <input type="checkbox" checked={!!c.returnOnly} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { returnOnly: e.target.checked })} style={{ cursor: 'pointer' }} />rtn-only
+                                                            </label>
+                                                        )}
+                                                        {normalizeCategory(slot.category) === 'BACKPLATE' && (
+                                                            <label title="INLINE BACKPLATE: inline-bracket copy of a shared return-style plate — offered only while a rtn-bp bracket is selected." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.inlineOnly ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                                <input type="checkbox" checked={!!c.inlineOnly} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { inlineOnly: e.target.checked })} style={{ cursor: 'pointer' }} />inl-only
                                                             </label>
                                                         )}
                                                     </span>

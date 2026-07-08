@@ -1097,11 +1097,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               // Plate scoping follows the CURRENT bracket too: a usesReturnPlates bracket (In Line)
               // wants the return plates even with no return chosen on that end.
               const mainOpt = next[s.id] && (s.styleOptions || []).find(x => (x.optId || x.partId) === next[s.id]);
-              const wantReturn = retn || !!(mainOpt && (mainOpt.usesReturnPlates || mainOpt.isReturnArm)); // an end-return ARM pairs with its return plates
+              // Pool-membership clearing (3 pools: return / inline / regular — see the sub-picker).
+              const returnChosen2 = retn || !!(mainOpt && mainOpt.isReturnArm);
+              const inlineBracket2 = !!(mainOpt && mainOpt.usesReturnPlates);
               const sel = next[`${s.id}__sub`];
-              if (sel && hasReturnOnly) {
+              if (sel && (s.subOptions.some(o => o.returnOnly || o.inlineOnly))) {
+                  const hasInl2 = s.subOptions.some(o => o.inlineOnly);
                   const o = s.subOptions.find(x => (x.optId || x.partId) === sel);
-                  if (o && ((wantReturn && !o.returnOnly) || (!wantReturn && o.returnOnly))) { delete next[`${s.id}__sub`]; changed = true; }
+                  const inPool = o && (returnChosen2 ? o.returnOnly
+                      : inlineBracket2 ? (hasInl2 ? o.inlineOnly : o.returnOnly)
+                      : (!o.returnOnly && !o.inlineOnly));
+                  if (o && !inPool) { delete next[`${s.id}__sub`]; changed = true; }
               }
               if (mainOpt && (mainOpt.isBasic || /basic/i.test(mainOpt.partName || '')) && next[`${s.id}__sub`]) { delete next[`${s.id}__sub`]; changed = true; }
           });
@@ -2208,9 +2214,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               // Treatment is a return OR the selected bracket is flagged usesReturnPlates
                               // (e.g. In Line brackets share the return plates); regular plates otherwise —
                               // never both, they occupy the same spot.
-                              if (currentStep.subOptions.some(o => o.returnOnly)) {
-                                  const wantReturn = isReturnChosenForPos(currentStep.position) || !!(selMainOpt?.usesReturnPlates || selMainOpt?.isReturnArm);
-                                  subs = subs.filter(o => wantReturn ? o.returnOnly : !o.returnOnly);
+                              // Three plate pools, one visible at a time (they occupy the same spots):
+                              //  - return chosen (or end-return arm)  -> returnOnly copies (outer, return-position)
+                              //  - In Line bracket (usesReturnPlates) -> inlineOnly copies (inline-position); flows
+                              //    with NO inline copies fall back to returnOnly = the pre-split behavior
+                              //  - otherwise                          -> regular plates (neither flag)
+                              if (currentStep.subOptions.some(o => o.returnOnly || o.inlineOnly)) {
+                                  const returnChosen = isReturnChosenForPos(currentStep.position) || !!selMainOpt?.isReturnArm;
+                                  const inlineBracket = !!selMainOpt?.usesReturnPlates;
+                                  const hasInl = currentStep.subOptions.some(o => o.inlineOnly);
+                                  subs = subs.filter(o => returnChosen ? o.returnOnly
+                                      : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
+                                      : (!o.returnOnly && !o.inlineOnly));
                               }
                               // Basic brackets take no backplate — grey the picker and pin it to None.
                               const noPlate = basicNoBackplate(currentStep);
