@@ -568,10 +568,14 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const pinByNode = {}; pinSnap.docs.forEach(d => { const p = d.data(); if (p.choiceNode) pinByNode[p.choiceNode] = p; });
             const norm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
             const findGrp = (cl) => {
+                // Meshes are allowed matches: a 1-node cluster created in 1.5 (a pole half, a french-return
+                // bend) resolves to a leaf MESH, not a group — skipping meshes made those clusters vanish
+                // from this tool entirely. Parent-first traversal + strict > keeps wrappers winning when
+                // both a group and its mesh match.
                 let g = scene.getObjectByName((cl.nodes && cl.nodes[0]) || cl.name) || scene.getObjectByName(cl.name);
-                if (!g) { const wants = new Set([norm(cl.nodes && cl.nodes[0]), norm(cl.name)].filter(Boolean)); scene.traverse(n => { if (!g && !n.isMesh && wants.has(norm(n.name))) g = n; }); }
+                if (!g) { const wants = new Set([norm(cl.nodes && cl.nodes[0]), norm(cl.name)].filter(Boolean)); scene.traverse(n => { if (!g && wants.has(norm(n.name))) g = n; }); }
                 // Last resort: the scene node whose subtree contains the most of this cluster's node names.
-                if (!g) { const want = new Set((cl.nodes || []).map(norm)); let best = null, bestScore = 0; scene.traverse(n => { if (n.isMesh) return; let sc = 0; n.traverse(d => { if (want.has(norm(d.name))) sc++; }); if (sc > bestScore) { bestScore = sc; best = n; } }); if (bestScore > 0) g = best; }
+                if (!g) { const want = new Set((cl.nodes || []).map(norm)); let best = null, bestScore = 0; scene.traverse(n => { let sc = 0; n.traverse(d => { if (want.has(norm(d.name))) sc++; }); if (sc > bestScore) { bestScore = sc; best = n; } }); if (bestScore > 0) g = best; }
                 return g;
             };
             // Auto-match: existing pin wins, else derive the item # from the node name against the
@@ -591,7 +595,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const leafNames = (node) => (pinByNode[node.name] || !pinnedUnder(node)) ? [node.name] : (node.children || []).filter(c => c.name).flatMap(leafNames);
             const rows = clusters.map(cl => {
                 const grp = findGrp(cl);
-                const kids = grp ? (grp.children || []).filter(c => c.name).flatMap(leafNames) : [];
+                let kids = grp ? (grp.children || []).filter(c => c.name).flatMap(leafNames) : [];
+                // Single-node cluster (1.5-created pole half / bend / bushing): the matched node IS the
+                // one choice — without this the row had zero choices and was hidden from the list.
+                if (grp && !kids.length && grp.name) kids = [grp.name];
                 const isEndCluster = normalizeCategory(cl.category) === 'FINIAL';
                 const choices = kids.map(nm => {
                     const label = choiceLabel(nm);
