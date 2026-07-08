@@ -378,7 +378,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const subPoolAt = (step, pos) => {
       const subs = step?.subOptions || [];
       if (!subs.some(o => o.returnOnly)) return subs;
-      const want = returnChosenAt(pos) || !!(optSel(step)?.usesReturnPlates);
+      const want = returnChosenAt(pos) || !!(optSel(step)?.usesReturnPlates || optSel(step)?.isReturnArm);
       return subs.filter(o => want ? o.returnOnly : !o.returnOnly);
   };
   const pickStep = (stepId, optId) => setDynamicConfigParams(prev => { const next = { ...prev }; if (optId) next[stepId] = optId; else delete next[stepId]; return next; });
@@ -417,7 +417,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               if (basic && next[`${st.id}__sub`]) { delete next[`${st.id}__sub`]; changed = true; }
               const subs = st.subOptions || [];
               if (subs.some(o => o.returnOnly) && next[`${st.id}__sub`]) {
-                  const want = optIsReturn(endOpt) || !!bo?.usesReturnPlates;
+                  const want = optIsReturn(endOpt) || !!(bo?.usesReturnPlates || bo?.isReturnArm);
                   const so = subOf(st, next[`${st.id}__sub`]);
                   if (so && ((want && !so.returnOnly) || (!want && so.returnOnly))) { delete next[`${st.id}__sub`]; changed = true; }
               }

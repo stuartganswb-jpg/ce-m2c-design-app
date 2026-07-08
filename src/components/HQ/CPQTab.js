@@ -1097,7 +1097,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               // Plate scoping follows the CURRENT bracket too: a usesReturnPlates bracket (In Line)
               // wants the return plates even with no return chosen on that end.
               const mainOpt = next[s.id] && (s.styleOptions || []).find(x => (x.optId || x.partId) === next[s.id]);
-              const wantReturn = retn || !!(mainOpt && mainOpt.usesReturnPlates);
+              const wantReturn = retn || !!(mainOpt && (mainOpt.usesReturnPlates || mainOpt.isReturnArm)); // an end-return ARM pairs with its return plates
               const sel = next[`${s.id}__sub`];
               if (sel && hasReturnOnly) {
                   const o = s.subOptions.find(x => (x.optId || x.partId) === sel);
@@ -2209,7 +2209,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               // (e.g. In Line brackets share the return plates); regular plates otherwise —
                               // never both, they occupy the same spot.
                               if (currentStep.subOptions.some(o => o.returnOnly)) {
-                                  const wantReturn = isReturnChosenForPos(currentStep.position) || !!selMainOpt?.usesReturnPlates;
+                                  const wantReturn = isReturnChosenForPos(currentStep.position) || !!(selMainOpt?.usesReturnPlates || selMainOpt?.isReturnArm);
                                   subs = subs.filter(o => wantReturn ? o.returnOnly : !o.returnOnly);
                               }
                               // Basic brackets take no backplate — grey the picker and pin it to None.

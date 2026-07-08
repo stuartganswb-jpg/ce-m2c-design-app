@@ -664,12 +664,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               // consults the resolved LIBRARY part's name ("Mounting Base for 1\" French Return") —
               // linked pins carry the ERP code as partName, so the pin name alone can't tell.
               const RETURNISH = /bend|return|miter|mitre|mtr|french/i;
-              const clusterReturnish = RETURNISH.test(String(cl.name || ''));
+              const clusterReturnish = RETURNISH.test(String(cl.name || '')) || !!cl.returnOnly; // 1.5's 'RETURN plates' toggle counts too
               const flagsFor = (p) => {
                   const feePart = partsById[p.partId];
                   const et = String(p.endTreatment || '').toUpperCase();
                   const returnish = et ? (et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT')
-                      : (clusterReturnish || RETURNISH.test(String(p.partName || '')) || RETURNISH.test(String(feePart?.itemName || '')));
+                      : (clusterReturnish || p.returnOnly === true || RETURNISH.test(String(p.partName || '')) || RETURNISH.test(String(feePart?.itemName || '')));
                   const feeish = p.isFee || feePart?.partClass === 'Fee' || String(feePart?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE';
                   // END RETURN ARM (Flat Iron pattern): a BRACKET choice that IS the end treatment — the
                   // arm mimics the miter. Selecting it greys that side's End Treatment step in CPQ/Vision.
