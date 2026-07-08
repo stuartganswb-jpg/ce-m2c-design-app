@@ -189,7 +189,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 const m = index ? matchItemByName(nm, index) : null;
                 if (m) hit++;
                 const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
+                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, thumb: '' };
             });
             setLayers(prev => {
                 if (prev[slot.id]?.url) URL.revokeObjectURL(prev[slot.id].url);
@@ -266,7 +266,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 choices: prev[slotId].choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
                     const m = index ? matchItemByName(nm, index) : null;
                     const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
+                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, thumb: '' };
                 }))
             }
         } : prev);
@@ -397,7 +397,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         ...(et ? { endTreatment: et } : {}),
                         ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}),
                         ...(ch.isHidden ? { isHiddenPart: true } : {}),
-                        ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}),
+                        ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}),
                         ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {})
                     });
                 });
@@ -623,7 +623,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     if (!itemNo && !flagged && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
                     // endTreatment: saved pin tag wins; unsaved end-cluster rows seed from the name.
                     const et = pin?.endTreatment || (isEndCluster ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '');
-                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, usesReturnPlates: !!pin?.usesReturnPlates, thumb: '' };
+                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, usesReturnPlates: !!pin?.usesReturnPlates, isReturnArm: !!pin?.isReturnArm, thumb: '' };
                 });
                 // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
@@ -716,7 +716,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const label = choiceLabel(nm);
                     const m = index ? matchItemByName(label, index) : null;
                     const et = normalizeCategory(r.category) === 'FINIAL' ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, thumb: '' };
+                    return { nodeName: nm, label, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, thumb: '' };
                 }))
             })
         } : prev);
@@ -752,7 +752,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const partId = hasItem ? ch.itemNo.trim().toUpperCase() : (ch.isHidden ? `HIDDEN-${slug}` : `FEE-${slug}`);
                     const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
                     for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
@@ -986,6 +986,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <input type="checkbox" checked={!!c.usesReturnPlates} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { usesReturnPlates: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />
                                                         rtn-bp
                                                     </label>
+                                                    {normalizeCategory(r.category) === 'BRACKET' && (
+                                                        <label title="END RETURN ARM (Flat Iron pattern): this bracket IS the end treatment — selecting it greys that side's finial / inside-mount step; its backplate stays choosable (unless basic). Auto-detected when the library part is flagged isReturnBracket; check here to force it." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isReturnArm ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                            <input type="checkbox" checked={!!c.isReturnArm} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isReturnArm: e.target.checked })} style={{ cursor: 'pointer' }} />
+                                                            end-arm
+                                                        </label>
+                                                    )}
                                                 </span>
                                                 <span style={{ display: 'flex', gap: '2px' }}>
                                                     <button onClick={() => moveChoice(r.clusterId, c.nodeName, -1)} title="Move up — order is saved and drives the option order in the configurator (match Left/Right sides)" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '9px', padding: '2px 5px', borderRadius: '2px' }}>▲</button>
@@ -1088,6 +1094,11 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <label title="This bracket pairs with the RETURN backplates (e.g. In Line brackets): while it's the selected bracket, the backplate list shows the return plates instead of the regular ones. Subtle visual change, real BOM change." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.usesReturnPlates ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                             <input type="checkbox" checked={!!c.usesReturnPlates} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { usesReturnPlates: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />rtn-bp
                                                         </label>
+                                                        {normalizeCategory(slot.category) === 'BRACKET' && (
+                                                            <label title="END RETURN ARM (Flat Iron pattern): this bracket IS the end treatment — greys that side's finial / inside-mount step; backplate stays choosable (unless basic)." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isReturnArm ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                                <input type="checkbox" checked={!!c.isReturnArm} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isReturnArm: e.target.checked })} style={{ cursor: 'pointer' }} />end-arm
+                                                            </label>
+                                                        )}
                                                     </span>
                                                     <span style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                                                         <button onClick={() => moveSlotChoice(slot.id, c.nodeName, -1)} title="Move up — order is saved (choiceSort) and drives the option order in the configurator" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '8px', padding: '1px 4px', borderRadius: '2px' }}>▲</button>

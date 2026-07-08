@@ -1111,6 +1111,12 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         <span style={{ color: 'var(--ink)' }}>{(master.legacyErpId && !['PENDING', 'N/A'].includes(master.legacyErpId) && master.legacyErpId)
                                             || (item.legacyErpId && !['PENDING', 'N/A'].includes(item.legacyErpId) && item.legacyErpId)
                                             || item.partId}</span> | {specs.productType || "NO TYPE"}
+                                        {/* Cluster placement chips — location · position · hidden, same tags 1.5/1.6 show. */}
+                                        {(() => {
+                                            const cl = (selectedAssemblyData?.nodeClusters || []).find(c => c.id === item.clusterId);
+                                            const chips = cl ? [cl.location, cl.position, cl.hidden ? 'HIDDEN' : ''].filter(Boolean) : [];
+                                            return chips.length ? chips.map(t => <span key={t} style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', border: '1px solid var(--line)', padding: '1px 5px', marginLeft: '6px', color: 'var(--ink-soft)', borderRadius: '2px', letterSpacing: '.04em' }}>{t}</span>) : null;
+                                        })()}
                                     </div>
                                     {isNew && <div style={{ fontSize: '9px', fontFamily: 'var(--mono)', color: '#d9534f', textTransform: 'uppercase', marginTop: '6px' }}>Needs Specs</div>}
                                 </div>

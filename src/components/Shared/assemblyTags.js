@@ -273,6 +273,11 @@ export const validateAssemblyAlignment = ({ assembly, pins = [], parts = [], flo
             }
             const proj = parseFloat(part.manufacturingSpecs?.customData?.projection);
             if (!proj) push('WARN', 'PART', `Bracket "${part.itemName || label}" has no customData.projection — Vision can't auto-seed fabrication math. Enter it in the Master Library (customData.projection).`);
+            // END RETURN ARM (Flat Iron pattern): an arm named like one but not flagged won't grey the
+            // end-treatment step when selected. One-click flags the part (isReturnBracket).
+            if (/RETURN\s*ARM|END\s*ARM/i.test(String(part.itemName || '')) && !part.manufacturingSpecs?.customData?.isReturnBracket) {
+                push('WARN', 'PART', `"${part.itemName}" looks like an END RETURN ARM but isn't flagged isReturnBracket — Fix flags it so selecting it replaces that side's end treatment (greys finial/inside-mount; backplate stays). Regenerate after.`, part.id ? { type: 'part', partDocId: part.id, patch: { 'manufacturingSpecs.customData.isReturnBracket': true } } : null);
+            }
         }
         if (catN === 'BACKPLATE' && part) {
             const par = part.manufacturingSpecs?.parametric || {};

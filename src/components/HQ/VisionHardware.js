@@ -370,6 +370,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const optLabel = (o) => { const p = partOfOpt(o); return p ? `${p.itemName}${p.legacyErpId && p.legacyErpId !== 'PENDING' ? ` - ${p.legacyErpId}` : ''}` : (o.partName || o.optId); };
   const returnChosenAt = (pos) => pos === 'LEFT' ? optIsReturn(optSel(stepEndL)) : pos === 'RIGHT' ? optIsReturn(optSel(stepEndR)) : false;
   const brLockedAt = (step, pos) => !!(step && (step.subOptions || []).some(o => o.returnOnly) && returnChosenAt(pos));
+  // END RETURN ARM (Flat Iron pattern): a bracket option flagged isReturnArm (or whose part carries
+  // customData.isReturnBracket) IS the end treatment — that side's End Style greys + clears.
+  const armOfOpt = (o) => !!(o && (o.isReturnArm || partOfOpt(o)?.manufacturingSpecs?.customData?.isReturnBracket));
+  const armChosenAt = (pos) => pos === 'LEFT' ? armOfOpt(optSel(stepBrL)) : pos === 'RIGHT' ? armOfOpt(optSel(stepBrR)) : false;
   const basicSelAt = (step) => { const o = optSel(step); return !!(o && (o.isBasic || /basic/i.test(o.partName || ''))); };
   const subPoolAt = (step, pos) => {
       const subs = step?.subOptions || [];
@@ -407,6 +411,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               const locked = !!((st.subOptions || []).some(o => o.returnOnly) && optIsReturn(endOpt));
               if (locked && next[st.id]) { delete next[st.id]; changed = true; }
               const bo = optOf(st, next[st.id]);
+              // A selected END RETURN ARM clears that side's End Treatment (the arm IS the end).
+              if (endSt && next[endSt.id] && bo && (bo.isReturnArm || partOfOpt(bo)?.manufacturingSpecs?.customData?.isReturnBracket)) { delete next[endSt.id]; changed = true; }
               const basic = !!(bo && (bo.isBasic || /basic/i.test(bo.partName || '')));
               if (basic && next[`${st.id}__sub`]) { delete next[`${st.id}__sub`]; changed = true; }
               const subs = st.subOptions || [];
@@ -1171,8 +1177,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>End Style · Left{stepEndL ? ' · from flow' : ''}</label>
                                     {stepEndL ? (
-                                        <select value={dynamicConfigParams[stepEndL.id] || ''} onChange={e => pickStep(stepEndL.id, e.target.value)} style={fieldStyle}>
-                                            <option value="">-- Choose End Treatment --</option>
+                                        <select value={dynamicConfigParams[stepEndL.id] || ''} disabled={armChosenAt('LEFT')} onChange={e => pickStep(stepEndL.id, e.target.value)} style={{ ...fieldStyle, opacity: armChosenAt('LEFT') ? 0.45 : 1 }}>
+                                            <option value="">{armChosenAt('LEFT') ? '— end return arm selected —' : '-- Choose End Treatment --'}</option>
                                             {(stepEndL.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
                                         </select>
                                     ) : (
@@ -1187,8 +1193,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>End Style · Right{stepEndR ? ' · from flow' : ''}</label>
                                     {stepEndR ? (
-                                        <select value={dynamicConfigParams[stepEndR.id] || ''} onChange={e => pickStep(stepEndR.id, e.target.value)} style={fieldStyle}>
-                                            <option value="">-- Choose End Treatment --</option>
+                                        <select value={dynamicConfigParams[stepEndR.id] || ''} disabled={armChosenAt('RIGHT')} onChange={e => pickStep(stepEndR.id, e.target.value)} style={{ ...fieldStyle, opacity: armChosenAt('RIGHT') ? 0.45 : 1 }}>
+                                            <option value="">{armChosenAt('RIGHT') ? '— end return arm selected —' : '-- Choose End Treatment --'}</option>
                                             {(stepEndR.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
                                         </select>
                                     ) : (

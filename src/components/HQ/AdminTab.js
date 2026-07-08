@@ -671,7 +671,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   const returnish = et ? (et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT')
                       : (clusterReturnish || RETURNISH.test(String(p.partName || '')) || RETURNISH.test(String(feePart?.itemName || '')));
                   const feeish = p.isFee || feePart?.partClass === 'Fee' || String(feePart?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE';
-                  return { et, returnish, feeish, feePart };
+                  // END RETURN ARM (Flat Iron pattern): a BRACKET choice that IS the end treatment — the
+                  // arm mimics the miter. Selecting it greys that side's End Treatment step in CPQ/Vision.
+                  // Canonical source = the part's customData.isReturnBracket; pin.isReturnArm overrides.
+                  const returnArm = !!(p.isReturnArm || feePart?.manufacturingSpecs?.customData?.isReturnBracket);
+                  return { et, returnish, feeish, feePart, returnArm };
               };
               if (choicePins.length >= 2) {
                   // Cluster-scoped options: the SAME part can live in two clusters at one position (a
@@ -686,13 +690,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       const pid = p.partId || cl.name;
                       // Explicit endTreatment tag (1.6 per-choice select / pin.endTreatment) is CANONICAL;
                       // name regexes are the legacy fallback (flagsFor).
-                      const { et, returnish, feeish } = flagsFor(p);
+                      const { et, returnish, feeish, returnArm } = flagsFor(p);
                       const key = [cl.id, pid, position, location].join('|');
                       const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnish ? { returnOnly: true } : {}) };
                       e.nodes.add(String(p.choiceNode).trim());
                       // Fee choice: geometry + selection kept, bills as a fee (entity-priced when the
                       // partId is a Fee-class entity like CE-FEE-4594); ERP push never BOMs it.
                       if (feeish) { e.isFee = true; e.partName = `${p.partName || 'Charge'} (fee)`; }
+                      if (returnArm) e.isReturnArm = true;
                       if (p.isBasic) e.isBasic = true;
                       if (p.usesReturnPlates) e.usesReturnPlates = true;
                   });
@@ -704,8 +709,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               const e = mkOpt(map, cat, pin?.partId || cl.name, pin?.partName || cl.name, position, location);
               (cl.nodes || cl.meshes || []).forEach(n => { if (n) e.nodes.add(n); });
               if (pin) {
-                  const { et, returnish, feeish } = flagsFor(pin);
+                  const { et, returnish, feeish, returnArm } = flagsFor(pin);
                   if (et) e.endTreatment = et;
+                  if (returnArm) e.isReturnArm = true;
                   if (returnish) e.returnOnly = true;
                   if (feeish) { e.isFee = true; e.partName = `${pin.partName || 'Charge'} (fee)`; }
                   if (pin.isBasic) e.isBasic = true;
@@ -714,7 +720,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   e.returnOnly = true; // unpinned cluster named …RETURN… still scopes to returns
               }
           });
-          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}) }));
+          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}) }));
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 

@@ -1057,6 +1057,22 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // side's End Treatment is a return — only the (return) backplate remains to choose. Engages only on
   // steps whose sub-options carry returnOnly, so manual flows are untouched.
   const returnLocksBracket = (step) => !!(step && Array.isArray(step.subOptions) && step.subOptions.some(o => o.returnOnly) && isReturnChosenForPos(step.position));
+  // The INVERSE rule (Flat Iron pattern): a selected END RETURN ARM — a bracket-step option flagged
+  // isReturnArm (from the part's customData.isReturnBracket or the 1.6 end-arm checkbox), e.g. the
+  // FIWERA/FICERA miter-look arms — IS the end treatment. That side's End Treatment step greys+clears
+  // (no finial / inside mount with it); the arm's backplate stays choosable unless the arm is basic.
+  const isArmChosenForPos = (pos) => {
+      if (!pos) return false;
+      const p = String(pos).toUpperCase();
+      return (activeFlow?.steps || []).some(s => {
+          if ((s.position || '').toUpperCase() !== p) return false;
+          if (!(s.stepRole === 'BRACKET' || /bracket/i.test(s.title || '')) || /end treatment/i.test(s.title || '')) return false;
+          const sel = dynamicConfigParams[s.id];
+          const o = sel && (s.styleOptions || []).find(x => (x.optId || x.partId) === sel);
+          return !!(o && o.isReturnArm);
+      });
+  };
+  const armLocksEnd = (step) => !!(step && /end treatment/i.test(step.title || '') && isArmChosenForPos(step.position));
   // Basic brackets take no backplate: when the selected bracket is flagged isBasic (the explicit
   // per-option checkbox in the Assembly Builder assign tool — foolproof) or is literally named
   // "Basic …" (fallback for hand-authored options), the backplate pick greys out and stays None.
@@ -1072,6 +1088,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setDynamicConfigParams(prev => {
           let changed = false; const next = { ...prev };
           (activeFlow.steps || []).forEach(s => {
+              // End return arm chosen at this position → the End Treatment selection clears.
+              if (/end treatment/i.test(s.title || '') && next[s.id] && isArmChosenForPos(s.position)) { delete next[s.id]; changed = true; }
               if (!Array.isArray(s.subOptions) || !s.subOptions.length) return;
               const hasReturnOnly = s.subOptions.some(o => o.returnOnly);
               const retn = hasReturnOnly && isReturnChosenForPos(s.position);
@@ -2169,8 +2187,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           )}
 
                           {((currentStep.type === 'DROPDOWN' && currentStep.dataSource) || currentStep.type === 'STYLE_SWAP') && (
-                              <select value={dynamicConfigParams[currentStep.id] || ''} disabled={returnLocksBracket(currentStep)} onChange={(e) => handleStyleChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: currentStep.finishDataSource ? '12px' : '20px', outline: 'none', ...(returnLocksBracket(currentStep) ? { background: 'var(--paper-2)', color: 'var(--ink-soft)', cursor: 'not-allowed', opacity: 0.65 } : {}) }}>
-                                  <option value="">{returnLocksBracket(currentStep) ? 'Return selected — bracket replaced (choose the return backplate below)' : (currentStep.type === 'STYLE_SWAP' ? '-- Choose Style --' : '-- Select Option --')}</option>
+                              <select value={dynamicConfigParams[currentStep.id] || ''} disabled={returnLocksBracket(currentStep) || armLocksEnd(currentStep)} onChange={(e) => handleStyleChange(currentStep.id, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', marginBottom: currentStep.finishDataSource ? '12px' : '20px', outline: 'none', ...((returnLocksBracket(currentStep) || armLocksEnd(currentStep)) ? { background: 'var(--paper-2)', color: 'var(--ink-soft)', cursor: 'not-allowed', opacity: 0.65 } : {}) }}>
+                                  <option value="">{returnLocksBracket(currentStep) ? 'Return selected — bracket replaced (choose the return backplate below)' : armLocksEnd(currentStep) ? 'End return arm selected — it IS this end (no finial / inside mount)' : (currentStep.type === 'STYLE_SWAP' ? '-- Choose Style --' : '-- Select Option --')}</option>
                                   {getOptionsForStep(currentStep).map(opt => (
                                       <option key={opt.id} value={opt.id}>{opt.itemName}{opt.desc ? ` — ${opt.desc}` : ''}{renderOptionPrice(opt, currentStep)}</option>
                                   ))}
