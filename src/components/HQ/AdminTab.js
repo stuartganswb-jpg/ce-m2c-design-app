@@ -674,7 +674,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   // END RETURN ARM (Flat Iron pattern): a BRACKET choice that IS the end treatment — the
                   // arm mimics the miter. Selecting it greys that side's End Treatment step in CPQ/Vision.
                   // Canonical source = the part's customData.isReturnBracket; pin.isReturnArm overrides.
-                  const returnArm = !!(p.isReturnArm || feePart?.manufacturingSpecs?.customData?.isReturnBracket);
+                  const returnArm = !!(p.isReturnArm || cl.isReturnArm || feePart?.manufacturingSpecs?.customData?.isReturnBracket);
                   return { et, returnish, feeish, feePart, returnArm };
               };
               if (choicePins.length >= 2) {
@@ -719,6 +719,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               } else if (clusterReturnish) {
                   e.returnOnly = true; // unpinned cluster named …RETURN… still scopes to returns
               }
+              if (!pin && cl.isReturnArm) e.isReturnArm = true; // 1.5 cluster toggle, no pin yet
           });
           return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}) }));
       };
