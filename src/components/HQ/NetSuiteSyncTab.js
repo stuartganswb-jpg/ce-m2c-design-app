@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { doc, setDoc, getDocs, collection, writeBatch } from "firebase/firestore";
+import { parseFabricutWorkbook, buildFabricutPlan } from '../Shared/fabricutImport';
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -721,6 +722,51 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
+    // FABRICUT IMPORT: upload Fabricut_CE_CrossReference.xlsx → stamp Fabricut retail/cost pricing
+    // + sizeKey metadata onto EXISTING library items, matched by CE item # (base + every finish
+    // variant). Never creates items and never touches names/dims/basePrice — run "Sync Master
+    // Library" first so all H1 items exist here (they're flagged custitem_sync_to_cpq in NetSuite).
+    // Idempotent: re-run any time Stuart extends the workbook (poles/finials/rings rows to come).
+    const handleFabricutImport = async (file) => {
+        if (!file) return;
+        setIsSyncing(true);
+        try {
+            addLog(`FABRICUT IMPORT: parsing "${file.name}"…`, 'info');
+            const { rows, sheetsRead, sheetsSkipped } = await parseFabricutWorkbook(file);
+            if (!rows.length) throw new Error('No priced rows found — expected sheets with "CE Item #", "Retail Price" and "Sale Price" headers.');
+            addLog(`Parsed ${rows.length} rows from: ${sheetsRead.join(', ')}${sheetsSkipped.length ? ` (skipped: ${sheetsSkipped.join(', ')})` : ''}`, 'info');
+
+            addLog('Loading Master Library for CE-code matching…', 'info');
+            const snap = await getDocs(collection(db, 'Approved_Designs'));
+            const libIndex = [];
+            snap.docs.forEach(d => {
+                const x = d.data();
+                const code = String(x.legacyErpId && x.legacyErpId !== 'PENDING' ? x.legacyErpId : (x.itemId || '')).trim().toUpperCase();
+                if (!code || code === 'PENDING') return;
+                const cust = x.manufacturingSpecs?.customData || {};
+                libIndex.push({ docId: d.id, code, hasProjection: !!cust.projection, hasBpo: !!cust.bpOrientation });
+            });
+
+            const plan = buildFabricutPlan(rows, libIndex, Date.now());
+            addLog(`Plan: ${plan.stamps.length} library docs to stamp (${plan.stats.basesStamped} base designs + ${plan.stats.variantsStamped} finish variants); ${plan.gaps.length} xlsx items not in the library.`, 'info');
+
+            let done = 0;
+            for (let i = 0; i < plan.stamps.length; i += 400) {
+                const batch = writeBatch(db);
+                plan.stamps.slice(i, i + 400).forEach(s => batch.set(doc(db, 'Approved_Designs', s.docId), s.patch, { merge: true }));
+                await batch.commit();
+                done += Math.min(400, plan.stamps.length - i);
+                addLog(`  …${done}/${plan.stamps.length} stamped`, 'info');
+            }
+
+            if (plan.gaps.length) {
+                addLog(`⚠ ${plan.gaps.length} CE item(s) in the xlsx have no library match — run "Sync Master Library" (CE subsidiary) first, then re-import. Missing: ${plan.gaps.slice(0, 10).map(g => g.base).join(', ')}${plan.gaps.length > 10 ? ', …' : ''}`, 'warn');
+            }
+            addLog(`✅ Fabricut import complete: ${done} docs stamped with retail/cost + size keys.`, 'success');
+        } catch (e) { console.error(e); addLog(`❌ Fabricut import failed: ${e.message}`, 'error'); }
+        setIsSyncing(false);
+    };
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
@@ -752,6 +798,14 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         <SyncButton onClick={handleSyncItems} disabled={isSyncing} label="Sync Master Library (Items, Kits & BOMs)" sub="SuiteQL: Single-pass sync. Pulls all Inventory, Assemblies, active BOM Revisions, and component mappings." />
                         <div style={{ borderTop: '1px dashed var(--line)', margin: '6px 0', paddingTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)' }}>App → NetSuite (write-back)</div>
                         <SyncButton onClick={handlePushItemsToNetSuite} disabled={isSyncing} label="⬆ Push Items → NetSuite (App is master)" sub="REST PATCH: writes the App's SKU, Name, Base Price & Weight onto matched NetSuite items (by Internal ID). Tolerant — record-type + field-drop retries; one row can't halt the run. Tags not sent." />
+                        <div style={{ borderTop: '1px dashed var(--line)', margin: '6px 0', paddingTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)' }}>Fabricut</div>
+                        <label style={{ padding: '20px', textAlign: 'left', cursor: isSyncing ? 'wait' : 'pointer', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', display: 'flex', flexDirection: 'column', gap: '6px', opacity: isSyncing ? 0.6 : 1 }}
+                            onMouseOver={(e) => { if (!isSyncing) e.currentTarget.style.borderColor = 'var(--brass)'; }}
+                            onMouseOut={(e) => { if (!isSyncing) e.currentTarget.style.borderColor = 'var(--line)'; }}>
+                            <span style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500 }}>⬆ Import Fabricut Pricing (.xlsx)</span>
+                            <span style={{ fontFamily: 'var(--serif)', fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Upload Fabricut_CE_CrossReference.xlsx — stamps Fabricut Retail + CE Cost onto every matching library item and finish variant (by CE item #), plus the size keys the H1 size-matrix flows resolve through. Run "Sync Master Library" first; re-run any time the workbook grows. Never touches names, dims or Base Price.</span>
+                            <input type="file" accept=".xlsx" disabled={isSyncing} style={{ display: 'none' }} onChange={e => { handleFabricutImport(e.target.files[0]); e.target.value = ''; }} />
+                        </label>
                     </div>
                 </div>
 
