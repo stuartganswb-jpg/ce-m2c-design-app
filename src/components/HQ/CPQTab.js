@@ -4,6 +4,7 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query,
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
+import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption } from '../Shared/sizeMatrix';
 
 const globalTextureCache = {};
 
@@ -701,7 +702,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // Identify each option by optId (unique per instance) so a part repeated at
           // multiple positions stays distinct; fall back to partId for legacy flows. Also resolve the
           // underlying part's human description so the choice shows more than the bare ERP id.
-          return (step.styleOptions || []).map(o => ({ id: o.optId || o.partId, itemName: o.partName, desc: partDescOf(o.partId, o.partName), price: o.price }));
+          let opts = step.styleOptions || [];
+          // Size-matrix rule (Fabricut H1): french/miter returns aren't made at the 3-5/8"
+          // projection — hide the modeled returns and the OPT-BEND/OPT-MITER built-ins while it's
+          // selected. Finials and inside mounts stay.
+          const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
+          if (sizeSel && !returnsAllowedFor(sizeSel)) opts = opts.filter(o => !isReturnOption(o));
+          return opts.map(o => ({ id: o.optId || o.partId, itemName: o.partName, desc: partDescOf(o.partId, o.partName), price: o.price }));
       }
       if (!step || !step.dataSource) return [];
       let options = [];
@@ -1211,6 +1218,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           const f = globalFinishes.find(x => x.id === fid) || outsourceFinishes.find(x => x.id === fid);
           return f ? String(f.code || f.name || '').toUpperCase() : '';
       };
+      // SIZE-MATRIX (Fabricut H1): resolve every configured part to the selected Rod Diameter /
+      // Projection variant BEFORE finish resolution — identity chain: base → size → finish
+      // (H1-75BE → H1-1B6 → H1-1B6/EP2). Flows without SIZE steps degrade to identity.
+      const sizeBundle = makeSizeSwap(activeFlow, dynamicConfigParams, allParts);
       // Client pricing lookup. Entries may store the customer's ID or (older Library-editor entries)
       // the NAME — match both. cp.price is the "Client Cost" field = what THIS client pays us; only a
       // real value (>0) applies, so an empty/zero entry can never zero out a line.
@@ -1242,7 +1253,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       (activeFlow.steps || []).forEach(step => {
           const selectedValue = dynamicConfigParams[step.id];
-          
+
+          // SIZE steps are selectors, not products: emit an informational $0 quote line naming the
+          // chosen size (so the quote reads "Rod Diameter: 1" Round Rod"), never a part or price.
+          if (step.type === SIZE_STEP_TYPE) {
+              const sizeOpt = (step.styleOptions || []).find(o => o.optId === selectedValue);
+              if (sizeOpt) breakdown.push({ name: `${step.title}: ${sizeOpt.partName}`, qty: 1, price: 0, total: 0, partHandling: '', partId: null, legacyErpId: null });
+              return;
+          }
+
           let rawQty = stepQuantities[step.id];
           let qty = 1;
           if (rawQty !== undefined && rawQty !== '') {
@@ -1281,6 +1300,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   findLibPart(resolvedPartId) ||
                                   (styleOpt ? findLibPart(styleOpt.partName) : null);
 
+                  // Swap to the selected SIZE's part first (H1-75BE → H1-1B6) so the finish variant
+                  // below rides the sized base and the final SKU is e.g. H1-1B6/EP2.
+                  const preSizeObj = partObj;
+                  if (partObj) {
+                      const sizedPart = sizeBundle.swap(partObj);
+                      if (sizedPart !== partObj) { partObj = sizedPart; resolvedPartId = sizedPart.itemId || sizedPart.id; }
+                  }
+                  const sizeSwapped = partObj !== preSizeObj;
+
                   // Swap to the finish-specific SKU (…/P for paints, exact …/EPn for stocked EP) so the
                   // BOM identity AND the price come from the item that's actually sold. Keep the
                   // pre-variant part: client pricing is usually entered on the BASE item.
@@ -1304,14 +1332,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // Choose / Swap Style: an author-set option price OVERRIDES the item price — but only a
                   // real one. Generated options default to 0, and letting that 0 win is what blanked out
                   // all base pricing; 0/blank now means "price from the (finish-variant) item".
-                  if (styleOpt && styleOpt.price !== undefined && styleOpt.price !== '' && parseFloat(styleOpt.price) > 0) optionNativePrice = parseFloat(styleOpt.price) || 0;
+                  // Never when the size matrix swapped the part: author prices were entered for the
+                  // BASE size (3/4" × 4-5/8") — the sized item's own price is the correct one.
+                  if (styleOpt && styleOpt.price !== undefined && styleOpt.price !== '' && parseFloat(styleOpt.price) > 0 && !sizeSwapped) optionNativePrice = parseFloat(styleOpt.price) || 0;
 
                   // Pole "Length & Finish" steps: the selection is the FINISH; the physical item is the
                   // step's linkedItemId (stamped by the generator). Identity always follows the finish
                   // variant (BOM/push correctness); its base price applies only when nothing else —
                   // client price on the linked item, step base — has priced the step yet.
                   if (step.linkedItemId) {
-                      const linkedBase = findLibPart(step.linkedItemId);
+                      const linkedBase = sizeBundle.swap(findLibPart(step.linkedItemId));
                       if (linkedBase) {
                           const selFinish = globalFinishes.find(f => f.id === selectedValue) || outsourceFinishes.find(f => f.id === selectedValue);
                           const fc = selFinish ? String(selFinish.code || selFinish.name || '').toUpperCase() : finishCodeForStep(step.id);
@@ -1376,9 +1406,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           if (subSel && Array.isArray(step.subOptions)) {
               const subOpt = step.subOptions.find(o => (o.optId || o.partId) === subSel);
               if (subOpt) {
-                  const subBase = findLibPart(subOpt.partId) || findLibPart(subOpt.partName);
+                  // Same identity chain as main lines: base → size → finish. At 1"/1-3/8" the return
+                  // plates (RBP/RCP) resolve to the STANDARD plates — geometry unchanged, item swapped.
+                  const subBase0 = findLibPart(subOpt.partId) || findLibPart(subOpt.partName);
+                  const subBase = sizeBundle.swap(subBase0);
+                  const subSizeSwapped = subBase !== subBase0;
                   const subPart = subBase ? finishVariantOf(subBase, finishCodeForStep(step.id)) : null;
-                  let subPrice = (subOpt.price !== undefined && subOpt.price !== '' && parseFloat(subOpt.price) > 0)
+                  let subPrice = (subOpt.price !== undefined && subOpt.price !== '' && parseFloat(subOpt.price) > 0 && !subSizeSwapped)
                       ? parseFloat(subOpt.price)
                       : (subPart ? (parseFloat(subPart.manufacturingSpecs?.basePrice ?? subPart.basePrice) || 0) : 0);
                   if (step.useClientPricing) {
@@ -1402,6 +1436,24 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   }, [dynamicConfigParams, stepQuantities, dimensionInputs, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, liveAssemblies, activeBomPins, globalFinishes]);
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
+
+  // Size-matrix guard: flipping Projection to 3-5/8" removes return availability — clear any
+  // selected french/miter return (modeled or OPT-BEND/OPT-MITER built-in) so the configuration
+  // can't carry an impossible combination. The bracket then un-greys via the normal rules.
+  useEffect(() => {
+      if (!activeFlow) return;
+      const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
+      if (!sizeSel || returnsAllowedFor(sizeSel)) return;
+      setDynamicConfigParams(prev => {
+          let changed = false; const next = { ...prev };
+          (activeFlow.steps || []).forEach(st => {
+              if (st.type !== 'STYLE_SWAP' || !next[st.id]) return;
+              const o = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
+              if (o && isReturnOption(o)) { delete next[st.id]; changed = true; }
+          });
+          return changed ? next : prev;
+      });
+  }, [dynamicConfigParams, activeFlow]);
 
   // When a Style selection changes, drop any finish picked for the prior style: different
   // styles can scope different finish sets (e.g. a Wood rod offers wood-clear finishes, a
@@ -2181,6 +2233,22 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       
                       <div style={{ padding: '24px', flex: 1, overflowY: 'auto', maxHeight: '400px' }}>
                           
+                          {/* Size-matrix selector (Rod Diameter / Bracket Projection): big card
+                              choices; the selection re-resolves every configured part to that size
+                              at pricing/push time — geometry and all other selections stay put. */}
+                          {currentStep.type === SIZE_STEP_TYPE && (
+                              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max((currentStep.styleOptions || []).length, 1)}, 1fr)`, gap: '14px', marginBottom: '20px' }}>
+                                  {(currentStep.styleOptions || []).map(o => {
+                                      const on = dynamicConfigParams[currentStep.id] === o.optId;
+                                      return (
+                                          <div key={o.optId} onClick={() => handleParamChange(currentStep.id, o.optId)} style={{ border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}`, background: on ? 'var(--paper-2)' : '#fff', padding: '20px 12px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.15s' }}>
+                                              <div style={{ fontFamily: 'var(--serif)', fontSize: '1.05rem', color: 'var(--ink)', fontWeight: on ? 600 : 400 }}>{o.partName}</div>
+                                          </div>
+                                      );
+                                  })}
+                              </div>
+                          )}
+
                           {(currentStep.type === 'VISUAL_GRID' || currentStep.type === 'VISUAL_DIMENSIONS') && (
                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                                   {getOptionsForStep(currentStep).map(opt => (
@@ -2473,13 +2541,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               <ContactShadows position={[0, -0.5, 0]} opacity={0.5} scale={10} blur={2} far={4} />
                               <OrbitControls makeDefault />
                               <Bounds fit clip margin={1.2}>
-                                  <DynamicModel
-                                      url={activeAssembly.manufacturingSpecs.cadUrl}
-                                      textureOverrides={textureOverrides}
-                                      visibilityOverrides={debugShowAll ? {} : visibilityOverrides}
-                                      cloneSpecs={cloneSpecs}
-                                      highlightOverrides={highlightOverrides}
-                                  />
+                                  {/* Size-matrix visual: scale the whole model by the chosen rod
+                                      diameter (1" = +25%, 1-3/8" = +50%) — cosmetic, per Stuart. */}
+                                  <group scale={sizeSelectionsOf(activeFlow, dynamicConfigParams)?.scale || 1}>
+                                      <DynamicModel
+                                          url={activeAssembly.manufacturingSpecs.cadUrl}
+                                          textureOverrides={textureOverrides}
+                                          visibilityOverrides={debugShowAll ? {} : visibilityOverrides}
+                                          cloneSpecs={cloneSpecs}
+                                          highlightOverrides={highlightOverrides}
+                                      />
+                                  </group>
                               </Bounds>
                           </Canvas>
                           {capturedViews && (

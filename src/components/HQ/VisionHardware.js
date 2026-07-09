@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption } from '../Shared/sizeMatrix';
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
   // Default to TAKEOFF as Step 1
@@ -345,6 +346,20 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const stepEndL = endStepFor('LEFT'), stepEndR = endStepFor('RIGHT');
   const stepBrL = bracketStepFor('LEFT'), stepBrR = bracketStepFor('RIGHT'), stepBrC = bracketStepFor('CENTER');
   const flowDriven = !!(stepEndL || stepEndR || stepBrL || stepBrR || stepBrC);
+  // SIZE-MATRIX steps (Fabricut H1): Rod Diameter / Projection mirror into window 3 like every
+  // other step (dynamicConfigParams[stepId] = optId, push carries them). The fab math reads the
+  // SIZED parts — engData part ids resolve through sizeSwapPart so projection + plate dims are the
+  // selected size's, and poleDiameter follows the diameter answer.
+  const sizeSteps = flowSteps.filter(s => s.type === SIZE_STEP_TYPE);
+  const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
+  const sizeBundle = makeSizeSwap(activeFlow, dynamicConfigParams, libraryParts);
+  const sizeSwapPart = sizeBundle.swap;
+  // No french/miter returns at the 3-5/8" projection — filters the End Style options + auto-clear.
+  const endOptsFor = (st) => {
+      let os = st?.styleOptions || [];
+      if (sizeSel && !returnsAllowedFor(sizeSel)) os = os.filter(o => !isReturnOption(o));
+      return os;
+  };
   const optOf = (step, sel) => step ? ((step.styleOptions || []).find(o => (o.optId || o.partId) === sel) || null) : null;
   const optSel = (step) => optOf(step, step ? dynamicConfigParams[step.id] : null);
   const subOf = (step, sel) => step ? ((step.subOptions || []).find(o => (o.optId || o.partId) === sel) || null) : null;
@@ -367,7 +382,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       return o ? 'FINIAL' : '';
   };
   const partOfOpt = (o) => { if (!o) return null; const find = (k) => k && libraryParts.find(p => p.id === k || p.itemId === k || p.legacyErpId === k); return find(o.partId) || find(o.partName) || null; };
-  const optLabel = (o) => { const p = partOfOpt(o); return p ? `${p.itemName}${p.legacyErpId && p.legacyErpId !== 'PENDING' ? ` - ${p.legacyErpId}` : ''}` : (o.partName || o.optId); };
+  const optLabel = (o) => { const p = sizeSwapPart(partOfOpt(o)); return p ? `${p.itemName}${p.legacyErpId && p.legacyErpId !== 'PENDING' ? ` - ${p.legacyErpId}` : ''}` : (o.partName || o.optId); };
   const returnChosenAt = (pos) => pos === 'LEFT' ? optIsReturn(optSel(stepEndL)) : pos === 'RIGHT' ? optIsReturn(optSel(stepEndR)) : false;
   const brLockedAt = (step, pos) => !!(step && (step.subOptions || []).some(o => o.returnOnly) && returnChosenAt(pos));
   // END RETURN ARM (Flat Iron pattern): a bracket option flagged isReturnArm (or whose part carries
@@ -411,6 +426,15 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       if (!flowDriven) return;
       setDynamicConfigParams(prev => {
           let changed = false; const next = { ...prev };
+          // Size rule: flipping Projection to 3-5/8" removes return availability — clear a selected
+          // french/miter return so the config can't carry an impossible combination.
+          if (sizeSel && !returnsAllowedFor(sizeSel)) {
+              [stepEndL, stepEndR].forEach(st => {
+                  if (!st || !next[st.id]) return;
+                  const o = optOf(st, next[st.id]);
+                  if (o && isReturnOption(o)) { delete next[st.id]; changed = true; }
+              });
+          }
           [['LEFT', stepBrL], ['RIGHT', stepBrR], ['CENTER', stepBrC]].forEach(([pos, st]) => {
               if (!st) return;
               const endSt = pos === 'LEFT' ? stepEndL : pos === 'RIGHT' ? stepEndR : null;
@@ -448,16 +472,20 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           // One-way writes: a step SELECTION sets the engData part id; NO selection leaves engData
           // alone (drafts / auto-derived values survive). Clearing happens only when the step was
           // return-locked — the return legitimately removed the bracket.
+          // Part ids resolve through the size matrix (H1-75BE → H1-1B6) so the auto-synced dims —
+          // bracket projection, plate width/length — are the SELECTED size's, not the master's.
           [[stepBrL, 'bracketId', 'LEFT'], [stepBrR, 'bracketIdRight', 'RIGHT'], [stepBrC, 'bracketIdCenter', '']].forEach(([st, key, pos]) => {
               if (!st) return; const o = optOf(st, dynamicConfigParams[st.id]);
-              if (o) { const pid = partOfOpt(o)?.id || ''; if (pid && (prev[key] || '') !== pid) { u[key] = pid; ch = true; } }
+              if (o) { const pid = sizeSwapPart(partOfOpt(o))?.id || ''; if (pid && (prev[key] || '') !== pid) { u[key] = pid; ch = true; } }
               else if (pos && brLockedAt(st, pos) && prev[key]) { u[key] = ''; ch = true; }
           });
           [[stepBrL, 'backplateIdLeft', 'LEFT'], [stepBrR, 'backplateIdRight', 'RIGHT'], [stepBrC, 'backplateIdCenter', 'CENTER']].forEach(([st, key]) => {
               if (!st) return; const o = subOf(st, dynamicConfigParams[`${st.id}__sub`]);
-              if (o) { const pid = partOfOpt(o)?.id || ''; if (pid && (prev[key] || '') !== pid) { u[key] = pid; ch = true; } }
+              if (o) { const pid = sizeSwapPart(partOfOpt(o))?.id || ''; if (pid && (prev[key] || '') !== pid) { u[key] = pid; ch = true; } }
               else if (basicSelAt(st) && prev[key]) { u[key] = ''; ch = true; }
           });
+          // The Rod Diameter answer IS the pole diameter (drives the bend deduct = dia/2).
+          if (sizeSel?.diaInches && parseFloat(prev.poleDiameter) !== sizeSel.diaInches) { u.poleDiameter = sizeSel.diaInches; ch = true; }
           [[stepEndL, 'endStyle', 'mountLeft'], [stepEndR, 'endStyleRight', 'mountRight']].forEach(([st, key, mkey]) => {
               if (!st) return; const o = optOf(st, dynamicConfigParams[st.id]); if (!o) return;
               const style = endStyleOf(o);
@@ -1117,6 +1145,22 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                         <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)' }}>3. Fabrication Settings</div>
                         <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                            {/* SIZE-MATRIX (Fabricut H1): Rod Diameter + Bracket Projection — the two top-level
+                                flow questions. Every picker below re-labels + every dim re-syncs to the chosen
+                                size; unanswered = the flow's base size (3/4" × 4-5/8"). */}
+                            {sizeSteps.length > 0 && (
+                                <div style={{ display: 'flex', gap: '16px' }}>
+                                    {sizeSteps.map(st => (
+                                        <div key={st.id} style={{ flex: 1 }}>
+                                            <label style={labelStyle}>{st.title} · from flow</label>
+                                            <select value={dynamicConfigParams[st.id] || ''} onChange={e => pickStep(st.id, e.target.value)} style={fieldStyle}>
+                                                <option value="">-- Default ({st.sizeAxis === 'DIA' ? '3/4"' : '4-5/8"'}) --</option>
+                                                {(st.styleOptions || []).map(o => <option key={o.optId} value={o.optId}>{o.partName}</option>)}
+                                            </select>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                             {/* Bracket selection — independent Left / Center / Right (fill all three). bracketId = Left
                                 for back-compat (dim-sync + push-to-CPQ); bracketIdRight = Right; bracketIdCenter = Center. */}
                             <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
@@ -1200,7 +1244,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     {stepEndL ? (
                                         <select value={dynamicConfigParams[stepEndL.id] || ''} disabled={armChosenAt('LEFT')} onChange={e => pickStep(stepEndL.id, e.target.value)} style={{ ...fieldStyle, opacity: armChosenAt('LEFT') ? 0.45 : 1 }}>
                                             <option value="">{armChosenAt('LEFT') ? '— end return arm selected —' : '-- Choose End Treatment --'}</option>
-                                            {(stepEndL.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                            {endOptsFor(stepEndL).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
                                         </select>
                                     ) : (
                                         <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={fieldStyle}>
@@ -1216,7 +1260,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     {stepEndR ? (
                                         <select value={dynamicConfigParams[stepEndR.id] || ''} disabled={armChosenAt('RIGHT')} onChange={e => pickStep(stepEndR.id, e.target.value)} style={{ ...fieldStyle, opacity: armChosenAt('RIGHT') ? 0.45 : 1 }}>
                                             <option value="">{armChosenAt('RIGHT') ? '— end return arm selected —' : '-- Choose End Treatment --'}</option>
-                                            {(stepEndR.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                            {endOptsFor(stepEndR).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
                                         </select>
                                     ) : (
                                         <select value={engData.endStyleRight || engData.endStyle} onChange={e => setEngData({...engData, endStyleRight: e.target.value})} style={fieldStyle}>

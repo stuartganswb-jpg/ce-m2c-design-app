@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import { SIZE_STEP_TYPE, makeSizeSwap } from '../Shared/sizeMatrix';
 
 // DYNAMIC BRAND MAPPING DICTIONARY
 const BRAND_NETSUITE_MAP = {
@@ -125,10 +126,15 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           const flow = cpqFlows.find(f => f.id === cart.flowId);
           const flowSteps = flow?.steps || [];
           const activeStepIds = new Set([...Object.keys(cart.config), ...Object.keys(cart.quantities)]);
+          // SIZE-MATRIX: this cart's Rod Diameter / Projection selections re-resolve every part to
+          // the right size BEFORE finish routing (H1-75BE → H1-1B6 → H1-1B6/EP2). Identity when the
+          // flow has no SIZE steps.
+          const sizeBundle = makeSizeSwap(flow, cart.config, libraryParts);
 
           activeStepIds.forEach(stepId => {
               if (stepId.endsWith('__finish')) return; // finishes are applied, not physical BOM components
               const step = flowSteps.find(s => s.id === stepId);
+              if (step?.type === SIZE_STEP_TYPE) return; // size selectors are not physical components
               const userSelectionId = cart.config?.[stepId];
 
               // A step's quantity. Blank/undefined = a single-select step (qty 1). An explicit 0 means the
@@ -142,7 +148,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               // Hidden BOM-only accessories (e.g. bushings) attached to this step in Node Grouping — auto-added
               // to the BOM when the step is taken. Never a customer choice; qty scales with assemblies ordered.
               (step?.includedParts || []).forEach(ip => {
-                  const accPart = matchPart(ip.partId);
+                  const accPart = sizeBundle.swap(matchPart(ip.partId));
                   if (!accPart) { result.unresolved.push({ stepTitle: `${step?.title || stepId} · included`, partId: ip.partId }); return; }
                   rawLines.push({
                       stepId: `${stepId}__inc__${ip.partId}`, masterPart: accPart, qty: (parseInt(ip.qty) || 1) * cart.assemblyQty,
@@ -169,6 +175,9 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               // lengths that are both the same steel pole) → resolve to the real part before building the line.
               const aliasId = masterPart.aliasOf || masterPart.manufacturingSpecs?.aliasOf;
               if (aliasId) { const real = matchPart(aliasId); if (real) masterPart = real; }
+              // SIZE-MATRIX swap: the configured diameter/projection picks the actual item (return
+              // plates collapse to standard plates at 1"/1-3/8" per the resolver's RBP→BP rule).
+              masterPart = sizeBundle.swap(masterPart);
               // Fee/Charge entities price the quote (their charge rides the rollup item's price) but are
               // NOT physical NetSuite BOM components — skip instead of pushing an UNMAPPED item line.
               if (masterPart.partClass === 'Fee' || String(masterPart.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE') return;

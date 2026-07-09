@@ -5,6 +5,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
+import { sizeFamilyOfParts, buildSizeSteps } from '../Shared/sizeMatrix';
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -903,6 +904,15 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
       add({ title: 'Cut / Splice Fee', type: 'STATIC_FEE', qtyHelperText: 'Per cut / splice', basePrice: '0' });
 
+      // SIZE MATRIX: when the assembly's pinned parts belong to a size family (sizeKey stamped by
+      // the Fabricut importer), inject the two top-level SIZE steps — Rod Diameter + Bracket
+      // Projection — with FIXED ids (SIZE-DIA / SIZE-PROJ) so selections and saved quotes survive
+      // regenerates. One flow then covers the whole diameter × projection matrix: CPQ pricing, ERP
+      // push and Vision resolve every configured part through Shared/sizeMatrix at quote time.
+      const usedParts = [...new Set(pins.map(p => p.partId).filter(Boolean))].map(pid => partsById[pid]).filter(Boolean);
+      const sizeFamily = sizeFamilyOfParts(usedParts);
+      if (sizeFamily) steps.unshift(...buildSizeSteps(sizeFamily));
+
       // Force-hidden meshes = every cluster tagged hidden (e.g. bushings), by cluster id — the runtime
       // + the flow-settings hidden-clusters editor both key on cluster ids. (BOM inclusion of those
       // parts is handled separately via includedParts / hiddenByPos.)
@@ -960,7 +970,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               return next;
           });
           try {
-              await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, hiddenNodes, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig }));
+              await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, hiddenNodes, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig, sizeFamily: sizeFamily || oldFlow.sizeFamily || null }));
               alert(`✅ Regenerated "${oldFlow.name}" in place — ${mergedSteps.length} steps rebuilt from current tags + latest generator logic.\n\nCarried over your per-option settings (price, projection, layer, hides-bracket, finishes) where the option still exists (${Object.keys(oldOptByKey).length} option(s) matched). Flow settings (name, IDs, fab shape/projection, rollup) left untouched. Review any new/changed steps, set prices on anything new, then test.\n\n[diagnostic — why choices may be lumped]\n• ${pinDiag}`);
           } catch (err) { console.error("Regenerate failed:", err); alert("Regenerate failed: " + (err?.message || err)); }
           return;
@@ -972,7 +982,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               id: flowId, brandId: activeBrand, name: `${String(asm.itemName || 'HARDWARE').toUpperCase()} — GENERATED`,
               legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id, bayConfig: bayConfigKey || genBayConfig,
               fabShape: bay.fabShape, fabEndStyle: bay.endStyle, fabProjection: '', defaultFinishOptions: [],
-              hiddenClusters: newHidden, hiddenNodes, steps
+              hiddenClusters: newHidden, hiddenNodes, steps, sizeFamily: sizeFamily || null
           }));
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;
