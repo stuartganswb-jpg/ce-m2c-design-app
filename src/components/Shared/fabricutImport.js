@@ -38,6 +38,13 @@ const FAMILY_BY_COLLECTION = {
 const normHeader = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const parseNum = (v) => { const n = parseFloat(String(v ?? '').replace(/[$,]/g, '')); return Number.isFinite(n) ? n : null; };
 
+// Stem-different species families (Stuart 2026-07-09): the Fabricut-facing base resolves to
+// physical items whose codes don't share its stem — stamped as customData.speciesMap on the base
+// doc so speciesVariantOf (Shared/sizeMatrix) can route the finish's bomSuffix to the right item.
+const SPECIES_STEM_MAPS = {
+    'H1-138WR': { '-O': 'H1-138WHTOAK', '-W': 'H1-138WLNUT' }, // 1-3/8" wood pole, by the foot
+};
+
 // Projection letter from the CE description — the description is the reliable source ("(3-5/8" P)"
 // etc.); deriving from the code alone is ambiguous (H1-75D double vs H1-75DS decorative-short).
 export function projLetterFromDesc(desc) {
@@ -200,6 +207,7 @@ export function buildFabricutPlan(rows, libIndex, nowTs) {
                 if (!li.hasBpo && style && /^R?[BC]P-[HRSV]$/.test(style)) {
                     customData.bpOrientation = { H: 'HORIZONTAL', R: 'ROUND', S: 'SQUARE', V: 'VERTICAL' }[style.slice(-1)];
                 }
+                if (SPECIES_STEM_MAPS[g.base]) customData.speciesMap = SPECIES_STEM_MAPS[g.base];
                 if (Object.keys(customData).length) patch.manufacturingSpecs.customData = customData;
                 basesStamped++;
             } else {
