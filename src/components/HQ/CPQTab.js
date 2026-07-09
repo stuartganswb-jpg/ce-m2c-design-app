@@ -4,7 +4,7 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query,
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
-import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption } from '../Shared/sizeMatrix';
+import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf } from '../Shared/sizeMatrix';
 
 const globalTextureCache = {};
 
@@ -1212,12 +1212,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           for (const cand of cands) { const hit = byCode.get(cand); if (hit) return hit; }
           return basePart;
       };
-      const finishCodeForStep = (stepId) => {
+      const finishObjForStep = (stepId) => {
           const fid = dynamicConfigParams[`${stepId}__finish`];
-          if (!fid) return '';
-          const f = globalFinishes.find(x => x.id === fid) || outsourceFinishes.find(x => x.id === fid);
+          if (!fid) return null;
+          return globalFinishes.find(x => x.id === fid) || outsourceFinishes.find(x => x.id === fid) || null;
+      };
+      const finishCodeForStep = (stepId) => {
+          const f = finishObjForStep(stepId);
           return f ? String(f.code || f.name || '').toUpperCase() : '';
       };
+      // Finish-driven species: a finish with bomSuffix consumes the per-species item (-O/-W).
+      const speciesSwap = (part, finishObj) => speciesVariantOf(part, finishObj, (c) => byCode.get(c) || null);
       // SIZE-MATRIX (Fabricut H1): resolve every configured part to the selected Rod Diameter /
       // Projection variant BEFORE finish resolution — identity chain: base → size → finish
       // (H1-75BE → H1-1B6 → H1-1B6/EP2). Flows without SIZE steps degrade to identity.
@@ -1309,6 +1314,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   }
                   const sizeSwapped = partObj !== preSizeObj;
 
+                  // Species next (wood/acrylic): the finish's bomSuffix picks the -O/-W item.
+                  if (partObj) {
+                      const speciesPart = speciesSwap(partObj, finishObjForStep(step.id));
+                      if (speciesPart !== partObj) { partObj = speciesPart; resolvedPartId = speciesPart.itemId || speciesPart.id; }
+                  }
+
                   // Swap to the finish-specific SKU (…/P for paints, exact …/EPn for stocked EP) so the
                   // BOM identity AND the price come from the item that's actually sold. Keep the
                   // pre-variant part: client pricing is usually entered on the BASE item.
@@ -1341,10 +1352,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // variant (BOM/push correctness); its base price applies only when nothing else —
                   // client price on the linked item, step base — has priced the step yet.
                   if (step.linkedItemId) {
-                      const linkedBase = sizeBundle.swap(findLibPart(step.linkedItemId));
-                      if (linkedBase) {
+                      const linkedSized = sizeBundle.swap(findLibPart(step.linkedItemId));
+                      if (linkedSized) {
                           const selFinish = globalFinishes.find(f => f.id === selectedValue) || outsourceFinishes.find(f => f.id === selectedValue);
                           const fc = selFinish ? String(selFinish.code || selFinish.name || '').toUpperCase() : finishCodeForStep(step.id);
+                          // On pole steps the SELECTION is the finish — species rides it (wood pole → oak/walnut item).
+                          const linkedBase = speciesSwap(linkedSized, selFinish || finishObjForStep(step.id));
                           const linkedPart = finishVariantOf(linkedBase, fc);
                           const lp = parseFloat(linkedPart.manufacturingSpecs?.basePrice ?? linkedPart.basePrice) || 0;
                           if (optionNativePrice === 0 && stepPrice === 0 && lp > 0) optionNativePrice = lp;
@@ -1409,7 +1422,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // Same identity chain as main lines: base → size → finish. At 1"/1-3/8" the return
                   // plates (RBP/RCP) resolve to the STANDARD plates — geometry unchanged, item swapped.
                   const subBase0 = findLibPart(subOpt.partId) || findLibPart(subOpt.partName);
-                  const subBase = sizeBundle.swap(subBase0);
+                  const subBase = speciesSwap(sizeBundle.swap(subBase0), finishObjForStep(step.id));
                   const subSizeSwapped = subBase !== subBase0;
                   const subPart = subBase ? finishVariantOf(subBase, finishCodeForStep(step.id)) : null;
                   let subPrice = (subOpt.price !== undefined && subOpt.price !== '' && parseFloat(subOpt.price) > 0 && !subSizeSwapped)

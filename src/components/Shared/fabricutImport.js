@@ -146,7 +146,20 @@ export function buildFabricutPlan(rows, libIndex, nowTs) {
     let basesMatched = 0, variantsStamped = 0, basesStamped = 0;
 
     groups.forEach(g => {
-        const targets = libByBase.get(g.base) || [];
+        const targets = (libByBase.get(g.base) || []).map(li => ({ li, claimed: false }));
+        // SPECIES CLAIMS: a single-finish (suffixless) xlsx row also prices its dash-species
+        // siblings — the H1-138WBF row stamps H1-138WBF-O (oak) and -W (walnut); to Fabricut both
+        // species are the same item at the same price (Stuart 2026-07-09). Claim only short alnum
+        // suffixes, never slash-variants, and never a code that is its own xlsx row (so the H1-75R
+        // pole row can never claim the H1-75R-JNR joiner).
+        if (g.tiers.BASE) {
+            libIndex.forEach(li => {
+                if (li.code.includes('/') || !li.code.startsWith(g.base + '-')) return;
+                const sfx = li.code.slice(g.base.length + 1);
+                if (!/^[A-Z0-9]{1,3}$/.test(sfx) || groups.has(li.code)) return;
+                targets.push({ li, claimed: true });
+            });
+        }
         if (!targets.length) { gaps.push({ base: g.base, desc: g.desc, collection: g.collection }); return; }
         basesMatched++;
 
@@ -154,7 +167,13 @@ export function buildFabricutPlan(rows, libIndex, nowTs) {
         const projLetter = projLetterFromDesc(g.desc);
         const style = fam ? styleFromCode(g.base, fam.dia, projLetter) : null;
 
-        targets.forEach(li => {
+        targets.forEach(({ li, claimed }) => {
+            if (claimed) {
+                // species sibling: variant-shaped stamp carrying the single-finish prices
+                stamps.push({ docId: li.docId, code: li.code, patch: { manufacturingSpecs: { fabricut: { retail: g.tiers.BASE.retail, cost: g.tiers.BASE.cost, wholesale: g.tiers.BASE.wholesale, tier: 'BASE', importedAt: ts, source: 'CrossReference' } } } });
+                variantsStamped++;
+                return;
+            }
             const suffix = li.code.includes('/') ? li.code.split('/')[1] : '';
             const patch = { manufacturingSpecs: {} };
 

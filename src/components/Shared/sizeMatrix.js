@@ -141,6 +141,23 @@ export function sizeVariantOf(part, sel, sizeIndex) {
     return { part: hit, swapped: true };
 }
 
+// FINISH-DRIVEN SPECIES (Stuart 2026-07-09): to Fabricut a wood/acrylic item is ONE product at ONE
+// price (H1-138WBF), but the physical BOM item is per-species (H1-138WBF-O oak / -W walnut). The
+// selected FINISH decides which one is consumed: a finish carrying `bomSuffix` (e.g. "-O", set in
+// tab 4.5's Master Finish editor) resolves the base code to `${base}${bomSuffix}`; stem-different
+// items (wood pole H1-138WR → H1-138WHTOAK / H1-138WLNUT) resolve through the base part's
+// customData.speciesMap = { "-O": "H1-138WHTOAK", "-W": "H1-138WLNUT" }. Runs BETWEEN the size swap
+// and the /P //EPn finish-variant swap; identity when the finish has no bomSuffix.
+export function speciesVariantOf(part, finishObj, findByCode) {
+    const sfx = String(finishObj?.bomSuffix || '').trim().toUpperCase();
+    if (!part || !sfx || typeof findByCode !== 'function') return part;
+    const baseCode = String((part.legacyErpId && part.legacyErpId !== 'PENDING' ? part.legacyErpId : part.itemId) || '').trim().toUpperCase();
+    if (!baseCode || baseCode.includes('/')) return part;
+    const mapped = part.manufacturingSpecs?.customData?.speciesMap?.[sfx];
+    const hit = (mapped && findByCode(String(mapped).trim().toUpperCase())) || findByCode(`${baseCode}${sfx}`);
+    return hit || part;
+}
+
 // Convenience bundle for consumers: selections + a lazy-indexed swap function. When the flow has no
 // size matrix everything degrades to identity, so callers can apply it unconditionally.
 export function makeSizeSwap(flow, config, parts) {

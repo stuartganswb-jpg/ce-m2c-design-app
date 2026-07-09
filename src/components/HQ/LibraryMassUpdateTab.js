@@ -171,7 +171,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     
     const [editingGlobalFinish, setEditingGlobalFinish] = useState(null);
     const [editingOutsourceFinish, setEditingOutsourceFinish] = useState(null);
-    const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '', clientMapping: [] });
+    const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '', clientMapping: [], bomSuffix: '' });
     const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', vendorCrmId: '', textureUrl: '', clientMapping: [] });
     const [newFinishClientMapping, setNewFinishClientMapping] = useState({ customerId: '', clientFinishName: '' });
     
@@ -803,22 +803,27 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         if (!newFinishConfig.name) return alert("Finish name required.");
         let updatedFinishes;
         
+        // BOM species suffix (e.g. "-O" oak / "-W" walnut): quotes + pushes consume `<base><suffix>`
+        // (or the part's customData.speciesMap[suffix]) when this finish is selected — same pattern
+        // as /P //EPn finish variants, for single-finish species items (Fabricut wood/acrylic).
+        const bomSuffix = String(newFinishConfig.bomSuffix || '').trim().toUpperCase();
         if (editingGlobalFinish) {
-            updatedFinishes = globalFinishes.map(f => f.id === editingGlobalFinish ? { 
-                ...f, 
-                name: newFinishConfig.name.toUpperCase(), 
-                code: newFinishConfig.code.toUpperCase(), 
-                type: newFinishConfig.type.toUpperCase(), 
+            updatedFinishes = globalFinishes.map(f => f.id === editingGlobalFinish ? {
+                ...f,
+                name: newFinishConfig.name.toUpperCase(),
+                code: newFinishConfig.code.toUpperCase(),
+                type: newFinishConfig.type.toUpperCase(),
                 textureUrl: newFinishConfig.textureUrl,
-                clientMapping: newFinishConfig.clientMapping || [] 
+                clientMapping: newFinishConfig.clientMapping || [],
+                bomSuffix
             } : f);
         } else {
-            const newFinish = { id: `FIN-${Date.now()}`, name: newFinishConfig.name.toUpperCase(), code: newFinishConfig.code.toUpperCase(), type: newFinishConfig.type.toUpperCase(), textureUrl: newFinishConfig.textureUrl, status: 'Working', clientMapping: newFinishConfig.clientMapping || [] };
+            const newFinish = { id: `FIN-${Date.now()}`, name: newFinishConfig.name.toUpperCase(), code: newFinishConfig.code.toUpperCase(), type: newFinishConfig.type.toUpperCase(), textureUrl: newFinishConfig.textureUrl, status: 'Working', clientMapping: newFinishConfig.clientMapping || [], bomSuffix };
             updatedFinishes = [...globalFinishes, newFinish];
         }
 
         await setDoc(doc(db, "system", "master_finishes"), { finishes: updatedFinishes }, { merge: true });
-        setNewFinishConfig({ name: '', code: '', type: '', textureUrl: '', clientMapping: [] }); 
+        setNewFinishConfig({ name: '', code: '', type: '', textureUrl: '', clientMapping: [], bomSuffix: '' });
         setShowFinishForm(false);
         setEditingGlobalFinish(null);
     };
@@ -829,7 +834,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             code: finish.code || '',
             type: finish.type || '',
             textureUrl: finish.textureUrl || '',
-            clientMapping: finish.clientMapping || []
+            clientMapping: finish.clientMapping || [],
+            bomSuffix: finish.bomSuffix || ''
         });
         setEditingGlobalFinish(finish.id);
         setShowFinishForm(true);
@@ -1415,7 +1421,10 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px', marginBottom: '10px' }}>
                                                 {editingGlobalFinish ? `Editing: ${newFinishConfig.name}` : 'New In-House Finish'}
                                             </div>
-                                            <div><label style={labelStyle}>Finish ID / Code</label><input value={newFinishConfig.code} onChange={(e) => setNewFinishConfig({...newFinishConfig, code: e.target.value})} placeholder="e.g. MB" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                                <div><label style={labelStyle}>Finish ID / Code</label><input value={newFinishConfig.code} onChange={(e) => setNewFinishConfig({...newFinishConfig, code: e.target.value})} placeholder="e.g. MB" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                                <div><label style={labelStyle}>BOM Species Suffix (optional)</label><input value={newFinishConfig.bomSuffix} onChange={(e) => setNewFinishConfig({...newFinishConfig, bomSuffix: e.target.value})} placeholder='e.g. -O (oak) / -W (walnut)' title='Wood/acrylic species finishes: when this finish is picked, the BOM consumes "<item#><suffix>" (e.g. H1-138WBF-O) — or the item&apos;s speciesMap entry — instead of a /P //EP variant. Leave blank for normal finishes.' style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                            </div>
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                                                 <div><label style={labelStyle}>Descriptive Name</label><input value={newFinishConfig.name} onChange={(e) => setNewFinishConfig({...newFinishConfig, name: e.target.value})} placeholder="e.g. Matte Brass" style={fieldStyle} /></div>
                                                 <div><label style={labelStyle}>Category / Type</label><input value={newFinishConfig.type} onChange={(e) => setNewFinishConfig({...newFinishConfig, type: e.target.value})} placeholder="e.g. METAL, WOOD" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>

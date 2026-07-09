@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
-import { SIZE_STEP_TYPE, makeSizeSwap } from '../Shared/sizeMatrix';
+import { SIZE_STEP_TYPE, makeSizeSwap, speciesVariantOf } from '../Shared/sizeMatrix';
 
 // DYNAMIC BRAND MAPPING DICTIONARY
 const BRAND_NETSUITE_MAP = {
@@ -189,16 +189,26 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               // finish-to-order for most parts and stocked only where it's been checked. Pricing stays on the base
               // part so the quote total is unchanged (rollup absorbs the balance); only the pushed ITEM id changes.
               // If the finished assembly isn't in the library / NetSuite-mapped, we keep the base and flag it.
+              // The finish selection lives on the BASE step id — sub lines (backplates) share the bracket
+              // step's finish, so strip the __sub suffix before looking it up. Pole steps carry the finish
+              // as their MAIN selection, so that resolves as a finish too (species only — routing unchanged).
+              const baseStepId = stepId.endsWith('__sub') ? stepId.slice(0, -5) : stepId;
+              const finishId = cart.config?.[`${baseStepId}__finish`];
+              const outFinish = finishId ? outsourceFinishes.find(f => f.id === finishId) : null;
+              const finishObj = finishId ? (outFinish || globalFinishes.find(f => f.id === finishId)) : null; // outsourced or in-house
+              const selAsFinish = userSelectionId ? (outsourceFinishes.find(f => f.id === userSelectionId) || globalFinishes.find(f => f.id === userSelectionId)) : null;
+              // FINISH-DRIVEN SPECIES: a bomSuffix finish consumes the per-species physical item
+              // (H1-138WBF → H1-138WBF-O/-W; wood pole via customData.speciesMap) — swap BEFORE the
+              // NetSuite id + finished-SKU routing so the SO line lands on the real species item.
+              const speciesFinish = finishObj?.bomSuffix ? finishObj : (selAsFinish?.bomSuffix ? selAsFinish : null);
+              if (speciesFinish) {
+                  const sp = speciesVariantOf(masterPart, speciesFinish, (c) => libraryParts.find(p => String(p.legacyErpId || p.itemId || '').trim().toUpperCase() === c) || null);
+                  if (sp) masterPart = sp;
+              }
               let nsId = masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED';
               let finishedErpId = '';
               let finishUnmapped = '';
-              // The finish selection lives on the BASE step id — sub lines (backplates) share the bracket
-              // step's finish, so strip the __sub suffix before looking it up.
-              const baseStepId = stepId.endsWith('__sub') ? stepId.slice(0, -5) : stepId;
-              const finishId = cart.config?.[`${baseStepId}__finish`];
               if (finishId) {
-                  const outFinish = outsourceFinishes.find(f => f.id === finishId);
-                  const finishObj = outFinish || globalFinishes.find(f => f.id === finishId); // outsourced or in-house
                   const finishCode = finishCodeOf(finishObj);
                   if (finishCode) {
                       const baseErp = String(masterPart.legacyErpId || masterPart.itemId || '').toUpperCase();
