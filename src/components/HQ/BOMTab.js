@@ -7,6 +7,10 @@ import { loadGLBScene, snapshotPNG } from '../Shared/componentExport';
 import { generateOnboardingXlsx } from '../Shared/onboardingXlsx';
 import { validateAssemblyAlignment } from '../Shared/assemblyTags';
 
+// Fabricut-style spec-sheet generator (hidden-line drawings from the working GLB) — lazy so
+// the drawing engine only loads when opened.
+const SpecSheetModal = React.lazy(() => import('../SpecSheet/SpecSheetModal'));
+
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
   { id: 'uniquity', name: 'Uniquity' }, 
@@ -18,6 +22,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [assemblies, setAssemblies] = useState([]);
   const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
   const [capturingThumb, setCapturingThumb] = useState(false);
+  const [showSpecSheet, setShowSpecSheet] = useState(false);
   const [bulkThumb, setBulkThumb] = useState({ running: false, done: 0, total: 0 });
   
   const [searchTerm, setSearchTerm] = useState("");
@@ -1157,9 +1162,12 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                         </div>
                                     )}
                                     {selectedAssemblyData.manufacturingSpecs?.cadUrl && (
-                                        <div style={{ marginTop: '12px' }}>
+                                        <div style={{ marginTop: '12px', display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
                                             <button onClick={handleCaptureAssemblyThumbnail} disabled={capturingThumb} style={{ padding: '10px 20px', background: capturingThumb ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', border: 'none', cursor: capturingThumb ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                                                 {capturingThumb ? '⚙ Capturing…' : (selectedAssemblyData.finalImageUrl ? '⚙ Re-capture Assembly Thumbnail' : '⚙ Capture Assembly Thumbnail')}
+                                            </button>
+                                            <button onClick={() => setShowSpecSheet(true)} style={{ padding: '10px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                📐 Spec Sheets
                                             </button>
                                         </div>
                                     )}
@@ -1894,6 +1902,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
             </div>
         </div>
       </div>
+      {showSpecSheet && selectedAssemblyData && (
+        <React.Suspense fallback={null}>
+          <SpecSheetModal assembly={selectedAssemblyData} pins={bomPins} libraryParts={libraryParts} onClose={() => setShowSpecSheet(false)} />
+        </React.Suspense>
+      )}
     </div>
   );
 };
