@@ -17,6 +17,7 @@ const HEADER_KEYS = {
     itemType: 'ce item type',
     fabCode: 'fabricut code',
     retail: 'retail price',
+    wholesale: 'wholesale price', // added July 9 (uniformly retail ÷ 2 = Fabricut street price); optional
     sale: 'sale price',
 };
 
@@ -26,6 +27,7 @@ const FAMILY_BY_COLLECTION = {
     '3/4" round': { family: 'H1-RND', dia: '75' },
     '1" round': { family: 'H1-RND', dia: '1' },
     '1-3/8" round': { family: 'H1-RND', dia: '138' },
+    '1 3/8" round': { family: 'H1-RND', dia: '138' }, // July 9 rows use the space dialect
     '3/4" square': { family: 'H1-SQ', dia: '75S' },
     '2" rectangular': { family: 'H1-RECT', dia: '2RCT' },
     '1" brass': { family: 'H1-BRASS', dia: '1B' },
@@ -84,14 +86,16 @@ export async function parseFabricutWorkbook(file) {
             const get = (k) => { const c = colFor[k]; if (!c) return ''; const v = row.getCell(c).value; return String((v && v.result !== undefined ? v.result : v) ?? '').trim(); };
             const ceItem = get('ceItem').toUpperCase();
             if (!ceItem || ceItem === '(NONE)') return;
+            const cellNum = (k) => { const c = colFor[k]; if (!c) return null; const v = row.getCell(c).value; return parseNum(v && v.result !== undefined ? v.result : v); };
             rows.push({
                 ceItem,
                 desc: get('desc'),
                 collection: get('collection'),
                 itemType: get('itemType'),
                 fabCode: get('fabCode').toUpperCase(),
-                retail: parseNum(row.getCell(colFor.retail).value?.result ?? row.getCell(colFor.retail).value),
-                sale: parseNum(row.getCell(colFor.sale).value?.result ?? row.getCell(colFor.sale).value),
+                retail: cellNum('retail'),
+                wholesale: cellNum('wholesale'),
+                sale: cellNum('sale'),
                 sheet: ws.name,
             });
         });
@@ -119,12 +123,14 @@ export function buildFabricutPlan(rows, libIndex, nowTs) {
         const g = groups.get(base);
         if (!g.desc && r.desc) g.desc = r.desc;
         const tier = suffix === 'P' ? 'P' : suffix === 'EP' ? 'EP' : null;
-        const priceObj = { retail: r.retail, cost: r.sale };
+        const priceObj = { retail: r.retail, cost: r.sale, wholesale: r.wholesale ?? null };
         // fabCode per tier is a SET: plate rows repeat once per compatible bracket code, so a
         // multi-coded tier means "no single Fabricut code" (plates aren't standalone Fabricut items).
         if (tier) { g.tiers[tier] = priceObj; (g.fabByTier[tier] = g.fabByTier[tier] || new Set()).add(r.fabCode); }
         else if (suffix) g.exact[suffix] = { ...priceObj, fabCode: r.fabCode };
-        else { g.tiers.BASE = priceObj; (g.fabByTier.BASE = g.fabByTier.BASE || new Set()).add(r.fabCode); } // row with no finish suffix (rare)
+        // Suffixless row = a single-finish item (natural wood / acrylic / raw aluminum — no paint or
+        // plate tiers, July 9 additions): its prices stamp the BASE doc directly.
+        else { g.tiers.BASE = priceObj; (g.fabByTier.BASE = g.fabByTier.BASE || new Set()).add(r.fabCode); }
     });
 
     // group library codes by base for prefix lookup
@@ -155,11 +161,15 @@ export function buildFabricutPlan(rows, libIndex, nowTs) {
             if (!suffix) {
                 // BASE (mill) doc: full tier record + size metadata for the matrix resolver.
                 const fab = { importedAt: ts, source: 'CrossReference' };
-                if (g.tiers.P) { fab.paintedRetail = g.tiers.P.retail; fab.paintedCost = g.tiers.P.cost; }
-                if (g.tiers.EP) { fab.platedRetail = g.tiers.EP.retail; fab.platedCost = g.tiers.EP.cost; }
+                if (g.tiers.P) { fab.paintedRetail = g.tiers.P.retail; fab.paintedCost = g.tiers.P.cost; fab.paintedWholesale = g.tiers.P.wholesale; }
+                if (g.tiers.EP) { fab.platedRetail = g.tiers.EP.retail; fab.platedCost = g.tiers.EP.cost; fab.platedWholesale = g.tiers.EP.wholesale; }
+                // Single-finish item (suffixless xlsx row): the base doc IS the sellable item — stamp
+                // the same {retail, cost, wholesale, tier} shape variants carry so pricing reads uniformly.
+                if (g.tiers.BASE) { fab.retail = g.tiers.BASE.retail; fab.cost = g.tiers.BASE.cost; fab.wholesale = g.tiers.BASE.wholesale; fab.tier = 'BASE'; }
                 if (g.fabByTier.P?.size === 1) fab.fabCodePainted = [...g.fabByTier.P][0];
                 if (g.fabByTier.EP?.size === 1) fab.fabCodePremium = [...g.fabByTier.EP][0];
-                Object.keys(g.exact).forEach(sfx => { fab[`exact_${sfx}`] = { retail: g.exact[sfx].retail, cost: g.exact[sfx].cost, fabCode: g.exact[sfx].fabCode }; });
+                if (g.fabByTier.BASE?.size === 1) fab.fabCodeBase = [...g.fabByTier.BASE][0];
+                Object.keys(g.exact).forEach(sfx => { fab[`exact_${sfx}`] = { retail: g.exact[sfx].retail, cost: g.exact[sfx].cost, wholesale: g.exact[sfx].wholesale, fabCode: g.exact[sfx].fabCode }; });
                 patch.manufacturingSpecs.fabricut = fab;
 
                 const customData = {};
@@ -178,10 +188,11 @@ export function buildFabricutPlan(rows, libIndex, nowTs) {
                 let src = g.exact[suffix] || null;
                 if (!src && suffix.startsWith('EP')) src = g.tiers.EP || null;
                 if (!src && suffix.startsWith('P')) src = g.tiers.P || null;
+                if (!src && g.tiers.BASE) src = g.tiers.BASE; // single-finish pricing covers oddball variants (e.g. wood -O/-W species)
                 if (!src) return; // no price data for this variant's tier — leave untouched
                 patch.manufacturingSpecs.fabricut = {
-                    retail: src.retail, cost: src.cost,
-                    tier: g.exact[suffix] ? suffix : (suffix.startsWith('EP') ? 'EP' : 'P'),
+                    retail: src.retail, cost: src.cost, wholesale: src.wholesale ?? null,
+                    tier: g.exact[suffix] ? suffix : (suffix.startsWith('EP') ? 'EP' : suffix.startsWith('P') ? 'P' : 'BASE'),
                     importedAt: ts, source: 'CrossReference',
                 };
                 variantsStamped++;
