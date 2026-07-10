@@ -12,7 +12,7 @@ import { loadGLBScene } from '../Shared/componentExport';
 import { normalizeCategory, normalizePosition, normalizeEndTreatment } from '../Shared/assemblyTags';
 import {
   M2IN, extractWorldMeshes, groupBbox, translateMeshes, inferAxes, makeViews,
-  armRootCenter, parseInches, clipSegmentsU, breakMarks,
+  armRootCenter, parseInches, clipSegmentsU, breakMarks, sanitize,
 } from './specSheetGeometry';
 import { renderHiddenLine } from './hiddenLine';
 import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from './specSheetPage';
@@ -257,6 +257,28 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
     const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
     const views = makeViews(axes);
+    // Some plate/bracket GLB nodes embed a RING instance modeled inside the assembly
+    // (e.g. BP-H / CP-H carry one) — the plate-centering shift would drag it to the wrong
+    // spot and double the parked ring. Strip ring meshes from those groups: matched by
+    // ring part name (exact path segment) or eyelet, AND sitting on the rod plane — the
+    // plane guard keeps the BP-R PLATE safe from the BPR RING's colliding sanitized name.
+    const ringKeys = ringChoices.map(rc => sanitize(rc.partName)).filter(Boolean);
+    const onRodPlane = (m) => {
+      const b = groupBbox([m]);
+      return Math.abs(b.center[axes.projAxis] - axes.poleBox.center[axes.projAxis]) < 0.02;
+    };
+    const isStrayRing = (m) => {
+      if (!onRodPlane(m)) return false;
+      if (/eyelet/i.test(m.name + m.path)) return true;
+      const segs = (m.path + '/' + m.name).split('/');
+      return segs.some(s => ringKeys.includes(sanitize(s)));
+    };
+    // scrub embedded rings from the bracket group (in place — the array is shared below)
+    if (bracket.some(isStrayRing)) {
+      const keep = bracket.filter(m => !isStrayRing(m));
+      bracket.length = 0;
+      bracket.push(...keep);
+    }
     // pick the ring that actually HANGS on the rod for the composed views: prefer choices
     // whose bbox wraps the pole centerline; among those the lowest one (a stacked second
     // option floats above the rod and would corrupt the ring-drop measurement)
@@ -361,7 +383,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, hasAsMounted: false }], axes, ringItems };
     }
     const rows = plateChoices.map((platePin) => {
-      const plateAll0 = extractWorldMeshes(scene, [platePin.choiceNode]);
+      const plateAll0 = extractWorldMeshes(scene, [platePin.choiceNode]).filter(m => !isStrayRing(m));
       if (!plateAll0.length) return { rowKey: platePin.partName, code: platePin.partName, missing: true };
       const cover0 = plateAll0.filter(m => !WALL_PLATE_MATCH.test(m.name + m.path) && !SCREW_MATCH.test(m.name + m.path));
       const cb0 = groupBbox(cover0.length ? cover0 : plateAll0);
