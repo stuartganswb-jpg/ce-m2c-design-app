@@ -156,6 +156,32 @@ export function parseInches(text) {
   return isNaN(dec) ? null : dec;
 }
 
+// Clip 2D view segments to a u-window — the front view's rod break: at 1:1 print scale a
+// full-length rod can't fit, so the drawing truncates it like a hand-made CAD sheet.
+export function clipSegmentsU(vis, lo, hi) {
+  const out = [];
+  for (const [u0, v0, u1, v1] of vis) {
+    let a = u0, av = v0, b = u1, bv = v1;
+    if (a > b) { const t = a; a = b; b = t; const tv = av; av = bv; bv = tv; }
+    if (b < lo || a > hi) continue;
+    let nu0 = a, nv0 = av, nu1 = b, nv1 = bv;
+    const span = (b - a) || 1e-12;
+    if (a < lo) { const t = (lo - a) / span; nu0 = lo; nv0 = av + (bv - av) * t; }
+    if (b > hi) { const t = (hi - a) / span; nu1 = hi; nv1 = av + (bv - av) * t; }
+    out.push([nu0, nv0, nu1, nv1]);
+  }
+  return out;
+}
+
+// CAD-style rod break marks: two short parallel diagonals across the rod at a cut edge.
+export function breakMarks(u, vLo, vHi) {
+  const slant = 0.004, gap = 0.0018, over = 0.003;
+  return [
+    [u - slant / 2, vLo - over, u + slant / 2, vHi + over],
+    [u - slant / 2 + gap, vLo - over, u + slant / 2 + gap, vHi + over],
+  ];
+}
+
 // Stacked-fraction SVG text (matches the CAD drawing style). Returns markup string.
 export function fracSvg(x, y, inches, fontSize = 11, dia = false) {
   const f = frac(inches);

@@ -12,10 +12,10 @@ import { loadGLBScene } from '../Shared/componentExport';
 import { normalizeCategory, normalizePosition } from '../Shared/assemblyTags';
 import {
   M2IN, extractWorldMeshes, groupBbox, translateMeshes, inferAxes, makeViews,
-  armRootCenter, parseInches,
+  armRootCenter, parseInches, clipSegmentsU, breakMarks,
 } from './specSheetGeometry';
 import { renderHiddenLine } from './hiddenLine';
-import { buildPageSvg, PAGE_W, PAGE_H } from './specSheetPage';
+import { buildPageSvg, buildWallMountsPage, PAGE_W, PAGE_H } from './specSheetPage';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 
 // Wall-mount plate meshes are children of each backplate choice node in the merged GLB
@@ -60,6 +60,8 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
   const [error, setError] = useState('');
   const [pageIndex, setPageIndex] = useState(0);
   const [edition, setEdition] = useState('H1'); // 'H1' | 'FAB'
+  const [scaleMode, setScaleMode] = useState('actual'); // 'actual' (1:1 print) | 'fit' (compact)
+  const [choiceData, setChoiceData] = useState(null);
   const [manualDims, setManualDims] = useState(() => assembly?.specSheetOverrides?.manualDims || []);
   const [wallCfg, setWallCfg] = useState({});
   const [showWallCfg, setShowWallCfg] = useState(false);
@@ -69,6 +71,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
   const [pageData, setPageData] = useState(null); // { svg, viewMaps }
   const sceneRef = useRef(null);
   const rowCacheRef = useRef({}); // pageKey -> built rows
+  const wallMountsRef = useRef(null); // unique wall-mount styles for the 1:1 reference page
   const pendingPtRef = useRef(null);
   const svgHostRef = useRef(null);
 
@@ -137,36 +140,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         const families = {};
         plates.forEach(p => { const f = familyOf(p.partName); (families[f] = families[f] || []).push(p); });
         const anyReturnFlags = plates.some(p => p.returnOnly) || brackets.some(b => b.usesReturnPlates || b.isReturnArm);
-        const pageList = [];
-        for (const b of brackets) {
-          // isBasic = bracket takes NO backplate (canonical flag) — its page draws the
-          // bracket/pole/ring alone, no plate rows, no wall-mount detail.
-          if (b.isBasic) {
-            pageList.push({ key: `${b.partName}__BASIC`, title: `${b.partName} (basic — no backplate)`, bracketPin: b, familyPins: [], family: 'basic, no backplate' });
-            continue;
-          }
-          const bracketIsReturn = !!(b.usesReturnPlates || b.isReturnArm || /RETURN/i.test(b.endTreatment || ''));
-          for (const [fam, famPins] of Object.entries(families)) {
-            if (anyReturnFlags) {
-              const famIsReturn = famPins.some(p => p.returnOnly);
-              if (famIsReturn !== bracketIsReturn) continue;
-            }
-            // safety: never overload a page — chunk oversized families
-            for (let i = 0; i < famPins.length; i += MAX_ROWS_PER_PAGE) {
-              const chunk = famPins.slice(i, i + MAX_ROWS_PER_PAGE);
-              const part = famPins.length > MAX_ROWS_PER_PAGE ? ` (${i / MAX_ROWS_PER_PAGE + 1})` : '';
-              pageList.push({
-                key: `${b.partName}__${fam}__${i}`,
-                title: `${b.partName} + ${fam}${part}`,
-                bracketPin: b,
-                familyPins: chunk,
-                family: fam,
-              });
-            }
-          }
-        }
-        if (!pageList.length) throw new Error('No bracket × backplate-family pages could be derived.');
-        setPages(pageList);
+        setChoiceData({ brackets, families, anyReturnFlags });
         setStatus('');
       } catch (e) {
         console.error('SpecSheet load failed', e);
@@ -175,6 +149,44 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     })();
     return () => { dead = true; };
   }, [assembly, choicesFor]);
+
+  // ---- derive pages from choices (re-chunked when the scale mode changes) ----
+  useEffect(() => {
+    if (!choiceData) return;
+    const { brackets, families, anyReturnFlags } = choiceData;
+    const maxRows = scaleMode === 'actual' ? 2 : MAX_ROWS_PER_PAGE; // 1:1 geometry fits 2 rows/page
+    const pageList = [];
+    for (const b of brackets) {
+      // isBasic = bracket takes NO backplate (canonical flag) — its page draws the
+      // bracket/pole/ring alone, no plate rows, no wall-mount detail.
+      if (b.isBasic) {
+        pageList.push({ key: `${b.partName}__BASIC`, title: `${b.partName} (basic — no backplate)`, bracketPin: b, familyPins: [], family: 'basic, no backplate' });
+        continue;
+      }
+      const bracketIsReturn = !!(b.usesReturnPlates || b.isReturnArm || /RETURN/i.test(b.endTreatment || ''));
+      for (const [fam, famPins] of Object.entries(families)) {
+        if (anyReturnFlags) {
+          const famIsReturn = famPins.some(p => p.returnOnly);
+          if (famIsReturn !== bracketIsReturn) continue;
+        }
+        for (let i = 0; i < famPins.length; i += maxRows) {
+          const chunk = famPins.slice(i, i + maxRows);
+          const part = famPins.length > maxRows ? ` (${i / maxRows + 1})` : '';
+          pageList.push({
+            key: `${b.partName}__${fam}__${i}_${maxRows}`,
+            title: `${b.partName} + ${fam}${part}`,
+            bracketPin: b,
+            familyPins: chunk,
+            family: fam,
+          });
+        }
+      }
+    }
+    if (!pageList.length) { setError('No bracket × backplate-family pages could be derived.'); return; }
+    pageList.push({ key: '__WM__', title: '⊞ Wall mounts (1:1)', family: '' });
+    setPages(pageList);
+    setPageIndex(0);
+  }, [choiceData, scaleMode]);
 
   // ---- build rows for a page (cached per bracket × family) ----
   const buildRows = useCallback((bracketPin, familyPins) => {
@@ -191,28 +203,47 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
     const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
     const views = makeViews(axes);
-    // presentation: slide the ring group onto the visible pole span (examples show the
-    // ring on the rod) when it sits off this segment
+    // presentation: park the ring on the rod just beside the bracket (like the hand-made
+    // sheets) — also keeps the 1:1 rod-break window tight
     if (ring.length) {
-      const rb = groupBbox(ring), pb = axes.poleBox;
-      const rc = rb.center[axes.poleAxis];
-      if (rc < pb.min[axes.poleAxis] || rc > pb.max[axes.poleAxis]) {
-        const d = [0, 0, 0];
-        d[axes.poleAxis] = pb.center[axes.poleAxis] - rc;
-        ring = translateMeshes(ring, d);
-      }
+      const rb = groupBbox(ring), pb = axes.poleBox, bb = groupBbox(bracket);
+      const ax = axes.poleAxis;
+      const sign = Math.sign(pb.center[ax] - bb.center[ax]) || 1;
+      const ringHalf = (rb.max[ax] - rb.min[ax]) / 2 + 0.002;
+      let target = bb.center[ax] + sign * 0.022; // ring hugs the bracket — keeps the 1:1 window narrow
+      target = Math.min(Math.max(target, pb.min[ax] + ringHalf), pb.max[ax] - ringHalf);
+      const d = [0, 0, 0];
+      d[ax] = target - rb.center[ax];
+      ring = translateMeshes(ring, d);
     }
     const rootV = armRootCenter(bracket, axes);
+    // Rod break: clip the front view to a window around plate/bracket/ring and mark the
+    // cut — a full rod can't print at 1:1, and the hand-made sheets truncate it the same way.
+    const clipFront = (front0, includeBoxes) => {
+      const poleFull = viewBbox(pole, views.front);
+      let lo = Infinity, hi = -Infinity;
+      for (const b of includeBoxes) {
+        if (!b || !isFinite(b.minU)) continue;
+        if (b.minU < lo) lo = b.minU;
+        if (b.maxU > hi) hi = b.maxU;
+      }
+      lo -= 0.008; hi += 0.004;
+      const vis = clipSegmentsU(front0.vis, lo, hi);
+      if (poleFull.minU < lo) vis.push(...breakMarks(lo + 0.004, poleFull.minV, poleFull.maxV));
+      if (poleFull.maxU > hi) vis.push(...breakMarks(hi - 0.006, poleFull.minV, poleFull.maxV));
+      return { view: { vis, zb: { ...front0.zb, minU: lo, maxU: hi } }, hi, poleFull };
+    };
     // BASIC bracket page: one row, bracket + pole + ring only
     if (!plateChoices.length) {
       const meshes = [...bracket, ...pole, ...ring];
-      const front = renderHiddenLine(meshes, views.front, 1600);
+      const front0 = renderHiddenLine(meshes, views.front, 1600);
       const profile = renderHiddenLine(meshes, views.profile, 900);
-      const poleF = viewBbox(pole, views.front);
+      const bracketF = viewBbox(bracket, views.front);
       const ringF = ring.length ? viewBbox(ring, views.front) : null;
+      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ringF]);
       const dims = { front: [], profile: [], detail: [] };
-      dims.front.push({ t: 'dia', u: poleF.maxU - 0.004, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
-      if (ringF) dims.front.push({ t: 'v', u: ringF.maxU, v0: poleF.maxV, v1: ringF.minV, off: 14, ldy: 26, in: (poleF.maxV - ringF.minV) * M2IN });
+      dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
+      if (ringF) dims.front.push({ t: 'v', u: ringF.maxU, v0: poleF.maxV, v1: ringF.minV, off: 18, ldy: 26, in: (poleF.maxV - ringF.minV) * M2IN });
       const wallPt = [0, 0, 0]; wallPt[axes.projAxis] = axes.wallCoord;
       const wallU = projPoint(views.profile, wallPt)[0];
       const poleU = projPoint(views.profile, axes.poleCenter)[0];
@@ -238,25 +269,27 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       const wallCodeMatch = (wallPlate[0] ? (wallPlate[0].path + '/' + wallPlate[0].name) : '').match(/H1-[A-Z]*WP\d+(\s*\/?\s*P)?/i);
       const wallCode = wallCodeMatch ? wallCodeMatch[0].toUpperCase().replace(/\s*\/?\s*P$/, '/P') : (wallPlate.length ? 'WALL PLATE' : '');
       const meshes = [...bracket, ...plateAll, ...pole, ...ring];
-      const front = renderHiddenLine(meshes, views.front, 1600);
+      const front0 = renderHiddenLine(meshes, views.front, 1600);
       const profile = renderHiddenLine(meshes, views.profile, 900);
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
       const coverF = viewBbox(cover.length ? cover : plateAll, views.front);
-      const poleF = viewBbox(pole, views.front);
+      const bracketF = viewBbox(bracket, views.front);
       const ringF = ring.length ? viewBbox(ring, views.front) : null;
       const coverP = viewBbox(cover.length ? cover : plateAll, views.profile);
       const wallF = wallPlate.length ? viewBbox(wallPlate, views.front) : null;
+      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [coverF, bracketF, ringF]);
       const isRound = /-R$/i.test(platePin.partName || '');
       const dims = { front: [], profile: [], detail: [] };
       const plateWIn = (coverF.maxU - coverF.minU) * M2IN;
-      if (isRound) dims.front.push({ t: 'dia', u: coverF.maxU - 0.004, v: coverF.maxV, in: plateWIn });
+      // round plate: Ø leader off the circle's upper-LEFT arc (clear of the pole Ø leader)
+      if (isRound) dims.front.push({ t: 'dia', u: coverF.minU + (coverF.maxU - coverF.minU) * 0.15, v: coverF.maxV - (coverF.maxV - coverF.minV) * 0.15, dir: -1, in: plateWIn });
       else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: coverF.maxV, off: -10, in: plateWIn });
-      dims.front.push({ t: 'dia', u: poleF.maxU - 0.004, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
+      dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
       if (ringF) {
         // ring drop: TOP OF ROD → bottom of the eyelet (Stuart's definition); label drops
         // ~1/4" printed so the text clears the underside of the pole
-        dims.front.push({ t: 'v', u: ringF.maxU, v0: poleF.maxV, v1: ringF.minV, off: 14, ldy: 26, in: (poleF.maxV - ringF.minV) * M2IN });
+        dims.front.push({ t: 'v', u: ringF.maxU, v0: poleF.maxV, v1: ringF.minV, off: 18, ldy: 26, in: (poleF.maxV - ringF.minV) * M2IN });
         // as-mounted: top hole of the wall mount → bottom of the ring, from bulk-entered offset
         const topHoleOff = parseInches(wallCfg[wallCode]?.topHole);
         if (topHoleOff != null && wallF) {
@@ -282,6 +315,41 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     return { rows, axes };
   }, [nodesFor, wallCfg]);
 
+  // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
+  const buildWallMounts = useCallback(() => {
+    if (wallMountsRef.current) return wallMountsRef.current;
+    const scene = sceneRef.current;
+    const poleNodes = nodesFor('POLE');
+    const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
+    const seen = new Map();
+    for (const p of (choiceData ? Object.values(choiceData.families).flat() : [])) {
+      const meshes = extractWorldMeshes(scene, [p.choiceNode]).filter(m => WALL_PLATE_MATCH.test(m.name + m.path));
+      if (!meshes.length) continue;
+      const codeM = (meshes[0].path + '/' + meshes[0].name).match(/H1-[A-Z]*WP\d+(\s*\/?\s*P)?/i);
+      const code = codeM ? codeM[0].toUpperCase().replace(/\s*\/?\s*P$/, '/P') : `WALL PLATE (${p.partName})`;
+      if (seen.has(code) || !pole.length) continue;
+      const axes = inferAxes(pole, meshes);
+      const views = makeViews(axes);
+      const view = renderHiddenLine(meshes, views.front, 300);
+      const wb = viewBbox(meshes, views.front);
+      seen.set(code, {
+        code,
+        view,
+        wIn: (wb.maxU - wb.minU) * M2IN,
+        hIn: (wb.maxV - wb.minV) * M2IN,
+        topHole: wallCfg[code]?.topHole || '',
+      });
+    }
+    wallMountsRef.current = [...seen.values()];
+    return wallMountsRef.current;
+  }, [choiceData, nodesFor, wallCfg]);
+
+  const composeWallMountsPage = useCallback(() => buildWallMountsPage({
+    title: `${assembly.itemName || assembly.itemId} — Wall mounts`,
+    items: buildWallMounts(),
+    noteLines: ['Top-hole offsets come from the Wall mounts panel and drive the as-mounted dims.'],
+  }), [assembly, buildWallMounts]);
+
   // ---- compose current page ----
   useEffect(() => {
     if (!pages.length || error) return;
@@ -289,6 +357,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     setStatus('Rendering…');
     const t = setTimeout(() => {
       try {
+        if (page.key === '__WM__') { setPageData(composeWallMountsPage()); setStatus(''); return; }
         let built = rowCacheRef.current[page.key];
         if (!built) {
           built = buildRows(page.bracketPin, page.familyPins);
@@ -307,6 +376,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
             'Ring dim = top of rod to bottom of eyelet. Profile horizontal dim = wall face to pole centerline.',
             'Measured from 3D geometry, nearest 1/16". Manual dims entered where geometry cannot provide them.',
           ],
+          scaleMode,
         });
         setPageData(result);
         setStatus('');
@@ -317,10 +387,10 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error]);
+  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, composeWallMountsPage]);
 
-  // wall config affects measures → invalidate the row cache when it changes
-  useEffect(() => { rowCacheRef.current = {}; }, [wallCfg]);
+  // wall config affects measures → invalidate the caches when it changes
+  useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; }, [wallCfg]);
 
   // ---- manual dimension tool: two clicks on the SVG → value prompt ----
   const handleSvgClick = (e) => {
@@ -374,6 +444,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
 
   // every page rendered (uses cache; builds missing ones) — for print/PDF
   const buildAllPages = () => pages.map((page) => {
+    if (page.key === '__WM__') return composeWallMountsPage().svg;
     let built = rowCacheRef.current[page.key];
     if (!built) { built = buildRows(page.bracketPin, page.familyPins); rowCacheRef.current[page.key] = built; }
     const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
@@ -387,6 +458,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         ...(rows.some(r => r.hasAsMounted) ? [AS_MOUNTED_NOTE] : []),
         'Ring dim = top of rod to bottom of eyelet. Profile horizontal dim = wall face to pole centerline.',
       ],
+      scaleMode,
     }).svg;
   });
 
@@ -419,6 +491,10 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
           <div style={{ display: 'flex', gap: '4px' }}>
             <button style={edition === 'H1' ? btnOn : btn} onClick={() => setEdition('H1')}>H1 codes</button>
             <button style={edition === 'FAB' ? btnOn : btn} onClick={() => setEdition('FAB')}>Fabricut codes</button>
+          </div>
+          <div style={{ display: 'flex', gap: '4px' }} title="1:1 prints at actual size (rod shown broken, 2 rows/page); Fit packs 5 rows/page">
+            <button style={scaleMode === 'actual' ? btnOn : btn} onClick={() => setScaleMode('actual')}>1:1</button>
+            <button style={scaleMode === 'fit' ? btnOn : btn} onClick={() => setScaleMode('fit')}>Fit</button>
           </div>
           <button style={dimTool ? btnOn : btn} onClick={() => { setDimTool(v => !v); pendingPtRef.current = null; }}>＋ Manual dim</button>
           {manualDims.length > 0 && (
