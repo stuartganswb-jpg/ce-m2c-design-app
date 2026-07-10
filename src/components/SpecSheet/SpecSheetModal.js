@@ -23,6 +23,13 @@ import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 // its wall plates differently.
 const WALL_PLATE_MATCH = /(CPWP|BPWP)/i;
 const SCREW_MATCH = /screw/i;
+
+// Plate FAMILY = part code minus the shape suffix (H1-75RCP-S → H1-75RCP). A page is one
+// bracket × one family with the shapes as rows — matching the hand-made sheets. Return-arm
+// brackets pair with return plates when pins carry the flags; otherwise every family gets
+// its own page (tag pins in 1.6/⚖ to prune).
+const familyOf = (name) => String(name || '').replace(/-(H|R|S|V)$/i, '');
+const MAX_ROWS_PER_PAGE = 5;
 const AS_MOUNTED_NOTE = 'As-mounted dim marks the height from the center of the top hole of the wall mount to the bottom of the ring.';
 
 const btn = { padding: '6px 12px', fontSize: '0.8rem', cursor: 'pointer', border: '1px solid #444', background: '#fff', borderRadius: '4px' };
@@ -74,21 +81,18 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
   }, [clusters]);
 
   // Choice pins per category, LEFT side preferred (sheets draw one side).
-  const choicesFor = useCallback((cat, wantReturn) => {
+  const choicesFor = useCallback((cat) => {
     const inCat = (pins || []).filter(p => {
       const cl = clusterById[p.clusterId];
       return cl && cl.cat === cat && !cl.hidden && p.choiceNode && !p.isHiddenPart;
     });
     const left = inCat.filter(p => (clusterById[p.clusterId].pos || 'LEFT') === 'LEFT');
-    let pool = left.length ? left : inCat;
-    if (cat === 'BACKPLATE' && wantReturn != null) {
-      const filtered = pool.filter(p => !!p.returnOnly === !!wantReturn);
-      if (filtered.length) pool = filtered;
-    }
+    const pool = left.length ? left : inCat;
     // stable order: H, R, S, V suffixes first (matches the hand-made sheets), then name
     const rank = (p) => { const m = (p.partName || '').match(/-(H|R|S|V)$/i); return m ? 'HRSV'.indexOf(m[1].toUpperCase()) : 9; };
     return [...pool].sort((a, b) => rank(a) - rank(b) || String(a.partName).localeCompare(String(b.partName)));
   }, [pins, clusterById]);
+
 
   const nodesFor = useCallback((cat) => {
     const cls = clusters.filter(c => c.cat === cat && !c.hidden && (c.nodes || []).length && ['LEFT', 'SHARED', 'CENTER', ''].includes(c.pos || ''));
@@ -128,7 +132,35 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         if (cfgSnap?.exists()) setWallCfg(cfgSnap.data()?.wallPlates || {});
         const brackets = choicesFor('BRACKET');
         if (!brackets.length) throw new Error('No bracket choices found (need BRACKET-category cluster pins with choiceNode).');
-        setPages(brackets.map(p => ({ key: p.partName || p.id, title: p.partName, bracketPin: p })));
+        const plates = choicesFor('BACKPLATE');
+        if (!plates.length) throw new Error('No backplate choices found (need BACKPLATE-category cluster pins with choiceNode).');
+        const families = {};
+        plates.forEach(p => { const f = familyOf(p.partName); (families[f] = families[f] || []).push(p); });
+        const anyReturnFlags = plates.some(p => p.returnOnly) || brackets.some(b => b.usesReturnPlates || b.isReturnArm);
+        const pageList = [];
+        for (const b of brackets) {
+          const bracketIsReturn = !!(b.usesReturnPlates || b.isReturnArm || /RETURN/i.test(b.endTreatment || ''));
+          for (const [fam, famPins] of Object.entries(families)) {
+            if (anyReturnFlags) {
+              const famIsReturn = famPins.some(p => p.returnOnly);
+              if (famIsReturn !== bracketIsReturn) continue;
+            }
+            // safety: never overload a page — chunk oversized families
+            for (let i = 0; i < famPins.length; i += MAX_ROWS_PER_PAGE) {
+              const chunk = famPins.slice(i, i + MAX_ROWS_PER_PAGE);
+              const part = famPins.length > MAX_ROWS_PER_PAGE ? ` (${i / MAX_ROWS_PER_PAGE + 1})` : '';
+              pageList.push({
+                key: `${b.partName}__${fam}__${i}`,
+                title: `${b.partName} + ${fam}${part}`,
+                bracketPin: b,
+                familyPins: chunk,
+                family: fam,
+              });
+            }
+          }
+        }
+        if (!pageList.length) throw new Error('No bracket × backplate-family pages could be derived.');
+        setPages(pageList);
         setStatus('');
       } catch (e) {
         console.error('SpecSheet load failed', e);
@@ -138,8 +170,8 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     return () => { dead = true; };
   }, [assembly, choicesFor]);
 
-  // ---- build rows for a page (cached per bracket) ----
-  const buildRows = useCallback((bracketPin) => {
+  // ---- build rows for a page (cached per bracket × family) ----
+  const buildRows = useCallback((bracketPin, familyPins) => {
     const scene = sceneRef.current;
     const bracket = extractWorldMeshes(scene, [bracketPin.choiceNode]);
     if (!bracket.length) throw new Error(`Bracket node "${bracketPin.choiceNode}" not found in GLB.`);
@@ -147,7 +179,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     const ringNodes = nodesFor('RING');
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     let ring = ringNodes.length ? extractWorldMeshes(scene, ringNodes) : [];
-    const plateChoices = choicesFor('BACKPLATE', !!(bracketPin.usesReturnPlates || bracketPin.isReturnArm));
+    const plateChoices = familyPins || [];
     if (!plateChoices.length) throw new Error('No backplate choices found for this bracket.');
     const firstPlate = extractWorldMeshes(scene, [plateChoices[0].choiceNode]);
     if (!pole.length) throw new Error('No POLE cluster nodes found.');
@@ -179,8 +211,9 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       }
       const wallPlate = plateAll.filter(m => WALL_PLATE_MATCH.test(m.name + m.path));
       const cover = plateAll.filter(m => !WALL_PLATE_MATCH.test(m.name + m.path) && !SCREW_MATCH.test(m.name + m.path));
-      const wallCodeMatch = (wallPlate[0] ? (wallPlate[0].path + '/' + wallPlate[0].name) : '').match(/H1-[A-Z]*WP\d+(\/P)?/i);
-      const wallCode = wallCodeMatch ? wallCodeMatch[0].toUpperCase() : (wallPlate.length ? 'WALL PLATE' : '');
+      // merged GLBs may drop the "/" from item codes ("H1-CPWP2P") — normalize back to ".../P"
+      const wallCodeMatch = (wallPlate[0] ? (wallPlate[0].path + '/' + wallPlate[0].name) : '').match(/H1-[A-Z]*WP\d+(\s*\/?\s*P)?/i);
+      const wallCode = wallCodeMatch ? wallCodeMatch[0].toUpperCase().replace(/\s*\/?\s*P$/, '/P') : (wallPlate.length ? 'WALL PLATE' : '');
       const meshes = [...bracket, ...plateAll, ...pole, ...ring];
       const front = renderHiddenLine(meshes, views.front, 1600);
       const profile = renderHiddenLine(meshes, views.profile, 900);
@@ -222,7 +255,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes };
-  }, [choicesFor, nodesFor, wallCfg]);
+  }, [nodesFor, wallCfg]);
 
   // ---- compose current page ----
   useEffect(() => {
@@ -233,7 +266,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       try {
         let built = rowCacheRef.current[page.key];
         if (!built) {
-          built = buildRows(page.bracketPin);
+          built = buildRows(page.bracketPin, page.familyPins);
           rowCacheRef.current[page.key] = built;
         }
         const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
@@ -241,7 +274,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         const titleCode = edition === 'FAB' ? (fabCodeFor(page.bracketPin.partName) || page.bracketPin.partName) : page.bracketPin.partName;
         const result = buildPageSvg({
           title: `${assembly.itemName || assembly.itemId} — ${titleCode}`,
-          subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · generated from 3D model`,
+          subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${page.family} backplates · generated from 3D model`,
           rows,
           manualDims: manualDims.filter(d => d.pageKey === page.key),
           noteLines: [
@@ -317,12 +350,12 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
   // every page rendered (uses cache; builds missing ones) — for print/PDF
   const buildAllPages = () => pages.map((page) => {
     let built = rowCacheRef.current[page.key];
-    if (!built) { built = buildRows(page.bracketPin); rowCacheRef.current[page.key] = built; }
+    if (!built) { built = buildRows(page.bracketPin, page.familyPins); rowCacheRef.current[page.key] = built; }
     const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
     const titleCode = edition === 'FAB' ? (fabCodeFor(page.bracketPin.partName) || page.bracketPin.partName) : page.bracketPin.partName;
     return buildPageSvg({
       title: `${assembly.itemName || assembly.itemId} — ${titleCode}`,
-      subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · generated from 3D model`,
+      subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${page.family} backplates · generated from 3D model`,
       rows,
       manualDims: manualDims.filter(d => d.pageKey === page.key),
       noteLines: [
