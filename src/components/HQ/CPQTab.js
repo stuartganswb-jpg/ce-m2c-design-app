@@ -2328,7 +2328,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               Style option when that option carries its own finishAllowedOptions
                               (e.g. Wood rod -> wood-clear finishes, Metal rod -> metal finishes);
                               otherwise it falls back to the step-level finish list. */}
-                          {currentStep.finishDataSource && (() => {
+                          {/* Never on SIZE steps: they're selectors, not parts — a finish grid here
+                              (stray finishDataSource from "Apply finishes to all steps") captured
+                              clicks meant for the pole step's finish and confused the pole render. */}
+                          {currentStep.finishDataSource && currentStep.type !== SIZE_STEP_TYPE && (() => {
                               const selStyleId = dynamicConfigParams[currentStep.id];
                               const selOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === selStyleId);
                               const scopedFinishes = (selOpt && Array.isArray(selOpt.finishAllowedOptions) && selOpt.finishAllowedOptions.length)
@@ -2435,7 +2438,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           )}
                       </div>
 
-                      {!currentStep.hideQty && (
+                      {!currentStep.hideQty && currentStep.type !== SIZE_STEP_TYPE && (
                       <div style={{ padding: '20px 24px', background: 'var(--paper)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div style={{ color: 'var(--ink-soft)', flex: 1, paddingRight: '20px' }}>
                               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', display: 'block', marginBottom: '4px' }}>Step Quantity</span>

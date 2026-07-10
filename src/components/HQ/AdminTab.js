@@ -5,7 +5,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
-import { sizeFamilyOfParts, buildSizeSteps } from '../Shared/sizeMatrix';
+import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE } from '../Shared/sizeMatrix';
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -1028,11 +1028,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       if (!activeFlowId || !activeFlow) return;
       const def = flowSettings.defaultFinishOptions || [];
       const steps = activeFlow.steps || [];
-      const eligible = steps.filter(s => s.type !== 'STATIC_FEE');
+      // SIZE steps (Rod Diameter / Projection) are selectors, not parts — no finish picker.
+      const eligible = steps.filter(s => s.type !== 'STATIC_FEE' && s.type !== SIZE_STEP_TYPE);
       if (eligible.length === 0) return alert("This flow has no steps that can carry a finish (only fees).");
       if (!window.confirm(`Apply ${def.length} default finish(es) to all ${eligible.length} step(s)? This overwrites each step's current finish list.`)) return;
       const updatedSteps = steps.map(s => {
-          if (s.type === 'STATIC_FEE') return s;
+          if (s.type === 'STATIC_FEE' || s.type === SIZE_STEP_TYPE) return s;
           if (s.dataSource === 'master_finishes') {
               // The step's own options ARE finishes — scope them directly.
               return { ...s, allowedOptions: [...def] };
