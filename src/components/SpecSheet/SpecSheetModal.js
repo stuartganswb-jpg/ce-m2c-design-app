@@ -9,19 +9,19 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { loadGLBScene } from '../Shared/componentExport';
-import { normalizeCategory, normalizePosition } from '../Shared/assemblyTags';
+import { normalizeCategory, normalizePosition, normalizeEndTreatment } from '../Shared/assemblyTags';
 import {
   M2IN, extractWorldMeshes, groupBbox, translateMeshes, inferAxes, makeViews,
   armRootCenter, parseInches, clipSegmentsU, breakMarks,
 } from './specSheetGeometry';
 import { renderHiddenLine } from './hiddenLine';
-import { buildPageSvg, buildWallMountsPage, PAPERS } from './specSheetPage';
+import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from './specSheetPage';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 
 // Wall-mount plate meshes are children of each backplate choice node in the merged GLB
 // (Fabricut H1 convention: item codes like H1-CPWP2/P). Extend here if a collection names
 // its wall plates differently.
-const WALL_PLATE_MATCH = /(CPWP|BPWP)/i;
+const WALL_PLATE_MATCH = /(CPWP|BPWP|IMWP)/i;
 const SCREW_MATCH = /screw/i;
 
 // Plate FAMILY = part code minus the shape suffix (H1-75RCP-S → H1-75RCP). A page is one
@@ -80,6 +80,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
   const sceneRef = useRef(null);
   const rowCacheRef = useRef({}); // pageKey -> built rows
   const wallMountsRef = useRef(null); // unique wall-mount styles for the 1:1 reference page
+  const finialsRef = useRef(null);    // finial catalog items for the 1:1 grid page
   const pendingPtRef = useRef(null);
   const svgHostRef = useRef(null);
 
@@ -148,7 +149,15 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         const families = {};
         plates.forEach(p => { const f = familyOf(p.partName); (families[f] = families[f] || []).push(p); });
         const anyReturnFlags = plates.some(p => p.returnOnly) || brackets.some(b => b.usesReturnPlates || b.isReturnArm);
-        setChoiceData({ brackets, families, anyReturnFlags });
+        // the FINIAL cluster holds ALL end-treatment choices (canonical tag spec):
+        // plain finials → catalog grid page; french/miter returns → bracket-style pages;
+        // inside mounts → single-row page (their threaded plate is nested in the geometry)
+        const endChoices = choicesFor('FINIAL');
+        const et = (p) => normalizeEndTreatment(p.endTreatment || '');
+        const finials = endChoices.filter(p => !et(p) || et(p) === 'FINIAL');
+        const returnArms = endChoices.filter(p => et(p) === 'FRENCH_RETURN' || et(p) === 'MITER_RETURN');
+        const insideMounts = endChoices.filter(p => et(p) === 'INSIDE_MOUNT');
+        setChoiceData({ brackets, families, anyReturnFlags, finials, returnArms, insideMounts });
         setStatus('');
       } catch (e) {
         console.error('SpecSheet load failed', e);
@@ -161,18 +170,23 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
   // ---- derive pages from choices (re-chunked when the scale mode changes) ----
   useEffect(() => {
     if (!choiceData) return;
-    const { brackets, families, anyReturnFlags } = choiceData;
+    const { brackets, families, anyReturnFlags, finials = [], returnArms = [], insideMounts = [] } = choiceData;
     // 1:1 rows are ~4" tall (ring drop + plate + padding) — two fit on 11×17's 10.5" printable height
     const maxRows = scaleMode === 'actual' ? 2 : MAX_ROWS_PER_PAGE;
     const pageList = [];
-    for (const b of brackets) {
+    // return arms page like brackets (their bend geometry is part of the choice node)
+    const armLike = [
+      ...brackets.map(b => ({ pin: b, retSuffix: '' })),
+      ...returnArms.map(a => ({ pin: a, retSuffix: ' (return)' })),
+    ];
+    for (const { pin: b, retSuffix } of armLike) {
       // isBasic = bracket takes NO backplate (canonical flag) — its page draws the
       // bracket/pole/ring alone, no plate rows, no wall-mount detail.
       if (b.isBasic) {
         pageList.push({ key: `${b.partName}__BASIC`, title: `${b.partName} (basic — no backplate)`, bracketPin: b, familyPins: [], family: 'basic, no backplate' });
         continue;
       }
-      const bracketIsReturn = !!(b.usesReturnPlates || b.isReturnArm || /RETURN/i.test(b.endTreatment || ''));
+      const bracketIsReturn = !!(retSuffix || b.usesReturnPlates || b.isReturnArm || /RETURN/i.test(b.endTreatment || ''));
       for (const [fam, famPins] of Object.entries(families)) {
         if (anyReturnFlags) {
           const famIsReturn = famPins.some(p => p.returnOnly);
@@ -183,7 +197,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
           const part = famPins.length > maxRows ? ` (${i / maxRows + 1})` : '';
           pageList.push({
             key: `${b.partName}__${fam}__${i}_${maxRows}`,
-            title: `${b.partName} + ${fam}${part}`,
+            title: `${b.partName}${retSuffix} + ${fam}${part}`,
             bracketPin: b,
             familyPins: chunk,
             family: fam,
@@ -191,14 +205,18 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         }
       }
     }
+    for (const im of insideMounts) {
+      pageList.push({ key: `${im.partName}__IM`, title: `${im.partName} (inside mount)`, bracketPin: im, familyPins: [], family: 'inside mount', isIM: true });
+    }
     if (!pageList.length) { setError('No bracket × backplate-family pages could be derived.'); return; }
+    if (finials.length) pageList.push({ key: '__FINIALS__', title: '❖ Finials (1:1)', family: '' });
     pageList.push({ key: '__WM__', title: '⊞ Wall mounts (1:1)', family: '' });
     setPages(pageList);
     setPageIndex(0);
   }, [choiceData, scaleMode]);
 
   // ---- build rows for a page (cached per bracket × family) ----
-  const buildRows = useCallback((bracketPin, familyPins) => {
+  const buildRows = useCallback((bracketPin, familyPins, opts = {}) => {
     const scene = sceneRef.current;
     const bracket = extractWorldMeshes(scene, [bracketPin.choiceNode]);
     if (!bracket.length) throw new Error(`Bracket node "${bracketPin.choiceNode}" not found in GLB.`);
@@ -242,7 +260,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       if (poleFull.maxU > hi) vis.push(...breakMarks(hi - 0.006, poleFull.minV, poleFull.maxV));
       return { view: { vis, zb: { ...front0.zb, minU: lo, maxU: hi } }, hi, poleFull };
     };
-    // BASIC bracket page: one row, bracket + pole + ring only
+    // BASIC bracket / INSIDE MOUNT page: one row, choice + pole + ring only
     if (!plateChoices.length) {
       const meshes = [...bracket, ...pole, ...ring];
       const front0 = renderHiddenLine(meshes, views.front, 1600);
@@ -253,11 +271,33 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       const dims = { front: [], profile: [], detail: [] };
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
       if (ringF) dims.front.push({ t: 'v', u: ringF.maxU, v0: poleF.maxV, v1: ringF.minV, off: 18, ldy: 26, in: (poleF.maxV - ringF.minV) * M2IN });
-      const wallPt = [0, 0, 0]; wallPt[axes.projAxis] = axes.wallCoord;
-      const wallU = projPoint(views.profile, wallPt)[0];
-      const poleU = projPoint(views.profile, axes.poleCenter)[0];
-      const profTopV = viewBbox(meshes, views.profile).maxV;
-      dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: Math.abs(poleU - wallU) * M2IN });
+      if (opts.isIM) {
+        // inside mount: barrel length + Ø; end view gets plate Ø + ring Ø leaders.
+        // No projection dim — IM mounts at the rod end, not on the wall.
+        dims.front.push({ t: 'h', u0: bracketF.minU, u1: bracketF.maxU, v: bracketF.maxV, off: -10, in: (bracketF.maxU - bracketF.minU) * M2IN });
+        const barrel = bracket.filter(m => !WALL_PLATE_MATCH.test(m.name + m.path));
+        if (barrel.length) {
+          const bF = viewBbox(barrel, views.front);
+          dims.front.push({ t: 'v', u: bF.maxU, v0: bF.maxV, v1: bF.minV, off: 14, dia: true, in: (bF.maxV - bF.minV) * M2IN });
+        }
+        const imPlate = bracket.filter(m => WALL_PLATE_MATCH.test(m.name + m.path));
+        if (imPlate.length) {
+          const pP = viewBbox(imPlate, views.profile);
+          dims.profile.push({ t: 'dia', u: pP.minU + (pP.maxU - pP.minU) * 0.15, v: pP.maxV - (pP.maxV - pP.minV) * 0.15, dir: -1, in: (pP.maxV - pP.minV) * M2IN });
+        }
+        if (ring.length) {
+          // ring OD only — the eyelet hangs below and would inflate the Ø
+          const ringBody = ring.filter(m => !/eyelet/i.test(m.name + m.path));
+          const rP = viewBbox(ringBody.length ? ringBody : ring, views.profile);
+          dims.profile.push({ t: 'dia', u: rP.maxU - (rP.maxU - rP.minU) * 0.15, v: rP.maxV - (rP.maxV - rP.minV) * 0.15, in: (rP.maxV - rP.minV) * M2IN });
+        }
+      } else {
+        const wallPt = [0, 0, 0]; wallPt[axes.projAxis] = axes.wallCoord;
+        const wallU = projPoint(views.profile, wallPt)[0];
+        const poleU = projPoint(views.profile, axes.poleCenter)[0];
+        const profTopV = viewBbox(meshes, views.profile).maxV;
+        dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: Math.abs(poleU - wallU) * M2IN });
+      }
       return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, hasAsMounted: false }], axes };
     }
     const rows = plateChoices.map((platePin) => {
@@ -353,6 +393,38 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     return wallMountsRef.current;
   }, [choiceData, nodesFor, wallCfg]);
 
+  // ---- finials catalog: every finial choice at 1:1, side view, L × Ø dims ----
+  const buildFinials = useCallback(() => {
+    if (finialsRef.current) return finialsRef.current;
+    const scene = sceneRef.current;
+    const poleNodes = nodesFor('POLE');
+    const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
+    const items = [];
+    let views = null;
+    for (const p of (choiceData?.finials || [])) {
+      const meshes = extractWorldMeshes(scene, [p.choiceNode]);
+      if (!meshes.length) continue;
+      if (!views) {
+        const axes = inferAxes(pole.length ? pole : meshes, meshes);
+        views = makeViews(axes);
+      }
+      const view = renderHiddenLine(meshes, views.front, 400);
+      const b = viewBbox(meshes, views.front);
+      items.push({ partName: p.partName, view, wIn: (b.maxU - b.minU) * M2IN, hIn: (b.maxV - b.minV) * M2IN });
+    }
+    finialsRef.current = items;
+    return items;
+  }, [choiceData, nodesFor]);
+
+  const composeFinialsPage = useCallback(() => buildItemsGridPage({
+    title: `${assembly.itemName || assembly.itemId} — Finials`,
+    subtitle: 'All finial choices at actual size. Socket depth is hidden geometry — add it with the manual dim tool.',
+    items: buildFinials().map(f => ({ code: rowCode(f.partName), view: f.view, wIn: f.wIn, hIn: f.hIn })),
+    paper: layoutPaper,
+    footerNote: reducedNote,
+    perRowOverride: layoutPaper === 'tabloid' ? 5 : 4,
+  }), [assembly, buildFinials, rowCode, layoutPaper, reducedNote]);
+
   const composeWallMountsPage = useCallback(() => buildWallMountsPage({
     title: `${assembly.itemName || assembly.itemId} — Wall mounts`,
     items: buildWallMounts(),
@@ -369,9 +441,10 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     const t = setTimeout(() => {
       try {
         if (page.key === '__WM__') { setPageData(composeWallMountsPage()); setStatus(''); return; }
+        if (page.key === '__FINIALS__') { setPageData(composeFinialsPage()); setStatus(''); return; }
         let built = rowCacheRef.current[page.key];
         if (!built) {
-          built = buildRows(page.bracketPin, page.familyPins);
+          built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM });
           rowCacheRef.current[page.key] = built;
         }
         const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
@@ -400,7 +473,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, layoutPaper, reducedNote, composeWallMountsPage]);
+  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, layoutPaper, reducedNote, composeWallMountsPage, composeFinialsPage]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; }, [wallCfg]);
@@ -458,8 +531,9 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
   // every page rendered (uses cache; builds missing ones) — for print/PDF
   const buildAllPages = () => pages.map((page) => {
     if (page.key === '__WM__') return composeWallMountsPage().svg;
+    if (page.key === '__FINIALS__') return composeFinialsPage().svg;
     let built = rowCacheRef.current[page.key];
-    if (!built) { built = buildRows(page.bracketPin, page.familyPins); rowCacheRef.current[page.key] = built; }
+    if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM }); rowCacheRef.current[page.key] = built; }
     const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
     const titleCode = edition === 'FAB' ? (fabCodeFor(page.bracketPin.partName) || page.bracketPin.partName) : page.bracketPin.partName;
     return buildPageSvg({

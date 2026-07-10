@@ -199,15 +199,16 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   return { svg: wrapSvg(P, svg), viewMaps, paper: paper || (actual ? 'tabloid' : 'letter') };
 }
 
-// Dedicated wall-mounts reference page: every unique style at TRUE 1:1, face-on.
-export function buildWallMountsPage({ title, items = [], noteLines = [], paper = 'letter', footerNote }) {
+// Generic 1:1 items-grid page — used for the wall-mounts reference and the finials catalog.
+// items: [{ code, view, wIn, hIn, note? }] — each drawn face-on at actual size with W/H dims.
+export function buildItemsGridPage({ title, subtitle, items = [], noteLines = [], paper = 'letter', footerNote, perRowOverride }) {
   const P = PAPERS[paper];
   const oneToOne = scaleForPaper(paper);
   let svg = '';
   svg += `<rect x="${MARGIN}" y="${MARGIN}" width="${P.W - 2 * MARGIN}" height="${P.H - 2 * MARGIN}" fill="none" stroke="black" stroke-width="1.5"/>`;
-  svg += `<text x="${MARGIN + 40}" y="${MARGIN + 34}" font-size="13">${title || 'Wall mounts'}</text>`;
-  svg += `<text x="${MARGIN + 40}" y="${MARGIN + 50}" font-size="11" fill="#444">All wall-mount styles at actual size — print at 100% and hold against the part.</text>`;
-  const perRow = paper === 'tabloid' ? 4 : 3;
+  svg += `<text x="${MARGIN + 40}" y="${MARGIN + 34}" font-size="13">${title || ''}</text>`;
+  if (subtitle) svg += `<text x="${MARGIN + 40}" y="${MARGIN + 50}" font-size="11" fill="#444">${subtitle}</text>`;
+  const perRow = perRowOverride || (paper === 'tabloid' ? 4 : 3);
   const cellW = (P.W - 2 * MARGIN - 80) / perRow;
   const cellH = (P.H - 2 * MARGIN - 110) / Math.max(1, Math.ceil(items.length / perRow));
   items.forEach((it, i) => {
@@ -219,11 +220,21 @@ export function buildWallMountsPage({ title, items = [], noteLines = [], paper =
     const [bx, by, bw, bh] = mapping.rect;
     svg += dimH(bx, bx + bw, by - 12, it.wIn);
     svg += dimV(bx + bw + 12, by, by + bh, it.hIn);
-    if (it.topHole) svg += `<text x="${cx}" y="${by + bh + 22}" font-size="9" text-anchor="middle">top hole ${it.topHole}" from top</text>`;
+    if (it.note) svg += `<text x="${cx}" y="${by + bh + 22}" font-size="9" text-anchor="middle">${it.note}</text>`;
   });
   noteLines.forEach((line, i) => {
     svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 12 - (noteLines.length - 1 - i) * 14}" font-size="10">${line}</text>`;
   });
   svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 12}" font-size="10" text-anchor="end">${footerNote || `SCALE 1:1 ON ${P.label} LANDSCAPE (0.25" margins, print at 100%)`}</text>`;
   return { svg: wrapSvg(P, svg), viewMaps: [], paper };
+}
+
+// Dedicated wall-mounts reference page: every unique style at TRUE 1:1, face-on.
+export function buildWallMountsPage({ title, items = [], noteLines = [], paper = 'letter', footerNote }) {
+  return buildItemsGridPage({
+    title,
+    subtitle: 'All wall-mount styles at actual size — print at 100% and hold against the part.',
+    items: items.map(it => ({ ...it, note: it.topHole ? `top hole ${it.topHole}" from top` : '' })),
+    noteLines, paper, footerNote,
+  });
 }
