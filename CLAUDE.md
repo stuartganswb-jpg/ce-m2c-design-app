@@ -10,13 +10,17 @@ React + Firebase manufacturing PLM/WMS for Classical Elements & M2C Studio. Live
 Frontend **auto-deploys to production via Vercel on push to `main`**. Standard flow:
 ```
 rm -f .git/index.lock           # always do this first
-git checkout -b <feat-branch>
 git add <files> && git commit -q -m "...
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
-git push -u origin <feat-branch>
-git checkout main && git merge --ff-only <feat-branch> && git push origin main
+git pull --rebase --autostash origin main
+git push origin main
 ```
 After deploy, the user must **hard-refresh** (⌘⇧R) to clear the cached bundle.
+
+**MULTI-SESSION GIT SAFETY — multiple Claude sessions often work this repo at once:**
+- **NEVER switch branches in the shared checkout** (`git checkout <branch>` races the other session's in-flight files — this once landed a commit on main unintentionally). Commit small changes directly on main (fix-forward, as above); use an isolated **`git worktree`** for bigger multi-commit work.
+- Stage ONLY files you changed (never `git add -A` — the other session's work may be sitting in the tree).
+- Always `git pull --rebase --autostash` before push — it preserves the other session's uncommitted worktree state.
 
 ## Firebase Functions (NOT auto-deployed)
 `functions/index.js` (`netsuiteProxy` = NetSuite OAuth proxy; `authenticatePin` = PIN auth). **Vercel does NOT deploy functions.** Local `firebase login` fails on this Mac (localhost callback). **Deploy from Google Cloud Shell** (shell.cloud.google.com): `git pull` then `firebase deploy --only functions:netsuiteProxy --project ce-m2c-design-collab`. See memory `firebase-deploy-cloud-shell`.
