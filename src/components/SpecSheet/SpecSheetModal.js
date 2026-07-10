@@ -388,7 +388,10 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     const poleNodes = nodesFor('POLE');
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     const seen = new Map();
-    for (const p of (choiceData ? Object.values(choiceData.families).flat() : [])) {
+    const allPlatePins = choiceData
+      ? [...Object.values(choiceData.regFams || {}), ...Object.values(choiceData.retFams || {})].flat()
+      : [];
+    for (const p of allPlatePins) {
       const meshes = extractWorldMeshes(scene, [p.choiceNode]).filter(m => WALL_PLATE_MATCH.test(m.name + m.path));
       if (!meshes.length) continue;
       const codeM = (meshes[0].path + '/' + meshes[0].name).match(/H1-[A-Z]*WP\d+(\s*\/?\s*P)?/i);
