@@ -240,13 +240,42 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     const poleNodes = nodesFor('POLE');
     const ringNodes = nodesFor('RING');
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
-    let ring = ringNodes.length ? extractWorldMeshes(scene, ringNodes) : [];
+    // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
+    // BR) — the composed views draw only the one actually hanging on the rod; every option
+    // gets its own labeled detail image in the page corner.
+    const ringPins = choicesFor('RING');
+    let ringChoices = ringPins
+      .map(p => ({ partName: p.partName, meshes: extractWorldMeshes(scene, [p.choiceNode]) }))
+      .filter(r => r.meshes.length);
+    if (!ringChoices.length && ringNodes.length) {
+      ringChoices = [{ partName: '', meshes: extractWorldMeshes(scene, ringNodes) }];
+    }
+    let ring = [];
     const plateChoices = familyPins || [];
     if (!pole.length) throw new Error('No POLE cluster nodes found.');
     // basic brackets have no plate — the bracket itself marks the wall side for axis inference
     const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
     const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
     const views = makeViews(axes);
+    // pick the ring that actually HANGS on the rod for the composed views: prefer choices
+    // whose bbox wraps the pole centerline; among those the lowest one (a stacked second
+    // option floats above the rod and would corrupt the ring-drop measurement)
+    const ringDetails = [];
+    if (ringChoices.length) {
+      const vert = axes.vertAxis;
+      const poleC = axes.poleBox.center[vert];
+      const scored = ringChoices.map(rc => {
+        const b = groupBbox(rc.meshes);
+        return { ...rc, b, wraps: b.min[vert] <= poleC && b.max[vert] >= poleC, centerV: b.center[vert] };
+      });
+      const wrapping = scored.filter(s => s.wraps);
+      const pool = wrapping.length ? wrapping : scored;
+      const main = pool.reduce((lo, s) => (s.centerV < lo.centerV ? s : lo), pool[0]);
+      ring = main.meshes;
+      // detail images for EVERY ring option (they stack on the rod; key dims match, but
+      // the customer should see both parts) — rendered later once views exist
+      for (const s of scored) ringDetails.push(s);
+    }
     // presentation: park the ring on the rod just beside the bracket (like the hand-made
     // sheets) — also keeps the 1:1 rod-break window tight
     if (ring.length) {
@@ -260,6 +289,20 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       d[ax] = target - rb.center[ax];
       ring = translateMeshes(ring, d);
     }
+    // ring-option detail images: FACE-ON (profile direction — the ring reads as a circle),
+    // body OD + overall height including the eyelet
+    const ringItems = ringDetails.map(s => {
+      const view = renderHiddenLine(s.meshes, views.profile, 350);
+      const body = s.meshes.filter(m => !/eyelet/i.test(m.name + m.path));
+      const bP = viewBbox(body.length ? body : s.meshes, views.profile);
+      const aP = viewBbox(s.meshes, views.profile);
+      return {
+        partName: s.partName,
+        view,
+        odIn: (bP.maxV - bP.minV) * M2IN,
+        hIn: (aP.maxV - aP.minV) * M2IN,
+      };
+    });
     const rootV = armRootCenter(bracket, axes);
     // Rod break: clip the front view to a window around plate/bracket/ring and mark the
     // cut — a full rod can't print at 1:1, and the hand-made sheets truncate it the same way.
@@ -315,7 +358,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         const profTopV = viewBbox(meshes, views.profile).maxV;
         dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: Math.abs(poleU - wallU) * M2IN });
       }
-      return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, hasAsMounted: false }], axes };
+      return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, hasAsMounted: false }], axes, ringItems };
     }
     const rows = plateChoices.map((platePin) => {
       const plateAll0 = extractWorldMeshes(scene, [platePin.choiceNode]);
@@ -378,8 +421,8 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       }
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
-    return { rows, axes };
-  }, [nodesFor, wallCfg]);
+    return { rows, axes, ringItems };
+  }, [nodesFor, wallCfg, choicesFor]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
   const buildWallMounts = useCallback(() => {
@@ -483,6 +526,9 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
           scaleMode,
           paper: layoutPaper,
           footerNote: reducedNote,
+          cornerItems: (built.ringItems?.length > 1)
+            ? built.ringItems.map(r => ({ code: rowCode(r.partName), view: r.view, odIn: r.odIn, hIn: r.hIn }))
+            : [],
         });
         setPageData(result);
         setStatus('');
@@ -568,6 +614,9 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       scaleMode,
       paper: layoutPaper,
       footerNote: reducedNote,
+      cornerItems: (built.ringItems?.length > 1)
+        ? built.ringItems.map(r => ({ code: rowCode(r.partName), view: r.view, odIn: r.odIn, hIn: r.hIn }))
+        : [],
     }).svg;
   });
 

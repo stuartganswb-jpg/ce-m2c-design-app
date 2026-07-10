@@ -125,7 +125,7 @@ const wrapSvg = (P, inner) =>
 
 // rows[i] = { rowKey, code, wallCode, front, profile, detail, dims } — dim specs:
 //   { t:'h', u0, u1, v, off? } | { t:'v', u, v0, v1, off?, side?, ldy?, dia? } | { t:'dia', u, v, val, dir? }
-export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines = [], scaleMode = 'fit', paper, footerNote }) {
+export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines = [], scaleMode = 'fit', paper, footerNote, cornerItems = [] }) {
   const actual = scaleMode === 'actual';
   const P = PAPERS[paper || (actual ? 'tabloid' : 'letter')];
   const oneToOne = scaleForPaper(paper || (actual ? 'tabloid' : 'letter'));
@@ -190,6 +190,22 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
     } else svg += `<text x="${cols.code}" y="${cy + 4}" font-size="12" text-anchor="middle">${r.code || ''}</text>`;
   });
 
+  // corner detail images (1:1 mode): part options that stack in the composed views —
+  // e.g. the two ring choices — drawn separately bottom-right so both parts are shown
+  if (actual && cornerItems.length) {
+    const cellW = 240;
+    const baseCy = P.H - MARGIN - 150;
+    svg += `<text x="${P.W - MARGIN - (cellW * cornerItems.length) / 2 - 20}" y="${baseCy - 110}" font-size="10" text-anchor="middle">RING OPTIONS — stack on the rod, key dims identical</text>`;
+    cornerItems.forEach((it, i) => {
+      const cx = P.W - MARGIN - 20 - cellW * (cornerItems.length - 1 - i) - cellW / 2;
+      const { mu, mv, mapping } = place(it.view.zb, cx, baseCy, oneToOne);
+      svg += segPaths(it.view.vis, mu, mv);
+      const [bx, by, bw, bh] = mapping.rect;
+      svg += `<text x="${cx}" y="${by - 28}" font-size="11" text-anchor="middle">${it.code}</text>`;
+      svg += leaderDia(bx + bw * 0.18, by + bh * 0.15, it.odIn, -1);
+      svg += dimV(bx + bw + 12, by, by + bh, it.hIn);
+    });
+  }
   noteLines.forEach((line, i) => {
     svg += `<text x="${MARGIN + 290}" y="${P.H - MARGIN - 12 - (noteLines.length - 1 - i) * 14}" font-size="10">${line}</text>`;
   });
