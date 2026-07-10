@@ -311,19 +311,25 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       // the customer should see both parts) — rendered later once views exist
       for (const s of scored) ringDetails.push(s);
     }
-    // presentation: park the ring on the rod just beside the bracket (like the hand-made
-    // sheets) — also keeps the 1:1 rod-break window tight
-    if (ring.length) {
+    // presentation: park the ring on OPEN rod PAST the plate/bracket edge (per row — wide
+    // -H plates push it further out). A ring in front of the plate face reads as if it
+    // aligned to the plate top instead of hanging from the rod; off to the side the ring
+    // and its drop measurement are unambiguous (matches how the return pages read).
+    const parkRing = (clearHalfM) => {
+      if (!ring.length) return ring;
       const rb = groupBbox(ring), pb = axes.poleBox, bb = groupBbox(bracket);
       const ax = axes.poleAxis;
       const sign = Math.sign(pb.center[ax] - bb.center[ax]) || 1;
       const ringHalf = (rb.max[ax] - rb.min[ax]) / 2 + 0.002;
-      let target = bb.center[ax] + sign * 0.022; // ring hugs the bracket — keeps the 1:1 window narrow
+      let target = bb.center[ax] + sign * (clearHalfM + ringHalf + 0.008);
       target = Math.min(Math.max(target, pb.min[ax] + ringHalf), pb.max[ax] - ringHalf);
       const d = [0, 0, 0];
       d[ax] = target - rb.center[ax];
-      ring = translateMeshes(ring, d);
-    }
+      return translateMeshes(ring, d);
+    };
+    const bracketHalfAlong = bracket.length
+      ? (groupBbox(bracket).max[axes.poleAxis] - groupBbox(bracket).min[axes.poleAxis]) / 2
+      : 0;
     // ring-option detail images: FACE-ON (profile direction — the ring reads as a circle),
     // body OD + overall height including the eyelet
     const ringItems = ringDetails.map(s => {
@@ -349,7 +355,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         if (b.minU < lo) lo = b.minU;
         if (b.maxU > hi) hi = b.maxU;
       }
-      lo -= 0.008; hi += 0.004;
+      lo -= 0.015; hi += 0.018; // extra visible rod so the parked ring clearly hangs on it
       const vis = clipSegmentsU(front0.vis, lo, hi);
       if (poleFull.minU < lo) vis.push(...breakMarks(lo + 0.004, poleFull.minV, poleFull.maxV));
       if (poleFull.maxU > hi) vis.push(...breakMarks(hi - 0.006, poleFull.minV, poleFull.maxV));
@@ -357,11 +363,12 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     };
     // BASIC bracket / INSIDE MOUNT page: one row, choice + pole + ring only
     if (!plateChoices.length) {
-      const meshes = [...bracket, ...pole, ...ring];
+      const rowRing = parkRing(bracketHalfAlong);
+      const meshes = [...bracket, ...pole, ...rowRing];
       const front0 = renderHiddenLine(meshes, views.front, 1600);
       const profile = renderHiddenLine(meshes, views.profile, 900);
       const bracketF = viewBbox(bracket, views.front);
-      const ringF = ring.length ? viewBbox(ring, views.front) : null;
+      const ringF = rowRing.length ? viewBbox(rowRing, views.front) : null;
       const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ringF]);
       const dims = { front: [], profile: [], detail: [] };
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
@@ -418,14 +425,17 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       // merged GLBs may drop the "/" from item codes ("H1-CPWP2P") — normalize back to ".../P"
       const wallCodeMatch = (wallPlate[0] ? (wallPlate[0].path + '/' + wallPlate[0].name) : '').match(/H1-[A-Z]*WP\d+(\s*\/?\s*P)?/i);
       const wallCode = wallCodeMatch ? wallCodeMatch[0].toUpperCase().replace(/\s*\/?\s*P$/, '/P') : (wallPlate.length ? 'WALL PLATE' : '');
-      const meshes = [...bracket, ...plateAll, ...pole, ...ring];
+      // park the ring past THIS row's plate edge — wide -H plates push it further out
+      const plateHalfAlong = (cb0.max[axes.poleAxis] - cb0.min[axes.poleAxis]) / 2;
+      const rowRing = parkRing(Math.max(plateHalfAlong, bracketHalfAlong));
+      const meshes = [...bracket, ...plateAll, ...pole, ...rowRing];
       const front0 = renderHiddenLine(meshes, views.front, 1600);
       const profile = renderHiddenLine(meshes, views.profile, 900);
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
       const coverF = viewBbox(cover.length ? cover : plateAll, views.front);
       const bracketF = viewBbox(bracket, views.front);
-      const ringF = ring.length ? viewBbox(ring, views.front) : null;
+      const ringF = rowRing.length ? viewBbox(rowRing, views.front) : null;
       const coverP = viewBbox(cover.length ? cover : plateAll, views.profile);
       const wallF = wallPlate.length ? viewBbox(wallPlate, views.front) : null;
       const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [coverF, bracketF, ringF]);
