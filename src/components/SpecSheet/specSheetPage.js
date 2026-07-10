@@ -195,7 +195,6 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   if (actual && cornerItems.length) {
     const cellW = 240;
     const baseCy = P.H - MARGIN - 150;
-    svg += `<text x="${P.W - MARGIN - (cellW * cornerItems.length) / 2 - 20}" y="${baseCy - 110}" font-size="10" text-anchor="middle">RING OPTIONS — stack on the rod, key dims identical</text>`;
     cornerItems.forEach((it, i) => {
       const cx = P.W - MARGIN - 20 - cellW * (cornerItems.length - 1 - i) - cellW / 2;
       const { mu, mv, mapping } = place(it.view.zb, cx, baseCy, oneToOne);

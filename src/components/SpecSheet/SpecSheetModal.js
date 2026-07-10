@@ -443,8 +443,9 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       const dims = { front: [], profile: [], detail: [] };
       const plateWIn = (coverF.maxU - coverF.minU) * M2IN;
       // round plate: Ø leader off the circle's upper-LEFT arc (clear of the pole Ø leader)
+      // plate width BELOW the plate — above it the rod crosses the dim on short plates
       if (isRound) dims.front.push({ t: 'dia', u: coverF.minU + (coverF.maxU - coverF.minU) * 0.15, v: coverF.maxV - (coverF.maxV - coverF.minV) * 0.15, dir: -1, in: plateWIn });
-      else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: coverF.maxV, off: -10, in: plateWIn });
+      else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: coverF.minV, off: 16, in: plateWIn });
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
       if (ringF) {
         // ring drop: TOP OF ROD → bottom of the eyelet (Stuart's definition); label drops
