@@ -15,7 +15,7 @@ import {
   armRootCenter, parseInches, clipSegmentsU, breakMarks,
 } from './specSheetGeometry';
 import { renderHiddenLine } from './hiddenLine';
-import { buildPageSvg, buildWallMountsPage, PAGE_W, PAGE_H } from './specSheetPage';
+import { buildPageSvg, buildWallMountsPage, PAPERS } from './specSheetPage';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 
 // Wall-mount plate meshes are children of each backplate choice node in the merged GLB
@@ -60,7 +60,15 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
   const [error, setError] = useState('');
   const [pageIndex, setPageIndex] = useState(0);
   const [edition, setEdition] = useState('H1'); // 'H1' | 'FAB'
-  const [scaleMode, setScaleMode] = useState('actual'); // 'actual' (1:1 print) | 'fit' (compact)
+  // 'tab11' = true 1:1 on 11×17 · 'letterReduced' = same 11×17 master reduced onto 8.5×11
+  // (~64%, marked not-to-scale) · 'fit' = compact 8.5×11 fit-scale layout
+  const [paperMode, setPaperMode] = useState('tab11');
+  const scaleMode = paperMode === 'fit' ? 'fit' : 'actual';
+  const layoutPaper = scaleMode === 'actual' ? 'tabloid' : 'letter';
+  const outputPaper = paperMode === 'tab11' ? 'tabloid' : 'letter';
+  const reducedNote = paperMode === 'letterReduced'
+    ? 'REDUCED PRINT OF THE 11×17 1:1 MASTER — NOT 1:1 AT THIS SIZE (use the 11×17 option at 100% for actual scale)'
+    : null;
   const [choiceData, setChoiceData] = useState(null);
   const [manualDims, setManualDims] = useState(() => assembly?.specSheetOverrides?.manualDims || []);
   const [wallCfg, setWallCfg] = useState({});
@@ -154,7 +162,8 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
   useEffect(() => {
     if (!choiceData) return;
     const { brackets, families, anyReturnFlags } = choiceData;
-    const maxRows = scaleMode === 'actual' ? 2 : MAX_ROWS_PER_PAGE; // 1:1 geometry fits 2 rows/page
+    // 1:1 rows are ~4" tall (ring drop + plate + padding) — two fit on 11×17's 10.5" printable height
+    const maxRows = scaleMode === 'actual' ? 2 : MAX_ROWS_PER_PAGE;
     const pageList = [];
     for (const b of brackets) {
       // isBasic = bracket takes NO backplate (canonical flag) — its page draws the
@@ -348,7 +357,9 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     title: `${assembly.itemName || assembly.itemId} — Wall mounts`,
     items: buildWallMounts(),
     noteLines: ['Top-hole offsets come from the Wall mounts panel and drive the as-mounted dims.'],
-  }), [assembly, buildWallMounts]);
+    paper: layoutPaper,
+    footerNote: reducedNote,
+  }), [assembly, buildWallMounts, layoutPaper, reducedNote]);
 
   // ---- compose current page ----
   useEffect(() => {
@@ -377,6 +388,8 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
             'Measured from 3D geometry, nearest 1/16". Manual dims entered where geometry cannot provide them.',
           ],
           scaleMode,
+          paper: layoutPaper,
+          footerNote: reducedNote,
         });
         setPageData(result);
         setStatus('');
@@ -387,7 +400,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, composeWallMountsPage]);
+  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, layoutPaper, reducedNote, composeWallMountsPage]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; }, [wallCfg]);
@@ -459,17 +472,19 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         'Ring dim = top of rod to bottom of eyelet. Profile horizontal dim = wall face to pole centerline.',
       ],
       scaleMode,
+      paper: layoutPaper,
+      footerNote: reducedNote,
     }).svg;
   });
 
   const handlePrint = () => {
-    try { openSpecSheetPrint(assembly.itemName || assembly.itemId, buildAllPages()); }
+    try { openSpecSheetPrint(assembly.itemName || assembly.itemId, buildAllPages(), outputPaper); }
     catch (e) { alert('Print failed: ' + (e?.message || e)); }
   };
   const handlePdf = async () => {
     try {
       setStatus('Building PDF…');
-      await downloadSpecSheetPdf(assembly.itemName || assembly.itemId, buildAllPages());
+      await downloadSpecSheetPdf(assembly.itemName || assembly.itemId, buildAllPages(), outputPaper);
       setStatus('');
     } catch (e) { console.error(e); alert('PDF failed: ' + (e?.message || e)); setStatus(''); }
   };
@@ -492,9 +507,10 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
             <button style={edition === 'H1' ? btnOn : btn} onClick={() => setEdition('H1')}>H1 codes</button>
             <button style={edition === 'FAB' ? btnOn : btn} onClick={() => setEdition('FAB')}>Fabricut codes</button>
           </div>
-          <div style={{ display: 'flex', gap: '4px' }} title="1:1 prints at actual size (rod shown broken, 2 rows/page); Fit packs 5 rows/page">
-            <button style={scaleMode === 'actual' ? btnOn : btn} onClick={() => setScaleMode('actual')}>1:1</button>
-            <button style={scaleMode === 'fit' ? btnOn : btn} onClick={() => setScaleMode('fit')}>Fit</button>
+          <div style={{ display: 'flex', gap: '4px' }} title="1:1 = actual size on 11×17 · Reduced = the same 11×17 master shrunk onto 8.5×11 (~64%, not to scale) · Fit = compact 8.5×11">
+            <button style={paperMode === 'tab11' ? btnOn : btn} onClick={() => setPaperMode('tab11')}>1:1 · 11×17</button>
+            <button style={paperMode === 'letterReduced' ? btnOn : btn} onClick={() => setPaperMode('letterReduced')}>Reduced · 8.5×11</button>
+            <button style={paperMode === 'fit' ? btnOn : btn} onClick={() => setPaperMode('fit')}>Fit · 8.5×11</button>
           </div>
           <button style={dimTool ? btnOn : btn} onClick={() => { setDimTool(v => !v); pendingPtRef.current = null; }}>＋ Manual dim</button>
           {manualDims.length > 0 && (
@@ -545,7 +561,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         <div ref={svgHostRef} onClick={handleSvgClick}
           style={{ flex: 1, overflow: 'auto', padding: '0 16px 16px', cursor: dimTool ? 'crosshair' : 'default' }}>
           {pageData && (
-            <div style={{ background: '#fff', boxShadow: '0 1px 6px rgba(0,0,0,0.2)', maxWidth: `${PAGE_W}px`, margin: '0 auto', aspectRatio: `${PAGE_W}/${PAGE_H}` }}
+            <div style={{ background: '#fff', boxShadow: '0 1px 6px rgba(0,0,0,0.2)', maxWidth: `${PAPERS[layoutPaper].W}px`, margin: '0 auto', aspectRatio: `${PAPERS[layoutPaper].W}/${PAPERS[layoutPaper].H}` }}
               dangerouslySetInnerHTML={{ __html: pageData.svg }} />
           )}
         </div>

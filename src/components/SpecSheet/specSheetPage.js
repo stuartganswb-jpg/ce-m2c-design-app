@@ -1,24 +1,34 @@
 // specSheetPage.js — composes one spec-sheet page (SVG string) in the Fabricut drawing
-// style: engineering frame, one row per backplate shape, columns = wall-mount detail |
-// front view | combo code | profile view. Pure layout: rows arrive pre-rendered
-// (hidden-line segments + measures); this file only places, scales, and dimensions them.
+// style. Layout is paper-aware:
+//   letter  (8.5×11 landscape)  — 'fit' mode: compact 4-5 row pages, drawings scale to fit
+//                                  (capped at 1:1 so nothing prints oversize).
+//   tabloid (11×17 landscape)   — 'actual' mode: EVERYTHING at true 1:1 print scale;
+//                                  wall-mount detail | front (rod broken) | code | profile,
+//                                  rows stacked by their real content height.
+// The tabloid master can also be printed reduced onto letter (~64%, footer marks it
+// NOT TO SCALE) — same SVG, different output paper.
 import { fracSvg, fracSvgFromText } from './specSheetGeometry';
 
-export const PAGE_W = 1100;
-export const PAGE_H = 850;
+export const PAPERS = {
+  letter: { W: 1100, H: 850, printW: 10.5, printH: 8.0, label: '8.5×11' },
+  tabloid: { W: 1700, H: 1100, printW: 16.5, printH: 10.5, label: '11×17' },
+};
+// page units per world meter such that printed output (inside 0.25" margins) is actual size
+export const scaleForPaper = (paper) => (PAPERS[paper].W / PAPERS[paper].printW) / 0.0254;
+
+// legacy exports (letter defaults) — display sizing + raster output still import these
+export const PAGE_W = PAPERS.letter.W;
+export const PAGE_H = PAPERS.letter.H;
+export const SCALE_1TO1 = scaleForPaper('letter');
+
 const MARGIN = 28;
 const SW = 0.6; // dimension line weight
 
-// Printed on letter landscape inside 0.25" margins the page spans 10.5", so PAGE_W/10.5
-// page-units = one printed inch. Drawings never scale ABOVE this — capped there, a printed
-// sheet shows those parts at true 1:1 (hold the part against the paper).
-export const SCALE_1TO1 = (PAGE_W / 10.5) / 0.0254; // page units per world meter
-
-const COL = { detail: 130, front: 430, code: 660, profile: 890 };
-const BOX = { detail: [96, 60], front: [380, 42], profile: [230, 42] }; // [maxWpx, rowH inset]
-// 1:1 layout: no detail column in rows (wall mounts get their own page), code sits under
-// the front view, profile takes the right half (a 4.625" projection spans ~5.6" printed).
-const COL_ACTUAL = { front: 260, code: 260, profile: 766 };
+// fit-mode letter layout (row-centered columns)
+const COL_FIT = { detail: 130, front: 430, code: 660, profile: 890 };
+const BOX_FIT = { detail: [96, 60], front: [380, 42], profile: [230, 42] }; // [maxWpx, rowH inset]
+// 1:1 tabloid layout: detail column returns, profile takes the right side
+const COL_ACTUAL = { detail: 170, front: 560, code: 560, profile: 1290 };
 
 export function dimH(x0, x1, y, inches) {
   let s = `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="black" stroke-width="${SW}"/>`;
@@ -28,7 +38,7 @@ export function dimH(x0, x1, y, inches) {
   return s;
 }
 // side: +1 label right of the line (default), -1 label to the left (clear of artwork).
-// labelDy: extra vertical label offset in page units (~26 = 1/4" printed).
+// labelDy: extra vertical label offset in page units (~26 = 1/4" printed on letter).
 export function dimV(x, y0, y1, inches, dia = false, side = 1, labelDy = 0) {
   let s = `<line x1="${x}" y1="${y0}" x2="${x}" y2="${y1}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x - 4}" y1="${y0}" x2="${x + 4}" y2="${y0}" stroke="black" stroke-width="${SW}"/>`;
@@ -39,7 +49,7 @@ export function dimV(x, y0, y1, inches, dia = false, side = 1, labelDy = 0) {
 // dir +1: leader runs up-right, text right of it (default); -1: up-left, text to the left.
 export function leaderDia(x, y, inches, dir = 1) {
   let s = `<line x1="${x}" y1="${y}" x2="${x + 24 * dir}" y2="${y - 16}" stroke="black" stroke-width="${SW}"/>`;
-  s += fracSvg(dir < 0 ? x - 24 * 1 - 46 : x + 26, y - 18, inches, 11, true);
+  s += fracSvg(dir < 0 ? x - 24 - 46 : x + 26, y - 18, inches, 11, true);
   return s;
 }
 // Aligned manual dimension between two arbitrary page points, label = user text.
@@ -63,9 +73,8 @@ const segPaths = (vis, mu, mv) => {
   return `<path d="${p}" stroke="black" stroke-width="0.7" fill="none" stroke-linecap="round"/>`;
 };
 
-// Fit a rendered view into a box at (cx, cy) with an EXPLICIT scale (px per world unit)
-// so a column shares one scale across rows. Returns { mu, mv, mapping } where mapping
-// carries everything needed to invert page → world coords for the manual dim tool.
+// Place a rendered view centered at (cx, cy) at an explicit scale (px per world unit).
+// mapping carries what the manual-dim tool needs to invert page → world coords.
 function place(zb, cx, cy, scale) {
   const wWorld = zb.maxU - zb.minU, hWorld = zb.maxV - zb.minV;
   const x0 = cx - (wWorld * scale) / 2;
@@ -81,9 +90,9 @@ function place(zb, cx, cy, scale) {
   };
 }
 
-// Shared column scale: the tightest fit across all rows keeps the column visually consistent.
+// Shared fit-mode column scale: tightest fit across rows, capped at letter 1:1.
 function columnScale(rows, key, rowH) {
-  const [maxW, inset] = BOX[key];
+  const [maxW, inset] = BOX_FIT[key];
   let s = Infinity;
   for (const r of rows) {
     const zb = r[key]?.zb;
@@ -93,38 +102,45 @@ function columnScale(rows, key, rowH) {
   return isFinite(s) ? Math.min(s, SCALE_1TO1) : 1;
 }
 
-// rows[i] = { rowKey, code, wallCode, front: {vis, zb}, profile: {vis, zb}, detail: {vis, zb}|null,
-//             dims: { front: [...], profile: [...], detail: [...] } } — dim spec objects:
-//   { t:'h', u0, u1, v, off? } | { t:'v', u, v0, v1, off?, dia? } | { t:'dia', u, v, val }
-//   values in world units; inches computed from world span (×M2IN by the caller — dims carry `in`).
-export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines = [], scaleMode = 'fit' }) {
-  const actual = scaleMode === 'actual';
+function pageFrame(P, title, subtitle) {
   let svg = '';
-  const viewMaps = []; // { rowKey, view, mapping } for the dim tool
-  svg += `<rect x="${MARGIN}" y="${MARGIN}" width="${PAGE_W - 2 * MARGIN}" height="${PAGE_H - 2 * MARGIN}" fill="none" stroke="black" stroke-width="1.5"/>`;
+  svg += `<rect x="${MARGIN}" y="${MARGIN}" width="${P.W - 2 * MARGIN}" height="${P.H - 2 * MARGIN}" fill="none" stroke="black" stroke-width="1.5"/>`;
   for (let i = 1; i < 8; i++) {
-    const x = MARGIN + ((PAGE_W - 2 * MARGIN) * i) / 8;
-    svg += `<line x1="${x}" y1="${MARGIN}" x2="${x}" y2="${MARGIN - 8}" stroke="black"/><line x1="${x}" y1="${PAGE_H - MARGIN}" x2="${x}" y2="${PAGE_H - MARGIN + 8}" stroke="black"/>`;
-    svg += `<text x="${x - (PAGE_W - 2 * MARGIN) / 16}" y="${MARGIN - 12}" font-size="10" text-anchor="middle">${9 - i}</text>`;
+    const x = MARGIN + ((P.W - 2 * MARGIN) * i) / 8;
+    svg += `<line x1="${x}" y1="${MARGIN}" x2="${x}" y2="${MARGIN - 8}" stroke="black"/><line x1="${x}" y1="${P.H - MARGIN}" x2="${x}" y2="${P.H - MARGIN + 8}" stroke="black"/>`;
+    svg += `<text x="${x - (P.W - 2 * MARGIN) / 16}" y="${MARGIN - 12}" font-size="10" text-anchor="middle">${9 - i}</text>`;
   }
   ['D', 'C', 'B', 'A'].forEach((z, i) => {
-    const y = MARGIN + ((PAGE_H - 2 * MARGIN) * (i + 0.5)) / 4;
+    const y = MARGIN + ((P.H - 2 * MARGIN) * (i + 0.5)) / 4;
     svg += `<text x="${MARGIN - 16}" y="${y}" font-size="10" text-anchor="middle">${z}</text>`;
-    svg += `<text x="${PAGE_W - MARGIN + 16}" y="${y}" font-size="10" text-anchor="middle">${z}</text>`;
+    svg += `<text x="${P.W - MARGIN + 16}" y="${y}" font-size="10" text-anchor="middle">${z}</text>`;
   });
   svg += `<text x="${MARGIN + 40}" y="${MARGIN + 34}" font-size="13">${title || ''}</text>`;
   if (subtitle) svg += `<text x="${MARGIN + 40}" y="${MARGIN + 50}" font-size="11" fill="#444">${subtitle}</text>`;
+  return svg;
+}
 
-  const rowH = (PAGE_H - 2 * MARGIN - 90) / Math.max(rows.length, 1);
+const wrapSvg = (P, inner) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${P.W} ${P.H}" font-family="Helvetica, Arial, sans-serif"><rect width="${P.W}" height="${P.H}" fill="white"/>${inner}</svg>`;
+
+// rows[i] = { rowKey, code, wallCode, front, profile, detail, dims } — dim specs:
+//   { t:'h', u0, u1, v, off? } | { t:'v', u, v0, v1, off?, side?, ldy?, dia? } | { t:'dia', u, v, val, dir? }
+export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines = [], scaleMode = 'fit', paper, footerNote }) {
+  const actual = scaleMode === 'actual';
+  const P = PAPERS[paper || (actual ? 'tabloid' : 'letter')];
+  const oneToOne = scaleForPaper(paper || (actual ? 'tabloid' : 'letter'));
+  let svg = pageFrame(P, title, subtitle);
+  const viewMaps = [];
+
+  const rowH = (P.H - 2 * MARGIN - 90) / Math.max(rows.length, 1);
   const scales = actual
-    ? { detail: SCALE_1TO1, front: SCALE_1TO1, profile: SCALE_1TO1 }
+    ? { detail: oneToOne, front: oneToOne, profile: oneToOne }
     : {
       detail: columnScale(rows, 'detail', rowH),
       front: columnScale(rows, 'front', rowH),
       profile: columnScale(rows, 'profile', rowH),
     };
-  const cols = actual ? COL_ACTUAL : COL;
-  const viewKeys = actual ? ['front', 'profile'] : ['detail', 'front', 'profile'];
+  const cols = actual ? COL_ACTUAL : COL_FIT;
 
   const drawDims = (dims, mu, mv) => {
     let s = '';
@@ -136,10 +152,21 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
     return s;
   };
 
+  // actual mode: rows stack by their real content height; fit mode: equal rows
+  let cursor = MARGIN + 78;
   rows.forEach((r, i) => {
-    const cy = MARGIN + 95 + rowH * i + rowH / 2;
+    let cy, rowBottom;
+    if (actual) {
+      const hPx = ((r.front.zb.maxV - r.front.zb.minV) * scales.front) + 76; // dims + code padding
+      cy = cursor + hPx / 2;
+      rowBottom = cursor + hPx;
+      cursor = rowBottom;
+    } else {
+      cy = MARGIN + 95 + rowH * i + rowH / 2;
+      rowBottom = MARGIN + 95 + rowH * (i + 1);
+    }
     let frontBottom = cy;
-    for (const key of viewKeys) {
+    for (const key of ['detail', 'front', 'profile']) {
       const view = r[key];
       if (!view) continue;
       const { mu, mv, mapping } = place(view.zb, cols[key], cy, scales[key]);
@@ -150,7 +177,6 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
       }
       if (key === 'front') frontBottom = mapping.rect[1] + mapping.rect[3];
       viewMaps.push({ rowKey: r.rowKey, view: key, mapping });
-      // manual dims anchored to this row+view (world coords → this placement)
       for (const md of manualDims) {
         if (md.rowKey === r.rowKey && md.view === key) {
           svg += dimManual(mu(md.aU), mv(md.aV), mu(md.bU), mv(md.bV), md.value);
@@ -159,34 +185,35 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
     }
     if (actual) {
       const yUnder = frontBottom + 24;
-      if (yUnder < PAGE_H - MARGIN - 34) svg += `<text x="${cols.code}" y="${yUnder}" font-size="12" text-anchor="middle">${r.code || ''}</text>`;
-      else svg += `<text x="${MARGIN + 55}" y="${PAGE_H - MARGIN - 16}" font-size="12">${r.code || ''}</text>`; // last row: bottom-left slot, clear of the notes
+      if (yUnder < P.H - MARGIN - 34) svg += `<text x="${cols.code}" y="${yUnder}" font-size="12" text-anchor="middle">${r.code || ''}</text>`;
+      else svg += `<text x="${MARGIN + 55}" y="${P.H - MARGIN - 16}" font-size="12">${r.code || ''}</text>`;
     } else svg += `<text x="${cols.code}" y="${cy + 4}" font-size="12" text-anchor="middle">${r.code || ''}</text>`;
   });
-  if (actual) svg += `<text x="${PAGE_W - MARGIN - 8}" y="${PAGE_H - MARGIN - 12}" font-size="10" text-anchor="end">SCALE 1:1 ON 8.5×11 LANDSCAPE (0.25" margins, print at 100%)</text>`;
 
   noteLines.forEach((line, i) => {
-    svg += `<text x="${MARGIN + 290}" y="${PAGE_H - MARGIN - 12 - (noteLines.length - 1 - i) * 14}" font-size="10">${line}</text>`;
+    svg += `<text x="${MARGIN + 290}" y="${P.H - MARGIN - 12 - (noteLines.length - 1 - i) * 14}" font-size="10">${line}</text>`;
   });
+  const footer = footerNote || (actual ? `SCALE 1:1 ON ${P.label} LANDSCAPE (0.25" margins, print at 100%)` : '');
+  if (footer) svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 12}" font-size="10" text-anchor="end">${footer}</text>`;
 
-  const doc = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PAGE_W} ${PAGE_H}" font-family="Helvetica, Arial, sans-serif"><rect width="${PAGE_W}" height="${PAGE_H}" fill="white"/>${svg}</svg>`;
-  return { svg: doc, viewMaps };
+  return { svg: wrapSvg(P, svg), viewMaps, paper: paper || (actual ? 'tabloid' : 'letter') };
 }
 
-// Dedicated wall-mounts reference page: every unique wall-mount style at TRUE 1:1, face-on,
-// with W×H dims and the bulk-entered top-hole offset noted. items: [{ code, view, wIn, hIn, topHole }].
-export function buildWallMountsPage({ title, items = [], noteLines = [] }) {
+// Dedicated wall-mounts reference page: every unique style at TRUE 1:1, face-on.
+export function buildWallMountsPage({ title, items = [], noteLines = [], paper = 'letter', footerNote }) {
+  const P = PAPERS[paper];
+  const oneToOne = scaleForPaper(paper);
   let svg = '';
-  svg += `<rect x="${MARGIN}" y="${MARGIN}" width="${PAGE_W - 2 * MARGIN}" height="${PAGE_H - 2 * MARGIN}" fill="none" stroke="black" stroke-width="1.5"/>`;
+  svg += `<rect x="${MARGIN}" y="${MARGIN}" width="${P.W - 2 * MARGIN}" height="${P.H - 2 * MARGIN}" fill="none" stroke="black" stroke-width="1.5"/>`;
   svg += `<text x="${MARGIN + 40}" y="${MARGIN + 34}" font-size="13">${title || 'Wall mounts'}</text>`;
   svg += `<text x="${MARGIN + 40}" y="${MARGIN + 50}" font-size="11" fill="#444">All wall-mount styles at actual size — print at 100% and hold against the part.</text>`;
-  const perRow = 3;
-  const cellW = (PAGE_W - 2 * MARGIN - 80) / perRow;
-  const cellH = (PAGE_H - 2 * MARGIN - 110) / Math.max(1, Math.ceil(items.length / perRow));
+  const perRow = paper === 'tabloid' ? 4 : 3;
+  const cellW = (P.W - 2 * MARGIN - 80) / perRow;
+  const cellH = (P.H - 2 * MARGIN - 110) / Math.max(1, Math.ceil(items.length / perRow));
   items.forEach((it, i) => {
     const cx = MARGIN + 40 + cellW * (i % perRow) + cellW / 2;
     const cy = MARGIN + 100 + cellH * Math.floor(i / perRow) + cellH / 2;
-    const { mu, mv, mapping } = place(it.view.zb, cx, cy, SCALE_1TO1);
+    const { mu, mv, mapping } = place(it.view.zb, cx, cy, oneToOne);
     svg += segPaths(it.view.vis, mu, mv);
     svg += `<text x="${cx}" y="${mapping.rect[1] - 30}" font-size="11" text-anchor="middle">${it.code}</text>`;
     const [bx, by, bw, bh] = mapping.rect;
@@ -195,9 +222,8 @@ export function buildWallMountsPage({ title, items = [], noteLines = [] }) {
     if (it.topHole) svg += `<text x="${cx}" y="${by + bh + 22}" font-size="9" text-anchor="middle">top hole ${it.topHole}" from top</text>`;
   });
   noteLines.forEach((line, i) => {
-    svg += `<text x="${MARGIN + 40}" y="${PAGE_H - MARGIN - 12 - (noteLines.length - 1 - i) * 14}" font-size="10">${line}</text>`;
+    svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 12 - (noteLines.length - 1 - i) * 14}" font-size="10">${line}</text>`;
   });
-  svg += `<text x="${PAGE_W - MARGIN - 8}" y="${PAGE_H - MARGIN - 12}" font-size="10" text-anchor="end">SCALE 1:1 ON 8.5×11 LANDSCAPE (0.25" margins, print at 100%)</text>`;
-  const doc = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PAGE_W} ${PAGE_H}" font-family="Helvetica, Arial, sans-serif"><rect width="${PAGE_W}" height="${PAGE_H}" fill="white"/>${svg}</svg>`;
-  return { svg: doc, viewMaps: [] };
+  svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 12}" font-size="10" text-anchor="end">${footerNote || `SCALE 1:1 ON ${P.label} LANDSCAPE (0.25" margins, print at 100%)`}</text>`;
+  return { svg: wrapSvg(P, svg), viewMaps: [], paper };
 }
