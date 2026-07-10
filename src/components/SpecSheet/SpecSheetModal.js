@@ -154,17 +154,24 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
           const cl = clusterById[p.clusterId];
           return !!(p.returnOnly || cl?.returnOnly || cl?.usesReturnPlates);
         };
-        const regFams = {}, retFams = {};
+        // inline plates (the I set, at pole height) pair ONLY with inline brackets (the
+        // ILE clip); standard plates (the D set, at arm height) pair with the rest —
+        // mixing them puts the plate at the wrong height relative to rod and ring
+        const plateIsInline = (p) => {
+          const cl = clusterById[p.clusterId];
+          return !!(p.inlineOnly || cl?.inlineOnly);
+        };
+        const stdFams = {}, inlFams = {}, retFams = {};
         plates.forEach(p => {
           const f = familyOf(p.partName);
-          const target = plateIsReturn(p) ? retFams : regFams;
+          const target = plateIsReturn(p) ? retFams : (plateIsInline(p) ? inlFams : stdFams);
           (target[f] = target[f] || []).push(p);
         });
         // dedupe within each family (same part can pin LEFT and RIGHT positions)
         const dedupe = (arr) => { const seen = new Set(); return arr.filter(p => seen.has(p.partName) ? false : (seen.add(p.partName), true)); };
-        Object.keys(regFams).forEach(f => { regFams[f] = dedupe(regFams[f]); });
-        Object.keys(retFams).forEach(f => { retFams[f] = dedupe(retFams[f]); });
+        [stdFams, inlFams, retFams].forEach(map => Object.keys(map).forEach(f => { map[f] = dedupe(map[f]); }));
         const platesFlagged = Object.keys(retFams).length > 0;
+        const inlineFlagged = Object.keys(inlFams).length > 0;
         // the FINIAL cluster holds ALL end-treatment choices (canonical tag spec):
         // plain finials → catalog grid page; french/miter returns → bracket-style pages;
         // inside mounts → single-row page (their threaded plate is nested in the geometry)
@@ -173,7 +180,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         const finials = endChoices.filter(p => !et(p) || et(p) === 'FINIAL');
         const returnArms = endChoices.filter(p => et(p) === 'FRENCH_RETURN' || et(p) === 'MITER_RETURN');
         const insideMounts = endChoices.filter(p => et(p) === 'INSIDE_MOUNT');
-        setChoiceData({ brackets, regFams, retFams, platesFlagged, finials, returnArms, insideMounts });
+        setChoiceData({ brackets, stdFams, inlFams, retFams, platesFlagged, inlineFlagged, finials, returnArms, insideMounts });
         setStatus('');
       } catch (e) {
         console.error('SpecSheet load failed', e);
@@ -186,12 +193,12 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
   // ---- derive pages from choices (re-chunked when the scale mode changes) ----
   useEffect(() => {
     if (!choiceData) return;
-    const { brackets, regFams = {}, retFams = {}, platesFlagged, finials = [], returnArms = [], insideMounts = [] } = choiceData;
+    const { brackets, stdFams = {}, inlFams = {}, retFams = {}, platesFlagged, inlineFlagged, finials = [], returnArms = [], insideMounts = [] } = choiceData;
     // 1:1 rows are ~4" tall (ring drop + plate + padding) — two fit on 11×17's 10.5" printable height
     const maxRows = scaleMode === 'actual' ? 2 : MAX_ROWS_PER_PAGE;
     const pageList = [];
     const allFams = {};
-    [regFams, retFams].forEach(m => Object.entries(m).forEach(([f, pins]) => { allFams[f] = [...(allFams[f] || []), ...pins]; }));
+    [stdFams, inlFams, retFams].forEach(m => Object.entries(m).forEach(([f, pins]) => { allFams[f] = [...(allFams[f] || []), ...pins]; }));
     // return arms page like brackets (their bend geometry is part of the choice node)
     const armLike = [
       ...brackets.map(b => ({ pin: b, retSuffix: '' })),
@@ -205,9 +212,15 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         continue;
       }
       const bracketIsReturn = !!(retSuffix || b.usesReturnPlates || b.isReturnArm || /RETURN/i.test(b.endTreatment || ''));
-      // returns pair ONLY with return-plate families, brackets only with regular ones —
-      // falls back to everything when no plate carries a return flag yet
-      const famMap = platesFlagged ? (bracketIsReturn ? retFams : regFams) : allFams;
+      const bracketIsInline = !!(b.inlineOnly || clusterById[b.clusterId]?.inlineOnly);
+      // returns pair ONLY with return-plate families, inline brackets with the inline (I)
+      // set, everything else with the standard (D) set — falls back to the whole pool when
+      // the respective flags aren't in the data yet
+      let famMap;
+      if (bracketIsReturn) famMap = platesFlagged ? retFams : allFams;
+      else if (bracketIsInline && inlineFlagged) famMap = inlFams;
+      else famMap = (platesFlagged || inlineFlagged) ? stdFams : allFams;
+      if (!Object.keys(famMap).length) famMap = allFams;
       for (const [fam, famPins] of Object.entries(famMap)) {
         for (let i = 0; i < famPins.length; i += maxRows) {
           const chunk = famPins.slice(i, i + maxRows);
@@ -230,7 +243,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     pageList.push({ key: '__WM__', title: '⊞ Wall mounts (1:1)', family: '' });
     setPages(pageList);
     setPageIndex(0);
-  }, [choiceData, scaleMode]);
+  }, [choiceData, scaleMode, clusterById]);
 
   // ---- build rows for a page (cached per bracket × family) ----
   const buildRows = useCallback((bracketPin, familyPins, opts = {}) => {
@@ -387,9 +400,15 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       if (!plateAll0.length) return { rowKey: platePin.partName, code: platePin.partName, missing: true };
       const cover0 = plateAll0.filter(m => !WALL_PLATE_MATCH.test(m.name + m.path) && !SCREW_MATCH.test(m.name + m.path));
       const cb0 = groupBbox(cover0.length ? cover0 : plateAll0);
-      // center the plate group on the bracket arm root (GLBs model plates at pole centerline)
+      // OLD GLBs park every plate on the pole centerline — those need re-centering on the
+      // bracket arm root. Repaired/merged GLBs model plates at their TRUE heights (D set at
+      // arm height, I set at pole height) — shifting those corrupts the row. Only shift
+      // when the plate sits ON the centerline while the arm root is clearly elsewhere.
+      const poleCV = axes.poleBox.center[axes.vertAxis];
+      const plateOnCenterline = Math.abs(cb0.center[axes.vertAxis] - poleCV) < 0.004; // < ~5/32"
+      const rootOffCenterline = rootV != null && Math.abs(rootV - poleCV) > 0.008;    // > ~5/16"
       let plateAll = plateAll0;
-      if (rootV != null) {
+      if (plateOnCenterline && rootOffCenterline) {
         const d = [0, 0, 0];
         d[axes.vertAxis] = rootV - cb0.center[axes.vertAxis];
         plateAll = translateMeshes(plateAll0, d);
@@ -454,7 +473,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     const seen = new Map();
     const allPlatePins = choiceData
-      ? [...Object.values(choiceData.regFams || {}), ...Object.values(choiceData.retFams || {})].flat()
+      ? [...Object.values(choiceData.stdFams || {}), ...Object.values(choiceData.inlFams || {}), ...Object.values(choiceData.retFams || {})].flat()
       : [];
     for (const p of allPlatePins) {
       const meshes = extractWorldMeshes(scene, [p.choiceNode]).filter(m => WALL_PLATE_MATCH.test(m.name + m.path));
