@@ -146,9 +146,25 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         if (!brackets.length) throw new Error('No bracket choices found (need BRACKET-category cluster pins with choiceNode).');
         const plates = choicesFor('BACKPLATE');
         if (!plates.length) throw new Error('No backplate choices found (need BACKPLATE-category cluster pins with choiceNode).');
-        const families = {};
-        plates.forEach(p => { const f = familyOf(p.partName); (families[f] = families[f] || []).push(p); });
-        const anyReturnFlags = plates.some(p => p.returnOnly) || brackets.some(b => b.usesReturnPlates || b.isReturnArm);
+        // A plate is a RETURN plate if its pin OR its cluster carries the return flag —
+        // the same part code (e.g. H1-75RCP-S) exists in both the L/R bracket-backplate
+        // cluster and the french/miter return-backplate cluster, so the CLUSTER chip is
+        // what actually distinguishes them.
+        const plateIsReturn = (p) => {
+          const cl = clusterById[p.clusterId];
+          return !!(p.returnOnly || cl?.returnOnly || cl?.usesReturnPlates);
+        };
+        const regFams = {}, retFams = {};
+        plates.forEach(p => {
+          const f = familyOf(p.partName);
+          const target = plateIsReturn(p) ? retFams : regFams;
+          (target[f] = target[f] || []).push(p);
+        });
+        // dedupe within each family (same part can pin LEFT and RIGHT positions)
+        const dedupe = (arr) => { const seen = new Set(); return arr.filter(p => seen.has(p.partName) ? false : (seen.add(p.partName), true)); };
+        Object.keys(regFams).forEach(f => { regFams[f] = dedupe(regFams[f]); });
+        Object.keys(retFams).forEach(f => { retFams[f] = dedupe(retFams[f]); });
+        const platesFlagged = Object.keys(retFams).length > 0;
         // the FINIAL cluster holds ALL end-treatment choices (canonical tag spec):
         // plain finials → catalog grid page; french/miter returns → bracket-style pages;
         // inside mounts → single-row page (their threaded plate is nested in the geometry)
@@ -157,7 +173,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         const finials = endChoices.filter(p => !et(p) || et(p) === 'FINIAL');
         const returnArms = endChoices.filter(p => et(p) === 'FRENCH_RETURN' || et(p) === 'MITER_RETURN');
         const insideMounts = endChoices.filter(p => et(p) === 'INSIDE_MOUNT');
-        setChoiceData({ brackets, families, anyReturnFlags, finials, returnArms, insideMounts });
+        setChoiceData({ brackets, regFams, retFams, platesFlagged, finials, returnArms, insideMounts });
         setStatus('');
       } catch (e) {
         console.error('SpecSheet load failed', e);
@@ -165,15 +181,17 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       }
     })();
     return () => { dead = true; };
-  }, [assembly, choicesFor]);
+  }, [assembly, choicesFor, clusterById]);
 
   // ---- derive pages from choices (re-chunked when the scale mode changes) ----
   useEffect(() => {
     if (!choiceData) return;
-    const { brackets, families, anyReturnFlags, finials = [], returnArms = [], insideMounts = [] } = choiceData;
+    const { brackets, regFams = {}, retFams = {}, platesFlagged, finials = [], returnArms = [], insideMounts = [] } = choiceData;
     // 1:1 rows are ~4" tall (ring drop + plate + padding) — two fit on 11×17's 10.5" printable height
     const maxRows = scaleMode === 'actual' ? 2 : MAX_ROWS_PER_PAGE;
     const pageList = [];
+    const allFams = {};
+    [regFams, retFams].forEach(m => Object.entries(m).forEach(([f, pins]) => { allFams[f] = [...(allFams[f] || []), ...pins]; }));
     // return arms page like brackets (their bend geometry is part of the choice node)
     const armLike = [
       ...brackets.map(b => ({ pin: b, retSuffix: '' })),
@@ -187,11 +205,10 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         continue;
       }
       const bracketIsReturn = !!(retSuffix || b.usesReturnPlates || b.isReturnArm || /RETURN/i.test(b.endTreatment || ''));
-      for (const [fam, famPins] of Object.entries(families)) {
-        if (anyReturnFlags) {
-          const famIsReturn = famPins.some(p => p.returnOnly);
-          if (famIsReturn !== bracketIsReturn) continue;
-        }
+      // returns pair ONLY with return-plate families, brackets only with regular ones —
+      // falls back to everything when no plate carries a return flag yet
+      const famMap = platesFlagged ? (bracketIsReturn ? retFams : regFams) : allFams;
+      for (const [fam, famPins] of Object.entries(famMap)) {
         for (let i = 0; i < famPins.length; i += maxRows) {
           const chunk = famPins.slice(i, i + maxRows);
           const part = famPins.length > maxRows ? ` (${i / maxRows + 1})` : '';
