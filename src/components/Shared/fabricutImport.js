@@ -172,7 +172,13 @@ export function buildFabricutPlan(rows, libIndex, nowTs) {
 
         const fam = FAMILY_BY_COLLECTION[normHeader(g.collection)] || null;
         const projLetter = projLetterFromDesc(g.desc);
-        const style = fam ? styleFromCode(g.base, fam.dia, projLetter) : null;
+        let style = fam ? styleFromCode(g.base, fam.dia, projLetter) : null;
+        // ROUND-family "R" marker (Stuart 2026-07-09): 3/4" codes carry an R to disambiguate from
+        // the 3/4" SQUARE (H1-75S…) collection — H1-75R-JNR is the ROUND joiner. Inside the round
+        // family the marker is redundant, so a leading "R-" strips: H1-75R-JNR → style JNR, aligning
+        // with H1-1JNR / H1-138JNR so joiners size-swap. (The bare pole H1-75R stays style "R",
+        // matching H1-1R / H1-138R; plates RBP-/RCP- are untouched — no dash after the R.)
+        if (style && fam?.family === 'H1-RND' && style.startsWith('R-')) style = style.slice(2);
 
         targets.forEach(({ li, claimed }) => {
             if (claimed) {
