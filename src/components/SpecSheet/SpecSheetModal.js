@@ -139,6 +139,12 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         const anyReturnFlags = plates.some(p => p.returnOnly) || brackets.some(b => b.usesReturnPlates || b.isReturnArm);
         const pageList = [];
         for (const b of brackets) {
+          // isBasic = bracket takes NO backplate (canonical flag) — its page draws the
+          // bracket/pole/ring alone, no plate rows, no wall-mount detail.
+          if (b.isBasic) {
+            pageList.push({ key: `${b.partName}__BASIC`, title: `${b.partName} (basic — no backplate)`, bracketPin: b, familyPins: [], family: 'basic, no backplate' });
+            continue;
+          }
           const bracketIsReturn = !!(b.usesReturnPlates || b.isReturnArm || /RETURN/i.test(b.endTreatment || ''));
           for (const [fam, famPins] of Object.entries(families)) {
             if (anyReturnFlags) {
@@ -180,10 +186,10 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     let ring = ringNodes.length ? extractWorldMeshes(scene, ringNodes) : [];
     const plateChoices = familyPins || [];
-    if (!plateChoices.length) throw new Error('No backplate choices found for this bracket.');
-    const firstPlate = extractWorldMeshes(scene, [plateChoices[0].choiceNode]);
     if (!pole.length) throw new Error('No POLE cluster nodes found.');
-    const axes = inferAxes(pole, firstPlate);
+    // basic brackets have no plate — the bracket itself marks the wall side for axis inference
+    const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
+    const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
     const views = makeViews(axes);
     // presentation: slide the ring group onto the visible pole span (examples show the
     // ring on the rod) when it sits off this segment
@@ -197,6 +203,23 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       }
     }
     const rootV = armRootCenter(bracket, axes);
+    // BASIC bracket page: one row, bracket + pole + ring only
+    if (!plateChoices.length) {
+      const meshes = [...bracket, ...pole, ...ring];
+      const front = renderHiddenLine(meshes, views.front, 1600);
+      const profile = renderHiddenLine(meshes, views.profile, 900);
+      const poleF = viewBbox(pole, views.front);
+      const ringF = ring.length ? viewBbox(ring, views.front) : null;
+      const dims = { front: [], profile: [], detail: [] };
+      dims.front.push({ t: 'dia', u: poleF.maxU - 0.004, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
+      if (ringF) dims.front.push({ t: 'v', u: ringF.maxU, v0: poleF.maxV, v1: ringF.minV, off: 14, ldy: 26, in: (poleF.maxV - ringF.minV) * M2IN });
+      const wallPt = [0, 0, 0]; wallPt[axes.projAxis] = axes.wallCoord;
+      const wallU = projPoint(views.profile, wallPt)[0];
+      const poleU = projPoint(views.profile, axes.poleCenter)[0];
+      const profTopV = viewBbox(meshes, views.profile).maxV;
+      dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: Math.abs(poleU - wallU) * M2IN });
+      return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, hasAsMounted: false }], axes };
+    }
     const rows = plateChoices.map((platePin) => {
       const plateAll0 = extractWorldMeshes(scene, [platePin.choiceNode]);
       if (!plateAll0.length) return { rowKey: platePin.partName, code: platePin.partName, missing: true };
@@ -231,13 +254,14 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: coverF.maxV, off: -10, in: plateWIn });
       dims.front.push({ t: 'dia', u: poleF.maxU - 0.004, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
       if (ringF) {
-        // ring drop: TOP OF ROD → bottom of the eyelet (Stuart's definition)
-        dims.front.push({ t: 'v', u: ringF.maxU, v0: poleF.maxV, v1: ringF.minV, off: 14, in: (poleF.maxV - ringF.minV) * M2IN });
+        // ring drop: TOP OF ROD → bottom of the eyelet (Stuart's definition); label drops
+        // ~1/4" printed so the text clears the underside of the pole
+        dims.front.push({ t: 'v', u: ringF.maxU, v0: poleF.maxV, v1: ringF.minV, off: 14, ldy: 26, in: (poleF.maxV - ringF.minV) * M2IN });
         // as-mounted: top hole of the wall mount → bottom of the ring, from bulk-entered offset
         const topHoleOff = parseInches(wallCfg[wallCode]?.topHole);
         if (topHoleOff != null && wallF) {
           const topHoleV = wallF.maxV - topHoleOff / M2IN;
-          dims.front.push({ t: 'v', u: coverF.minU, v0: topHoleV, v1: ringF.minV, off: -16, in: (topHoleV - ringF.minV) * M2IN });
+          dims.front.push({ t: 'v', u: coverF.minU, v0: topHoleV, v1: ringF.minV, off: -16, side: -1, in: (topHoleV - ringF.minV) * M2IN });
         }
       }
       // profile: projection (wall face → pole centerline) + plate height
@@ -247,7 +271,8 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
       const poleU = projPoint(views.profile, polePt)[0];
       const profTopV = viewBbox(meshes, views.profile).maxV;
       dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: Math.abs(poleU - wallU) * M2IN });
-      dims.profile.push({ t: 'v', u: coverP.maxU, v0: coverP.maxV, v1: coverP.minV, off: 14, in: (coverP.maxV - coverP.minV) * M2IN, dia: isRound });
+      // plate height: line + label in the empty space LEFT of the plate (wall side), off the artwork
+      dims.profile.push({ t: 'v', u: coverP.minU, v0: coverP.maxV, v1: coverP.minV, off: -12, side: -1, in: (coverP.maxV - coverP.minV) * M2IN, dia: isRound });
       if (wallF && detail) {
         dims.detail.push({ t: 'h', u0: wallF.minU, u1: wallF.maxU, v: wallF.maxV, off: -12, in: (wallF.maxU - wallF.minU) * M2IN });
         dims.detail.push({ t: 'v', u: wallF.maxU, v0: wallF.maxV, v1: wallF.minV, off: 12, in: (wallF.maxV - wallF.minV) * M2IN });

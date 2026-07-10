@@ -9,6 +9,11 @@ export const PAGE_H = 850;
 const MARGIN = 28;
 const SW = 0.6; // dimension line weight
 
+// Printed on letter landscape inside 0.25" margins the page spans 10.5", so PAGE_W/10.5
+// page-units = one printed inch. Drawings never scale ABOVE this — capped there, a printed
+// sheet shows those parts at true 1:1 (hold the part against the paper).
+export const SCALE_1TO1 = (PAGE_W / 10.5) / 0.0254; // page units per world meter
+
 const COL = { detail: 130, front: 430, code: 660, profile: 890 };
 const BOX = { detail: [96, 60], front: [380, 42], profile: [230, 42] }; // [maxWpx, rowH inset]
 
@@ -19,11 +24,13 @@ export function dimH(x0, x1, y, inches) {
   s += fracSvg((x0 + x1) / 2 - 7, y - 5, inches);
   return s;
 }
-export function dimV(x, y0, y1, inches, dia = false) {
+// side: +1 label right of the line (default), -1 label to the left (clear of artwork).
+// labelDy: extra vertical label offset in page units (~26 = 1/4" printed).
+export function dimV(x, y0, y1, inches, dia = false, side = 1, labelDy = 0) {
   let s = `<line x1="${x}" y1="${y0}" x2="${x}" y2="${y1}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x - 4}" y1="${y0}" x2="${x + 4}" y2="${y0}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x - 4}" y1="${y1}" x2="${x + 4}" y2="${y1}" stroke="black" stroke-width="${SW}"/>`;
-  s += fracSvg(x + 7, (y0 + y1) / 2 + 4, inches, 11, dia);
+  s += fracSvg(side < 0 ? x - 34 : x + 7, (y0 + y1) / 2 + 4 + labelDy, inches, 11, dia);
   return s;
 }
 export function leaderDia(x, y, inches) {
@@ -79,7 +86,7 @@ function columnScale(rows, key, rowH) {
     if (!zb) continue;
     s = Math.min(s, maxW / (zb.maxU - zb.minU), (rowH - inset) / (zb.maxV - zb.minV));
   }
-  return isFinite(s) ? s : 1;
+  return isFinite(s) ? Math.min(s, SCALE_1TO1) : 1;
 }
 
 // rows[i] = { rowKey, code, wallCode, front: {vis, zb}, profile: {vis, zb}, detail: {vis, zb}|null,
@@ -114,7 +121,7 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
     let s = '';
     for (const d of dims || []) {
       if (d.t === 'h') s += dimH(mu(d.u0), mu(d.u1), mv(d.v) + (d.off || 0), d.in);
-      else if (d.t === 'v') s += dimV(mu(d.u) + (d.off || 0), mv(d.v0), mv(d.v1), d.in, d.dia);
+      else if (d.t === 'v') s += dimV(mu(d.u) + (d.off || 0), mv(d.v0), mv(d.v1), d.in, d.dia, d.side || 1, d.ldy || 0);
       else if (d.t === 'dia') s += leaderDia(mu(d.u), mv(d.v), d.in);
     }
     return s;
