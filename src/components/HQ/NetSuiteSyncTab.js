@@ -351,8 +351,12 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     LEFT JOIN bomrevisioncomponentmember ON bomrevisioncomponentmember.bomrevision = bomrevision.id
                     LEFT JOIN item AS comp ON comp.id = bomrevisioncomponentmember.item
                     
-                    WHERE item.custitem_sync_to_cpq = 'T' 
-                    AND item.isinactive = 'F' 
+                    WHERE item.custitem_sync_to_cpq = 'T'
+                    AND item.isinactive = 'F'
+                    /* "STD-" items = the renamed OLD standard-cost items (2026-07 NetSuite realignment).
+                       They keep the retired sales history for the Stock View snapshot ONLY — never
+                       imported into the app library (60 of them still carry the sync flag). */
+                    AND item.itemid NOT LIKE 'STD-%'
                     AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
                     AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')
                     AND item.id > ${lastId}

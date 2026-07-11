@@ -645,11 +645,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     };
 
     // Stocked-items sales snapshot, read STRAIGHT FROM NETSUITE (synced parts can lag). ONE ROW PER STOCKED
-    // item (custitem27='T'). New stocked items are named "<base>-N"; their OLD counterpart is "<base>"
-    // flagged custitem28='T'. Each month cell shows the CURRENT item's sales in BLACK, falling back to the
-    // old "-N-stripped" item's sales in BLUE where the current item had none — so a new SKU reads blue on
-    // the left and fills black from the right over time. Sales are CHUNKED (60 ids/query) to stay under
-    // NetSuite's 1000-row SuiteQL cap (that truncation was why items showed no history).
+    // item (custitem27='T'). NAMING (NetSuite realignment 2026-07-11): stocked items now carry the CLEAN
+    // SKU ("HAFICBR1/BL"); their OLD counterpart (custitem28='T', the sales history we keep) is
+    // "STD-<SKU>". The prior scheme (new = "<base>-N", old = "<base>") is kept as a fallback for any
+    // stragglers. Each month cell shows the CURRENT item's sales in BLACK, falling back to the OLD
+    // item's sales in BLUE where the current item had none — so a renamed SKU reads blue on the left and
+    // fills black from the right over time. Sales are CHUNKED (60 ids/query) to stay under NetSuite's
+    // 1000-row SuiteQL cap (that truncation was why items showed no history).
     const openSalesHistory = async () => {
         const months = last12Months(new Date());
         setSalesHist({ loading: true, error: null, rows: [], months, generatedAt: new Date().toLocaleString(), withOld: 0 });
@@ -698,11 +700,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const arows = await runSql(`SELECT ail.item AS internal_id, SUM(ail.quantityavailable) AS avail FROM AggregateItemLocation ail WHERE ail.item IN (${chunk.join(',')}) AND ail.location = ${loc} GROUP BY ail.item`);
                 arows.forEach(row => { availById[String(row.internal_id)] = Math.round(Number(row.avail) || 0); });
             }
-            // 3) One row per stocked item; pair "<base>-N" → old "<base>" for the blue fallback.
-            const rows = stocked.map(s => {
+            // 3) One row per stocked item; pair to the OLD history item: "STD-<SKU>" first (the
+            // 2026-07 realignment), then the legacy "<base>-N" → "<base>" scheme for stragglers.
+            const rows = stocked.filter(s => !/^STD-/i.test(s.itemid)).map(s => {
                 const newRec = salesById[s.internalId] || { m: {}, orders: 0 };
-                const base = /-N$/i.test(s.itemid) ? s.itemid.replace(/-N$/i, '') : null;
-                const oldSib = base ? oldByItemId[base.toUpperCase()] : null;
+                const stripped = String(s.itemid).replace(/-N$/i, '');
+                const oldSib = oldByItemId[('STD-' + stripped).toUpperCase()]
+                    || (stripped !== s.itemid ? oldByItemId[stripped.toUpperCase()] : null);
+                const base = oldSib ? stripped : null;
                 const oldRec = oldSib ? (salesById[oldSib.internalId] || { m: {}, orders: 0 }) : { m: {}, orders: 0 };
                 const cells = months.map(mo => {
                     const nq = newRec.m[mo.key] || 0, oq = oldRec.m[mo.key] || 0;
@@ -734,7 +739,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         URL.revokeObjectURL(url);
     };
 
-    // Lock the OLD counterparts (custitem28 items paired to a stocked -N row) by internal ID →
+    // Lock the OLD counterparts (custitem28 "STD-" items paired to a stocked row) by internal ID →
     // system/retired_items, so the app-wide hide works even before the next NetSuite sync.
     const lockRetiredByInternalId = async () => {
         const olds = (salesHist?.rows || []).filter(r => r.hasOld).map(r => ({ internalId: String(r.oldInternalId), itemid: r.oldItemId || r.base, base: r.base }));
@@ -975,7 +980,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '14px' }}>
                                 Last 12 months of demand (Sales Orders) per stocked item · {activeBrand?.toUpperCase()} · as of {salesHist.generatedAt}
                                 <span style={{ marginLeft: '14px', color: 'var(--ink)' }}>■ current item</span>
-                                <span style={{ marginLeft: '10px', color: OLD_BLUE }}>■ old “-N” version (fallback)</span>
+                                <span style={{ marginLeft: '10px', color: OLD_BLUE }}>■ old “STD-” item history (fallback)</span>
                                 <span style={{ marginLeft: '14px' }}>{salesHist.withOld || 0} of {(salesHist.rows || []).length} have an old version</span>
                             </div>
 
