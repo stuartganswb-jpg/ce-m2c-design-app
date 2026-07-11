@@ -19,6 +19,23 @@ export const PRICE_LEVELS = [
 
 export const priceLevelShort = (id) => PRICE_LEVELS.find(l => l.id === id)?.short || 'STANDARD';
 
+// Fabricut pattern id for a resolved item. Variant docs don't carry codes — they live on the BASE
+// doc (fabCodePainted / fabCodePremium / fabCodeBase, stamped by the CrossReference import); the
+// tier follows the variant's own finish suffix (…/EPn → PREMIUM code). findByCode resolves the
+// base doc from an UPPERCASE ERP code.
+export function fabricutCodeOf(part, findByCode) {
+    if (!part) return null;
+    const code = String(part.legacyErpId || part.itemId || '').trim().toUpperCase();
+    if (!code) return null;
+    const [base, sfx = ''] = code.split('/');
+    let doc = part;
+    if ((sfx || !part.manufacturingSpecs?.fabricut) && typeof findByCode === 'function') doc = findByCode(base) || part;
+    const fab = doc?.manufacturingSpecs?.fabricut;
+    if (!fab) return null;
+    if (sfx.startsWith('EP')) return fab.fabCodePremium || fab.fabCodePainted || fab.fabCodeBase || null;
+    return fab.fabCodePainted || fab.fabCodeBase || fab.fabCodePremium || null;
+}
+
 // The level price for a resolved part (AFTER size/species/finish resolution), or null when this
 // level has nothing to say about it (→ caller keeps standard pricing).
 //   - Finish-variant and single-finish docs carry direct {retail, cost, wholesale}.

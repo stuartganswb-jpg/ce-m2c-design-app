@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf } from '../Shared/sizeMatrix';
-import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf } from '../Shared/priceLevels';
+import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
 
 const globalTextureCache = {};
 
@@ -714,6 +714,30 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const r = sizeVariantOf(base, sel, sizeLabelIndex);
       return r.swapped ? r.part : null;
   };
+  // Level-aware option display (Stuart 2026-07-11): FEES always show the plain description only
+  // (CE-FEE ids are app-internal). FAB COST (CE→Fabricut) shows our id — description · Fabricut
+  // pattern id. FAB WHOLESALE / RETAIL show the Fabricut pattern id (their world). STANDARD keeps
+  // our sized code + description.
+  const optionDisplayFor = (o) => {
+      const allParts = [...libraryParts, ...liveAssemblies];
+      const findBase = (k) => !k ? null : (allParts.find(x => String(x.legacyErpId || x.itemId || '').trim().toUpperCase() === String(k).trim().toUpperCase()) || null);
+      const sized = sizedPartForLabel(o.partId, o.partName);
+      const doc = sized || allParts.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
+          || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName))) || null;
+      const desc = doc?.itemName || partDescOf(o.partId, o.partName) || '';
+      const fee = !!(o.isFee || doc?.partClass === 'Fee' || String(doc?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE');
+      if (fee) return { name: desc || o.partName, desc: '' };
+      const ourCode = doc?.legacyErpId && doc.legacyErpId !== 'PENDING' ? doc.legacyErpId : (sized ? (sized.itemId || o.partName) : o.partName);
+      if (priceLevel === 'FAB_WHOLESALE' || priceLevel === 'FAB_RETAIL') {
+          const fc = fabricutCodeOf(doc, findBase);
+          return { name: fc || ourCode, desc: desc };
+      }
+      if (priceLevel === 'FAB_COST') {
+          const fc = fabricutCodeOf(doc, findBase);
+          return { name: ourCode, desc: `${desc}${fc ? ' · ' + fc : ''}` };
+      }
+      return { name: sized ? (sized.legacyErpId || sized.itemId || o.partName) : o.partName, desc };
+  };
 
   const getOptionsForStep = (step) => {
       // Tag-driven Mount selector: options are the distinct Location tags on the linked assembly's
@@ -736,13 +760,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
           if (sizeSel && !returnsAllowedFor(sizeSel)) opts = opts.filter(o => !isReturnOption(o));
           return opts.map(o => {
-              const sized = sizedPartForLabel(o.partId, o.partName);
-              return {
-                  id: o.optId || o.partId,
-                  itemName: sized ? (sized.legacyErpId || sized.itemId || o.partName) : o.partName,
-                  desc: sized ? (sized.itemName || '') : partDescOf(o.partId, o.partName),
-                  price: o.price
-              };
+              const d = optionDisplayFor(o);
+              return { id: o.optId || o.partId, itemName: d.name, desc: d.desc, price: o.price };
           });
       }
       if (!step || !step.dataSource) return [];
@@ -1265,6 +1284,24 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       };
       // Finish-driven species: a finish with bomSuffix consumes the per-species item (-O/-W).
       const speciesSwap = (part, finishObj) => speciesVariantOf(part, finishObj, (c) => byCode.get(c) || null);
+      // Quote-line naming per level (Stuart 2026-07-11): fees = plain description only (CE-FEE ids
+      // are app-internal, never printed); FAB COST = our id — description · Fabricut pattern id;
+      // FAB WHOLESALE / RETAIL = the Fabricut pattern id alone (their catalog language); STANDARD
+      // keeps the description as today.
+      const lineNameFor = (p, opt) => {
+          const desc = p?.itemName || p?.name || opt?.partName || '';
+          const fee = !!(opt?.isFee || p?.partClass === 'Fee' || String(p?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE');
+          if (fee) return desc;
+          if (priceLevel === 'FAB_WHOLESALE' || priceLevel === 'FAB_RETAIL') {
+              return fabricutCodeOf(p, (c) => byCode.get(c) || null) || desc;
+          }
+          if (priceLevel === 'FAB_COST') {
+              const our = p?.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : (p?.itemId || '');
+              const fc = fabricutCodeOf(p, (c) => byCode.get(c) || null);
+              return `${our || desc}${our && desc ? ' — ' + desc : ''}${fc ? ' · ' + fc : ''}`;
+          }
+          return desc;
+      };
       // SIZE-MATRIX (Fabricut H1): resolve every configured part to the selected Rod Diameter /
       // Projection variant BEFORE finish resolution — identity chain: base → size → finish
       // (H1-75BE → H1-1B6 → H1-1B6/EP2). Flows without SIZE steps degrade to identity.
@@ -1373,7 +1410,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
                   resolvedErpId = partObj?.legacyErpId || partObj?.itemId || styleOpt?.legacyErpId || null;
 
-                  if (partObj) itemName = `${step.title} (${partObj.itemName || partObj.name})`;
+                  if (partObj) itemName = `${step.title} (${lineNameFor(partObj, styleOpt)})`;
                   else if (styleOpt) itemName = `${step.title} (${styleOpt.partName})`;
 
                   let optionNativePrice = 0;
@@ -1406,7 +1443,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           if (optionNativePrice === 0 && stepPrice === 0 && lp > 0) optionNativePrice = lp;
                           resolvedPartId = linkedPart.itemId || linkedPart.id;
                           resolvedErpId = linkedPart.legacyErpId || linkedPart.itemId || resolvedErpId;
-                          itemName = `${step.title} (${linkedPart.itemName})`;
+                          itemName = `${step.title} (${lineNameFor(linkedPart, null)})`;
                       }
                   }
 
@@ -1490,7 +1527,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       if (fp != null) subPrice = fp;
                   }
                   breakdown.push({
-                      name: `${step.subLabel || 'Backplate'} (${subPart?.itemName || subOpt.partName})`,
+                      name: `${step.subLabel || 'Backplate'} (${subPart ? lineNameFor(subPart, subOpt) : subOpt.partName})`,
                       qty: qty, price: subPrice, total: subPrice * qty,
                       partHandling: step.partHandling || '',
                       partId: subPart?.itemId || subPart?.id || subOpt.partId,
@@ -2385,11 +2422,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   <select value={noPlate ? '' : (dynamicConfigParams[`${currentStep.id}__sub`] || '')} disabled={noPlate} onChange={(e) => handleParamChange(`${currentStep.id}__sub`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none', ...(noPlate ? { background: 'var(--paper-2)', color: 'var(--ink-soft)', cursor: 'not-allowed', opacity: 0.65 } : {}) }}>
                                       <option value="">{noPlate ? '-- None (basic bracket — no backplate) --' : '-- None --'}</option>
                                       {subs.map(o => {
-                                          const sized = sizedPartForLabel(o.partId, o.partName);
-                                          const nm = sized ? (sized.legacyErpId || sized.itemId || o.partName) : o.partName;
-                                          const d = sized ? (sized.itemName || '') : partDescOf(o.partId, o.partName);
+                                          const d = optionDisplayFor(o);
                                           return (
-                                          <option key={o.optId} value={o.optId}>{nm}{d ? ` — ${d}` : ''}</option>
+                                          <option key={o.optId} value={o.optId}>{d.name}{d.desc ? ` — ${d.desc}` : ''}</option>
                                       ); })}
                                   </select>
                               </div>
