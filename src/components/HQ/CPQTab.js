@@ -511,11 +511,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // sheet at FAB levels; everything else stays standard. Never drives NetSuite push rates.
   const [priceLevel, setPriceLevel] = useState('STANDARD');
   
-  const [jobData, setJobData] = useState({ 
-      customerId: '', 
-      jobName: '', 
-      shippingMethod: 'SAVED', 
-      shippingAddressId: '', 
+  const [jobData, setJobData] = useState({
+      customerId: '',
+      jobName: '',
+      shippingMethod: 'SAVED',
+      shippingAddressId: '',
+      shippingAmount: '',
       customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' }
   });
   
@@ -1812,6 +1813,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           shippingMethod: jobData.shippingMethod || 'SAVED',
           shippingAddressId: jobData.shippingAddressId || null,
           customShippingAddress: jobData.shippingMethod === 'CUSTOM' ? jobData.customShippingAddress : null,
+          // Shipping charge rides OUTSIDE cpqData.totalPrice: the push writes it to the NetSuite
+          // estimate header (shippingcost), never a line — keeps the rollup balance math intact.
+          shippingAmount: parseFloat(jobData.shippingAmount) || 0,
 
           // fsSafe hardens the whole blob — Vision-derived fields can carry undefined / NaN / nested
           // arrays that Firestore rejects ("cpqData contains an invalid nested entity").
@@ -1873,7 +1877,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           localStorage.removeItem('hq_global_cart');
           localStorage.removeItem('hq_active_quote_session');
           setShowCheckoutModal(false);
-          setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
+          setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
           setActiveMasterQuoteId(null);
 
       } catch (err) { 
@@ -1981,9 +1985,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                     <span style="flex: 1; text-align: right;">$${item.total.toFixed(2)}</span>
                                 </div>
                             `).join('')}
+                            ${(parseFloat(job.shippingAmount) || 0) > 0 ? `
+                            <div class="row">
+                                <span style="flex: 4; text-align: right; padding-right: 20px;">Shipping</span>
+                                <span style="flex: 1; text-align: right;">$${(parseFloat(job.shippingAmount) || 0).toFixed(2)}</span>
+                            </div>` : ''}
                             <div class="row total">
                                 <span style="flex: 4; text-align: right; padding-right: 20px; font-family: 'Cormorant Garamond', serif;">Total Estimate</span>
-                                <span style="flex: 1; text-align: right;">$${job.cpqData?.totalPrice?.toFixed(2)}</span>
+                                <span style="flex: 1; text-align: right;">$${((job.cpqData?.totalPrice || 0) + (parseFloat(job.shippingAmount) || 0)).toFixed(2)}</span>
                             </div>
                         </div>
                     </div>
@@ -2296,7 +2305,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 Checkout ({cart.length} Items)
             </button>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume Draft</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
         </div>
       </div>
 
@@ -2997,6 +3006,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                     </div>
                                 </div>
                             )}
+
+                            <div style={{ marginTop: '20px' }}>
+                                <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Shipping Charge ($, Optional)</label>
+                                <input type="number" min="0" step="0.01" placeholder="0.00" value={jobData.shippingAmount ?? ''} onChange={e => setJobData({...jobData, shippingAmount: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' }} />
+                                <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px', fontStyle: 'italic' }}>Charged on top of the quote total — lands in the NetSuite estimate's shipping cost field on push.</div>
+                            </div>
                         </div>
                     )}
 

@@ -501,10 +501,16 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                   ) : (
                                       <div style={{ padding: '20px', fontStyle: 'italic', color: 'var(--ink-soft)', textAlign: 'center' }}>No line items configured.</div>
                                   )}
+                                  {(parseFloat(activeDocJob.shippingAmount) || 0) > 0 && (
+                                      <div style={{ display: 'flex', padding: '12px 0', fontSize: '13px' }}>
+                                          <span style={{ flex: 4, textAlign: 'right', paddingRight: '30px' }}>Shipping</span>
+                                          <span style={{ flex: 1, textAlign: 'right' }}>${(parseFloat(activeDocJob.shippingAmount) || 0).toFixed(2)}</span>
+                                      </div>
+                                  )}
                                   {activeDocJob.cpqData?.totalPrice && (
                                       <div style={{ display: 'flex', paddingTop: '20px', marginTop: '10px', borderTop: '1px solid var(--line)', fontSize: '16px', fontWeight: 500 }}>
                                           <span style={{ flex: 4, textAlign: 'right', paddingRight: '30px', fontFamily: 'var(--serif)' }}>Total Estimate</span>
-                                          <span style={{ flex: 1, textAlign: 'right' }}>${activeDocJob.cpqData.totalPrice.toFixed(2)}</span>
+                                          <span style={{ flex: 1, textAlign: 'right' }}>${(activeDocJob.cpqData.totalPrice + (parseFloat(activeDocJob.shippingAmount) || 0)).toFixed(2)}</span>
                                       </div>
                                   )}
                               </div>

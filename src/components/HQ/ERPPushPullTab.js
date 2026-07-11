@@ -360,6 +360,17 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
           const cpqGrandTotal = parseFloat(job.cpqData.totalPrice || 0);
           const silentFeeBalance = Math.max(0, cpqGrandTotal - physicalItemsTotal);
+          // The rollup can only absorb DOWN to zero: if the physical lines at standard rates
+          // already exceed the quoted (net) total — e.g. a heavy trade discount — the estimate
+          // lands ABOVE the quote. Surface it instead of pushing a silent mismatch.
+          if (cpqGrandTotal - physicalItemsTotal < -0.005) {
+              const overBy = (physicalItemsTotal - cpqGrandTotal).toFixed(2);
+              addLog(`⚠️ Quoted total $${cpqGrandTotal.toFixed(2)} is BELOW the physical lines' standard-rate total $${physicalItemsTotal.toFixed(2)} — rollup floors at $0, estimate will land $${overBy} over the quote.`, 'warn');
+              if (!window.confirm(`Heads up: this quote's total ($${cpqGrandTotal.toFixed(2)}) is LOWER than the sum of its physical lines at standard rates ($${physicalItemsTotal.toFixed(2)}).\n\nThe rollup line can't go negative, so the NetSuite estimate would land $${overBy} ABOVE the quoted total.\n\nPush anyway?`)) {
+                  setIsPushing(false);
+                  return;
+              }
+          }
 
           let nsCustomerId = job.customer?.id || "";
           if (nsCustomerId.startsWith('CUST-')) nsCustomerId = nsCustomerId.replace('CUST-', '');
@@ -397,12 +408,17 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
           const memoText = [job.jobName, job.sidemark].filter(Boolean).join(' - ').trim();
 
+          // Quote's shipping charge → estimate HEADER shipping cost (never a line item):
+          // lines + rollup still sum to cpqData.totalPrice; NetSuite adds shipping on top.
+          const shippingAmount = parseFloat(job.shippingAmount) || 0;
+          if (shippingAmount > 0) shippingPayload.shippingcost = parseFloat(shippingAmount.toFixed(2));
+
           const payload = {
-              entity: { id: nsCustomerId }, 
-              subsidiary: { id: brandMapping.subsidiary }, 
-              location: { id: brandMapping.location },     
+              entity: { id: nsCustomerId },
+              subsidiary: { id: brandMapping.subsidiary },
+              location: { id: brandMapping.location },
               memo: memoText,
-              custbody50: job.jobId || job.id, 
+              custbody50: job.jobId || job.id,
               ...shippingPayload,
               item: {
                   items: [
@@ -420,6 +436,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
           addLog(`Payload constructed. Silent Fees/Assembly assigned $${silentFeeBalance.toFixed(2)}`, 'success');
           if (shippingPayload.shippingaddress) addLog(`Custom Shipping Override Attached.`, 'info');
+          if (shippingAmount > 0) addLog(`Shipping charge $${shippingAmount.toFixed(2)} → estimate header shipping cost.`, 'info');
 
           const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
           addLog(`Transmitting to NetSuite via Google Cloud...`, 'info');
@@ -579,6 +596,9 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                                         {activeJob.customShippingAddress.addr2 && <div>{activeJob.customShippingAddress.addr2}</div>}
                                         <div>{activeJob.customShippingAddress.city}, {activeJob.customShippingAddress.state} {activeJob.customShippingAddress.zip}</div>
                                     </div>
+                                )}
+                                {(parseFloat(activeJob.shippingAmount) || 0) > 0 && (
+                                    <div style={{ marginTop: '8px' }}><strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginRight: '8px' }}>Shipping Charge:</strong> ${(parseFloat(activeJob.shippingAmount) || 0).toFixed(2)} <span style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>(pushes to estimate header)</span></div>
                                 )}
                             </div>
                         </div>
