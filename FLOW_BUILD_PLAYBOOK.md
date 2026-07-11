@@ -118,3 +118,12 @@ Fabricut Cost shows `our id — desc · pattern id`, Wholesale/Retail show patte
 - Pins anchor **shell/base items**; finishes resolve `/P`, `/EPn`, `-O`, `-W`; sizes resolve
   the diameter/projection code. One part per pin, always the base.
 - If a picker shows something wrong, fix the TAGS (1.5/1.6) or the ITEM data — not the flow.
+
+## SPEC SHEETS FOR ALL SIZES (added 2026-07-11)
+
+Sheets measure TRUE geometry — they never use the flow's render scaling. Each rod diameter gets a
+**SPEC MASTER** assembly (dimension-only, never flow-linked) built in 1.6 from true-scale slot
+GLBs; the 📐 tool then generates that diameter's full catalog (every projection is just a bracket
+choice there). The complete modeling checklists — every item #, node name, and Load-Choices flag,
+generated from the live import data — are in `SPEC_MASTER_MANIFESTS.md`. Never add other
+projections/diameters to the production flow master; that's what the spec masters are for.
