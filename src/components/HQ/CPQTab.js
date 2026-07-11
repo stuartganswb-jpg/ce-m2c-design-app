@@ -644,9 +644,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               const pick = withGeom || (opts || [])[0];
               return pick && (pick.optId || pick.partId);
           };
+          // A DEFAULT must be the standard configuration — never a FEE, french/miter return, or
+          // inside mount. After the size-matrix regenerate the modeled FRENCH RETURN became the
+          // first geometry-bearing option on the End Treatment steps, so an untouched flow opened
+          // pre-charged with two $50 return fees (and the returns hid the rod ends). Steps whose
+          // options are all fee/return-ish seed nothing and stay unselected.
+          const seedable = (opts) => (opts || []).filter(o =>
+              !o.isFee && !isReturnOption(o) && String(o.endTreatment || '').toUpperCase() !== 'INSIDE_MOUNT');
           steps.forEach(step => {
               if (step.type === 'STYLE_SWAP' && Array.isArray(step.styleOptions) && step.styleOptions.length) {
-                  if (!next[step.id]) { const id = firstGeom(step.styleOptions, step.geometryMap); if (id) { next[step.id] = id; changed = true; } }
+                  if (!next[step.id]) { const id = firstGeom(seedable(step.styleOptions), step.geometryMap); if (id) { next[step.id] = id; changed = true; } }
                   // Secondary chooser in the same step (e.g. the backplate paired with the bracket),
                   // seeded to a plate whose location matches the chosen bracket's mount.
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
