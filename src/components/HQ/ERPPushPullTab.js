@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, getDocs, query, where } from "firebase/firestore";
 import { SIZE_STEP_TYPE, makeSizeSwap, speciesVariantOf } from '../Shared/sizeMatrix';
 
 // DYNAMIC BRAND MAPPING DICTIONARY
@@ -454,6 +454,32 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       setIsPushing(false);
   };
 
+  // Delete a ghost/abandoned quote job (e.g. a Vision push that was never completed): removes the
+  // jobs doc plus its orphaned cpq_drafts and Vision drawings. Blocked once the job has reached
+  // NetSuite — void it there instead, so the app and NetSuite never disagree about a live estimate.
+  const handleDeleteJob = async (job, e) => {
+      e.stopPropagation();
+      const jid = job.jobId || job.id;
+      if (job.netsuiteEstimateId || job.dispatchStatus?.nsSalesOrder) {
+          alert(`${jid} is already in NetSuite (estimate ${job.netsuiteEstimateId || 'created'}).\n\nVoid it in NetSuite first — deleting only the app copy would leave a live estimate with no app record.`);
+          return;
+      }
+      if (!window.confirm(`Delete quote ${jid} (${job.customer?.name || 'no customer'} · $${job.cpqData?.totalPrice?.toFixed(2) || '0.00'})?\n\nThis permanently removes the job, its staging drafts, and its Vision drawings from the app. It never reached NetSuite, so nothing exists there.`)) return;
+      try {
+          let extras = 0;
+          const draftsQ = await getDocs(query(collection(db, 'cpq_drafts'), where('masterQuoteId', '==', jid)));
+          for (const d of draftsQ.docs) { await deleteDoc(d.ref); extras++; }
+          const filesQ = await getDocs(query(collection(db, 'crm_files'), where('jobId', '==', jid)));
+          for (const f of filesQ.docs) { await deleteDoc(f.ref); extras++; }
+          await deleteDoc(doc(db, 'jobs', job.id));
+          if (activeJob?.id === job.id) setActiveJob(null);
+          addLog(`🗑 Deleted quote ${jid}${extras ? ` (+${extras} draft/drawing doc(s))` : ''}.`, 'success');
+      } catch (err) {
+          console.error(err);
+          alert('Delete failed: ' + (err?.message || err));
+      }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
       
@@ -480,7 +506,10 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                         <div key={job.id} onClick={() => setActiveJob(job)} style={{ background: activeJob?.id === job.id ? 'var(--paper-2)' : '#fff', border: `1px solid ${activeJob?.id === job.id ? 'var(--brass)' : 'var(--line)'}`, padding: '16px', cursor: 'pointer', transition: 'all 0.2s ease', boxShadow: activeJob?.id === job.id ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                                 <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '1.05rem' }}>{job.customer?.name || job.clientName || 'Unknown Customer'}</span>
-                                <span style={{ fontFamily: 'var(--serif)', fontSize: '1.1rem', color: 'var(--ink)' }}>${job.cpqData?.totalPrice?.toFixed(2) || '0.00'}</span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.1rem', color: 'var(--ink)' }}>${job.cpqData?.totalPrice?.toFixed(2) || '0.00'}</span>
+                                    <button onClick={(e) => handleDeleteJob(job, e)} title="Delete this quote from the app (ghost/abandoned jobs only — blocked once it's in NetSuite). Also removes its staging drafts + Vision drawings." style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '13px', lineHeight: 1, padding: '5px 7px', borderRadius: '2px' }}>🗑</button>
+                                </span>
                             </div>
                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontFamily: 'var(--mono)', textTransform: 'uppercase' }}>ID: {job.jobId || job.id}</div>
                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Ref: {job.sidemark || 'N/A'}</div>
