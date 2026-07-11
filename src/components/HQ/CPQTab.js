@@ -1177,8 +1177,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   };
 
   useEffect(() => {
-      if (!activeFlow) return;
-      
+      if (!activeFlow) {
+          // No flow = no quote: zero the panel. Returning without clearing left the LAST
+          // computuation on screen after Clear All / flow deselect — a "$120 ghost" with
+          // nothing selected.
+          setPricing({ base: 0, finalPrice: 0 });
+          setPricingBreakdown([]);
+          return;
+      }
+
       let breakdown = [];
       let baseAssemblyPrice = activeAssembly?.manufacturingSpecs?.basePrice ? parseFloat(activeAssembly.manufacturingSpecs.basePrice) : 0;
       if (!activeAssembly && activeFlow.basePrice) baseAssemblyPrice = parseFloat(activeFlow.basePrice);
