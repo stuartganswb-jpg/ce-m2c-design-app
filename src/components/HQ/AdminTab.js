@@ -788,7 +788,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   title: label ? `${label} ${base}` : base,
                   type: 'STYLE_SWAP', partHandling: 'Custom', required: false, finishDataSource: 'master_finishes', useClientPricing: true,
                   position: pos, ...(stepRole ? { stepRole } : {}),
-                  ...(clone && pos === 'CENTER' ? { isCenterClone: true, qtyHelperText: 'Number of center passing brackets' } : {}),
+                  // Only the CENTER bracket step takes a quantity (a long pole can carry several
+                  // passing brackets); LEFT/RIGHT positions are structurally one each (Stuart 2026-07-10).
+                  ...(clone && pos === 'CENTER' ? { isCenterClone: true, qtyHelperText: 'Number of center passing brackets' } : { hideQty: true }),
                   styleOptions: group, geometryMap: geom(group),
                   ...(subs.length ? { subLabel, subOptions: subs, subGeometryMap: geom(subs) } : {}),
                   ...(inc ? { includedParts: inc } : {})
@@ -865,7 +867,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               });
               add({
                   title: label ? `${label} End Treatment` : 'End Treatment',
-                  type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, finishDataSource: 'master_finishes', useClientPricing: true,
+                  // one end = one treatment — never a quantity (Stuart 2026-07-10)
+                  type: 'STYLE_SWAP', partHandling: 'Small Parts', required: false, hideQty: true, finishDataSource: 'master_finishes', useClientPricing: true,
                   // position lets an option flagged "hides bracket" (ticked per option in the step editor)
                   // disable THIS side's outer Bracket & Mount step in CPQTab. Off by default — a return
                   // that still needs its bracket/backplate (e.g. french-return backplates) keeps the step.
