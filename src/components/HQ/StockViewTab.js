@@ -670,11 +670,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 return b.items || [];
             };
             // 1) Item universe: stocked items (the rows) + old items (the blue fallback source).
-            const itemRows = await runSql(`SELECT i.id AS internal_id, i.itemid AS itemid, i.custitem27 AS stk, i.custitem28 AS old FROM item i JOIN ItemSubsidiaryMap ism ON ism.item = i.id WHERE ism.subsidiary = ${sub} AND ${flagWhere}`);
+            // ROWS require an ACTIVE item — an inactive item with a stray Stocked flag was surfacing
+            // (H1-2RCTAR). Old/retired history donors stay includable regardless of active state.
+            const itemRows = await runSql(`SELECT i.id AS internal_id, i.itemid AS itemid, i.custitem27 AS stk, i.custitem28 AS old, i.isinactive AS inact FROM item i JOIN ItemSubsidiaryMap ism ON ism.item = i.id WHERE ism.subsidiary = ${sub} AND ${flagWhere}`);
             const stocked = [], oldByItemId = {};
             itemRows.forEach(row => {
                 const rec = { internalId: String(row.internal_id), itemid: row.itemid };
-                if (row.stk === 'T') stocked.push(rec);
+                if (row.stk === 'T' && row.inact !== 'T') stocked.push(rec);
                 if (row.old === 'T') oldByItemId[String(row.itemid).toUpperCase()] = rec;
             });
             // 2) Sales, CHUNKED so each grouped query stays under the 1000-row cap (chunk × 12 months < 1000).
