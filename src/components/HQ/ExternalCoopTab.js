@@ -492,9 +492,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                   <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Configuration Details</div>
                                   {activeDocJob.cpqData?.breakdown ? (
                                       activeDocJob.cpqData.breakdown.map((item, i) => (
-                                          <div key={i} style={{ display: 'flex', padding: '12px 0', borderBottom: '1px solid rgba(28,26,22,.08)', fontSize: '13px' }}>
+                                          <div key={i} style={{ display: 'flex', padding: '12px 0', borderBottom: '1px solid rgba(28,26,22,.08)', fontSize: '13px', color: item.isDiscount ? '#8a6d3b' : 'inherit', fontWeight: item.isNetLine ? 600 : 'inherit' }}>
                                               <span style={{ flex: 3 }}>{item.name}</span>
-                                              <span style={{ flex: 1, textAlign: 'center', color: 'var(--ink-soft)' }}>Qty: {item.qty}</span>
+                                              <span style={{ flex: 1, textAlign: 'center', color: 'var(--ink-soft)' }}>{(item.isDiscount || item.isNetLine) ? '' : `Qty: ${item.qty}`}</span>
                                               <span style={{ flex: 1, textAlign: 'right' }}>${item.total.toFixed(2)}</span>
                                           </div>
                                       ))
@@ -563,7 +563,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                   </div>
 
                                   {activeDocJob.cpqData?.breakdown ? (
-                                      activeDocJob.cpqData.breakdown.map((item, i) => (
+                                      activeDocJob.cpqData.breakdown.filter(item => !item.isDiscount && !item.isNetLine).map((item, i) => (
                                           <div key={i} style={{ display: 'flex', padding: '12px 0', borderBottom: '1px solid rgba(28,26,22,.08)', fontSize: '13px' }}>
                                               <span style={{ flex: 3, fontWeight: 500 }}>{item.name}</span>
                                               <span style={{ flex: 1, textAlign: 'right', fontSize: '14px', fontWeight: 500 }}>{item.qty}</span>

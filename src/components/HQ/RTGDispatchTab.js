@@ -7,8 +7,9 @@ import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
 
-// Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers).
-const getJobLines = (job) => (job?.cpqData?.breakdown || []).filter(l => l && !l.isHeader);
+// Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers and
+// the trade-discount / net-total display rows).
+const getJobLines = (job) => (job?.cpqData?.breakdown || []).filter(l => l && !l.isHeader && !l.isDiscount && !l.isNetLine);
 
 // Fixed ids for the Brimar test seed (shared by seed + remove so they can never drift). The floor
 // doc ids follow autoSplitSalesOrder's orderKey convention (WO-/SHOP-/PKG- + soNum).
@@ -642,6 +643,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             let cpqSpecs = {};
             if (originalJob && originalJob.cpqData && originalJob.cpqData.breakdown) {
                 originalJob.cpqData.breakdown.forEach(item => {
+                    if (item.isDiscount || item.isNetLine) return; // display-only quote rows
                     cpqSpecs[item.name] = `Qty: ${item.qty}`;
                 });
             }
@@ -737,6 +739,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             let cpqSpecs = {};
             if (originalJob && originalJob.cpqData && originalJob.cpqData.breakdown) {
                 originalJob.cpqData.breakdown.forEach(item => {
+                    if (item.isDiscount || item.isNetLine) return; // display-only quote rows
                     cpqSpecs[item.name] = `Qty: ${item.qty}`;
                 });
             }

@@ -479,7 +479,8 @@ export const EngineeringSpecsStrip = ({ draft, notes, parts, hideHangers }) => {
 
 const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [liveAssemblies, setLiveAssemblies] = useState([]);
-  const [liveCustomers, setLiveCustomers] = useState([]); 
+  const [liveCustomers, setLiveCustomers] = useState([]);
+  const [crmDiscounts, setCrmDiscounts] = useState([]);
   const [previousDrafts, setPreviousDrafts] = useState([]); 
   const [cpqRules, setCpqRules] = useState([]);
   const [cpqFlows, setCpqFlows] = useState([]);
@@ -566,6 +567,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       });
 
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { if (docSnap.exists()) setGlobalLists(docSnap.data()); });
+      // Trade discount dictionary (AdminTab → CRM & Sales Configuration → Discount Codes) —
+      // resolves a customer's discountCode (e.g. D20) to its percent at quote time.
+      const unsubDiscounts = onSnapshot(doc(db, "system", "crm_discounts"), (snap) => setCrmDiscounts((snap.exists() && snap.data().list) || []));
       const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (snap) => { if(snap.exists() && snap.data().finishes) setGlobalFinishes(snap.data().finishes); });
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
@@ -579,7 +583,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           setLiveCustomers(customers);
       });
 
-      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); };
+      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); unsubDiscounts(); };
   }, [activeBrand]);
 
   // Brand isolation: the CPQ customer dropdown is ONLY this brand's crm_records
@@ -587,6 +591,30 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // brandId, so they can't be brand-scoped and would leak other brands' names
   // into the dropdown — dropped intentionally.
   const combinedCustomers = useMemo(() => liveCustomers, [liveCustomers]);
+
+  // TRADE DISCOUNT (customer's CRM discountCode, e.g. D20 = less 20%). Applies per cart item,
+  // AFTER the full pricing chain, display-side only: STANDARD-level items only (Fabricut levels
+  // are already negotiated prices), and only on the item-priced portion — fee/labor lines and
+  // lines that resolve to no physical item are never discounted. Evaluated against the CURRENT
+  // customer at display/finalize time (not stamped at add-to-cart, so items added before the
+  // customer was picked still discount). Returns per-unit figures, or null when not applicable.
+  const tradeDiscountFor = (item) => {
+      if (!item || (item.priceLevel || 'STANDARD') !== 'STANDARD') return null;
+      const custRec = combinedCustomers.find(c => c.id === jobData.customerId);
+      const code = String(custRec?.discountCode || '').trim();
+      if (!code) return null;
+      const disc = crmDiscounts.find(d => String(d.code || '').trim().toUpperCase() === code.toUpperCase());
+      const percent = disc ? parseFloat(disc.percent) : 0;
+      if (!(percent > 0)) return null;
+      // Pre-isFee cart items (older localStorage carts) lack the flag — the CE-FEE id guard and
+      // the physical-item requirement still keep fees out of the base.
+      const base = (item.pricingBreakdown || [])
+          .filter(l => l && !l.isFee && (l.partId || l.legacyErpId) && !String(l.legacyErpId || '').toUpperCase().startsWith('CE-FEE'))
+          .reduce((s, l) => s + (parseFloat(l.total) || 0), 0);
+      if (!(base > 0)) return null;
+      const amount = Math.round(base * percent) / 100; // base × percent%, rounded to cents
+      return { code, percent, base, amount };
+  };
 
   const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
 
@@ -1296,10 +1324,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       // are app-internal, never printed); FAB COST = our id — description · Fabricut pattern id;
       // FAB WHOLESALE / RETAIL = the Fabricut pattern id alone (their catalog language); STANDARD
       // keeps the description as today.
+      const isFeePart = (p, opt) => !!(opt?.isFee || p?.partClass === 'Fee' || String(p?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE');
       const lineNameFor = (p, opt) => {
           const desc = p?.itemName || p?.name || opt?.partName || '';
-          const fee = !!(opt?.isFee || p?.partClass === 'Fee' || String(p?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE');
-          if (fee) return desc;
+          if (isFeePart(p, opt)) return desc;
           if (priceLevel === 'FAB_WHOLESALE' || priceLevel === 'FAB_RETAIL') {
               return fabricutCodeOf(p, (c) => byCode.get(c) || null) || desc;
           }
@@ -1376,6 +1404,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
               let multiplier = 1.0;
               let itemName = step.title;
+              // Fee/labor lines are excluded from the trade-discount base (items only).
+              let lineIsFee = step.type === 'STATIC_FEE';
               // For STYLE_SWAP the selected value is the per-instance optId, not the part id.
               // Resolve the real part id so the part lookup, line item, and ERP push are correct.
               let resolvedPartId = selectedValue;
@@ -1417,6 +1447,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   }
 
                   resolvedErpId = partObj?.legacyErpId || partObj?.itemId || styleOpt?.legacyErpId || null;
+                  if (isFeePart(partObj, styleOpt)) lineIsFee = true;
 
                   if (partObj) itemName = `${step.title} (${lineNameFor(partObj, styleOpt)})`;
                   else if (styleOpt) itemName = `${step.title} (${styleOpt.partName})`;
@@ -1498,6 +1529,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   const cutLength = dimInput ? (dimInput.calc_cutLength || dimInput.length || null) : null;
                   breakdown.push({
                       name: itemName, qty: qty, price: stepPrice * multiplier, total: lineTotal,
+                      isFee: lineIsFee,
                       partHandling: step.partHandling || '',
                       partId: resolvedPartId || step.linkedItemId || null,
                       legacyErpId: resolvedErpId,
@@ -1718,7 +1750,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const mergedDimensions = {};
 
       cart.forEach((item) => {
-          grandTotal += item.pricing.finalPrice * item.qty;
+          const disc = tradeDiscountFor(item);
+          const grossTotal = item.pricing.finalPrice * item.qty;
+          const discTotal = disc ? disc.amount * item.qty : 0;
+          grandTotal += grossTotal - discTotal;
 
           Object.assign(mergedConfiguration, item.dynamicConfigParams || {});
           Object.assign(mergedQuantities, item.stepQuantities || {});
@@ -1727,7 +1762,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           mergedBreakdown.push({
               name: `▶ ${item.assemblyName} [${item.sidemark}]`,
               qty: item.qty,
-              total: item.pricing.finalPrice * item.qty,
+              total: grossTotal,
               isHeader: true
           });
 
@@ -1743,6 +1778,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   dimensions: line.dimensions || null
               });
           });
+
+          // Three-line trade-discount display (configured total ▸ discount ▸ net). Display-only
+          // rows: flagged so BOM/dispatch/packing consumers skip them, and nothing ever sums
+          // breakdown totals (the quote total is cpqData.totalPrice, already net).
+          if (disc) {
+              mergedBreakdown.push({ name: `  Trade Discount - (${disc.percent}%)`, qty: 1, price: -disc.amount, total: -discTotal, isDiscount: true, partHandling: '', partId: null });
+              mergedBreakdown.push({ name: `  Net Line Total`, qty: 1, price: item.pricing.finalPrice - disc.amount, total: grossTotal - discTotal, isNetLine: true, partHandling: '', partId: null });
+          }
 
           if (!mergedNotesObj && item.engineeringNotes) mergedNotesObj = item.engineeringNotes;
           
@@ -1776,7 +1819,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               totalPrice: grandTotal,
               appliedRules: engineFlags.warnings,
               breakdown: mergedBreakdown,
-              cartItems: cart,
+              // tradeDiscount stamped per item (always set, so a re-finalize after the code
+              // changed can't keep a stale stamp). finalPrice stays GROSS per-unit; net derives.
+              cartItems: cart.map(it => ({ ...it, tradeDiscount: tradeDiscountFor(it) || null })),
               // Consumed by ERPPushPullTab to map lines -> physical NetSuite inventory.
               configuration: mergedConfiguration,
               quantities: mergedQuantities,
@@ -1930,9 +1975,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                         <div class="section-box">
                             <div class="section-header">Configuration Details</div>
                             ${job.cpqData?.breakdown?.map(item => `
-                                <div class="row" style="${item.isHeader ? 'font-weight: bold; background: #f4f0e6; padding: 8px;' : ''}">
+                                <div class="row" style="${item.isHeader ? 'font-weight: bold; background: #f4f0e6; padding: 8px;' : ''}${item.isDiscount ? 'color: #8a6d3b;' : ''}${item.isNetLine ? 'font-weight: bold;' : ''}">
                                     <span style="flex: 3;">${item.name}</span>
-                                    <span style="flex: 1; text-align: center; color: #524e46;">${item.isHeader ? '' : `Qty: ${item.qty}`}</span>
+                                    <span style="flex: 1; text-align: center; color: #524e46;">${(item.isHeader || item.isDiscount || item.isNetLine) ? '' : `Qty: ${item.qty}`}</span>
                                     <span style="flex: 1; text-align: right;">$${item.total.toFixed(2)}</span>
                                 </div>
                             `).join('')}
@@ -1972,7 +2017,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                 <span style="flex: 3;">Component</span>
                                 <span style="flex: 1; text-align: right;">Req. Qty</span>
                             </div>
-                            ${job.cpqData?.breakdown?.map(item => `
+                            ${job.cpqData?.breakdown?.filter(item => !item.isDiscount && !item.isNetLine).map(item => `
                                 <div class="row" style="${item.isHeader ? 'font-weight: bold; background: #f4f0e6; padding: 8px;' : ''}">
                                     <span style="flex: 3; font-weight: 500;">${item.name}</span>
                                     <span style="flex: 1; text-align: right; font-size: 14px; font-weight: 500;">${item.isHeader ? '' : item.qty}</span>
@@ -2271,6 +2316,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   </div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.06em', marginTop: '2px' }}>
                     Qty {item.qty} · ${((item.pricing?.finalPrice || 0) * (item.qty || 1)).toFixed(2)}
+                    {(() => {
+                        const d = tradeDiscountFor(item);
+                        return d ? <span style={{ color: 'var(--brass)' }}> · Trade Discount - ({d.percent}%): -${(d.amount * (item.qty || 1)).toFixed(2)} · Net ${(((item.pricing?.finalPrice || 0) - d.amount) * (item.qty || 1)).toFixed(2)}</span> : null;
+                    })()}
                   </div>
                 </div>
                 <button onClick={() => handleEditCartItem(item.id)} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Edit</button>
@@ -2765,6 +2814,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '4px' }}>Estimated Unit Price</div>
                           <div style={{ fontFamily: 'var(--serif)', fontSize: '2.1rem', fontWeight: 500, color: 'var(--ink)' }}>${pricing.finalPrice.toFixed(2)}</div>
                       </div>
+                      {(() => {
+                          const d = tradeDiscountFor({ priceLevel, pricingBreakdown, pricing });
+                          return d ? (
+                              <div style={{ borderTop: '1px solid var(--line)', marginTop: '8px', paddingTop: '8px', fontSize: '0.85rem' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', color: 'var(--brass)' }}>
+                                      <span>Trade Discount - ({d.percent}%)</span><span>-${d.amount.toFixed(2)}</span>
+                                  </div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', color: 'var(--ink)', fontWeight: 500, marginTop: '4px' }}>
+                                      <span>Net Unit Total</span><span>${(pricing.finalPrice - d.amount).toFixed(2)}</span>
+                                  </div>
+                              </div>
+                          ) : null;
+                      })()}
                   </div>
               </div>
           </div>
@@ -2841,12 +2903,24 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 
                 <div style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column', gap: '24px', maxHeight: '80vh', overflowY: 'auto' }}>
                     
-                    <div style={{ padding: '24px', background: 'var(--paper)', border: '1px solid var(--line)', textAlign: 'center' }}>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px' }}>Cart Total ({cart.length} Items)</div>
-                        <div style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', fontWeight: 500, color: 'var(--ink)' }}>
-                            ${cart.reduce((sum, item) => sum + (item.pricing.finalPrice * item.qty), 0).toFixed(2)}
-                        </div>
-                    </div>
+                    {(() => {
+                        const gross = cart.reduce((sum, item) => sum + (item.pricing.finalPrice * item.qty), 0);
+                        const discTotal = cart.reduce((sum, item) => { const d = tradeDiscountFor(item); return sum + (d ? d.amount * item.qty : 0); }, 0);
+                        return (
+                            <div style={{ padding: '24px', background: 'var(--paper)', border: '1px solid var(--line)', textAlign: 'center' }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px' }}>Cart Total ({cart.length} Items)</div>
+                                {discTotal > 0 && (
+                                    <div style={{ fontSize: '0.9rem', marginBottom: '6px' }}>
+                                        <span style={{ color: 'var(--ink-soft)', textDecoration: 'line-through', marginRight: '10px' }}>${gross.toFixed(2)}</span>
+                                        <span style={{ color: 'var(--brass)' }}>Trade Discount: -${discTotal.toFixed(2)}</span>
+                                    </div>
+                                )}
+                                <div style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', fontWeight: 500, color: 'var(--ink)' }}>
+                                    ${(gross - discTotal).toFixed(2)}
+                                </div>
+                            </div>
+                        );
+                    })()}
 
                     <div>
                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>* Verify Customer</label>
