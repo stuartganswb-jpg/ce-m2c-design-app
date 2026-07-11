@@ -93,6 +93,9 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 const wb = writeBatch(db);
                 chunk.forEach(c => {
                     const safeId = `CUST-${c.id}`;
+                    // NS-owned fields only — app-owned fields (discountCode, salesRep, contact,
+                    // notes, billingAddress, ytd/mtd/openOrders) are omitted so merge preserves
+                    // whatever the app has set on re-sync.
                     wb.set(doc(db, "crm_records", safeId), {
                         id: safeId,
                         type: 'CUSTOMER',
@@ -102,14 +105,8 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         phone: c.phone || '',
                         creditLimit: parseFloat(c.creditlimit) || 0,
                         terms: c.terms || '',
-                        billingAddress: '',
-                        discountCode: '',
-                        contact: '',
-                        salesRep: '',
-                        notes: 'Imported from NetSuite',
                         brandId: targetBrand,
-                        sharedBrands: [targetBrand],
-                        ytd: 0, mtd: 0, openOrders: 0
+                        sharedBrands: [targetBrand]
                     }, { merge: true });
                 });
                 await wb.commit();
