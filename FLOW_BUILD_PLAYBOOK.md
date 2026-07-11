@@ -1,8 +1,10 @@
 # CPQ FLOW BUILD PLAYBOOK — the one true method (Fabricut H1 pattern)
 
 > The repeatable recipe for extending or building size-matrix CPQ flows. Written 2026-07-11 against
-> the live system (size matrix + species finishes + price levels all shipped). Anything not in this
-> playbook — old step generators, manual step windows — is legacy and pending removal.
+> the live system (size matrix + species finishes + price levels all shipped). The legacy tooling
+> (Auto-Sync BOM, manual mesh wiring, empty-flow auto-create, Danger Zone) was REMOVED 2026-07-11 —
+> a flow with a linked assembly now shows only the generated-flow editor: prices, finishes,
+> required, fee amounts, and Regenerate. If a control isn't visible, the generator owns it.
 
 ## THE METHOD IN ONE PARAGRAPH
 
