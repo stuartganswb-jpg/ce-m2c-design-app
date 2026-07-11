@@ -168,8 +168,23 @@ function HQ() {
       if (e.detail === 'VISION') setActiveTab('9. Client Vision');
       if (e.detail === 'CPQ') setActiveTab('8. CPQ Configurator');
     };
+    // Reopen-a-quote (Shared/reopenQuote.js, fired from CRM / ERP hub): swap the finalized
+    // quote's cart snapshot into the global cart, lock the session to its job id, stash the
+    // job context for CPQTab to restore on mount, and jump to the configurator.
+    const handleReopenQuote = (e) => {
+      const { cartItems, session } = e.detail || {};
+      if (!Array.isArray(cartItems) || !cartItems.length || !session?.jobId) return;
+      setGlobalCart(cartItems);
+      localStorage.setItem('hq_active_quote_session', session.jobId);
+      localStorage.setItem('hq_reopen_quote', JSON.stringify(session));
+      setActiveTab('8. CPQ Configurator');
+    };
     window.addEventListener('NAVIGATE_TAB', handleTabNavigation);
-    return () => window.removeEventListener('NAVIGATE_TAB', handleTabNavigation);
+    window.addEventListener('REOPEN_QUOTE_IN_CPQ', handleReopenQuote);
+    return () => {
+      window.removeEventListener('NAVIGATE_TAB', handleTabNavigation);
+      window.removeEventListener('REOPEN_QUOTE_IN_CPQ', handleReopenQuote);
+    };
   }, []);
 
   const attemptLogin = async (e) => {

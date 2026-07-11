@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, doc, updateDoc, deleteDoc, getDocs, query, where } from "firebase/firestore";
 import { SIZE_STEP_TYPE, makeSizeSwap, speciesVariantOf } from '../Shared/sizeMatrix';
+import { reopenQuoteInCpq } from '../Shared/reopenQuote';
 
 // DYNAMIC BRAND MAPPING DICTIONARY
 const BRAND_NETSUITE_MAP = {
@@ -635,11 +636,19 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
                     </div>
 
-                    <div style={{ padding: '24px', background: 'var(--paper-2)', borderTop: '1px solid var(--line)' }}>
-                        <button 
-                            onClick={() => handlePushToNetSuite(activeJob)} 
+                    <div style={{ padding: '24px', background: 'var(--paper-2)', borderTop: '1px solid var(--line)', display: 'flex', gap: '12px' }}>
+                        <button
+                            onClick={() => reopenQuoteInCpq(activeJob)}
                             disabled={isPushing}
-                            style={{ width: '100%', padding: '16px', background: isPushing ? 'var(--paper)' : 'var(--ink)', color: isPushing ? 'var(--ink-soft)' : '#fff', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', border: '1px solid var(--ink)', cursor: isPushing ? 'wait' : 'pointer', transition: 'all 0.2s' }}
+                            title="Reopen this quote's configuration in the CPQ Configurator"
+                            style={{ flex: 1, padding: '16px', background: '#fff', color: 'var(--brass)', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', border: '1px solid var(--brass)', cursor: isPushing ? 'wait' : 'pointer', transition: 'all 0.2s' }}
+                        >
+                            Reopen in CPQ
+                        </button>
+                        <button
+                            onClick={() => handlePushToNetSuite(activeJob)}
+                            disabled={isPushing}
+                            style={{ flex: 2, padding: '16px', background: isPushing ? 'var(--paper)' : 'var(--ink)', color: isPushing ? 'var(--ink-soft)' : '#fff', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', border: '1px solid var(--ink)', cursor: isPushing ? 'wait' : 'pointer', transition: 'all 0.2s' }}
                         >
                             {isPushing ? "Transmitting to NetSuite..." : "Approve & Push to ERP"}
                         </button>

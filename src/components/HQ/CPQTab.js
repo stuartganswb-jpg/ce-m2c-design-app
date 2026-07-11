@@ -548,6 +548,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const sessionStr = localStorage.getItem('hq_active_quote_session');
       if (sessionStr) {
           setActiveMasterQuoteId(sessionStr);
+          // Reopened quote (CRM/ERP "Reopen in CPQ"): restore the job context, since the
+          // customer select is disabled while a session lock is active. The payload stays in
+          // localStorage until finalize / Clear All so a tab-away remount restores it again.
+          try {
+              const reopen = JSON.parse(localStorage.getItem('hq_reopen_quote') || 'null');
+              if (reopen && reopen.jobId === sessionStr) {
+                  setJobData(prev => ({
+                      ...prev,
+                      customerId: reopen.customerId || '',
+                      jobName: reopen.jobName || '',
+                      shippingMethod: reopen.shippingMethod || 'SAVED',
+                      shippingAddressId: reopen.shippingAddressId || '',
+                      shippingAmount: reopen.shippingAmount || '',
+                      customShippingAddress: reopen.customShippingAddress || prev.customShippingAddress
+                  }));
+              }
+          } catch (e) { /* corrupt reopen payload — ignore */ }
       }
   }, []);
 
@@ -1875,7 +1892,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           
           setCart([]);
           localStorage.removeItem('hq_global_cart');
-          localStorage.removeItem('hq_active_quote_session');
+          localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote');
           setShowCheckoutModal(false);
           setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
           setActiveMasterQuoteId(null);
@@ -2305,7 +2322,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 Checkout ({cart.length} Items)
             </button>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume Draft</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
         </div>
       </div>
 

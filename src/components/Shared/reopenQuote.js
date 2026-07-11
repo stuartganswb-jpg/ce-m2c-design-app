@@ -1,0 +1,41 @@
+// "Reopen in CPQ": load a finalized quote's configuration back into the CPQ configurator so
+// details can change without rebuilding from scratch. Used by the CRM (ExternalCoopTab) and the
+// ERP hub (ERPPushPullTab). Dispatches REOPEN_QUOTE_IN_CPQ, handled in HQ.js (which owns the
+// global cart and the active tab); CPQTab restores the locked job context (customer/shipping)
+// from the hq_reopen_quote payload on mount. From there the existing cart Edit + re-finalize
+// machinery applies — finalize merges into the SAME job id, so BOM/CPQ links stay intact.
+export const reopenQuoteInCpq = (job) => {
+    const jobId = job.jobId || job.id;
+    const items = Array.isArray(job.cpqData?.cartItems) ? job.cpqData.cartItems : [];
+    if (!items.length) {
+        alert("This quote carries no CPQ cart snapshot (it was finalized before per-item carts existed), so it can't be reopened. Rebuild it as a new quote.");
+        return false;
+    }
+    if (job.netsuiteEstimateId || job.dispatchStatus?.nsSalesOrder) {
+        const what = job.netsuiteEstimateId ? `NetSuite estimate ${job.netsuiteEstimateId}` : 'a NetSuite sales order';
+        if (!window.confirm(`⚠ This quote already reached ${what}.\n\nYou can reopen and modify it, but re-pushing creates a NEW estimate — the old one must be closed in NetSuite manually.\n\nReopen anyway?`)) return false;
+    }
+    try {
+        const cur = JSON.parse(localStorage.getItem('hq_global_cart') || '[]');
+        if (cur.length && cur[0]?.masterQuoteId !== jobId) {
+            if (!window.confirm(`A CPQ cart with ${cur.length} item(s) is already in progress — reopening this quote REPLACES that cart.\n\nContinue?`)) return false;
+        }
+    } catch (e) { /* unreadable stored cart — proceed */ }
+    window.dispatchEvent(new CustomEvent('REOPEN_QUOTE_IN_CPQ', {
+        detail: {
+            // masterQuoteId re-stamped on every item: it drives finalize's target job id, so the
+            // re-finalize updates THIS job in place.
+            cartItems: items.map(it => ({ ...it, masterQuoteId: jobId })),
+            session: {
+                jobId,
+                customerId: job.customer?.id || '',
+                jobName: job.jobName || '',
+                shippingMethod: job.shippingMethod || 'SAVED',
+                shippingAddressId: job.shippingAddressId || '',
+                shippingAmount: (parseFloat(job.shippingAmount) || 0) > 0 ? String(job.shippingAmount) : '',
+                customShippingAddress: job.customShippingAddress || null
+            }
+        }
+    }));
+    return true;
+};
