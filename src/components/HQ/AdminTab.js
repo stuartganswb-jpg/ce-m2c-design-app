@@ -1027,18 +1027,30 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   // id of a newly-created item only in a Location header the proxy doesn't forward, so we
   // resolve the id this way — which also makes create idempotent (re-clicks re-map instead
   // of erroring on NetSuite's unique-itemid rule).
+  // NetSuite fetch with polite retries: the account has an integration CONCURRENCY limit, so a
+  // burst of activity (item syncs in another tab, the team's CSV imports, other integrations)
+  // returns 429 CONCURRENCY_LIMIT_EXCEEDED. That's congestion, not failure — wait and retry
+  // (2s / 5s / 10s) before surfacing an error.
+  const nsFetchWithRetry = async (body, tries = 4) => {
+      let resp, text;
+      for (let attempt = 1; attempt <= tries; attempt++) {
+          resp = await fetch(NS_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          text = await resp.text();
+          const busy = resp.status === 429 || /CONCURRENCY_LIMIT_EXCEEDED/i.test(text);
+          if (!busy || attempt === tries) break;
+          await new Promise(r => setTimeout(r, [0, 2000, 5000, 10000][attempt] || 10000));
+      }
+      let data; try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }
+      return { ok: resp.ok, status: resp.status, data };
+  };
+
   const findNsItemIdByName = async (name) => {
-      const resp = await fetch(NS_FUNCTION_URL, {
+      const { ok, data } = await nsFetchWithRetry({
+          targetUrl: NS_SUITEQL_URL,
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-              targetUrl: NS_SUITEQL_URL,
-              method: 'POST',
-              payload: { q: `SELECT id FROM item WHERE itemid = '${name.replace(/'/g, "''")}'` }
-          })
+          payload: { q: `SELECT id FROM item WHERE itemid = '${name.replace(/'/g, "''")}'` }
       });
-      const data = await resp.json();
-      if (resp.ok && Array.isArray(data.items) && data.items.length > 0) {
+      if (ok && Array.isArray(data.items) && data.items.length > 0) {
           return String(data.items[data.items.length - 1].id);
       }
       return null;
@@ -1066,13 +1078,13 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   incomeaccount: { id: NS_ROLLUP_INCOME_ACCT },
                   taxschedule: { id: NS_ROLLUP_TAX_SCHEDULE }
               };
-              const response = await fetch(NS_FUNCTION_URL, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ targetUrl: `${NS_REST_BASE}/nonInventorySaleItem`, method: 'POST', payload })
-              });
-              const result = await response.json();
-              if (!response.ok) throw new Error(`NetSuite rejected [${response.status}]: ${JSON.stringify(result)}`);
+              const { ok: createOk, status: createStatus, data: result } = await nsFetchWithRetry({ targetUrl: `${NS_REST_BASE}/nonInventorySaleItem`, method: 'POST', payload });
+              if (!createOk) {
+                  const busy = createStatus === 429 || /CONCURRENCY_LIMIT_EXCEEDED/i.test(JSON.stringify(result));
+                  throw new Error(busy
+                      ? `NetSuite is at its concurrent-request limit right now (another sync/import is running — possibly in another tab or by the team). The app already retried 4×. Wait ~30 seconds and click again; it's safe to re-run.`
+                      : `NetSuite rejected [${createStatus}]: ${JSON.stringify(result)}`);
+              }
 
               newId = result.id || result.recordId || result.internalId ||
                   (result.links && result.links[0]?.href ? result.links[0].href.split('/').pop() : null) ||
