@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption } from '../Shared/sizeMatrix';
+import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption, buildSizeIndex, partAllowedAtSize } from '../Shared/sizeMatrix';
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
   // Default to TAKEOFF as Step 1
@@ -354,12 +354,19 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
   const sizeBundle = makeSizeSwap(activeFlow, dynamicConfigParams, libraryParts);
   const sizeSwapPart = sizeBundle.swap;
-  // No french/miter returns at the 3-5/8" projection — filters the End Style options + auto-clear.
+  // No french/miter returns at the 3-5/8" projection, and size-native extras (1-3/8" wood/
+  // acrylic) only at their own diameter — filters every flow-driven picker + auto-clear.
+  const visionSizeIndex = useMemo(() => buildSizeIndex(libraryParts), [libraryParts]);
+  const optAllowedAtSize = (o) => {
+      if (!sizeSel) return true;
+      return partAllowedAtSize(partOfOpt(o), sizeSel, visionSizeIndex);
+  };
   const endOptsFor = (st) => {
       let os = st?.styleOptions || [];
       if (sizeSel && !returnsAllowedFor(sizeSel)) os = os.filter(o => !isReturnOption(o));
-      return os;
+      return os.filter(optAllowedAtSize);
   };
+  const brOptsFor = (st) => (st?.styleOptions || []).filter(optAllowedAtSize);
   const optOf = (step, sel) => step ? ((step.styleOptions || []).find(o => (o.optId || o.partId) === sel) || null) : null;
   const optSel = (step) => optOf(step, step ? dynamicConfigParams[step.id] : null);
   const subOf = (step, sel) => step ? ((step.subOptions || []).find(o => (o.optId || o.partId) === sel) || null) : null;
@@ -399,9 +406,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       const returnChosen = returnChosenAt(pos) || !!sel?.isReturnArm;
       const inlineBracket = !!sel?.usesReturnPlates;
       const hasInl = subs.some(o => o.inlineOnly);
-      return subs.filter(o => returnChosen ? o.returnOnly
+      return subs.filter(o => (returnChosen ? o.returnOnly
           : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
-          : (!o.returnOnly && !o.inlineOnly));
+          : (!o.returnOnly && !o.inlineOnly)) && optAllowedAtSize(o));
   };
   const pickStep = (stepId, optId) => setDynamicConfigParams(prev => { const next = { ...prev }; if (optId) next[stepId] = optId; else delete next[stepId]; return next; });
 
@@ -1169,7 +1176,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     {stepBrL ? (
                                         <select value={dynamicConfigParams[stepBrL.id] || ''} disabled={brLockedAt(stepBrL, 'LEFT')} onChange={e => pickStep(stepBrL.id, e.target.value)} style={{ ...fieldStyle, opacity: brLockedAt(stepBrL, 'LEFT') ? 0.45 : 1 }}>
                                             <option value="">{brLockedAt(stepBrL, 'LEFT') ? '— replaced by the return —' : '-- Select --'}</option>
-                                            {(stepBrL.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                            {brOptsFor(stepBrL).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
                                         </select>
                                     ) : (
                                         <select value={engData.bracketId || ''} onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))} style={fieldStyle}>
@@ -1183,7 +1190,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     {stepBrR ? (
                                         <select value={dynamicConfigParams[stepBrR.id] || ''} disabled={brLockedAt(stepBrR, 'RIGHT')} onChange={e => pickStep(stepBrR.id, e.target.value)} style={{ ...fieldStyle, opacity: brLockedAt(stepBrR, 'RIGHT') ? 0.45 : 1 }}>
                                             <option value="">{brLockedAt(stepBrR, 'RIGHT') ? '— replaced by the return —' : '-- Select --'}</option>
-                                            {(stepBrR.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                            {brOptsFor(stepBrR).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
                                         </select>
                                     ) : (
                                         <select value={engData.bracketIdRight || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdRight: e.target.value }))} style={fieldStyle}>
@@ -1197,7 +1204,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     {stepBrC ? (
                                         <select value={dynamicConfigParams[stepBrC.id] || ''} onChange={e => pickStep(stepBrC.id, e.target.value)} style={fieldStyle}>
                                             <option value="">-- Select Center Style --</option>
-                                            {(stepBrC.styleOptions || []).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                            {brOptsFor(stepBrC).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
                                         </select>
                                     ) : (
                                         <select value={engData.bracketIdCenter || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdCenter: e.target.value }))} style={fieldStyle}>

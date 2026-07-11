@@ -158,6 +158,19 @@ export function speciesVariantOf(part, finishObj, findByCode) {
     return hit || part;
 }
 
+// DIAMETER AVAILABILITY (Stuart 2026-07-11, for the 1-3/8" wood/acrylic extras): an option whose
+// part is NATIVE to a non-base diameter (sizeKey.dia ≠ the family base, e.g. H1-138WBF wood
+// finials, wood/acrylic poles) is offered ONLY at that diameter — unless a size variant exists at
+// the selected one. Master-native (base-dia) parts always show: a missing variant there is a data
+// gap that falls back to the base item rather than hiding a real choice.
+export function partAllowedAtSize(part, sel, sizeIndex) {
+    const sk = part?.manufacturingSpecs?.customData?.sizeKey;
+    if (!part || !sel || !sk || sk.family !== sel.family) return true;
+    const fam = SIZE_FAMILIES[sel.family];
+    if (!fam || sk.dia === sel.dia || sk.dia === fam.baseDia) return true;
+    return !sizeVariantOf(part, sel, sizeIndex).missing;
+}
+
 // Convenience bundle for consumers: selections + a lazy-indexed swap function. When the flow has no
 // size matrix everything degrades to identity, so callers can apply it unconditionally.
 export function makeSizeSwap(flow, config, parts) {

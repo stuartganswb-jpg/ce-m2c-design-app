@@ -4,7 +4,7 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query,
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
-import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf } from '../Shared/sizeMatrix';
+import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
 
 const globalTextureCache = {};
@@ -754,11 +754,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // multiple positions stays distinct; fall back to partId for legacy flows. Also resolve the
           // underlying part's human description so the choice shows more than the bare ERP id.
           let opts = step.styleOptions || [];
-          // Size-matrix rule (Fabricut H1): french/miter returns aren't made at the 3-5/8"
-          // projection — hide the modeled returns and the OPT-BEND/OPT-MITER built-ins while it's
-          // selected. Finials and inside mounts stay.
+          // Size-matrix rules (Fabricut H1): french/miter returns aren't made at the 3-5/8"
+          // projection (finials + inside mounts stay); size-native extras (1-3/8" wood/acrylic
+          // rods, finials, wood brackets) show only at their own diameter.
           const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
-          if (sizeSel && !returnsAllowedFor(sizeSel)) opts = opts.filter(o => !isReturnOption(o));
+          if (sizeSel) {
+              const allParts = [...libraryParts, ...liveAssemblies];
+              opts = opts.filter(o => {
+                  if (!returnsAllowedFor(sizeSel) && isReturnOption(o)) return false;
+                  const base = allParts.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
+                      || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName)));
+                  return partAllowedAtSize(base, sizeSel, sizeLabelIndex);
+              });
+          }
           return opts.map(o => {
               const d = optionDisplayFor(o);
               return { id: o.optId || o.partId, itemName: d.name, desc: d.desc, price: o.price };
@@ -1544,23 +1552,35 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
 
-  // Size-matrix guard: flipping Projection to 3-5/8" removes return availability — clear any
-  // selected french/miter return (modeled or OPT-BEND/OPT-MITER built-in) so the configuration
-  // can't carry an impossible combination. The bracket then un-greys via the normal rules.
+  // Size-matrix guard: flipping Projection to 3-5/8" removes return availability, and flipping
+  // Diameter away from a size-native extra (1-3/8" wood/acrylic) removes that option — clear any
+  // selection the new size can't carry so the configuration stays possible. Brackets then
+  // un-grey via the normal rules.
   useEffect(() => {
       if (!activeFlow) return;
       const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
-      if (!sizeSel || returnsAllowedFor(sizeSel)) return;
+      if (!sizeSel) return;
+      const returnsOk = returnsAllowedFor(sizeSel);
+      const allParts = [...libraryParts, ...liveAssemblies];
+      const partOf = (o) => allParts.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
+          || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName)));
       setDynamicConfigParams(prev => {
           let changed = false; const next = { ...prev };
           (activeFlow.steps || []).forEach(st => {
-              if (st.type !== 'STYLE_SWAP' || !next[st.id]) return;
-              const o = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
-              if (o && isReturnOption(o)) { delete next[st.id]; changed = true; }
+              if (st.type !== 'STYLE_SWAP') return;
+              const check = (key, pool) => {
+                  if (!next[key]) return;
+                  const o = (pool || []).find(x => (x.optId || x.partId) === next[key]);
+                  if (!o) return;
+                  const banned = (!returnsOk && isReturnOption(o)) || !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex);
+                  if (banned) { delete next[key]; changed = true; }
+              };
+              check(st.id, st.styleOptions);
+              check(`${st.id}__sub`, st.subOptions);
           });
           return changed ? next : prev;
       });
-  }, [dynamicConfigParams, activeFlow]);
+  }, [dynamicConfigParams, activeFlow, libraryParts, liveAssemblies, sizeLabelIndex]);
 
   // When a Style selection changes, drop any finish picked for the prior style: different
   // styles can scope different finish sets (e.g. a Wood rod offers wood-clear finishes, a
@@ -2413,6 +2433,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   subs = subs.filter(o => returnChosen ? o.returnOnly
                                       : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
                                       : (!o.returnOnly && !o.inlineOnly));
+                              }
+                              // Size-native plates (if any) show only at their own diameter.
+                              const subSizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
+                              if (subSizeSel) {
+                                  const ap = [...libraryParts, ...liveAssemblies];
+                                  subs = subs.filter(o => partAllowedAtSize(
+                                      ap.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
+                                          || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName))),
+                                      subSizeSel, sizeLabelIndex));
                               }
                               // Basic brackets take no backplate — grey the picker and pin it to None.
                               const noPlate = basicNoBackplate(currentStep);

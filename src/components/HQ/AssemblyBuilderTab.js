@@ -826,7 +826,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 const id = `${String(activeBrand || 'CE').toUpperCase()}-${isFeeClass ? 'FEE' : 'INV'}-${Date.now()}-${i}`;
                 const customData = {};
                 if (r.projection) customData.projection = r.projection;
-                if (r.backplateOrientation) customData.backplateOrientation = r.backplateOrientation.toUpperCase();
+                if (r.backplateOrientation) customData.bpOrientation = r.backplateOrientation.toUpperCase(); // canonical key — Vision O2O reads bpOrientation (legacy backplateOrientation had zero readers)
                 if (parseBool(r.isReturnBracket, false)) customData.isReturnBracket = true;
                 await setDoc(doc(db, 'Approved_Designs', id), {
                     id, itemId: id, legacyErpId: erp, itemName: (r.name || erp).toUpperCase(),
