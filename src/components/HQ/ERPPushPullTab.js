@@ -240,15 +240,25 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       // else: in-house finish-to-order → keep nsId = base; the floor makes + finishes it
                   }
               }
+              // MULTI-MATERIAL POLE: the material step carries the pole ITEM; the Length/calculator
+              // step carries the FOOTAGE (its per-foot qty) — push the pole line at the feet, and
+              // take the cut length from the calculator step's dimensions.
+              let lineQty = qty * cart.assemblyQty;
+              let dimStepId = stepId;
+              if (step?.type === 'STYLE_SWAP' && /pole.*material|rod material/i.test(step?.title || '')) {
+                  const calcStep = flowSteps.find(s => s.calculatorTemplate);
+                  const feet = calcStep ? parseInt(cart.quantities?.[calcStep.id]) : 0;
+                  if (feet > 0) { lineQty = feet * cart.assemblyQty; dimStepId = calcStep.id; }
+              }
               rawLines.push({
                   stepId,
                   masterPart,
-                  qty: qty * cart.assemblyQty,
+                  qty: lineQty,
                   nsId,
                   finishedErpId,   // non-empty when this line pushes a finished assembly (outsourced or stocked in-house)
                   finishUnmapped,  // non-empty when a finished SKU couldn't be NS-resolved (fell back to base)
                   partCategory: masterPart.manufacturingSpecs?.partHandling || '',
-                  projection: cart.dimensions?.[stepId]?.length || ''
+                  projection: cart.dimensions?.[dimStepId]?.length || ''
               });
           });
       });

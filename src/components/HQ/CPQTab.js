@@ -1523,10 +1523,42 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       upcharge = parseFloat(step.priceMap[selectedValue]) || 0;
                   }
 
+                  // MULTI-MATERIAL POLE: the material step is IDENTITY only — the Length/calculator
+                  // step prices the chosen pole × footage (below), so pricing it here too would
+                  // double-count. Single-material flows have no material step, nothing changes.
+                  if (step.type === 'STYLE_SWAP' && /pole.*material|rod material/i.test(step.title || '') && (activeFlow.steps || []).some(s => s.calculatorTemplate)) {
+                      optionNativePrice = 0; upcharge = 0;
+                  }
+
                   stepPrice += optionNativePrice + upcharge;
 
                   if (partObj && partObj.multiplier && parseFloat(partObj.multiplier) > 1.0) {
                       multiplier = parseFloat(partObj.multiplier);
+                  }
+              }
+
+              // MULTI-MATERIAL POLE PRICING: a Length step (calculator, no linked item, no own
+              // selection) prices the pole chosen on the "Pole / Rod Material" step × the
+              // calculated footage — full identity chain (size → species → finish) so the line
+              // carries the real SKU for BOM/push. Restores Flat Iron's per-foot pole pricing and
+              // covers Fabricut the moment it gains wood/acrylic materials.
+              if (!selectedValue && step.calculatorTemplate && !step.linkedItemId) {
+                  const matStep = (activeFlow.steps || []).find(s => s.type === 'STYLE_SWAP' && /pole.*material|rod material/i.test(s.title || ''));
+                  const matSel = matStep ? dynamicConfigParams[matStep.id] : null;
+                  const matOpt = matSel ? (matStep.styleOptions || []).find(o => (o.optId || o.partId) === matSel) : null;
+                  if (matOpt) {
+                      let polePart = findLibPart(matOpt.partId) || findLibPart(matOpt.partName);
+                      polePart = speciesSwap(sizeBundle.swap(polePart), finishObjForStep(matStep.id));
+                      const poleFinished = polePart ? finishVariantOf(polePart, finishCodeForStep(matStep.id)) : null;
+                      if (poleFinished) {
+                          let pp = parseFloat(poleFinished.manufacturingSpecs?.basePrice ?? poleFinished.basePrice) || 0;
+                          if (matStep.useClientPricing) { const cv = clientPriceFor(poleFinished) ?? clientPriceFor(polePart); if (cv != null) pp = cv; }
+                          if (priceLevel !== 'STANDARD') { const fp = fabricutPriceOf(poleFinished, priceLevel); if (fp != null) pp = fp; }
+                          if (stepPrice === 0 && pp > 0) stepPrice = pp;
+                          resolvedPartId = poleFinished.itemId || poleFinished.id;
+                          resolvedErpId = poleFinished.legacyErpId || poleFinished.itemId || null;
+                          itemName = `${step.title} (${lineNameFor(poleFinished, null)})`;
+                      }
                   }
               }
 

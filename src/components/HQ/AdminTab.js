@@ -860,7 +860,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       const poleInc = takeIncluded(''); // shared/untagged hidden accessories ride the always-present pole step
       // linkedItemId = the pole ITEM (single-material case): this step's selection is the FINISH, so
       // without it the pricing engine has no physical part to price the per-foot qty against.
-      add({ title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(centerPole.length === 1 && centerPole[0]?.partId ? { linkedItemId: centerPole[0].partId } : {}), ...(poleInc ? { includedParts: poleInc } : {}) });
+      // Multi-material flows (Flat Iron steel/wood; Fabricut once wood/acrylic land): the MATERIAL
+      // step above owns the finish (per-option scoped lists), so the Length step is dimensions +
+      // footage ONLY — no second finish chooser (type DIMENSIONS carries no dataSource and passes
+      // the required-gate without a selection). Single-material keeps the combined Length & Finish
+      // step exactly as before.
+      add(centerPole.length > 1
+          ? { title: bay.poleTitle.replace(/ & Finish/i, ''), type: 'DIMENSIONS', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(poleInc ? { includedParts: poleInc } : {}) }
+          : { title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(centerPole[0]?.partId ? { linkedItemId: centerPole[0].partId } : {}), ...(poleInc ? { includedParts: poleInc } : {}) });
       // End Treatment comes BEFORE the brackets on purpose: picking a return here can remove that end's
       // outer bracket step (returnHidesBracket), so the customer settles each end first and never picks
       // a bracket that then disappears. It's ALWAYS emitted — even with 0 finials it carries the Mitered
