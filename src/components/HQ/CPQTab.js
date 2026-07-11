@@ -4,7 +4,7 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query,
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
-import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf } from '../Shared/sizeMatrix';
+import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf } from '../Shared/priceLevels';
 
 const globalTextureCache = {};
@@ -699,6 +699,22 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       return desc && desc !== partName ? desc : '';
   };
 
+  // Size-matrix labels: resolve an option's underlying part to the SELECTED size so the pickers
+  // read the item actually being quoted — 3-5/8" projection shows H1-75DS (not the master's
+  // H1-75DE), 1" diameter re-codes plates to H1-1BP-x, etc. Display only: selection ids (optId)
+  // never change, so flipping sizes keeps every choice. Mirrors Vision's sized optLabel.
+  const sizeLabelIndex = useMemo(() => buildSizeIndex([...libraryParts, ...liveAssemblies]), [libraryParts, liveAssemblies]);
+  const sizedPartForLabel = (partId, partName) => {
+      const sel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
+      if (!sel) return null;
+      const allParts = [...libraryParts, ...liveAssemblies];
+      const base = allParts.find(x => x.id === partId || x.itemId === partId || x.legacyErpId === partId
+          || (partName && (x.itemName === partName || x.legacyErpId === partName || x.itemId === partName)));
+      if (!base) return null;
+      const r = sizeVariantOf(base, sel, sizeLabelIndex);
+      return r.swapped ? r.part : null;
+  };
+
   const getOptionsForStep = (step) => {
       // Tag-driven Mount selector: options are the distinct Location tags on the linked assembly's
       // clusters (Wall / Ceiling / Inside-End). Picking one hides the off-mount end regions.
@@ -719,7 +735,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // selected. Finials and inside mounts stay.
           const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
           if (sizeSel && !returnsAllowedFor(sizeSel)) opts = opts.filter(o => !isReturnOption(o));
-          return opts.map(o => ({ id: o.optId || o.partId, itemName: o.partName, desc: partDescOf(o.partId, o.partName), price: o.price }));
+          return opts.map(o => {
+              const sized = sizedPartForLabel(o.partId, o.partName);
+              return {
+                  id: o.optId || o.partId,
+                  itemName: sized ? (sized.legacyErpId || sized.itemId || o.partName) : o.partName,
+                  desc: sized ? (sized.itemName || '') : partDescOf(o.partId, o.partName),
+                  price: o.price
+              };
+          });
       }
       if (!step || !step.dataSource) return [];
       let options = [];
@@ -2360,8 +2384,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>{currentStep.subLabel || 'Backplate'}</label>
                                   <select value={noPlate ? '' : (dynamicConfigParams[`${currentStep.id}__sub`] || '')} disabled={noPlate} onChange={(e) => handleParamChange(`${currentStep.id}__sub`, e.target.value)} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontSize: '0.95rem', fontFamily: 'var(--sans)', outline: 'none', ...(noPlate ? { background: 'var(--paper-2)', color: 'var(--ink-soft)', cursor: 'not-allowed', opacity: 0.65 } : {}) }}>
                                       <option value="">{noPlate ? '-- None (basic bracket — no backplate) --' : '-- None --'}</option>
-                                      {subs.map(o => { const d = partDescOf(o.partId, o.partName); return (
-                                          <option key={o.optId} value={o.optId}>{o.partName}{d ? ` — ${d}` : ''}</option>
+                                      {subs.map(o => {
+                                          const sized = sizedPartForLabel(o.partId, o.partName);
+                                          const nm = sized ? (sized.legacyErpId || sized.itemId || o.partName) : o.partName;
+                                          const d = sized ? (sized.itemName || '') : partDescOf(o.partId, o.partName);
+                                          return (
+                                          <option key={o.optId} value={o.optId}>{nm}{d ? ` — ${d}` : ''}</option>
                                       ); })}
                                   </select>
                               </div>
