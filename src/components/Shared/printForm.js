@@ -24,6 +24,19 @@ export function printForm(element, title = 'Document') {
   </head><body>${markup}</body></html>`);
   win.document.close();
   win.focus();
-  // Give the copied stylesheets + fonts a moment to load before firing the print dialog.
-  setTimeout(() => { try { win.print(); } catch (e) { /* user may have closed it */ } }, 500);
+  // Fire the print dialog only after IMAGES have loaded (the brand logo comes from Firebase
+  // Storage — a fixed 500ms beat it to the printer, so forms printed logo-less on first run).
+  // Safety timeout still fires after 4s; the guard prevents a double dialog.
+  let fired = false;
+  const doPrint = () => { if (fired) return; fired = true; try { win.print(); } catch (e) { /* user may have closed it */ } };
+  setTimeout(() => {
+    let imgs = [];
+    try { imgs = Array.from(win.document.images || []); } catch (e) { /* window closed */ }
+    const pending = imgs.filter(im => !im.complete);
+    if (!pending.length) return doPrint();
+    let left = pending.length;
+    const done = () => { if (--left <= 0) doPrint(); };
+    pending.forEach(im => { im.addEventListener('load', done); im.addEventListener('error', done); });
+    setTimeout(doPrint, 4000);
+  }, 400);
 }

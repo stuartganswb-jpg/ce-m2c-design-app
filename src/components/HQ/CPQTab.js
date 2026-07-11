@@ -510,6 +510,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // Quote-display price level (Shared/priceLevels): Fabricut-data items price per the imported
   // sheet at FAB levels; everything else stays standard. Never drives NetSuite push rates.
   const [priceLevel, setPriceLevel] = useState('STANDARD');
+  // Brand logos (hq_config/brand_logos, uploaded in Admin → Form Templates) — printed at the top
+  // of the generated order documents.
+  const [brandLogos, setBrandLogos] = useState({});
   
   const [jobData, setJobData] = useState({
       customerId: '',
@@ -573,6 +576,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       
       const unsubFlows = onSnapshot(query(collection(db, "cpq_flows"), where("brandId", "==", activeBrand)), (snap) => setCpqFlows(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       const unsubRules = onSnapshot(doc(db, "system", "cpq_rules"), (snap) => { if(snap.exists() && snap.data().rules) setCpqRules(snap.data().rules); });
+      const unsubLogos = onSnapshot(doc(db, "hq_config", "brand_logos"), (snap) => { if (snap.exists()) setBrandLogos(snap.data()); });
       const unsubDrafts = onSnapshot(query(collection(db, "cpq_drafts"), where("brandId", "==", activeBrand)), (snap) => setPreviousDrafts(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       
       const unsubParts = onSnapshot(query(collection(db, "Approved_Designs")), (snap) => {
@@ -601,7 +605,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           setLiveCustomers(customers);
       });
 
-      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); unsubDiscounts(); };
+      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); unsubDiscounts(); unsubLogos(); };
   }, [activeBrand]);
 
   // Brand isolation: the CPQ customer dropdown is ONLY this brand's crm_records
@@ -2012,7 +2016,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
             
             <div class="page">
                 <div class="header">
-                  <div class="brand">${activeBrand}</div>
+                  <div class="brand">${brandLogos[activeBrand] ? `<img src="${brandLogos[activeBrand]}" alt="${activeBrand}" style="max-height:56px;max-width:240px;display:block" />` : activeBrand}</div>
                   <div class="doc-type">Quotation</div>
                 </div>
                 
@@ -2058,7 +2062,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
             <div class="page">
                 <div class="header">
-                  <div class="brand">${activeBrand}</div>
+                  <div class="brand">${brandLogos[activeBrand] ? `<img src="${brandLogos[activeBrand]}" alt="${activeBrand}" style="max-height:56px;max-width:240px;display:block" />` : activeBrand}</div>
                   <div class="doc-type">Factory Router</div>
                 </div>
                 
@@ -2092,7 +2096,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
             ${svgs && svgs.length > 0 ? svgs.map(draft => `
             <div class="page">
                 <div class="header">
-                  <div class="brand">${activeBrand}</div>
+                  <div class="brand">${brandLogos[activeBrand] ? `<img src="${brandLogos[activeBrand]}" alt="${activeBrand}" style="max-height:56px;max-width:240px;display:block" />` : activeBrand}</div>
                   <div class="doc-type">Engineering Drawing</div>
                 </div>
                 <div class="meta-grid">
