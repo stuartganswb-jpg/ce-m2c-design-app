@@ -108,14 +108,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   const [zoomImg, setZoomImg] = useState(null);   // {url,label} for the cluster-image lightbox
   const [isCreatingRollup, setIsCreatingRollup] = useState(false);
 
-  const [inspectedNodes, setInspectedNodes] = useState([]);
-  const [isInspecting, setIsInspecting] = useState(false);
 
   const [customSchema, setCustomSchema] = useState([]);
   const [cpqRules, setCpqRules] = useState([]);
   const [newRule, setNewRule] = useState({ name: '', conditionField: '', conditionOp: 'EQUALS', conditionVal: '', effectField: '', effectVal: '' });
-  const [aiPrompt, setAiPrompt] = useState("");
-  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
 
   const [brandLogos, setBrandLogos] = useState({});
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
@@ -277,7 +273,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           hiddenClusters: flow.hiddenClusters || []
       });
       setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
-      setInspectedNodes([]);
   }, [activeFlowId, cpqFlows]);
 
   useEffect(() => {
@@ -378,34 +373,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       await setDoc(doc(db, "system", "master_lists"), { [listKey]: updatedList }, { merge: true });
   };
 
-  const handleInspectNodes = () => {
-      if (!flowSettings.linkedAssemblyId) return alert("Please link a Master Assembly to this CPQ Flow first.");
-      const linkedAsm = allApprovedDesigns.find(a => a.id === flowSettings.linkedAssemblyId || a.itemId === flowSettings.linkedAssemblyId);
-      if (!linkedAsm || !linkedAsm.manufacturingSpecs?.cadUrl) return alert("The linked Master Assembly does not have a 3D CAD (.glb) file attached.");
-
-      setIsInspecting(true);
-      const loader = new GLTFLoader();
-      loader.load(
-          linkedAsm.manufacturingSpecs.cadUrl, 
-          (gltf) => {
-              const nodes = [];
-              gltf.scene.traverse((child) => {
-                  if (child.isMesh) {
-                      nodes.push(child.name);
-                  }
-              });
-              if (nodes.length === 0) alert("No meshes found in this file.");
-              else setInspectedNodes(nodes);
-              setIsInspecting(false);
-          },
-          undefined,
-          (error) => {
-              console.error(error);
-              alert("Failed to load 3D file for inspection.");
-              setIsInspecting(false);
-          }
-      );
-  };
 
   const handleAddRole = async () => {
       if (!newRole.trim()) return alert("Role name required.");
@@ -1155,74 +1122,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       }
   };
 
-  const handleAutoCreateFlowForAssembly = async (asm) => {
-      const flowId = `FLOW-${Date.now()}`;
-      try {
-          await setDoc(doc(db, "cpq_flows", flowId), { 
-              id: flowId, 
-              brandId: activeBrand, 
-              name: `${asm.itemName} CONFIGURATOR`, 
-              legacyErpId: asm.legacyErpId !== 'PENDING' ? asm.legacyErpId : '', 
-              basePrice: asm.manufacturingSpecs?.basePrice || 0,
-              linkedAssemblyId: asm.id,
-              steps: [] 
-          });
-          await updateDoc(doc(db, "Approved_Designs", asm.id), { linkedCpqFlowId: flowId });
-          setActiveFlowId(flowId);
-      } catch (err) { console.error(err); alert("Error generating automated flow."); }
-  };
-
-  const handleAutoSyncBOM = async (flow) => {
-      if (linkedBomPins.length === 0) return alert("No BOM sub-assemblies found in this Master File Cabinet.");
-      if (!window.confirm("Auto-generate CPQ steps for all components mapped to this Master Assembly?")) return;
-      
-      try {
-          const generatedSteps = linkedBomPins.map((pin, idx) => {
-              const libPart = allApprovedDesigns.find(d => d.id === pin.partId || d.legacyErpId === pin.partId || d.itemId === pin.partId);
-              let bp = 0;
-              if (libPart) {
-                  const specs = libPart.manufacturingSpecs || {};
-                  const bPrice = parseFloat(specs.basePrice) || 0;
-                  bp = bPrice > 0 ? bPrice : 0; 
-              }
-
-              return {
-                  id: `STEP-AUTO-${Date.now()}-${idx}`,
-                  title: `Select Finish for ${pin.partName}`,
-                  type: 'DROPDOWN',
-                  dataSource: 'master_finishes',
-                  required: true,
-                  priceMap: {},
-                  geometryMap: {},
-                  targetNodes: pin.targetNode || pin.partName, 
-                  linkedPinId: pin.partId,
-                  linkedItemId: pin.partId,
-                  basePrice: bp,
-                  allowedOptions: [],
-                  useClientPricing: false,
-                  priceOverride: '',
-                  // Default the small/custom division flag from the linked part so
-                  // auto-generated flows are tagged at authoring time (WORK_ORDER_CONTRACT §7).
-                  partHandling: libPart?.manufacturingSpecs?.partHandling || '',
-                  calculatorTemplate: '',
-                  qtyHelperText: ''
-              };
-          });
-
-          const updatedSteps = [...(flow.steps || []), ...generatedSteps];
-          await setDoc(doc(db, "cpq_flows", flow.id), stripUndefined({ ...flow, steps: updatedSteps }), { merge: true });
-          alert(`✅ Successfully synced ${generatedSteps.length} configuration steps from the Master File Cabinet!`);
-      } catch (err) {
-          console.error("Auto-sync failed:", err);
-          alert("Failed to auto-generate steps.");
-      }
-  };
-
   const handleAddStepToFlow = async (flow) => {
       if (!newStep.title) return alert("Step title is required");
       // Fees roll into the flow's NetSuite rollup item, so they don't map to a physical
       // part and don't need a Part Handling / Routing division.
-      if (newStep.type !== 'STATIC_FEE' && !newStep.mountSelector && !newStep.partHandling) return alert("❌ ERROR: Part Handling / Routing is required for every step.");
+      if (newStep.type !== 'STATIC_FEE' && !newStep.partHandling) return alert("❌ ERROR: Part Handling / Routing is required for every step.");
 
       try {
           let updatedSteps;
@@ -1254,38 +1158,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       await setDoc(doc(db, "cpq_flows", flow.id), stripUndefined({ ...flow, steps: updatedSteps }));
   };
 
-  const handleAiGenerateRule = () => {
-      if (!aiPrompt) return;
-      setIsGeneratingAi(true);
-      setTimeout(() => {
-          let generatedRule = { name: `AI: ${aiPrompt.substring(0, 30)}...`, conditionField: '', conditionOp: 'EQUALS', conditionVal: '', effectField: '', effectVal: '' };
-          const txt = aiPrompt.toLowerCase();
-
-          if (txt.includes("french return") && txt.includes("1")) {
-              generatedRule.name = "1in French Return Math Logic";
-              generatedRule.conditionField = "productType"; 
-              generatedRule.conditionVal = "FRENCH RETURN";
-              generatedRule.effectField = "MATH.frenchReturn1in"; 
-              generatedRule.effectVal = "true";
-          } else if (txt.includes("mitered")) {
-              generatedRule.name = "Mitered Bay Math Logic";
-              generatedRule.conditionField = "productType"; 
-              generatedRule.conditionVal = "MITERED BAY";
-              generatedRule.effectField = "MATH.miteredBay"; 
-              generatedRule.effectVal = "true";
-          } else if (txt.includes("light") && (txt.includes("fabric") || txt.includes("weight"))) { 
-              generatedRule.conditionField = "customData.weightClass"; generatedRule.conditionVal = "LIGHTWEIGHT"; 
-              generatedRule.effectField = "UI.disableStep"; generatedRule.effectVal = "Select Trim / Fringe";
-          } else if (txt.includes("heavy") || txt.includes("weight")) { 
-              generatedRule.conditionField = "customData.weightClass"; generatedRule.conditionVal = "HEAVY"; 
-              generatedRule.effectField = "MATH.maxBracketSpacing"; generatedRule.effectVal = "30";
-          }
-
-          setNewRule(generatedRule); setAiPrompt(""); setIsGeneratingAi(false);
-          alert("✨ AI successfully parsed your request and pre-filled the rule parameters!");
-      }, 1000);
-  };
-
   const handleAddRule = async () => {
       if (!newRule.name || !newRule.conditionField || !newRule.effectField) return alert("Fill in required fields.");
       const updatedRules = [...cpqRules, { id: `RULE-${Date.now()}`, ...newRule }];
@@ -1298,118 +1170,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       await setDoc(doc(db, "system", "cpq_rules"), { rules: updatedRules }, { merge: true });
   };
 
-  const handleNukeJobs = async () => {
-      const promptStr = window.prompt(`Type "DELETE ALL JOBS" to wipe ALL ${activeBrand.toUpperCase()} jobs across HQ, Shop Floor, Finishing & Packaging:`);
-      if (promptStr !== "DELETE ALL JOBS") return;
-      try {
-          // A CPQ job fans out into order docs across every floor (WORK_ORDER_CONTRACT shared orderKey),
-          // so an HQ-only nuke left orphans on the Shop/Finishing floors. Cascade brand-scoped through
-          // the whole order lifecycle. Note the field name differs: jobs/cpq_drafts use brandId, the
-          // order docs use brand. Each collection is guarded so one failure can't abort the rest.
-          const targets = [
-              { col: "jobs", field: "brandId" },
-              { col: "cpq_drafts", field: "brandId" },
-              { col: "hq_sales_orders", field: "brand" },
-              { col: "hq_work_orders", field: "brand" },
-              { col: "shop_custom_orders", field: "brand" },
-              { col: "shop_milling", field: "brand" },
-              { col: "fin_workorders", field: "brand" },
-              { col: "packaging_orders", field: "brand" },
-          ];
-          let total = 0;
-          const summary = [];
-          for (const t of targets) {
-              try {
-                  const snap = await getDocs(query(collection(db, t.col), where(t.field, "==", activeBrand)));
-                  await Promise.all(snap.docs.map(d => deleteDoc(doc(db, t.col, d.id))));
-                  if (snap.docs.length) summary.push(`${t.col}: ${snap.docs.length}`);
-                  total += snap.docs.length;
-              } catch (e) { console.error(`Nuke ${t.col} failed:`, e); summary.push(`${t.col}: ⚠️ ${e.message}`); }
-          }
-          alert(`✅ Nuked ${total} ${activeBrand.toUpperCase()} job doc(s) across all floors.\n\n${summary.join("\n") || "(nothing found)"}`);
-      } catch(e) { console.error(e); alert("❌ Nuke failed: " + e.message); }
-  };
-
-  // 🚀 UPDATED: Wipes Assemblies AND their BOM Pins to prevent ghosts
-  const handleNukeAssemblies = async () => { 
-      const promptStr = window.prompt(`Type "DELETE ALL ASSEMBLIES" to confirm wiping ${activeBrand.toUpperCase()} assemblies AND BOM pins:`); 
-      if (promptStr === "DELETE ALL ASSEMBLIES") {
-          try {
-              // 1. Get this brand's Assemblies
-              const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "in", ["Assembly", "Master Assembly"]), where("brandId", "==", activeBrand)));
-              const brandAsmIds = new Set(snap.docs.map(d => d.id));
-
-              // 2. Get the BOM Pins that belong to THIS brand's assemblies only — scoping by the
-              // pin's assemblyId so the nuke can't reach into other brands' pins (pins have no
-              // brandId field, so we match on the assemblies we're deleting).
-              const pinsSnap = await getDocs(collection(db, "assembly_pins"));
-              const brandPins = pinsSnap.docs.filter(d => {
-                  const aid = d.data().assemblyId;
-                  return aid && brandAsmIds.has(aid);
-              });
-
-              const allDocs = [
-                  ...snap.docs.map(d => doc(db, "Approved_Designs", d.id)),
-                  ...brandPins.map(d => doc(db, "assembly_pins", d.id))
-              ];
-
-              // 3. Delete in batches to bypass Firebase 500 document limits
-              const chunkSize = 400;
-              for (let i = 0; i < allDocs.length; i += chunkSize) {
-                  const chunk = allDocs.slice(i, i + chunkSize);
-                  const batch = writeBatch(db);
-                  chunk.forEach(docRef => batch.delete(docRef));
-                  await batch.commit();
-              }
-
-              alert(`✅ ALL ${activeBrand.toUpperCase()} ASSEMBLIES AND BOM PINS NUKED.`);
-          } catch(e) { 
-              console.error(e); 
-              alert("❌ Failed to nuke database: " + e.message);
-          }
-      }
-  };
-  
-  const handleNukeFlows = async () => {
-      const promptStr = window.prompt(`Type "DELETE ALL FLOWS" to confirm wiping ${activeBrand.toUpperCase()} CPQ flows:`);
-      if (promptStr === "DELETE ALL FLOWS") {
-          try {
-              const snap = await getDocs(query(collection(db, "cpq_flows"), where("brandId", "==", activeBrand)));
-              await Promise.all(snap.docs.map(d => deleteDoc(doc(db, "cpq_flows", d.id))));
-              alert(`✅ ALL ${activeBrand.toUpperCase()} CPQ FLOWS NUKED (${snap.docs.length}).`);
-          } catch(e) { console.error(e); alert("❌ Failed to nuke flows: " + e.message); }
-      }
-  };
-
-  const handleNukeLibrary = async () => {
-      const promptStr = window.prompt(`Type "DELETE MASTER LIBRARY" to confirm wiping ${activeBrand.toUpperCase()} inventory:`); 
-      if (promptStr === "DELETE MASTER LIBRARY") {
-          try {
-              const snap = await getDocs(query(collection(db, "Approved_Designs"), where("partClass", "==", "Inventory"), where("brandId", "==", activeBrand)));
-              await Promise.all(snap.docs.map(d => deleteDoc(doc(db, "Approved_Designs", d.id))));
-              alert(`✅ ${activeBrand.toUpperCase()} MASTER INVENTORY NUKED.`);
-          } catch(e) { console.error(e); }
-      }
-  };
-
-  const handleNukeCustomers = async () => { 
-      const promptStr = window.prompt(`Type "DELETE ALL CUSTOMERS" to confirm wiping ${activeBrand.toUpperCase()} customers:`); 
-      if (promptStr === "DELETE ALL CUSTOMERS") {
-          try {
-              const snap = await getDocs(collection(db, "crm_records"));
-              const toDelete = snap.docs.filter(d => {
-                  const data = d.data();
-                  return data.type === "CUSTOMER" && (data.brandId === activeBrand || (data.sharedBrands && data.sharedBrands.includes(activeBrand)));
-              });
-              
-              await Promise.all(toDelete.map(d => deleteDoc(doc(db, "crm_records", d.id))));
-              alert(`✅ ALL ${activeBrand.toUpperCase()} CUSTOMERS NUKED.`);
-          } catch(e) { 
-              console.error(e); 
-              alert(`❌ FAILED: ${e.message}`);
-          }
-      }
-  };
 
   const handleLogoUpload = async (e, brandKey) => {
       const file = e.target.files[0];
@@ -1481,9 +1241,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   };
 
   const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
-  const orphanedAssemblies = masterAssemblies.filter(asm => !cpqFlows.some(flow => flow.linkedAssemblyId === asm.id));
   const availableSourceItems = getDataSourceItems(newStep.dataSource);
   const linkedAsm = allApprovedDesigns.find(a => a.id === flowSettings.linkedAssemblyId || a.itemId === flowSettings.linkedAssemblyId);
+  // GENERATED-FLOW MODE (Stuart 2026-07-11): a flow with a linked assembly is built by the tag
+  // generator — manual step wiring is hidden; only prices, finishes, required and flow settings
+  // stay editable, so the old step machinery can't fight the generator.
+  const isGeneratedFlow = !!(activeFlow?.linkedAssemblyId || flowSettings.linkedAssemblyId);
 
   const optionsToMap = (newStep.allowedOptions && newStep.allowedOptions.length > 0) 
       ? availableSourceItems.filter(opt => newStep.allowedOptions.includes(opt.id)) 
@@ -1512,9 +1275,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           <AdminNavButton active={activeSection === "USERS"} onClick={() => setActiveSection("USERS")} label="User Matrix" icon="🔐" />
           <AdminNavButton active={activeSection === "PLATING_FEES"} onClick={() => setActiveSection("PLATING_FEES")} label="Plating Fees" icon="🧪" />
           
-          <button onClick={() => setActiveSection("DANGER")} style={{ padding: '16px 20px', textAlign: 'left', background: activeSection === "DANGER" ? '#fdf2f2' : '#fff', color: '#d9534f', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSection === "DANGER" ? '2px solid #d9534f' : '2px solid transparent', display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <span style={{ fontSize: '1.1rem' }}>⚠️</span> Danger Zone
-          </button>
           
           {isSuperAdmin && (
               <button onClick={() => setActiveSection("SUPER_ADMIN")} style={{ padding: '16px 20px', textAlign: 'left', background: activeSection === "SUPER_ADMIN" ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', border: 'none', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSection === "SUPER_ADMIN" ? '2px solid var(--ink)' : '2px solid transparent', display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1567,25 +1327,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                         ))}
                     </div>
 
-                    {orphanedAssemblies.length > 0 && (
-                        <div style={{ marginTop: '20px', borderTop: '1px solid var(--line)', paddingTop: '20px' }}>
-                            <h4 style={{ margin: '0 0 10px 0', fontFamily: 'var(--serif)', fontSize: '1.1rem', color: '#d9534f' }}>Pending CPQ Setup</h4>
-                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '15px' }}>These assemblies were flagged for CPQ routing but don't have a flow yet.</div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                {orphanedAssemblies.map(asm => (
-                                    <button 
-                                        key={asm.id}
-                                        onClick={() => handleAutoCreateFlowForAssembly(asm)}
-                                        style={{ padding: '12px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', transition: 'all 0.2s' }}
-                                        onMouseOver={e => { e.currentTarget.style.background = '#d9534f'; e.currentTarget.style.color = '#fff'; }}
-                                        onMouseOut={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#d9534f'; }}
-                                    >
-                                        + Create Flow: {asm.itemName}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
                 </div>
 
                 <div style={{ flex: 1, padding: '30px', overflowY: 'auto' }}>
@@ -1790,20 +1531,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                 <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Configure Steps</h3>
                                 <button onClick={() => document.getElementById('main-assembly-settings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} style={{ padding: '10px 16px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>↑ Main Assembly Settings</button>
                             </div>
-                            
-                            {flowSettings.linkedAssemblyId && (
-                                <div style={{ background: 'var(--paper)', border: '1px solid var(--brass)', padding: '20px', marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div>
-                                        <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--brass)' }}>Auto-Sync Available</h4>
-                                        <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Detected <strong>{linkedBomPins.length} Sub-Assemblies/Components</strong> in the Master File Cabinet.</span>
-                                    </div>
-                                    <button onClick={() => handleAutoSyncBOM(activeFlow)} style={{ padding: '12px 24px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
-                                        Auto-Generate Steps
-                                    </button>
+
+                            {isGeneratedFlow && !newStep.id && (
+                                <div style={{ background: 'var(--paper)', border: '1px solid var(--brass)', padding: '18px 22px', marginBottom: '30px', borderRadius: '2px' }}>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.05rem', color: 'var(--ink)' }}>Generated flow — steps are built from the linked assembly's tags.</span>
+                                    <span style={{ display: 'block', fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '6px' }}>Model + tag in 1.5 / 1.6, then ↻ Regenerate above. Click a step's EDIT to set option prices and finish scoping (both survive regenerates). Manual step-building is off for generated flows.</span>
                                 </div>
                             )}
-
-                            {/* MANUAL STEP BUILDER */}
+                            {(!isGeneratedFlow || newStep.id) && (
                             <div style={{ background: newStep.id ? 'var(--paper-2)' : '#fff', padding: '24px', border: newStep.id ? '1px solid var(--brass)' : '1px solid var(--line)', marginBottom: '30px', borderRadius: '2px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 20px 0' }}>
                                     <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: newStep.id ? 'var(--brass)' : 'var(--ink)' }}>
@@ -1815,8 +1550,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                 </div>
                                 
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                                    <input value={newStep.title} onChange={e => setNewStep({...newStep, title: e.target.value})} placeholder="Step Title (e.g. Select Bracket Style)" style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                                    <input value={newStep.title} disabled={isGeneratedFlow} title={isGeneratedFlow ? 'Generated step — the title is the regenerate match key; it comes from the tags.' : undefined} onChange={e => setNewStep({...newStep, title: e.target.value})} placeholder="Step Title (e.g. Select Bracket Style)" style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', opacity: isGeneratedFlow ? 0.6 : 1 }} />
                                     
+                                    {!isGeneratedFlow && (
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                                         <select value={newStep.type} onChange={e => setNewStep({...newStep, type: e.target.value, dataSource: e.target.value === 'STATIC_FEE' ? '' : newStep.dataSource})} style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
                                             <option value="DROPDOWN">Dropdown List</option>
@@ -1854,8 +1590,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                             </optgroup>
                                         </select>
                                     </div>
+                                    )}
 
-                                    {(newStep.type === 'VISUAL_DIMENSIONS' || newStep.type === 'DIMENSIONS' || newStep.calculatorTemplate) && (
+                                    {!isGeneratedFlow && (newStep.type === 'VISUAL_DIMENSIONS' || newStep.type === 'DIMENSIONS' || newStep.calculatorTemplate) && (
                                         <div style={{ background: 'var(--paper-2)', padding: '15px', border: '1px solid var(--line)' }}>
                                             <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Calculator Template</label>
                                             <select value={newStep.calculatorTemplate || ''} onChange={e => setNewStep({...newStep, calculatorTemplate: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
@@ -1868,6 +1605,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                         </div>
                                     )}
 
+                                    {!isGeneratedFlow && (
                                     <div style={{ background: '#fff', padding: '15px', border: '1px solid var(--line)' }}>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Helper Text</label>
                                         <input 
@@ -1877,8 +1615,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                             style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}
                                         />
                                     </div>
+                                    )}
 
-                                    {newStep.type === 'STYLE_SWAP' && (
+                                    {!isGeneratedFlow && newStep.type === 'STYLE_SWAP' && (
                                     <div style={{ background: '#fff', padding: '15px', border: '1px solid var(--line)' }}>
                                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                                             <input type="checkbox" checked={!!newStep.isCenterClone} onChange={e => setNewStep({...newStep, isCenterClone: e.target.checked})} />
@@ -1888,25 +1627,13 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                     </div>
                                     )}
 
-                                    <div style={{ background: '#fff', padding: '15px', border: '1px solid var(--line)' }}>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                                            <input type="checkbox" checked={!!newStep.mountSelector} onChange={e => setNewStep({...newStep, mountSelector: e.target.checked})} />
-                                            <span style={{ fontSize: '0.85rem', color: 'var(--ink)' }}>Tag-driven Mount selector</span>
-                                        </label>
-                                        <span style={{ fontSize: '0.72rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>Options come from the assembly's Location tags (Wall / Ceiling / Inside). Picking one hides every end cluster of the OTHER locations — no geometryMap or data source needed. Use a DROPDOWN step.</span>
-                                        {newStep.mountSelector && (
-                                            <div style={{ marginTop: '10px' }}>
-                                                <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Applies to position</label>
-                                                <select value={newStep.mountPosition || ''} onChange={e => setNewStep({...newStep, mountPosition: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
-                                                    <option value="">All positions (whole mount)</option>
-                                                    <option value="LEFT">Left only</option>
-                                                    <option value="RIGHT">Right only</option>
-                                                </select>
-                                            </div>
-                                        )}
+                                    {isGeneratedFlow && newStep.type === 'STATIC_FEE' && (
+                                    <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
+                                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Fee Amount ($)</label>
+                                        <input type="number" step="0.01" value={newStep.basePrice !== undefined && newStep.basePrice !== null && newStep.basePrice !== '' ? newStep.basePrice : ''} onChange={e => setNewStep({...newStep, basePrice: e.target.value})} placeholder="0.00" style={{ width: '200px', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
-
-                                    {newStep.type !== 'STYLE_SWAP' && (
+                                    )}
+                                    {!isGeneratedFlow && newStep.type !== 'STYLE_SWAP' && (
                                     <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '15px' }}>Item Mapping & Base Price</label>
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
@@ -1981,7 +1708,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                     </div>
                                     )}
 
-                                    {newStep.dataSource && availableSourceItems.length > 0 && newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && (
+                                    {!isGeneratedFlow && newStep.dataSource && availableSourceItems.length > 0 && newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && (
                                         <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Restrict Options</span>
@@ -2006,55 +1733,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                         </div>
                                     )}
                                     
-                                    {newStep.type !== 'STYLE_SWAP' && (
-                                    <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Target 3D Mesh / Node</label>
-                                            <button 
-                                                onClick={handleInspectNodes} 
-                                                disabled={isInspecting}
-                                                style={{ padding: '6px 12px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: isInspecting ? 'wait' : 'pointer' }}
-                                            >
-                                                {isInspecting ? 'Scanning...' : 'Inspect 3D Nodes'}
-                                            </button>
-                                        </div>
-
-                                        {linkedAsm?.nodeClusters?.length > 0 && (
-                                            <div style={{ marginBottom: '15px', background: '#fff', border: '1px solid var(--line)', padding: '15px' }}>
-                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '10px' }}>Saved Sub-Assemblies</div>
-                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                                    {linkedAsm.nodeClusters.map(cluster => {
-                                                        const clusterNodes = cluster.nodes || cluster.meshes || [];
-                                                        return (
-                                                            <span 
-                                                                key={cluster.id} 
-                                                                onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${clusterNodes.join(', ')}` : clusterNodes.join(', ')}))} 
-                                                                style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '0.8rem', cursor: 'pointer', borderRadius: '2px' }}
-                                                            >
-                                                                {cluster.name}
-                                                            </span>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
-                                        )}
-                                        
-                                        {inspectedNodes.length > 0 && (
-                                            <div style={{ marginBottom: '15px', background: '#fff', border: '1px solid var(--line)', padding: '15px', maxHeight: '150px', overflowY: 'auto' }}>
-                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '10px' }}>Available Meshes</div>
-                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                                                    {inspectedNodes.map((node, i) => (
-                                                        <span key={i} onClick={() => setNewStep(prev => ({...prev, targetNodes: prev.targetNodes ? `${prev.targetNodes}, ${node}` : node}))} style={{ background: 'var(--paper-2)', padding: '4px 8px', fontSize: '0.8rem', cursor: 'pointer', border: '1px solid var(--line)' }}>
-                                                            {node}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        <input value={newStep.targetNodes || ''} onChange={e => setNewStep({...newStep, targetNodes: e.target.value})} placeholder="e.g., Pole_Top, Bracket_Base" style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
-                                    </div>
-                                    )}
 
                                     {newStep.type === 'STYLE_SWAP' && (
                                         <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
@@ -2231,7 +1909,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                         </div>
                                     )}
 
-                                    {newStep.type === 'STATIC_FEE' ? (
+                                    {!isGeneratedFlow && (newStep.type === 'STATIC_FEE' ? (
                                         <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
                                             <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Fee Step</label>
                                             <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>This is a fee — it rolls into the flow's NetSuite rollup item, so it needs no part, routing, or item association. Just set the amount under Pricing Rules.</span>
@@ -2246,8 +1924,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                             ))}
                                         </select>
                                     </div>
-                                    )}
+                                    ))}
 
+                                    {!isGeneratedFlow && (
                                     <div style={{ background: 'var(--paper-2)', padding: '20px', border: '1px solid var(--line)', marginTop: '10px' }}>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '15px' }}>Pricing Rules</label>
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
@@ -2261,14 +1940,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                             </div>
                                         </div>
                                     </div>
-                                    
-                                    {optionsToMap.length > 0 && optionsToMap.length < 100 && newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && (
+                                    )}
+
+                                    {!isGeneratedFlow && optionsToMap.length > 0 && optionsToMap.length < 100 && newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && (
                                         <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '15px' }}>Option Properties</div>
-                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: '15px', maxHeight: '300px', overflowY: 'auto' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', maxHeight: '300px', overflowY: 'auto' }}>
                                                 <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>Option Name</div>
                                                 <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>Upcharge ($)</div>
-                                                <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>Geometry Swap (Mesh)</div>
                                                 
                                                 {optionsToMap.map(opt => {
                                                     const partObj = allApprovedDesigns.find(p => p.id === opt.id) || dynamicAssets.find(a => a.id === opt.id) || globalFinishes.find(f => f.id === opt.id) || outsourceFinishes.find(f => f.id === opt.id);
@@ -2287,9 +1966,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                                 <input type="number" step="0.5" value={newStep.priceMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, priceMap: { ...prev.priceMap, [opt.id]: parseFloat(e.target.value) || 0 } }))} placeholder="0.00" style={{ width: '100%', padding: '8px', border: '1px solid var(--line)', outline: 'none' }} disabled={newStep.useClientPricing || !!newStep.priceOverride} />
                                                             </div>
-                                                            <div>
-                                                                <input value={newStep.geometryMap?.[opt.id] || ""} onChange={(e) => setNewStep(prev => ({ ...prev, geometryMap: { ...prev.geometryMap, [opt.id]: e.target.value } }))} placeholder="Mesh to Show" style={{ width: '100%', padding: '8px', border: '1px solid var(--line)', outline: 'none' }} />
-                                                            </div>
                                                         </React.Fragment>
                                                     );
                                                 })}
@@ -2302,7 +1978,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                     </label>
                                     
                                     <div style={{ display: 'flex', gap: '15px', marginTop: '10px' }}>
-                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={(newStep.type !== 'STATIC_FEE' && !newStep.mountSelector && !newStep.partHandling) || (newStep.type === 'STYLE_SWAP' ? !(newStep.styleOptions && newStep.styleOptions.length) : ((newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE' && !newStep.mountSelector) && !newStep.dataSource))} style={{ flex: 1, padding: '15px', background: (newStep.type !== 'STATIC_FEE' && !newStep.mountSelector && !newStep.partHandling) ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', border: 'none', cursor: (newStep.type !== 'STATIC_FEE' && !newStep.mountSelector && !newStep.partHandling) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                        <button onClick={() => handleAddStepToFlow(activeFlow)} disabled={(newStep.type !== 'STATIC_FEE' && !newStep.partHandling) || (newStep.type === 'STYLE_SWAP' ? !(newStep.styleOptions && newStep.styleOptions.length) : ((newStep.type !== 'DIMENSIONS' && newStep.type !== 'STATIC_FEE') && !newStep.dataSource))} style={{ flex: 1, padding: '15px', background: (newStep.type !== 'STATIC_FEE' && !newStep.partHandling) ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', border: 'none', cursor: (newStep.type !== 'STATIC_FEE' && !newStep.partHandling) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                                             {newStep.id ? "Save Edits to Step" : "Add Step"}
                                         </button>
                                         {newStep.id && (
@@ -2313,6 +1989,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                     </div>
                                 </div>
                             </div>
+                            )}
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                                 {(activeFlow.steps || []).map((step, idx) => (
@@ -2324,10 +2001,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                             </div>
                                         </div>
                                         <div style={{ display: 'flex', gap: '8px' }}>
+                                            {!isGeneratedFlow && (<>
                                             <button onClick={() => handleMoveStep(activeFlow, idx, 'UP')} disabled={idx === 0} style={{ padding: '8px', cursor: idx === 0 ? 'not-allowed' : 'pointer', background: 'var(--paper-2)', border: '1px solid var(--line)' }}>⬆️</button>
-                                            <button onClick={() => handleMoveStep(activeFlow, idx, 'DOWN')} disabled={idx === activeFlow.steps.length - 1} style={{ padding: '8px', cursor: idx === activeFlow.steps.length - 1 ? 'not-allowed' : 'pointer', background: 'var(--paper-2)', border: '1px solid var(--line)' }}>⬇️</button>
+                                            <button onClick={() => handleMoveStep(activeFlow, idx, 'DOWN')} disabled={idx === activeFlow.steps.length - 1} style={{ padding: '8px', cursor: idx === activeFlow.steps.length - 1 ? 'not-allowed' : 'pointer', background: 'var(--paper-2)', border: '1px solid var(--line)' }}>⬇️</button></>)}
                                             <button onClick={() => setNewStep(step)} style={{ padding: '8px 20px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', marginLeft: '10px' }}>Edit</button>
-                                            <button onClick={() => handleDeleteStep(activeFlow, step.id)} style={{ padding: '8px 20px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Del</button>
+                                            {!isGeneratedFlow && (<button onClick={() => handleDeleteStep(activeFlow, step.id)} style={{ padding: '8px 20px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Del</button>)}
                                         </div>
                                     </div>
                                 ))}
@@ -2348,12 +2026,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               
               <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '24px', marginBottom: '30px', borderRadius: '2px' }}>
                   <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>AI Assist: Describe Your Rule</label>
-                  <div style={{ display: 'flex', gap: '15px' }}>
-                      <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="e.g. 'If weight class is light, disable the trim step'" style={{ flex: 1, padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
-                      <button onClick={handleAiGenerateRule} disabled={isGeneratingAi || !aiPrompt} style={{ padding: '12px 24px', background: isGeneratingAi ? '#ccc' : 'var(--ink)', color: '#fff', border: 'none', cursor: isGeneratingAi ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
-                          {isGeneratingAi ? 'Generating...' : 'Generate'}
-                      </button>
-                  </div>
+                  
               </div>
 
               <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', marginBottom: '40px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
@@ -2865,53 +2538,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       ))}
                   </tbody>
                 </table>
-              </div>
-            </div>
-          )}
-
-          {/* --- DANGER ZONE VIEW --- */}
-          {activeSection === "DANGER" && (
-            <div style={{ padding: '40px', maxWidth: '800px' }}>
-              <h3 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.6rem', color: '#d9534f', borderBottom: '1px solid var(--line)', paddingBottom: '15px' }}>Danger Zone (Dataflash)</h3>
-              <p style={{ color: '#fff', background: '#d9534f', padding: '15px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Actions taken here are permanent and cannot be undone.</p>
-              
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '30px' }}>
-                <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
-                  <div>
-                      <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: '#d9534f' }}>Wipe All Jobs, Drafts, & Pipeline</h4>
-                      <div style={{fontSize:'0.9rem', color:'var(--ink-soft)'}}>Clears all Sales Orders, Work Orders, and CPQ quotes.</div>
-                  </div>
-                  <button onClick={handleNukeJobs} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Pipeline</button>
-                </div>
-                
-                <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
-                  <div>
-                      <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: '#d9534f' }}>Wipe All Master Assemblies</h4>
-                      <div style={{fontSize:'0.9rem', color:'var(--ink-soft)'}}>Deletes all BOMs and Top-Level Configurations.</div>
-                  </div>
-                  <button onClick={handleNukeAssemblies} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Assemblies</button>
-                </div>
-                <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
-                  <div>
-                      <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: '#d9534f' }}>Wipe All CPQ Flows</h4>
-                      <div style={{fontSize:'0.9rem', color:'var(--ink-soft)'}}>Deletes every CPQ flow for this brand (steps, geometry maps, hide-cluster lists).</div>
-                  </div>
-                  <button onClick={handleNukeFlows} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Flows</button>
-                </div>
-                <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
-                  <div>
-                      <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: '#d9534f' }}>Wipe All Customers</h4>
-                      <div style={{fontSize:'0.9rem', color:'var(--ink-soft)'}}>Deletes all customer records and address books for this brand.</div>
-                  </div>
-                  <button onClick={handleNukeCustomers} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Customers</button>
-                </div>
-                <div style={{ border: '1px solid #d9534f', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff' }}>
-                  <div>
-                      <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', color: '#d9534f' }}>Wipe Master Inventory Library</h4>
-                      <div style={{fontSize:'0.9rem', color:'var(--ink-soft)'}}>Deletes all raw materials, components, and hardware.</div>
-                  </div>
-                  <button onClick={handleNukeLibrary} style={{ padding: '16px 24px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Nuke Inventory</button>
-                </div>
               </div>
             </div>
           )}
