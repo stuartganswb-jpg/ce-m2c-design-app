@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf } from '../Shared/sizeMatrix';
+import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf } from '../Shared/priceLevels';
 
 const globalTextureCache = {};
 
@@ -505,6 +506,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   
   const [pricing, setPricing] = useState({ base: 0, finalPrice: 0 });
   const [pricingBreakdown, setPricingBreakdown] = useState([]);
+  // Quote-display price level (Shared/priceLevels): Fabricut-data items price per the imported
+  // sheet at FAB levels; everything else stays standard. Never drives NetSuite push rates.
+  const [priceLevel, setPriceLevel] = useState('STANDARD');
   
   const [jobData, setJobData] = useState({ 
       customerId: '', 
@@ -1373,7 +1377,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           // On pole steps the SELECTION is the finish — species rides it (wood pole → oak/walnut item).
                           const linkedBase = speciesSwap(linkedSized, selFinish || finishObjForStep(step.id));
                           const linkedPart = finishVariantOf(linkedBase, fc);
-                          const lp = parseFloat(linkedPart.manufacturingSpecs?.basePrice ?? linkedPart.basePrice) || 0;
+                          const fabLp = priceLevel !== 'STANDARD' ? fabricutPriceOf(linkedPart, priceLevel) : null;
+                          const lp = fabLp != null ? fabLp : (parseFloat(linkedPart.manufacturingSpecs?.basePrice ?? linkedPart.basePrice) || 0);
                           if (optionNativePrice === 0 && stepPrice === 0 && lp > 0) optionNativePrice = lp;
                           resolvedPartId = linkedPart.itemId || linkedPart.id;
                           resolvedErpId = linkedPart.legacyErpId || linkedPart.itemId || resolvedErpId;
@@ -1384,6 +1389,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (step.useClientPricing) {
                       const v = clientPriceFor(partObj) ?? clientPriceFor(preVariantObj);
                       if (v != null) optionNativePrice = v;
+                  }
+
+                  // PRICE LEVEL: at a Fabricut level, an item carrying imported Fabricut pricing
+                  // quotes EXACTLY per the sheet — overriding item/author/client pricing (BP plates
+                  // = explicit $0, included in the arm). Fees and non-Fabricut items fall through
+                  // untouched, so the quote is a faithful mix.
+                  if (priceLevel !== 'STANDARD') {
+                      const fp = fabricutPriceOf(partObj, priceLevel);
+                      if (fp != null) optionNativePrice = fp;
                   }
 
                   let upcharge = 0;
@@ -1446,6 +1460,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       const v = clientPriceFor(subPart) ?? clientPriceFor(subBase);
                       if (v != null) subPrice = v;
                   }
+                  // Price level on plate sub-lines: BP → $0 (in the arm), CP → the flat upcharge.
+                  if (priceLevel !== 'STANDARD') {
+                      const fp = fabricutPriceOf(subPart, priceLevel);
+                      if (fp != null) subPrice = fp;
+                  }
                   breakdown.push({
                       name: `${step.subLabel || 'Backplate'} (${subPart?.itemName || subOpt.partName})`,
                       qty: qty, price: subPrice, total: subPrice * qty,
@@ -1460,7 +1479,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       setPricing({ base: total, finalPrice: total });
       setPricingBreakdown(breakdown);
-  }, [dynamicConfigParams, stepQuantities, dimensionInputs, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, liveAssemblies, activeBomPins, globalFinishes]);
+  }, [dynamicConfigParams, stepQuantities, dimensionInputs, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, liveAssemblies, activeBomPins, globalFinishes, priceLevel]);
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
 
@@ -1533,6 +1552,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           sidemark: activeDraft?.sidemark || 'No Sidemark', 
           flowId: activeFlowId,
           qty: assemblyQty,
+          priceLevel,
           pricing: { ...pricing },
           pricingBreakdown: [...pricingBreakdown],
           dynamicConfigParams: { ...dynamicConfigParams },
@@ -1655,6 +1675,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       const payload = {
           jobId: targetJobId, brandId: activeBrand, status: 'CONFIGURED',
+          // Quote-display level this job was priced at (cart items each carry theirs too). The
+          // push still rates physical lines at standard pricing; the rollup absorbs the balance.
+          priceLevel: cart[0]?.priceLevel || priceLevel,
           customer: { id: jobData.customerId, name: customerName },
           jobName: jobData.jobName, 
           sidemark: jobData.jobName || 'Multi-Room Project',
@@ -2193,6 +2216,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           ) : (
               !jobData.customerId && <span style={{ fontSize: '0.85rem', color: 'var(--brass)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>Base MSRP will be shown until customer is selected.</span>
           )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: 'auto' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>Price Level</span>
+              <select value={priceLevel} onChange={e => setPriceLevel(e.target.value)}
+                  title="Quote display level. Items with imported Fabricut pricing quote at this level (backplates $0 — included in the arm; coverplates the flat upcharge). Fees and non-Fabricut items keep standard pricing. Items already in the cart keep the level they were added at. NetSuite push line rates are never changed by this."
+                  style={{ padding: '10px 12px', fontSize: '0.9rem', border: `1px solid ${priceLevel !== 'STANDARD' ? 'var(--brass)' : 'var(--line)'}`, outline: 'none', fontFamily: 'var(--sans)', background: priceLevel !== 'STANDARD' ? 'var(--paper-2)' : '#fff', minWidth: '230px' }}>
+                  {PRICE_LEVELS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+              </select>
+          </div>
       </div>
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch' }}>
@@ -2623,7 +2654,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       return n ? <EngineeringSpecsStrip draft={d} notes={n} parts={[...libraryParts, ...liveAssemblies]} /> : <div style={{ flex: 1 }} />;
                   })()}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', textAlign: 'right', fontSize: '0.85rem', width: '300px', flexShrink: 0 }}>
-                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '6px', color: 'var(--ink)' }}>Pricing Breakdown</div>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '6px', color: 'var(--ink)', display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+                          <span>Pricing Breakdown</span>
+                          {priceLevel !== 'STANDARD' && <span style={{ color: 'var(--brass)' }}>{priceLevelShort(priceLevel)}</span>}
+                      </div>
                       <div style={{ maxHeight: '80px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', paddingRight: '10px' }}>
                           {pricingBreakdown.map((item, i) => (
                               <div key={i} style={{ display: 'flex', justifyContent: 'flex-end', gap: '20px' }}>

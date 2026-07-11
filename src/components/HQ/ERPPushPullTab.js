@@ -300,7 +300,13 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           if (!window.confirm(`These finished assemblies aren't synced to NetSuite yet:\n\n${finishFallbacks.map(f => `• ${f}`).join('\n')}\n\nIf you continue, those lines push the BASE item (consumes raw / makes a finishing WO, not the finished stock). Sync/map them in the Library first for correct consumption.\n\nPush anyway?`)) return;
       }
 
-      if (!window.confirm(`Push Quote ${job.jobId || job.id} to NetSuite? This will create a live Quote/Estimate.`)) return;
+      // Non-standard price level: physical lines still push at standard rates, but the rollup
+      // absorbs the balance to the QUOTED total — so the estimate lands at the level's total.
+      // Correct when selling to Fabricut at their level; name it so it's never a surprise.
+      const lvlNote = job.priceLevel && job.priceLevel !== 'STANDARD'
+          ? `\n\n⚠ This quote was priced at the ${job.priceLevel.replace('FAB_', 'FABRICUT ')} level — the estimate total will match that quote (lines at standard rates, rollup absorbs the difference).`
+          : '';
+      if (!window.confirm(`Push Quote ${job.jobId || job.id} to NetSuite? This will create a live Quote/Estimate.${lvlNote}`)) return;
 
       setIsPushing(true);
       addLog(`Initiating NetSuite Cloud Proxy for Job: ${job.jobId || job.id}`, 'info');
