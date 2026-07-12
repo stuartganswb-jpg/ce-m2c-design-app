@@ -57,7 +57,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', borderBottom: '2px solid var(--ink)', paddingBottom: '18px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           {logoUrl
-            ? <img src={logoUrl} alt={company} style={{ maxHeight: '52px', maxWidth: '200px' }} />
+            ? <img src={logoUrl} alt={company} style={{ height: '52px', maxWidth: '220px', objectFit: 'contain' }} />
             : <div style={{ fontFamily: 'var(--serif)', fontSize: '1.7rem', fontWeight: 500, letterSpacing: '.02em' }}>{company}</div>}
         </div>
         <div style={{ textAlign: 'right' }}>

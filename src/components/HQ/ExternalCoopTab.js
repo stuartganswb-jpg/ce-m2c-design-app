@@ -403,6 +403,19 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       // Map the job onto the branded Form Template document (Shared/FormPreview) — the same form
       // the Admin Form Templates screen previews, logo + header/footer/terms + contact footer.
       // Discount / net-total rows keep their look: no qty, direct amount, net line bolded.
+      // Bill-to/ship-to resolve from the JOB's customer record (not the sidebar selection):
+      // ship-to = the job's custom address, else its saved NetSuite address-book entry, else the
+      // customer's default shipping address — never the sidemark.
+      const jobCrm = crmData[activeDocJob.customer?.id]
+          || Object.values(crmData).find(r => r.type === 'CUSTOMER' && r.name && r.name === (activeDocJob.customer?.name || activeDocJob.clientName))
+          || activeCrmRecord;
+      const fmtAddr = (a) => !a ? [] : [a.addressee || a.attention || a.label, a.addr1, a.addr2, [a.city, a.state].filter(Boolean).join(', ') + (a.zip ? ' ' + a.zip : '')].map(x => String(x || '').trim()).filter(Boolean);
+      const savedAddr = (jobCrm?.shippingAddresses || []).find(a => String(a.addressBookId) === String(activeDocJob.shippingAddressId))
+          || (jobCrm?.shippingAddresses || []).find(a => a.isDefault) || (jobCrm?.shippingAddresses || [])[0] || null;
+      const shipLines = activeDocJob.shippingMethod === 'CUSTOM' && activeDocJob.customShippingAddress
+          ? fmtAddr(activeDocJob.customShippingAddress)
+          : fmtAddr(savedAddr);
+      const billLines = String(jobCrm?.billingAddress || '').split('\n').map(x => x.trim()).filter(Boolean);
       const shippingAmt = parseFloat(activeDocJob.shippingAmount) || 0;
       const quoteLines = (activeDocJob.cpqData?.breakdown || []).map(b => ({
           item: b.isHeader ? '▶' : '',
@@ -415,9 +428,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       if (shippingAmt > 0) quoteLines.push({ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt });
       const quoteFormData = {
           billTo: [activeDocJob.customer?.name || activeDocJob.clientName || 'N/A',
-                   ...String(activeCrmRecord?.billingAddress || '').split('\n').filter(Boolean)],
-          shipTo: [activeDocJob.sidemark || activeDocJob.jobName || 'Per project',
-                   ...(activeDocJob.customShippingAddress ? [activeDocJob.customShippingAddress.addr1, activeDocJob.customShippingAddress.city && `${activeDocJob.customShippingAddress.city}, ${activeDocJob.customShippingAddress.state || ''} ${activeDocJob.customShippingAddress.zip || ''}`].filter(Boolean) : [])],
+                   ...(billLines.length ? billLines : fmtAddr(savedAddr))],
+          shipTo: (shipLines.length ? shipLines : [activeDocJob.customer?.name || activeDocJob.clientName || 'Per project']),
           lines: quoteLines,
           date: activeDocJob.dateSaved || new Date().toLocaleDateString(),
           po: activeDocJob.sidemark || activeDocJob.jobId || '—',
