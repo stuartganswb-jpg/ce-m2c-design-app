@@ -3,6 +3,7 @@ import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
 import { ref, deleteObject } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
+import FormPreview from '../Shared/FormPreview';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { reopenQuoteInCpq } from '../Shared/reopenQuote';
@@ -399,6 +400,32 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       const template = formTemplates['QUOTE'] || { header: '', footer: '', terms: '' };
       const logoUrl = brandLogos[activeBrand];
 
+      // Map the job onto the branded Form Template document (Shared/FormPreview) — the same form
+      // the Admin Form Templates screen previews, logo + header/footer/terms + contact footer.
+      // Discount / net-total rows keep their look: no qty, direct amount, net line bolded.
+      const shippingAmt = parseFloat(activeDocJob.shippingAmount) || 0;
+      const quoteLines = (activeDocJob.cpqData?.breakdown || []).map(b => ({
+          item: b.isHeader ? '▶' : '',
+          desc: b.name,
+          qty: (b.isDiscount || b.isNetLine || b.isHeader) ? '' : b.qty,
+          price: (b.isDiscount || b.isNetLine || b.isHeader || b.qty == null || !b.qty) ? null : b.price,
+          amount: b.total,
+          bold: !!b.isNetLine || !!b.isHeader,
+      }));
+      if (shippingAmt > 0) quoteLines.push({ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt });
+      const quoteFormData = {
+          billTo: [activeDocJob.customer?.name || activeDocJob.clientName || 'N/A',
+                   ...String(activeCrmRecord?.billingAddress || '').split('\n').filter(Boolean)],
+          shipTo: [activeDocJob.sidemark || activeDocJob.jobName || 'Per project',
+                   ...(activeDocJob.customShippingAddress ? [activeDocJob.customShippingAddress.addr1, activeDocJob.customShippingAddress.city && `${activeDocJob.customShippingAddress.city}, ${activeDocJob.customShippingAddress.state || ''} ${activeDocJob.customShippingAddress.zip || ''}`].filter(Boolean) : [])],
+          lines: quoteLines,
+          date: activeDocJob.dateSaved || new Date().toLocaleDateString(),
+          po: activeDocJob.sidemark || activeDocJob.jobId || '—',
+          termsLabel: activeCrmRecord?.terms || 'Per agreement',
+          tax: 0,
+          total: (activeDocJob.cpqData?.totalPrice || 0) + shippingAmt,
+      };
+
       let mathSection = '';
       if (activeDocJob.engineeringNotes) {
           const notes = activeDocJob.engineeringNotes;
@@ -451,78 +478,19 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
                   <div id="printable-document" style={{ width: '8.5in', display: 'flex', flexDirection: 'column', gap: '30px' }}>
                       
-                      {/* PAGE 1: QUOTE */}
+                      {/* PAGE 1: QUOTE — the actual Form Templates document */}
                       {renderQuote && (
-                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.6in', boxSizing: 'border-box', fontFamily: 'var(--sans)', color: 'var(--ink)', boxShadow: '0 12px 48px rgba(0,0,0,0.05)', position: 'relative' }}>
-                              <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: '20px', marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                                  {logoUrl ? (
-                                      <img src={logoUrl} alt={activeBrand} style={{ height: '60px', objectFit: 'contain' }} />
-                                  ) : (
-                                      <div style={{ fontFamily: 'var(--serif)', fontSize: '28px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1 }}>{activeBrand}</div>
-                                  )}
-                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', letterSpacing: '.15em', textTransform: 'uppercase' }}>Official Quote</div>
-                              </div>
-
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginBottom: '40px' }}>
-                                  <div>
-                                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Prepared For</div>
-                                      <div style={{ fontSize: '15px', fontWeight: 500, marginTop: '6px' }}>{activeDocJob.customer?.name || activeDocJob.clientName || 'N/A'}</div>
-                                      {activeCrmRecord?.billingAddress && <div style={{ fontSize: '13px', marginTop: '6px', whiteSpace: 'pre-wrap', color: 'var(--ink-soft)' }}>{activeCrmRecord.billingAddress}</div>}
-                                  </div>
-                                  <div>
-                                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                                          <div>
-                                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Document ID</div>
-                                              <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px' }}>{activeDocJob.jobId || activeDocJob.id}</div>
-                                          </div>
-                                          <div>
-                                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Date</div>
-                                              <div style={{ fontSize: '14px', fontWeight: 500, marginTop: '4px' }}>{activeDocJob.dateSaved || new Date().toLocaleDateString()}</div>
-                                          </div>
-                                          <div style={{ gridColumn: 'span 2' }}>
-                                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>Project / Sidemark</div>
-                                              <div style={{ fontSize: '15px', fontWeight: 500, color: 'var(--ink)', marginTop: '4px' }}>{activeDocJob.sidemark || activeDocJob.note || 'N/A'}</div>
-                                          </div>
-                                      </div>
-                                  </div>
-                              </div>
-
-                              {template.header && <div style={{ marginBottom: '30px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>{template.header}</div>}
-
-                              <div style={{ border: '1px solid var(--line)', marginBottom: '40px', padding: '24px' }}>
-                                  <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Configuration Details</div>
-                                  {activeDocJob.cpqData?.breakdown ? (
-                                      activeDocJob.cpqData.breakdown.map((item, i) => (
-                                          <div key={i} style={{ display: 'flex', padding: '12px 0', borderBottom: '1px solid rgba(28,26,22,.08)', fontSize: '13px', color: item.isDiscount ? '#8a6d3b' : 'inherit', fontWeight: item.isNetLine ? 600 : 'inherit' }}>
-                                              <span style={{ flex: 3 }}>{item.name}</span>
-                                              <span style={{ flex: 1, textAlign: 'center', color: 'var(--ink-soft)' }}>{(item.isDiscount || item.isNetLine) ? '' : `Qty: ${item.qty}`}</span>
-                                              <span style={{ flex: 1, textAlign: 'right' }}>${item.total.toFixed(2)}</span>
-                                          </div>
-                                      ))
-                                  ) : (
-                                      <div style={{ padding: '20px', fontStyle: 'italic', color: 'var(--ink-soft)', textAlign: 'center' }}>No line items configured.</div>
-                                  )}
-                                  {(parseFloat(activeDocJob.shippingAmount) || 0) > 0 && (
-                                      <div style={{ display: 'flex', padding: '12px 0', fontSize: '13px' }}>
-                                          <span style={{ flex: 4, textAlign: 'right', paddingRight: '30px' }}>Shipping</span>
-                                          <span style={{ flex: 1, textAlign: 'right' }}>${(parseFloat(activeDocJob.shippingAmount) || 0).toFixed(2)}</span>
-                                      </div>
-                                  )}
-                                  {activeDocJob.cpqData?.totalPrice && (
-                                      <div style={{ display: 'flex', paddingTop: '20px', marginTop: '10px', borderTop: '1px solid var(--line)', fontSize: '16px', fontWeight: 500 }}>
-                                          <span style={{ flex: 4, textAlign: 'right', paddingRight: '30px', fontFamily: 'var(--serif)' }}>Total Estimate</span>
-                                          <span style={{ flex: 1, textAlign: 'right' }}>${(activeDocJob.cpqData.totalPrice + (parseFloat(activeDocJob.shippingAmount) || 0)).toFixed(2)}</span>
-                                      </div>
-                                  )}
-                              </div>
-
-                              {template.footer && <div style={{ marginBottom: '20px', fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.6', borderTop: '1px solid var(--line)', paddingTop: '20px' }}>{template.footer}</div>}
-                              {template.terms && <div style={{ marginTop: '40px', fontSize: '10px', color: 'var(--ink-soft)', whiteSpace: 'pre-wrap', lineHeight: '1.5', borderTop: '1px solid var(--line)', paddingTop: '20px' }}>{template.terms}</div>}
-
-                              <div style={{ marginTop: '60px', display: 'flex', justifyContent: 'space-between', gap: '40px' }}>
-                                  <div style={{ flex: 1, borderTop: '1px solid var(--line)', paddingTop: '8px', fontSize: '10px', fontFamily: 'var(--mono)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Client Approval Signature</div>
-                                  <div style={{ width: '200px', borderTop: '1px solid var(--line)', paddingTop: '8px', fontSize: '10px', fontFamily: 'var(--mono)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Date</div>
-                              </div>
+                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.45in 0.35in', boxSizing: 'border-box', boxShadow: '0 12px 48px rgba(0,0,0,0.05)' }}>
+                              <FormPreview
+                                  type="QUOTE"
+                                  brand={activeBrand}
+                                  logoUrl={logoUrl}
+                                  header={template.header}
+                                  footer={template.footer}
+                                  terms={template.terms}
+                                  docNumber={activeDocJob.jobId || activeDocJob.id}
+                                  data={quoteFormData}
+                              />
                           </div>
                       )}
 

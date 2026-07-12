@@ -7,6 +7,13 @@ import Barcode from './Barcode';
 // → packing → invoice chain). Pass `data` to render a REAL order; omit it for the admin sample.
 
 const BRAND_NAMES = { m2c: 'M2C Studio', ce: 'Classical Elements', uniquity: 'Uniquity', leyla: 'Leyla' };
+// Printed at the bottom of EVERY form: shared address + the brand's own site/phone (Stuart 2026-07-11).
+const COMPANY_ADDRESS = '1200 Redding Dr · High Point, NC 27260';
+const BRAND_CONTACT = {
+  ce: { web: 'www.classicalelements.com', phone: '1 (336) 967-3313' },
+  m2c: { web: 'www.m2cstudio.com', phone: '910.805.8410' },
+  uniquity: { web: 'www.uniquitystyle.com', phone: '1 (336) 290-5115' },
+};
 const TITLES = { QUOTE: 'Quotation', SALES_ORDER: 'Sales Order', WORK_ORDER: 'Work Order', PACKING_SLIP: 'Packing List', INVOICE: 'Invoice', FACTORY_ROUTER: 'Factory Router' };
 
 const SAMPLE_LINES = [
@@ -33,7 +40,8 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
   const po = d.po || 'CUST-10239';
   const termsLabel = d.termsLabel || 'Net 30';
 
-  const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
+  const lineAmount = (l) => (l.amount != null ? Number(l.amount) || 0 : (Number(l.qty) || 0) * (Number(l.price) || 0));
+  const subtotal = lines.reduce((s, l) => s + lineAmount(l), 0);
   const tax = (d.tax != null) ? d.tax : (showMoney ? subtotal * 0.0875 : 0);
   const total = (d.total != null) ? d.total : subtotal + tax;
 
@@ -97,9 +105,9 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
             <tr key={i} style={{ borderBottom: '1px solid var(--line)' }}>
               <td style={{ ...cell, fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.item}</td>
               <td style={cell}>{l.desc}</td>
-              <td style={{ ...cell, textAlign: 'center' }}>{l.qty}</td>
-              {showMoney && <td style={{ ...cell, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '11px' }}>{money(l.price)}</td>}
-              {showMoney && <td style={{ ...cell, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '11px' }}>{money((Number(l.qty) || 0) * (Number(l.price) || 0))}</td>}
+              <td style={{ ...cell, textAlign: 'center' }}>{l.qty === '' || l.qty == null ? '' : l.qty}</td>
+              {showMoney && <td style={{ ...cell, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.price == null ? '' : money(l.price)}</td>}
+              {showMoney && <td style={{ ...cell, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: l.bold ? 600 : 400 }}>{money(lineAmount(l))}</td>}
             </tr>
           ))}
         </tbody>
@@ -125,6 +133,14 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
         </div>
       )}
 
+      {/* Client approval signatures on quotes */}
+      {type === 'QUOTE' && (
+        <div style={{ marginTop: '40px', display: 'flex', justifyContent: 'space-between', gap: '40px' }}>
+          <div style={{ flex: 1, borderTop: '1px solid var(--line)', paddingTop: '8px', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Client Approval Signature</div>
+          <div style={{ width: '180px', borderTop: '1px solid var(--line)', paddingTop: '8px', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Date</div>
+        </div>
+      )}
+
       {/* Document number — print + barcode at the bottom of every form (the NetSuite spine) */}
       <div style={{ marginTop: '34px', paddingTop: '16px', borderTop: '2px solid var(--ink)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
@@ -134,6 +150,13 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
         <div style={{ textAlign: 'center' }}>
           <Barcode value={docNumber} height={46} moduleWidth={2} />
         </div>
+      </div>
+
+      {/* Company footer — shared address + this brand's site/phone, on every form */}
+      <div style={{ marginTop: '12px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '8.5px', letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>
+        {company} · {COMPANY_ADDRESS}
+        {BRAND_CONTACT[brand]?.web ? ` · ${BRAND_CONTACT[brand].web}` : ''}
+        {BRAND_CONTACT[brand]?.phone ? ` · ${BRAND_CONTACT[brand].phone}` : ''}
       </div>
     </div>
   );
