@@ -753,26 +753,56 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const handleUpdateAttachmentDist = (id, newDist) => { setAttachments(atts => atts.map(a => a.id === id ? { ...a, distInches: parseFloat(newDist) || 0 } : a)); };
   const handleUpdateAttachmentNote = (id, text) => { setAttachments(atts => atts.map(a => a.id === id ? { ...a, note: text } : a)); };
 
-  // Auto-place brackets along a STRAIGHT pole: end brackets inset (an end-return bracket sits at
-  // 0", others ~3" in), then centers per the 36"/54" rule — none at ≤36", else spread evenly so
-  // no gap exceeds 54" (so a 100" pole gets one at 50"). All become editable/removable attachments.
+  // Auto-place brackets along a STRAIGHT pole. Support rules:
+  //  • max span between supports = 48" — tightened to 36" when the rod is ¾" (poleDiameter ≤ .76)
+  //  • a return end COUNTS AS a support (French bend, miter return, inside-mount socket — anything
+  //    that kills the finial step in CPQ): no end bracket is placed there. A selected return/end
+  //    ARM still places its bracket at 0" — the arm itself is that end's support. So a 96" pole
+  //    with French returns recommends just one center bracket.
+  //  • splices are KEPT, and each one gets a support bracket recommended at its position.
   const handleAutoPlaceBrackets = () => {
       if (engData.shape !== 'STRAIGHT') return alert("Auto-place currently supports straight poles. Miter / Bow are coming next.");
       const segLen = pole2;
       if (!segLen || segLen <= 0) return alert("Enter the pole width / measurements first so there's a length to lay out.");
-      if (attachments.length > 0 && !window.confirm("Replace the current placements with a fresh auto-layout? Any manual bracket / splice positions will be cleared.")) return;
+      const keptSplices = attachments.filter(a => a.type === 'splice');
+      if (attachments.some(a => a.type === 'bracket') && !window.confirm("Replace the current bracket placements with a fresh auto-layout? Splices are kept (each gets a support bracket); manual bracket positions are cleared.")) return;
       const isRet = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
+      const isRetStyle = (s) => s === 'RETURN_BEND' || s === 'RETURN_MITER';
       const snap = (n) => Math.round(n * 8) / 8;
-      const leftOff = isRet(engData.bracketId) ? 0 : 3;
-      const rightOff = isRet(engData.bracketIdRight) ? 0 : 3;
+      const maxSpan = (parseFloat(engData.poleDiameter) || 1) <= 0.76 ? 36 : 48; // ¾" rod carries less — tighter spacing
       let idc = Date.now();
-      const next = [
-          { id: idc++, type: 'bracket', segId: 2, distInches: snap(leftOff), ref: 'START', note: 'End · L' },
-          { id: idc++, type: 'bracket', segId: 2, distInches: snap(rightOff), ref: 'END', note: 'End · R' },
-      ];
-      const nCenters = segLen <= 36 ? 0 : Math.max(1, Math.ceil(segLen / 54) - 1);
-      for (let i = 1; i <= nCenters; i++) next.push({ id: idc++, type: 'bracket', segId: 2, distInches: snap(segLen * i / (nCenters + 1)), ref: 'START', note: 'Center' });
-      setAttachments(next);
+      const next = [];
+      const supports = [];
+      // Ends: an arm pick always places its bracket (at 0" when it's a return/end arm or the end
+      // returns); a return style or inside mount with NO arm is self-supporting — supported, but
+      // nothing to place.
+      [[engData.bracketId, endStyleL, isLeftInside, 'START', 'End · L'], [engData.bracketIdRight, endStyleR, isRightInside, 'END', 'End · R']].forEach(([bktId, style, inside, ref, note]) => {
+          const selfSupported = isRetStyle(style) || inside;
+          if (bktId) {
+              const off = (isRet(bktId) || selfSupported) ? 0 : 3;
+              next.push({ id: idc++, type: 'bracket', segId: 2, distInches: snap(off), ref, note });
+              supports.push(ref === 'START' ? off : segLen - off);
+          } else if (selfSupported) {
+              supports.push(ref === 'START' ? 0 : segLen); // return / socket holds this end
+          } else {
+              next.push({ id: idc++, type: 'bracket', segId: 2, distInches: snap(3), ref, note });
+              supports.push(ref === 'START' ? 3 : segLen - 3);
+          }
+      });
+      // Splices: keep them, and recommend a support bracket at each splice position.
+      keptSplices.forEach(sp => {
+          const d = parseFloat(sp.distInches) || 0;
+          next.push({ id: idc++, type: 'bracket', segId: 2, distInches: snap(d), ref: sp.ref || 'START', note: 'Splice support' });
+          supports.push(sp.ref === 'END' ? segLen - d : d);
+      });
+      // Fill every remaining gap so no span between supports exceeds maxSpan.
+      supports.sort((a, b) => a - b);
+      for (let i = 0; i < supports.length - 1; i++) {
+          const a = supports[i], b = supports[i + 1];
+          const nMid = Math.ceil((b - a) / maxSpan) - 1;
+          for (let k = 1; k <= nMid; k++) next.push({ id: idc++, type: 'bracket', segId: 2, distInches: snap(a + ((b - a) * k) / (nMid + 1)), ref: 'START', note: 'Center' });
+      }
+      setAttachments([...next, ...keptSplices]);
   };
   const handleUpdateShopNote = (id, text) => { setShopNotes(notes => notes.map(n => n.id === id ? { ...n, text: text } : n)); };
 
@@ -864,7 +894,16 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                 if (engTool === 'splice') { const center = closestSeg.len / 2; if (Math.abs(finalDist - center) < (closestSeg.len * 0.15)) finalDist = center; }
                 let ref = 'START'; let displayDist = finalDist;
                 if (finalDist > closestSeg.len / 2) { ref = 'END'; displayDist = closestSeg.len - finalDist; }
-                setAttachments([...attachments, { id: Date.now(), type: engTool, segId: closestSeg.id, distInches: Math.round(displayDist * 8) / 8, ref: ref, note: '' }]);
+                const dist = Math.round(displayDist * 8) / 8;
+                const placed = [{ id: Date.now(), type: engTool, segId: closestSeg.id, distInches: dist, ref: ref, note: '' }];
+                // A splice needs support: recommend a bracket at the same position (unless one already sits within 1").
+                if (engTool === 'splice') {
+                    const absOf = (a) => a.ref === 'END' ? closestSeg.len - (parseFloat(a.distInches) || 0) : (parseFloat(a.distInches) || 0);
+                    const abs = ref === 'END' ? closestSeg.len - dist : dist;
+                    const hasNear = attachments.some(a => a.type === 'bracket' && a.segId === closestSeg.id && Math.abs(absOf(a) - abs) <= 1);
+                    if (!hasNear) placed.push({ id: Date.now() + 1, type: 'bracket', segId: closestSeg.id, distInches: dist, ref: ref, note: 'Splice support' });
+                }
+                setAttachments([...attachments, ...placed]);
             }
         }
     }
@@ -1240,7 +1279,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     </div>
                                 ))}
                             </div>
-                            <button onClick={handleAutoPlaceBrackets} disabled={engData.shape !== 'STRAIGHT'} title={engData.shape !== 'STRAIGHT' ? 'Auto-place currently supports straight poles' : 'Place end + center brackets automatically — then slide / edit / remove them in the Engineering view'} style={{ padding: '12px 16px', background: engData.shape === 'STRAIGHT' ? 'var(--brass)' : 'var(--paper-2)', color: engData.shape === 'STRAIGHT' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: engData.shape === 'STRAIGHT' ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⚙ Auto-Place Brackets · ends + centers (edit in Engineering view)</button>
+                            <button onClick={handleAutoPlaceBrackets} disabled={engData.shape !== 'STRAIGHT'} title={engData.shape !== 'STRAIGHT' ? 'Auto-place currently supports straight poles' : 'Bracket every 48" (36" on ¾" rod). Return / inside-mount ends count as supports; splices are kept and each gets a support bracket. Slide / edit / remove them in the Engineering view.'} style={{ padding: '12px 16px', background: engData.shape === 'STRAIGHT' ? 'var(--brass)' : 'var(--paper-2)', color: engData.shape === 'STRAIGHT' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: engData.shape === 'STRAIGHT' ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⚙ Auto-Place Brackets · ends + centers (edit in Engineering view)</button>
                             <div style={{ display: 'flex', gap: '16px' }}>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Projection (in)</label>
