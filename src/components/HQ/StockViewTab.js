@@ -57,6 +57,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         s => setCapacityMatrix(s.exists() ? s.data() : { rules: {}, default: null }), () => { }), []);
     const [orderQty, setOrderQty] = useState({});   // per-row entered production amount (keyed by internalId)
     const [genBusy, setGenBusy] = useState(false);
+    const [onOrdModal, setOnOrdModal] = useState(null); // snapshot row → open PO/WO inbound detail popup
+    const [cutModal, setCutModal] = useState(null);     // rod-cut order builder ({itemid, internalId, available, qty, target})
 
     // BUILDER STATE
     const [activeBuilder, setActiveBuilder] = useState("PO"); // 'PO' or 'WO'
@@ -702,6 +704,35 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const arows = await runSql(`SELECT ail.item AS internal_id, SUM(ail.quantityavailable) AS avail FROM AggregateItemLocation ail WHERE ail.item IN (${chunk.join(',')}) AND ail.location = ${loc} GROUP BY ail.item`);
                 arows.forEach(row => { availById[String(row.internal_id)] = Math.round(Number(row.avail) || 0); });
             }
+            // 2c) INBOUND SUPPLY per stocked item: open purchase-order lines (on order from a vendor) +
+            // open work orders (in production). Best-effort — a failure here only leaves the On Ord
+            // column empty, it never breaks the report.
+            const inboundById = {};
+            try {
+                const pushInb = (row, kind, source, expected) => {
+                    const iid = String(row.internal_id);
+                    const ordered = Math.abs(parseFloat(row.ordered) || 0);
+                    const done = Math.max(0, parseFloat(row.done) || 0);
+                    const open = ordered - done;
+                    if (open <= 0) return;
+                    let rec = inboundById[iid]; if (!rec) { rec = { qty: 0, lines: [] }; inboundById[iid] = rec; }
+                    rec.qty += open;
+                    rec.lines.push({ kind, tranid: row.tranid, source: source || '', ordered, done, open, expected: expected || '', status: row.statusname || '' });
+                };
+                const stkIds = stocked.map(x => x.internalId);
+                for (let i = 0; i < stkIds.length; i += 150) {
+                    const chunk = stkIds.slice(i, i + 150);
+                    const poRows = await runSql(`SELECT tl.item AS internal_id, t.tranid AS tranid, t.duedate AS duedate, BUILTIN.DF(t.status) AS statusname, BUILTIN.DF(t.entity) AS vendor, ABS(NVL(tl.quantity,0)) AS ordered, NVL(tl.quantityshiprecv,0) AS done FROM transaction t JOIN transactionline tl ON tl.transaction = t.id WHERE t.type = 'PurchOrd' AND tl.item IN (${chunk.join(',')}) AND NVL(tl.isclosed,'F') = 'F' AND BUILTIN.DF(t.status) NOT LIKE '%Closed%' AND BUILTIN.DF(t.status) NOT LIKE '%Rejected%'`);
+                    poRows.forEach(row => pushInb(row, 'PO', row.vendor, row.duedate));
+                    // WOs: the mainline row carries the assembly being built; quantityshiprecv = qty already
+                    // built. t.enddate (production end) may not be queryable — fall back to duedate-only.
+                    const woSel = (extra) => `SELECT tl.item AS internal_id, t.tranid AS tranid, t.duedate AS duedate${extra}, BUILTIN.DF(t.status) AS statusname, ABS(NVL(tl.quantity,0)) AS ordered, NVL(tl.quantityshiprecv,0) AS done FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'WorkOrd' AND tl.item IN (${chunk.join(',')}) AND BUILTIN.DF(t.status) NOT LIKE '%Closed%' AND BUILTIN.DF(t.status) NOT LIKE '%Built%'`;
+                    let woRows;
+                    try { woRows = await runSql(woSel(', t.enddate AS expected')); }
+                    catch (weErr) { woRows = await runSql(woSel('')); }
+                    woRows.forEach(row => pushInb(row, 'WO', 'Production', row.expected || row.duedate));
+                }
+            } catch (inbErr) { console.warn('Inbound (PO/WO) fetch failed — On Ord column left empty:', inbErr); }
             // 3) One row per stocked item; pair to the OLD history item: "STD-<SKU>" first (the
             // 2026-07 realignment), then the legacy "<base>-N" → "<base>" scheme for stragglers.
             const rows = stocked.filter(s => !/^STD-/i.test(s.itemid)).map(s => {
@@ -719,7 +750,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 });
                 const total = cells.reduce((a, c) => a + c.v, 0);
                 const newTotal = months.reduce((a, mo) => a + (newRec.m[mo.key] || 0), 0);
-                return { itemid: s.itemid, base: s.itemid, internalId: s.internalId, available: availById[s.internalId] || 0, oldInternalId: oldSib ? oldSib.internalId : null, oldItemId: oldSib ? oldSib.itemid : null, cells, total, newTotal, avg: total / 12, orders: (newRec.orders || 0) + (oldRec.orders || 0), hasOld: !!oldSib };
+                return { itemid: s.itemid, base: s.itemid, internalId: s.internalId, available: availById[s.internalId] || 0, onOrd: (inboundById[s.internalId] || {}).qty || 0, onOrdLines: (inboundById[s.internalId] || {}).lines || [], oldInternalId: oldSib ? oldSib.internalId : null, oldItemId: oldSib ? oldSib.itemid : null, cells, total, newTotal, avg: total / 12, orders: (newRec.orders || 0) + (oldRec.orders || 0), hasOld: !!oldSib };
             }).sort((a, b2) => String(a.itemid).localeCompare(String(b2.itemid), undefined, { numeric: true, sensitivity: 'base' }));
             setSalesHist(s => (s ? { ...s, loading: false, rows, withOld: rows.filter(r => r.hasOld).length } : s));
         } catch (e) {
@@ -731,9 +762,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (!salesHist || !salesHist.rows.length) return;
         const months = salesHist.months;
         const esc = (c) => `"${String(c).replace(/"/g, '""')}"`;
-        const lines = [['Stocked Item', 'OLD int.ID', ...months.map(m => m.label), 'Merged 12-mo Total', 'New-only Total', 'Orders'].map(esc).join(',')];
+        const lines = [['Stocked Item', 'OLD int.ID', ...months.map(m => m.label), 'Merged 12-mo Total', 'New-only Total', 'Orders', 'On Order (PO+WO)'].map(esc).join(',')];
         salesHist.rows.forEach(r => {
-            lines.push([r.itemid, r.oldInternalId || '', ...r.cells.map(c => c.v), r.total, r.newTotal, r.orders].map(esc).join(','));
+            lines.push([r.itemid, r.oldInternalId || '', ...r.cells.map(c => c.v), r.total, r.newTotal, r.orders, Math.round(r.onOrd || 0)].map(esc).join(','));
         });
         const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
         const a = document.createElement('a');
@@ -970,6 +1001,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const totMin = reo.reduce((s, x) => s + x.minOnHand, 0);
                 const totRec = reo.reduce((s, x) => s + x.recommended, 0);
                 const totOrder = rows.reduce((s, r, i) => s + (parseInt(orderQty[r.internalId] ?? reo[i].recommended) || 0), 0);
+                const totOnOrd = rows.reduce((s, r) => s + (r.onOrd || 0), 0);
                 const numTd = { padding: '7px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', borderBottom: '1px solid var(--paper-2)' };
                 const monthTh = { padding: '8px 6px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)', borderBottom: '2px solid var(--ink)', whiteSpace: 'nowrap' };
                 return (
@@ -1012,9 +1044,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <th style={monthTh}>Avg/mo</th>
                                                 <th style={monthTh}>Orders</th>
                                                 <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '2px solid var(--ink)' }} title="NetSuite quantity available">Avail</th>
+                                                <th style={{ ...monthTh, color: '#3f7fc4' }} title="Inbound: open purchase orders + work orders in production — click a number for the orders behind it">On Ord</th>
                                                 <th style={monthTh} title="Min on hand = 4 weeks of the 6-month avg sales rate">Min OH</th>
                                                 <th style={{ ...monthTh, color: '#3a7d44' }} title="Shortfall rounded up to full finishing sleds for the part size">Rec</th>
                                                 <th style={{ ...monthTh, color: 'var(--ink)' }}>Order</th>
+                                                <th style={monthTh} title="Rod cuts — turn 8 ft rods into 6 ft or 4 ft">Cut</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -1032,9 +1066,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.avg.toFixed(1)}</td>
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.orders}</td>
                                                     <td style={{ ...numTd, color: info.available <= info.minOnHand ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }}>{info.available}</td>
+                                                    <td style={{ ...numTd }}>{r.onOrd > 0 ? <button onClick={() => setOnOrdModal(r)} title="Open POs / work orders — click for detail" style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{Math.round(r.onOrd)}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{info.minOnHand || '·'}</td>
                                                     <td style={{ ...numTd, fontWeight: 600, color: info.recommended > 0 ? '#3a7d44' : 'var(--line)' }}>{info.recommended || '·'}</td>
                                                     <td style={{ ...numTd }}><input type="number" min="0" value={ov} onChange={e => setOrderQty(prev => ({ ...prev, [r.internalId]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', outline: 'none' }} /></td>
+                                                    <td style={{ ...numTd }}>{(info.isPole && /8(1[05])/.test(String(r.itemid))) ? <button title="Cut 8 ft rods down to 6 ft / 4 ft" onClick={() => setCutModal({ itemid: r.itemid, internalId: r.internalId, available: info.available, qty: '', target: '4FT' })} style={{ padding: '3px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>✂</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                 </tr>
                                                 );
                                             })}
@@ -1048,14 +1084,115 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}></td>
                                                 <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}></td>
                                                 <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)', borderLeft: '2px solid var(--ink)' }}>{totAvail}</td>
+                                                <td style={{ ...numTd, fontWeight: 700, color: '#3f7fc4', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{Math.round(totOnOrd) || '·'}</td>
                                                 <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{totMin}</td>
                                                 <td style={{ ...numTd, fontWeight: 700, color: '#3a7d44', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{totRec}</td>
                                                 <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{totOrder}</td>
+                                                <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}></td>
                                             </tr>
                                         </tfoot>
                                     </table>
                                 )}
                             </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* 🚚 INBOUND DETAIL — the open POs / work orders behind a snapshot "On Ord" number */}
+            {onOrdModal && (
+                <div onClick={() => setOnOrdModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '32px', width: '780px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+                            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>Inbound — {onOrdModal.itemid}</h2>
+                            <button onClick={() => setOnOrdModal(null)} style={{ background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                        </div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>{Math.round(onOrdModal.onOrd)} pcs inbound across {onOrdModal.onOrdLines.length} open order{onOrdModal.onOrdLines.length === 1 ? '' : 's'} · purchase orders + work orders in production</div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                            <thead style={{ borderBottom: '2px solid var(--ink)' }}>
+                                <tr>
+                                    {['Type', 'Order #', 'Vendor / Source', 'Ordered', "Rec'd / Built", 'Open', 'Expected', 'Status'].map((h, i) => <th key={h} style={{ padding: '10px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', textAlign: i >= 3 && i <= 5 ? 'center' : 'left' }}>{h}</th>)}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {[...onOrdModal.onOrdLines].sort((a, b) => String(a.expected || '9999').localeCompare(String(b.expected || '9999'))).map((l, idx) => (
+                                    <tr key={idx} style={{ borderBottom: '1px solid var(--paper-2)' }}>
+                                        <td style={{ padding: '9px 8px' }}><span style={{ padding: '2px 8px', fontFamily: 'var(--mono)', fontSize: '9px', fontWeight: 700, letterSpacing: '.08em', color: '#fff', background: l.kind === 'PO' ? '#3f7fc4' : '#3a7d44' }}>{l.kind}</span></td>
+                                        <td style={{ padding: '9px 8px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{l.tranid}</td>
+                                        <td style={{ padding: '9px 8px', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>{l.source || '—'}</td>
+                                        <td style={{ padding: '9px 8px', fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'center', color: 'var(--ink-soft)' }}>{Math.round(l.ordered)}</td>
+                                        <td style={{ padding: '9px 8px', fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'center', color: 'var(--ink-soft)' }}>{Math.round(l.done) || '·'}</td>
+                                        <td style={{ padding: '9px 8px', fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'center', fontWeight: 700, color: l.kind === 'PO' ? '#3f7fc4' : '#3a7d44' }}>{Math.round(l.open)}</td>
+                                        <td style={{ padding: '9px 8px', fontFamily: 'var(--mono)', fontSize: '11px', color: l.expected ? 'var(--ink)' : 'var(--line)' }}>{l.expected || 'no date'}</td>
+                                        <td style={{ padding: '9px 8px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{String(l.status).replace(/^.*: ?/, '')}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* ✂ ROD CUT ORDER BUILDER — turn stocked 8 ft rods into 2×4 ft or 1×6 ft (+2 ft scrap) */}
+            {cutModal && (() => {
+                const qn = parseInt(cutModal.qty) || 0;
+                const is4 = cutModal.target === '4FT';
+                const targetCode = String(cutModal.itemid).replace(/8(1[05])/, is4 ? '4$1' : '6$1');
+                const validPattern = targetCode !== String(cutModal.itemid);
+                const targetRow = ((salesHist && salesHist.rows) || []).find(x => String(x.itemid).toUpperCase() === targetCode.toUpperCase());
+                const targetPart = partByKey['erp:' + targetCode.toUpperCase()];
+                const targetInternalId = targetRow ? targetRow.internalId : (targetPart && targetPart.netSuiteInternalId ? String(targetPart.netSuiteInternalId) : null);
+                const yieldQty = is4 ? qn * 2 : qn;
+                const scrapFt = is4 ? 0 : qn * 2;
+                const ready = qn > 0 && validPattern && !!targetInternalId;
+                const issue = async () => {
+                    if (!ready) return;
+                    try {
+                        const id = `RC-${Date.now()}`;
+                        await setDoc(doc(db, 'rod_cut_orders', id), {
+                            id, brand: activeBrand, status: 'OPEN',
+                            sourceItemId: cutModal.itemid, sourceInternalId: String(cutModal.internalId),
+                            targetItemId: targetCode, targetInternalId: String(targetInternalId),
+                            qtySource: qn, qtyTarget: yieldQty, cutTo: cutModal.target, scrapFt,
+                            sourceBin: null, destBin: null, nsAdjustmentId: null,
+                            createdAt: Date.now(), createdBy: currentUser || '', createdVia: 'SALES_SNAPSHOT',
+                            completedAt: null, completedBy: null
+                        });
+                        addLog(`✂ Rod cut order ${id}: ${qn} × ${cutModal.itemid} → ${yieldQty} × ${targetCode}`, 'success');
+                        alert(`✂ Rod cut order issued:\n\n${qn} × ${cutModal.itemid} (8 ft) → ${yieldQty} × ${targetCode}${scrapFt ? ` + ${scrapFt} ft scrap` : ''}\n\nIt's queued on the WMS → ROD CUTS tab. NetSuite inventory adjusts when the operator scans the bins and confirms the cut.`);
+                        setCutModal(null);
+                    } catch (e) { alert('Failed to create the rod cut order: ' + (e.message || e)); }
+                };
+                const tgl = (on) => ({ flex: 1, padding: '12px', background: on ? 'var(--ink)' : '#fff', color: on ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.05em' });
+                return (
+                    <div onClick={() => setCutModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '32px', width: '560px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+                                <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>✂ Rod Cut</h2>
+                                <button onClick={() => setCutModal(null)} style={{ background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                            </div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>{cutModal.itemid} · 8 ft rod · {cutModal.available} available</div>
+
+                            <label style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>How many 8 ft rods to cut</label>
+                            <input type="number" min="1" value={cutModal.qty} onChange={e => setCutModal(m => ({ ...m, qty: e.target.value }))} placeholder="0" autoFocus style={{ width: '100%', padding: '12px', fontFamily: 'var(--mono)', fontSize: '1.2rem', textAlign: 'center', border: '2px solid var(--line)', outline: 'none', boxSizing: 'border-box', marginBottom: qn > cutModal.available ? '6px' : '20px' }} />
+                            {qn > cutModal.available && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#b8860b', marginBottom: '14px' }}>⚠ Only {cutModal.available} available in NetSuite — the operator's source bin must actually hold {qn} or the adjustment will be rejected.</div>}
+
+                            <label style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Cut down to</label>
+                            <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+                                <button onClick={() => setCutModal(m => ({ ...m, target: '4FT' }))} style={tgl(is4)}>1 × 8 ft → 2 × 4 ft</button>
+                                <button onClick={() => setCutModal(m => ({ ...m, target: '6FT' }))} style={tgl(!is4)}>1 × 8 ft → 1 × 6 ft <span style={{ opacity: .6 }}>(+2 ft scrap)</span></button>
+                            </div>
+
+                            <div style={{ border: '1px solid var(--line)', background: 'var(--paper)', padding: '16px', marginBottom: '20px' }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: 'var(--ink)', fontWeight: 600 }}>{qn || '—'} × {cutModal.itemid} → {qn ? yieldQty : '—'} × {targetCode}{scrapFt ? <span style={{ color: 'var(--ink-soft)', fontWeight: 400 }}> + {scrapFt} ft scrap</span> : null}</div>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', marginTop: '6px', color: targetInternalId ? '#3a7d44' : '#d9534f' }}>
+                                    {!validPattern ? '✗ Couldn\'t derive a cut-down code from this item number (no 810/815 block).'
+                                        : targetInternalId ? `✓ Target ${targetCode} found (NetSuite id ${targetInternalId})`
+                                        : `✗ ${targetCode} isn't in NetSuite / the synced library — create & sync it first.`}
+                                </div>
+                            </div>
+
+                            <button onClick={issue} disabled={!ready} style={{ width: '100%', padding: '15px', background: ready ? 'var(--brass)' : 'var(--paper-2)', color: ready ? '#fff' : 'var(--ink-soft)', border: ready ? 'none' : '1px solid var(--line)', cursor: ready ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Issue Rod Cut Order → WMS</button>
                         </div>
                     </div>
                 );

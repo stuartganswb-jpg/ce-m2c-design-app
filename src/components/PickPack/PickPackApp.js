@@ -13,7 +13,7 @@ import { useRetiredSet } from '../Shared/retiredItems';
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
 // TABS updated to include COUNT + CHIPS (sample-chip production control)
-const TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING'];
+const TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'ROD CUTS', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING'];
 
 // Sample-chip production steps, in run order. Painting reuses the paint recipes (P01, P02…).
 // Finishes for the big HDSC chip run: P01–P30 (incl. P25), EP1–EP6, S01–S12 = 48 finishes.
@@ -463,6 +463,20 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return () => unsub();
     }, []);
 
+    // --- ROD CUTS (cut stocked 8 ft rods down to 6 ft / 4 ft; issued from the HQ Sales Snapshot) ---
+    const [rodCutOrders, setRodCutOrders] = useState([]);
+    const [activeCut, setActiveCut] = useState(null);        // the rod_cut_orders doc being worked
+    const [cutSrcScan, setCutSrcScan] = useState('');
+    const [cutDestScan, setCutDestScan] = useState('');
+    const [cutConfirmed, setCutConfirmed] = useState(false); // operator confirmed the physical cut
+    const [cutMemo, setCutMemo] = useState('');
+    useEffect(() => {
+        const unsub = onSnapshot(collection(db, "rod_cut_orders"), (snap) => {
+            setRodCutOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        });
+        return () => unsub();
+    }, []);
+
     // --- NETSUITE INVENTORY SYNC (PULL) ---
     const pullNetSuiteStock = async () => {
         setIsSyncing(true);
@@ -835,6 +849,60 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } finally {
             setIsSyncing(false);
         }
+    };
+
+    // --- ROD CUT (8 ft → 6 ft / 4 ft): ONE inventory adjustment with two single-direction lines ---
+    // (−source 8 ft rods out of the scanned source bin, +cut-down rods into the scanned destination
+    // bin). Same proven REST shape + account as the COUNT tab's adjustment; because each LINE stays
+    // one direction, the mixed +/- bin rule is never violated. 6 ft cuts lose 2 ft/rod as untracked scrap.
+    const pushRodCut = async () => {
+        const o = activeCut;
+        if (!o) return;
+        const srcBin = (cutSrcScan || '').trim().toUpperCase();
+        const destBin = (cutDestScan || '').trim().toUpperCase();
+        if (!srcBin || !destBin || !cutConfirmed) return;
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+        const memoText = `Rod cut by ${operator?.name || 'Unknown'}: ${o.qtySource} × ${o.sourceItemId} → ${o.qtyTarget} × ${o.targetItemId}${o.scrapFt ? ` (+${o.scrapFt} ft scrap)` : ''}${cutMemo.trim() ? ` — ${cutMemo.trim()}` : ''}`;
+        try {
+            setIsSyncing(true);
+            await ensureBinExists(destBin, nsConfig.location);
+            const r = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
+                    method: 'POST',
+                    payload: {
+                        account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: memoText,
+                        inventory: { items: [
+                            { item: { id: String(o.sourceInternalId) }, location: { id: nsConfig.location }, adjustQtyBy: -o.qtySource, inventoryDetail: { quantity: -o.qtySource, inventoryAssignment: { items: [{ binNumber: { refName: srcBin }, quantity: -o.qtySource }] } } },
+                            { item: { id: String(o.targetInternalId) }, location: { id: nsConfig.location }, adjustQtyBy: o.qtyTarget, inventoryDetail: { quantity: o.qtyTarget, inventoryAssignment: { items: [{ binNumber: { refName: destBin }, quantity: o.qtyTarget }] } } }
+                        ] }
+                    }
+                })
+            });
+            const body = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(typeof body === 'object' ? JSON.stringify(body) : String(body));
+            await updateDoc(doc(db, "rod_cut_orders", o.id), { status: 'DONE', sourceBin: srcBin, destBin, nsAdjustmentId: body.id || null, completedAt: Date.now(), completedBy: operator?.name || '' });
+            writeLog(`Rod cut ${o.id}: -${o.qtySource} ${o.sourceItemId} (${srcBin}) → +${o.qtyTarget} ${o.targetItemId} (${destBin}).`, 'wms');
+            alert(`✅ Rod cut posted to NetSuite:\n\n−${o.qtySource} × ${o.sourceItemId} from ${srcBin}\n+${o.qtyTarget} × ${o.targetItemId} into ${destBin}${o.scrapFt ? `\n(${o.scrapFt} ft scrap — not tracked)` : ''}`);
+            setActiveCut(null); setCutSrcScan(''); setCutDestScan(''); setCutConfirmed(false); setCutMemo('');
+            pullNetSuiteStock();
+        } catch (e) {
+            console.error("Rod cut push failed:", e);
+            alert("❌ NetSuite rejected the rod cut adjustment:\n\n" + (e.message || e) + "\n\nMost common cause: the source bin doesn't actually hold that many 8 ft rods — Pull Live Stock and re-check where they sit.");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
+    const cancelRodCut = async (o) => {
+        if (!window.confirm(`Cancel rod cut order ${o.id}?\n\n${o.qtySource} × ${o.sourceItemId} → ${o.qtyTarget} × ${o.targetItemId}\n\nNo inventory has moved — this just removes the order from the queue.`)) return;
+        try {
+            await updateDoc(doc(db, "rod_cut_orders", o.id), { status: 'CANCELLED', cancelledAt: Date.now(), cancelledBy: operator?.name || '' });
+            writeLog(`Rod cut ${o.id} cancelled.`, 'wms');
+            if (activeCut?.id === o.id) { setActiveCut(null); setCutSrcScan(''); setCutDestScan(''); setCutConfirmed(false); setCutMemo(''); }
+        } catch (e) { alert('Failed to cancel: ' + (e.message || e)); }
     };
 
     // --- CONVERSION CART (batch phosphate) ------------------------------------------------------
@@ -1611,6 +1679,18 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     };
     const platingRateFor = (l) => { const v = shipCosts[l.id]; return v !== undefined ? (parseFloat(v) || 0) : platingBaseCost(l); };
 
+    // ROD CUTS derived: validate the source (8 ft) bin against LIVE per-bin stock when we have it;
+    // dest bin is free-form (created in NetSuite if new — and it may legitimately equal the source bin,
+    // since the cut-down rods are a DIFFERENT item). Same live-bin principle as Transfer/Convert.
+    const cutSrc = (cutSrcScan || '').trim();
+    const cutDest = (cutDestScan || '').trim();
+    const cutBins = activeCut ? (nsStock[String(activeCut.sourceItemId || '').toUpperCase()]?.bins || []).filter(b => b.bin) : [];
+    const cutBinsKnown = !!activeCut && cutBins.length > 0;
+    const cutSrcBin = cutBins.find(b => String(b.bin).toUpperCase() === cutSrc.toUpperCase());
+    const cutSrcQty = cutSrcBin ? cutSrcBin.qty : 0;
+    const cutSrcOk = cutBinsKnown ? (!!cutSrcBin && cutSrcQty >= ((activeCut && activeCut.qtySource) || 0)) : cutSrc !== '';
+    const cutReady = !!activeCut && cutSrc !== '' && cutDest !== '' && cutConfirmed && cutSrcOk;
+
     const safeUserRole = operator?.role ? operator.role.toLowerCase() : 'operator';
     const myTabs = ['admin', 'superadmin'].includes(safeUserRole) ? TABS : (perms[safeUserRole] || perms['operator'] || TABS);
     // Click-to-pick bin chips show unless this role is on the HQ "Force Bin Scan" list (admins always keep it).
@@ -2211,6 +2291,131 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 )}
 
                 {/* ⇄ TAB: BIN TRANSFER (move qty between bins within a location) */}
+                {/* ✂ TAB: ROD CUTS (cut 8 ft rods down to 6 ft / 4 ft — scan source bin, confirm cut, scan dest bin) */}
+                {activeTab === 'ROD CUTS' && (() => {
+                    const cuts = rodCutOrders.filter(o => (o.brand || 'ce') === activeBrand);
+                    const openCuts = cuts.filter(o => o.status === 'OPEN').sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                    const doneCuts = cuts.filter(o => o.status === 'DONE').sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)).slice(0, 10);
+                    const fmtD = (t) => t ? new Date(t).toLocaleDateString() : '';
+                    const stepLbl = { display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' };
+                    return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
+
+                            {/* ROD CUT WORK MODAL */}
+                            {activeCut && (() => {
+                                const o = activeCut;
+                                const destPart = hqParts.find(p => erpOf(p) === String(o.targetItemId || '').toUpperCase());
+                                const destHome = destPart ? binOf(destPart) : '';
+                                return (
+                                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        <div style={{ background: '#fff', padding: '40px', width: '720px', maxHeight: '92vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
+                                            <h2 style={{ margin: '0 0 6px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>✂ Rod Cut</h2>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '24px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
+                                                {o.id} · Location {BRAND_NETSUITE_MAP[activeBrand]?.location} · posts a NetSuite inventory adjustment on confirm
+                                            </div>
+
+                                            {/* THE CUT */}
+                                            <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: theme.paper, marginBottom: '24px' }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '13px', color: theme.ink, fontWeight: 600 }}>{o.qtySource} × {o.sourceItemId} <span style={{ color: theme.inkSoft, fontWeight: 400 }}>(8 ft)</span> → {o.qtyTarget} × {o.targetItemId} <span style={{ color: theme.inkSoft, fontWeight: 400 }}>({o.cutTo === '4FT' ? '4 ft' : '6 ft'})</span>{o.scrapFt ? <span style={{ color: theme.inkSoft, fontWeight: 400 }}> + {o.scrapFt} ft scrap</span> : null}</div>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '6px' }}>{cutBins.length ? `8 ft stock by bin: ${cutBins.slice().sort((a, b) => b.qty - a.qty).map(b => `${b.bin} (${b.qty})`).join('  ·  ')}` : 'No live bin data — Pull Live Stock to validate the source bin'}</div>
+                                                {o.createdBy ? <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '4px' }}>Issued by {o.createdBy} · {fmtD(o.createdAt)}</div> : null}
+                                            </div>
+
+                                            {/* STEP 1 — SOURCE BIN */}
+                                            <div style={{ marginBottom: '20px' }}>
+                                                <label style={stepLbl}>1 · Scan the bin you're taking the 8 ft rods from {canClickBin && cutBins.length > 0 ? '(or pick one)' : ''}</label>
+                                                {canClickBin && cutBins.length > 0 && (
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                                                        {cutBins.map(b => { const sel = cutSrc.toUpperCase() === String(b.bin).toUpperCase(); return (
+                                                            <button key={b.bin} onClick={() => setCutSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                        ); })}
+                                                    </div>
+                                                )}
+                                                <input value={cutSrcScan} onChange={e => setCutSrcScan(e.target.value)} placeholder="scan source bin" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${cutSrc ? (cutSrcOk ? '#7dbb81' : '#d9534f') : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', color: cutSrc ? (cutSrcOk ? '#7dbb81' : '#d9534f') : theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>
+                                                    {!cutSrc ? 'the bin the 8 ft rods come out of'
+                                                        : !cutBinsKnown ? '⚠ live stock not pulled — bin accepted unverified'
+                                                        : cutSrcOk ? `✓ ${cutSrcQty} × 8 ft in this bin`
+                                                        : cutSrcBin ? `✗ only ${cutSrcQty} in this bin — need ${o.qtySource}` : '✗ item not in this bin'}
+                                                </div>
+                                            </div>
+
+                                            {/* STEP 2 — CONFIRM THE PHYSICAL CUT */}
+                                            <div style={{ marginBottom: '20px' }}>
+                                                <label style={stepLbl}>2 · Make the cut</label>
+                                                <button onClick={() => setCutConfirmed(v => !v)} style={{ width: '100%', padding: '15px', background: cutConfirmed ? '#eaf5ea' : '#fff', color: cutConfirmed ? '#3a7d44' : theme.ink, border: `2px solid ${cutConfirmed ? '#7dbb81' : theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                                    {cutConfirmed ? `✓ Cut ${o.qtySource} × 8 ft into ${o.qtyTarget} × ${o.cutTo === '4FT' ? '4 ft' : '6 ft'}` : `Tap when you've cut ${o.qtySource} × 8 ft into ${o.qtyTarget} × ${o.cutTo === '4FT' ? '4 ft' : '6 ft'}`}
+                                                </button>
+                                            </div>
+
+                                            {/* STEP 3 — DEST BIN */}
+                                            <div style={{ marginBottom: '20px' }}>
+                                                <label style={stepLbl}>3 · Scan the bin the {o.cutTo === '4FT' ? '4 ft' : '6 ft'} rods go into</label>
+                                                <input value={cutDestScan} onChange={e => setCutDestScan(e.target.value)} placeholder={destHome && destHome !== 'UNASSIGNED' ? `e.g. ${destHome} (its home bin)` : 'new or existing bin'} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${cutDest ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>{destHome && destHome !== 'UNASSIGNED' ? `${o.targetItemId} home bin: ${destHome} · ` : ''}created in NetSuite if new · same bin as the source is fine</div>
+                                            </div>
+
+                                            {/* MEMO */}
+                                            <div style={{ marginBottom: '24px' }}>
+                                                <label style={stepLbl}>Memo{operator?.name ? ` — recorded as ${operator.name}` : ''}</label>
+                                                <textarea value={cutMemo} onChange={e => setCutMemo(e.target.value)} placeholder="Optional note. Goes on the NetSuite adjustment memo with your name." rows={2} style={{ width: '100%', padding: '12px', fontFamily: theme.sans, fontSize: '0.9rem', color: theme.ink, border: `1px solid ${theme.line}`, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
+                                            </div>
+
+                                            <div style={{ display: 'flex', gap: '14px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                                                <button onClick={() => cancelRodCut(o)} style={{ marginRight: 'auto', padding: '15px 20px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel Order</button>
+                                                <button onClick={() => { setActiveCut(null); setCutSrcScan(''); setCutDestScan(''); setCutConfirmed(false); setCutMemo(''); }} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Close</button>
+                                                <button onClick={pushRodCut} disabled={!cutReady || isSyncing} style={{ padding: '15px 30px', background: cutReady && !isSyncing ? theme.brass : theme.paper2, color: cutReady && !isSyncing ? '#fff' : theme.inkSoft, border: 'none', cursor: cutReady && !isSyncing ? 'pointer' : 'not-allowed', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
+                                                    {isSyncing ? 'Posting…' : 'Confirm — Adjust NetSuite'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
+                            {/* HEADER */}
+                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px', display: 'flex', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <div>
+                                    <div style={{ fontFamily: theme.serif, fontSize: '1.4rem', color: theme.ink }}>Rod Cut Orders</div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.08em', marginTop: '4px' }}>Issued from HQ stock planning · cut 8 ft rods into 6 ft / 4 ft · scan source bin → cut → scan destination bin</div>
+                                </div>
+                                <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ marginLeft: 'auto', padding: '12px 20px', background: isSyncing ? theme.paper : theme.ink, color: isSyncing ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>
+                                    {isSyncing ? 'Syncing...' : 'Pull Live Stock'}
+                                </button>
+                            </div>
+
+                            {/* OPEN ORDERS */}
+                            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                {openCuts.length === 0 && (
+                                    <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '48px', textAlign: 'center', color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif, fontSize: '1.1rem' }}>No open rod cut orders. They're issued from HQ → Global Inventory → Stocked Sales Snapshot (✂ on 8 ft rod rows).</div>
+                                )}
+                                {openCuts.map(o => (
+                                    <div key={o.id} style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px 24px', display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
+                                        <div style={{ flex: 1, minWidth: '280px' }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '14px', color: theme.ink, fontWeight: 600 }}>{o.qtySource} × {o.sourceItemId} <span style={{ color: theme.inkSoft, fontWeight: 400 }}>(8 ft)</span> → {o.qtyTarget} × {o.targetItemId} <span style={{ color: theme.inkSoft, fontWeight: 400 }}>({o.cutTo === '4FT' ? '4 ft' : '6 ft'})</span></div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '6px' }}>{o.id} · issued {fmtD(o.createdAt)}{o.createdBy ? ` by ${o.createdBy}` : ''}{o.scrapFt ? ` · ${o.scrapFt} ft scrap expected` : ''}</div>
+                                        </div>
+                                        <button onClick={() => cancelRodCut(o)} style={{ padding: '10px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Cancel</button>
+                                        <button onClick={() => { const bins = (nsStock[String(o.sourceItemId || '').toUpperCase()]?.bins || []).filter(b => b.bin).sort((a, b) => b.qty - a.qty); setActiveCut(o); setCutSrcScan(bins[0]?.bin || ''); setCutDestScan(''); setCutConfirmed(false); setCutMemo(''); }} style={{ padding: '12px 22px', background: theme.brass, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Start Cut →</button>
+                                    </div>
+                                ))}
+
+                                {/* RECENTLY COMPLETED */}
+                                {doneCuts.length > 0 && (
+                                    <div style={{ marginTop: '10px' }}>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Recently completed</div>
+                                        {doneCuts.map(o => (
+                                            <div key={o.id} style={{ background: theme.paper, border: `1px solid ${theme.line}`, padding: '10px 16px', marginBottom: '6px', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>
+                                                ✓ {o.qtySource} × {o.sourceItemId} ({o.sourceBin}) → {o.qtyTarget} × {o.targetItemId} ({o.destBin}) · {fmtD(o.completedAt)}{o.completedBy ? ` by ${o.completedBy}` : ''}{o.nsAdjustmentId ? ` · NS adj #${o.nsAdjustmentId}` : ''}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    );
+                })()}
+
                 {activeTab === 'TRANSFER' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
 
