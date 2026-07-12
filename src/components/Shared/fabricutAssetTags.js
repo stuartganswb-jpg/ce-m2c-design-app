@@ -279,14 +279,21 @@ export function buildSingleMeta({ patternId, finishId, partIndex, finishLists })
 export function pairedCandidatesFor(plateCode, partIndex, queryText) {
     const q = U(queryText);
     const list = partIndex?.list || [];
-    if (q) {
-        return list.filter(p => {
-            if (partCodeOf(p).includes('/')) return false;
-            return partCodeOf(p).includes(q) || U(p.itemName).includes(q);
-        }).slice(0, 25);
-    }
     const plateDoc = findPartByCode(plateCode, partIndex);
     const plate = plateInfoOf(plateCode, plateDoc);
+    const diaOf = (p) => p?.manufacturingSpecs?.customData?.sizeKey?.dia || '';
+    if (q) {
+        // "H1-DE" should find H1-1DE / H1-138DE etc. — also match with the H1- prefix stripped,
+        // and float the plate's diameter to the top when the folder pins the size.
+        const qAlt = q.replace(/^H1-?/, '');
+        const hits = list.filter(p => {
+            const code = partCodeOf(p);
+            if (code.includes('/')) return false;
+            return code.includes(q) || U(p.itemName).includes(q) || (qAlt.length >= 2 && code.includes(qAlt));
+        });
+        if (plate?.dia) hits.sort((a, b) => (diaOf(b) === plate.dia ? 1 : 0) - (diaOf(a) === plate.dia ? 1 : 0));
+        return hits.slice(0, 25);
+    }
     if (!plate) return [];
     return list.filter(p => {
         if (partCodeOf(p).includes('/')) return false;

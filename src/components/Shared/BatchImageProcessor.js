@@ -49,6 +49,10 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     // folder, applied to every image processed under that folder (the renders are identical frames).
     const [folderMeta, setFolderMeta] = useState({});
     const [pairedQuery, setPairedQuery] = useState("");
+    // THE FIRST QUESTION per folder: which bracket arm / fee item is combined with this plate in
+    // these renders? Opens automatically on the first image of every not-yet-paired folder.
+    const [pairPrompt, setPairPrompt] = useState(null); // { folder } | null
+    const [pairPromptQuery, setPairPromptQuery] = useState("");
     const [cropMode, setCropMode] = useState(false);
     const [dragRect, setDragRect] = useState(null); // live drag, fractions
     const dragStartRef = useRef(null);
@@ -205,6 +209,17 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
     const folderKey = queue[currentIndex]?.folder || '~loose~';
     const currentFolderMeta = folderMeta[folderKey] || {};
+
+    // Prompt for the folder's combo partner the moment its first image comes up; `pairedChosen`
+    // (set by picking an item OR "plate only") keeps it from re-asking within the same folder —
+    // every NEW folder asks again, so everything ends up tagged.
+    useEffect(() => {
+        const entry = queue[currentIndex];
+        if (!entry || !entry.folder || autoRun) { setPairPrompt(null); return; }
+        const fm = folderMeta[entry.folder] || {};
+        if (!fm.pairedChosen) { setPairPrompt({ folder: entry.folder }); setPairPromptQuery(""); }
+        else setPairPrompt(null);
+    }, [currentIndex, queue, folderMeta, autoRun]);
     const pairedDoc = currentFolderMeta.pairedDocId ? safeHqParts.find(p => p.id === currentFolderMeta.pairedDocId) : null;
     const pairedInfo = pairedDoc ? pairedInfoOf(pairedDoc) : null;
     const activeCrop = currentFolderMeta.crop || null;
@@ -552,6 +567,11 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         return pairedCandidatesFor(patternId, partIndex, pairedQuery);
     }, [patternId, partIndex, pairedQuery, queue, currentIndex]);
 
+    const pairPromptSuggestions = useMemo(() => {
+        if (!pairPrompt) return [];
+        return pairedCandidatesFor(pairPrompt.folder, partIndex, pairPromptQuery);
+    }, [pairPrompt, partIndex, pairPromptQuery]);
+
     const inputStyle = { width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px', outline: 'none' };
     const labelStyle = { fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' };
 
@@ -723,7 +743,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                         {pairedSuggestions.map(p => {
                                             const info = pairedInfoOf(p);
                                             return (
-                                                <button key={p.id} onClick={() => { setFolderField({ pairedDocId: p.id }); setPairedQuery(''); }} style={{ textAlign: 'left', padding: '7px 8px', background: '#fff', border: 'none', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.ink, cursor: 'pointer' }}>
+                                                <button key={p.id} onClick={() => { setFolderField({ pairedDocId: p.id, pairedChosen: true }); setPairedQuery(''); }} style={{ textAlign: 'left', padding: '7px 8px', background: '#fff', border: 'none', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.ink, cursor: 'pointer' }}>
                                                     {info?.endTreatment ? `[${END_TREATMENT_LABELS[info.endTreatment]}] ` : info?.role === 'ARM' ? '[ARM] ' : ''}{partCodeOf(p)} — {String(p.itemName || '')}
                                                 </button>
                                             );
@@ -891,6 +911,56 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                 </div>
             )}
             </>
+            )}
+
+            {/* FOLDER PAIRING PROMPT — first question for every new folder: the plate is the
+                folder name; which bracket arm / fee item is it combined with in these images? */}
+            {pairPrompt && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.85)', zIndex: 9500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                    <div style={{ background: '#fff', width: '90%', maxWidth: '950px', display: 'flex', boxShadow: '0 10px 40px rgba(0,0,0,0.2)', overflow: 'hidden' }}>
+                        <div style={{ flex: 1, background: theme.paper, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', minHeight: '420px' }}>
+                            {imagePreview ? <img src={imagePreview} alt="folder sample" style={{ maxWidth: '100%', maxHeight: '55vh', objectFit: 'contain' }} /> : <span style={{ color: theme.inkSoft }}>⚲</span>}
+                        </div>
+                        <div style={{ flex: 1, padding: '30px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            <div style={{ fontFamily: theme.serif, fontSize: '1.4rem', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>Pair This Folder</div>
+                            <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink, letterSpacing: '.05em' }}>
+                                FOLDER = PLATE: <span style={{ color: theme.brass }}>{pairPrompt.folder}</span>
+                            </div>
+                            {resolved && (
+                                <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, letterSpacing: '.05em' }}>
+                                    ✓ {String(resolved.doc.itemName || resolved.base)}{resolved.summary ? ` — ${resolved.summary}` : ''}
+                                </div>
+                            )}
+                            <div style={{ fontFamily: theme.sans, fontSize: '0.9rem', color: theme.inkSoft }}>
+                                Which <b>bracket arm</b> or <b>fee item</b> (french/miter return) is combined with this plate in these images? Applies to the whole folder.
+                            </div>
+                            <input
+                                autoFocus
+                                type="text"
+                                value={pairPromptQuery}
+                                onChange={e => setPairPromptQuery(e.target.value)}
+                                placeholder="e.g. CE-FEE-4594 or H1-DE…"
+                                style={{ width: '100%', padding: '12px', border: `1px solid ${theme.brass}`, fontFamily: theme.sans, fontSize: '0.95rem', textTransform: 'uppercase', boxSizing: 'border-box', outline: 'none' }}
+                            />
+                            <div style={{ flex: 1, minHeight: '140px', maxHeight: '220px', overflowY: 'auto', border: `1px solid ${theme.line}` }}>
+                                {pairPromptSuggestions.map(p => {
+                                    const info = pairedInfoOf(p);
+                                    return (
+                                        <button key={p.id} onClick={() => { setFolderMeta(prev => ({ ...prev, [pairPrompt.folder]: { ...(prev[pairPrompt.folder] || {}), pairedDocId: p.id, pairedChosen: true } })); setPairPrompt(null); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 10px', background: '#fff', border: 'none', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.ink, cursor: 'pointer' }}>
+                                            {info?.endTreatment ? `[${END_TREATMENT_LABELS[info.endTreatment]}] ` : info?.role === 'ARM' ? '[ARM] ' : ''}{partCodeOf(p)} — {String(p.itemName || '')}
+                                        </button>
+                                    );
+                                })}
+                                {pairPromptSuggestions.length === 0 && (
+                                    <div style={{ padding: '10px', fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft }}>No matches — type our item # or a name (fees, arms and inside mounts at this diameter show first).</div>
+                                )}
+                            </div>
+                            <button onClick={() => { setFolderMeta(prev => ({ ...prev, [pairPrompt.folder]: { ...(prev[pairPrompt.folder] || {}), pairedDocId: null, pairedChosen: true } })); setPairPrompt(null); }} style={{ padding: '10px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>
+                                PLATE ONLY — NO COMBO IN THESE IMAGES
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {/* FIX-IT-NOW POPUP — the folder run pauses here; nothing saves until resolved */}
