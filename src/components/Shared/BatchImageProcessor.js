@@ -6,6 +6,7 @@ import ProgramPrintUploader from './ProgramPrintUploader';
 import {
     buildPartIndex, resolveBaseDoc, plateInfoOf, parseRenderFilename,
     buildComboMeta, buildSingleMeta, pairedCandidatesFor, pairedInfoOf, partCodeOf,
+    fabricutCodesOfDoc, ourFinishNameOf,
     END_TREATMENT_LABELS, DIA_LABELS, PROJ_LABELS,
 } from './fabricutAssetTags';
 
@@ -21,6 +22,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
     const [hqParts, setHqParts] = useState([]);
     const [globalLists, setGlobalLists] = useState({ prodTypes: [], customers: [] });
+    const [crmCustomers, setCrmCustomers] = useState([]);
 
     const [globalFinishes, setGlobalFinishes] = useState([]);
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);
@@ -82,6 +84,17 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         return () => { if (typeof unsub === 'function') unsub(); };
     }, []);
 
+    // Customer dropdown comes from the CRM (crm_records CUSTOMER), not the legacy master_lists.
+    useEffect(() => {
+        let unsub = null;
+        try {
+            unsub = onSnapshot(collection(db, "crm_records"), snap => {
+                setCrmCustomers(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER'));
+            }, e => console.warn("CRM records missing"));
+        } catch (err) { console.error("CRM DB Error:", err); }
+        return () => { if (typeof unsub === 'function') unsub(); };
+    }, []);
+
     useEffect(() => {
         let unsub = null;
         try {
@@ -110,6 +123,14 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const allFinishes = [...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])];
     const partIndex = useMemo(() => buildPartIndex(hqParts), [hqParts]);
     const finishLists = useMemo(() => [masterFinishes, globalFinishes, outsourceFinishes, inhouseFinishes], [masterFinishes, globalFinishes, outsourceFinishes, inhouseFinishes]);
+
+    // CRM customers first, legacy master_lists names appended for anything not in the CRM yet.
+    const customerOptions = useMemo(() => {
+        const names = crmCustomers.map(r => String(r.companyName || r.name || '').trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
+        const seen = new Set(names.map(n => n.toUpperCase()));
+        (globalLists.customers || []).forEach(c => { const n = String(c || '').trim(); if (n && !seen.has(n.toUpperCase())) { seen.add(n.toUpperCase()); names.push(n); } });
+        return names;
+    }, [crmCustomers, globalLists.customers]);
 
     const handleFileSelect = (e) => {
         if (!e.target.files) return;
@@ -198,6 +219,29 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         if (sk) bits.push(DIA_LABELS[sk.dia] || sk.dia, PROJ_LABELS[sk.projLetter] || '');
         return { ...r, plate, summary: bits.filter(Boolean).join(' · ') };
     }, [patternId, partIndex]);
+
+    // Fabricut codes the CrossReference import stamped on the resolved plate + paired docs — used
+    // to autofill an empty FABRICUT CODE field and to sanity-check a filename-parsed one.
+    const libFabCodes = useMemo(
+        () => [...new Set([...fabricutCodesOfDoc(resolved?.doc), ...fabricutCodesOfDoc(pairedDoc)])],
+        [resolved, pairedDoc]
+    );
+    useEffect(() => {
+        if (!fabCode && libFabCodes.length) setFabCode(libFabCodes[0]);
+    }, [fabCode, libFabCodes]);
+    const fabCodeStatus = !fabCode ? null
+        : !libFabCodes.length ? null
+        : libFabCodes.includes(String(fabCode).trim().toUpperCase())
+            ? { ok: true, txt: '✓ matches CrossReference import' }
+            : { ok: false, txt: `⚠ not on the imported CrossReference for this item (has: ${libFabCodes.slice(0, 3).join(', ')}${libFabCodes.length > 3 ? '…' : ''})` };
+
+    // Fabricut color name: filename first; blanks fill from the 4.5 Master Finishes name once the
+    // color names are loaded there (P02–P19 renders carry no name in the filename).
+    useEffect(() => {
+        if (fabColorName) return;
+        const libName = ourFinishNameOf(finishId, finishLists);
+        if (libName) setFabColorName(libName);
+    }, [fabColorName, finishId, finishLists]);
 
     // ----- CROP TOOL -----
     const fracPoint = (e) => {
@@ -631,6 +675,9 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             <div style={{ flex: 1 }}>
                                 <label style={labelStyle}>FABRICUT CODE</label>
                                 <input type="text" value={fabCode} onChange={e => setFabCode(e.target.value)} onKeyDown={handleKeyDown} placeholder="e.g. HNFSRFRSB079" style={inputStyle} />
+                                {fabCodeStatus && (
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: fabCodeStatus.ok ? theme.brass : '#a33', marginTop: '5px', letterSpacing: '.05em' }}>{fabCodeStatus.txt}</div>
+                                )}
                             </div>
                             <div style={{ flex: 1 }}>
                                 <label style={labelStyle}>FABRICUT COLOR NAME</label>
@@ -640,10 +687,10 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                                <label style={labelStyle}>CUSTOMER</label>
+                                <label style={labelStyle}>CUSTOMER (CRM)</label>
                                 <select value={customerId} onChange={e => setCustomerId(e.target.value)} style={{ ...inputStyle, textTransform: 'none' }}>
                                     <option value="">Select...</option>
-                                    {globalLists.customers.map(c => <option key={c} value={c}>{c}</option>)}
+                                    {customerOptions.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                             </div>
                             <div style={{ flex: 1 }}>

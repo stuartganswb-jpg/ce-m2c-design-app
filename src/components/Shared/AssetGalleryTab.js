@@ -19,6 +19,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [masterFinishes, setMasterFinishes] = useState([]);
 
     const [globalLists, setGlobalLists] = useState({ prodTypes: [], customers: [] });
+    const [crmCustomers, setCrmCustomers] = useState([]);
     const [collectionsData, setCollectionsData] = useState([]);
 
     const [searchQuery, setSearchQuery] = useState('');
@@ -70,6 +71,17 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 setCollectionsData(snap.docs.map(d => ({id: d.id, ...d.data()})));
             });
         } catch (err) { console.error("Collections DB Error:", err); }
+        return () => { if (typeof unsub === 'function') unsub(); };
+    }, []);
+
+    // Customer dropdowns come from the CRM (crm_records CUSTOMER), not the legacy master_lists.
+    useEffect(() => {
+        let unsub = null;
+        try {
+            unsub = onSnapshot(collection(db, "crm_records"), snap => {
+                setCrmCustomers(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER'));
+            }, e => console.warn("CRM records missing"));
+        } catch (err) { console.error("CRM DB Error:", err); }
         return () => { if (typeof unsub === 'function') unsub(); };
     }, []);
 
@@ -148,6 +160,14 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
 
     const partIndex = useMemo(() => buildPartIndex(hqParts), [hqParts]);
     const finishLists = useMemo(() => [masterFinishes, globalFinishes, outsourceFinishes, inhouseFinishes], [masterFinishes, globalFinishes, outsourceFinishes, inhouseFinishes]);
+
+    // CRM customers first, legacy master_lists names appended for anything not in the CRM yet.
+    const customerOptions = useMemo(() => {
+        const names = crmCustomers.map(r => String(r.companyName || r.name || '').trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
+        const seen = new Set(names.map(n => n.toUpperCase()));
+        (globalLists.customers || []).forEach(c => { const n = String(c || '').trim(); if (n && !seen.has(n.toUpperCase())) { seen.add(n.toUpperCase()); names.push(n); } });
+        return names;
+    }, [crmCustomers, globalLists.customers]);
 
     // One lowercase blob per asset (name/ids/notes + tags[] + fab{} + Fabricut codes + our & their
     // color names + linked-part docs) — search AND-matches every query token against it, so
@@ -579,7 +599,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                             <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>CUSTOMER</label>
                             <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, background: '#fff' }}>
                                 <option value="">Select...</option>
-                                {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                {customerOptions.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                         </div>
                         <div style={{ flex: 1 }}>
@@ -851,7 +871,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                         <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>CUSTOMER</label>
                                         <select value={metaForm.customerId || ''} onChange={e => setMetaForm({...metaForm, customerId: e.target.value})} style={{ width: '100%', padding: '12px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, background: '#fff' }}>
                                             <option value="">Select...</option>
-                                            {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                            {customerOptions.map(c => <option key={c} value={c}>{c}</option>)}
                                         </select>
                                     </div>
                                     <div style={{ flex: 1 }}>
