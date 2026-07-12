@@ -6,7 +6,7 @@ import ProgramPrintUploader from './ProgramPrintUploader';
 import {
     buildPartIndex, resolveBaseDoc, plateInfoOf, parseRenderFilename,
     buildComboMeta, buildSingleMeta, pairedCandidatesFor, pairedInfoOf, partCodeOf,
-    fabricutCodesOfDoc, ourFinishNameOf,
+    fabricutCodesOfDoc, fabricutCodeForFinish, ourFinishNameOf,
     END_TREATMENT_LABELS, DIA_LABELS, PROJ_LABELS,
 } from './fabricutAssetTags';
 
@@ -169,10 +169,13 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
             const parsed = parseRenderFilename(file.name);
             if (entry.folder) {
-                // Kermit render folder: folder = plate code; filename carries fabricut code + finish
+                // Kermit render folder: ONLY the folder name (plate code) and the finish/color
+                // token are trustworthy — the filename's Fabricut code is usually WRONG, so it is
+                // ignored; the code autofills from the CrossReference import (or the folder-sticky
+                // manual entry) instead.
                 setPatternId(entry.folder.toUpperCase());
                 setFinishId(parsed?.finishId || "");
-                setFabCode(parsed?.fabCode || "");
+                setFabCode("");
                 setFabColorName(parsed?.fabColorName || "");
             } else {
                 setFabCode(parsed?.fabCode || "");
@@ -220,20 +223,55 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         return { ...r, plate, summary: bits.filter(Boolean).join(' · ') };
     }, [patternId, partIndex]);
 
-    // Fabricut codes the CrossReference import stamped on the resolved plate + paired docs — used
-    // to autofill an empty FABRICUT CODE field and to sanity-check a filename-parsed one.
+    // FABRICUT CODE resolution — the CrossReference import is the source of truth (filenames are
+    // not). Priority: folder-sticky manual entry → tier-aware code (per this image's finish) off
+    // the paired fee/arm doc, then the plate doc. libFabCodes only sanity-checks manual entries.
     const libFabCodes = useMemo(
         () => [...new Set([...fabricutCodesOfDoc(resolved?.doc), ...fabricutCodesOfDoc(pairedDoc)])],
         [resolved, pairedDoc]
     );
+    const autoFabCode = useMemo(() => {
+        const clean = String(finishId).toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1');
+        return String(currentFolderMeta.fabCode || '').toUpperCase()
+            || fabricutCodeForFinish(pairedDoc, clean)
+            || fabricutCodeForFinish(resolved?.doc, clean)
+            || '';
+    }, [finishId, currentFolderMeta.fabCode, pairedDoc, resolved]);
     useEffect(() => {
-        if (!fabCode && libFabCodes.length) setFabCode(libFabCodes[0]);
-    }, [fabCode, libFabCodes]);
-    const fabCodeStatus = !fabCode ? null
+        if (!fabCode && autoFabCode) setFabCode(autoFabCode);
+    }, [fabCode, autoFabCode]);
+    const fabCodeStatus = !fabCode ? (queue[currentIndex]?.folder ? { ok: false, txt: '⚠ REQUIRED — no Fabricut code on the CrossReference import for this item; enter it (sticks for the whole folder)' } : null)
         : !libFabCodes.length ? null
         : libFabCodes.includes(String(fabCode).trim().toUpperCase())
             ? { ok: true, txt: '✓ matches CrossReference import' }
             : { ok: false, txt: `⚠ not on the imported CrossReference for this item (has: ${libFabCodes.slice(0, 3).join(', ')}${libFabCodes.length > 3 ? '…' : ''})` };
+
+    // IMPORT GATE — Fabricut items don't import unless identified BOTH ways: our item # resolves
+    // in the Master Library AND a Fabricut code is present. Missing info is entered right then.
+    const missingFor = (m) => {
+        const out = [];
+        if (!resolveBaseDoc(m.patternId, partIndex).doc) out.push('OUR ITEM # (no Master Library match)');
+        if (!m.finishId) out.push('FINISH ID');
+        if (!m.fabCode) out.push('FABRICUT CODE');
+        return out;
+    };
+
+    // Mid-run "fix it now" popup: the folder loop pauses on an unidentifiable image and waits for
+    // this modal (save / skip / stop) before anything is written.
+    const fixResolverRef = useRef(null);
+    const [fixModal, setFixModal] = useState(null);
+    const requestFix = (data) => new Promise(resolve => {
+        fixResolverRef.current = resolve;
+        let previewUrl = null;
+        try { previewUrl = URL.createObjectURL(data.file); } catch (e) { /* preview optional */ }
+        setFixModal({ ...data, previewUrl, values: { finishId: data.finishId || '', fabCode: data.fabCode || '', fabColorName: data.fabColorName || '' } });
+    });
+    const closeFix = (result) => {
+        setFixModal(fm => { if (fm?.previewUrl) { try { URL.revokeObjectURL(fm.previewUrl); } catch (e) {} } return null; });
+        const r = fixResolverRef.current;
+        fixResolverRef.current = null;
+        if (r) r(result);
+    };
 
     // Fabricut color name: filename first; blanks fill from the 4.5 Master Finishes name once the
     // color names are loaded there (P02–P19 renders carry no name in the filename).
@@ -415,6 +453,13 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const handleProcessAndNext = async (e) => {
         if (e) e.preventDefault();
         if (!patternId) return alert("You must provide a Pattern ID.");
+        if (queue[currentIndex]?.folder) {
+            // Fabricut folder conveyor: hard gate — identify with OUR item # AND a Fabricut code.
+            const missing = missingFor(metaFromForm());
+            if (missing.length) return alert(`NOT IMPORTED — missing: ${missing.join(' · ')}.\nEnter it now; Fabricut assets must be identified by our item # and a matching Fabricut code.`);
+        } else if (/^H1-/i.test(String(patternId).trim()) && !resolved) {
+            if (!window.confirm("This H1 pattern does not resolve to a Master Library item — import anyway?")) return;
+        }
 
         setIsProcessing(true);
 
@@ -436,37 +481,58 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         }
     };
 
-    // Blast through every remaining image of the current folder: same plate/paired/crop/fields,
-    // each file's OWN finish + fabricut code + color parsed from its filename.
+    // Blast through every remaining image of the current folder: same plate/paired/crop/fields;
+    // each file is scanned for its OWN finish/color token; the Fabricut code comes from the
+    // folder-sticky entry or the CrossReference import (tier-aware per finish) — NEVER the
+    // filename. Anything unidentifiable pauses the run in a fix-it-now popup before saving.
     const remainingInFolder = queue.filter((q, i) => i > currentIndex && q.folder && q.folder === queue[currentIndex]?.folder);
     const handleProcessFolder = async () => {
-        if (!patternId) return alert("You must provide a Pattern ID.");
         const baseMeta = metaFromForm();
+        const missing = missingFor(baseMeta);
+        if (missing.length) return alert(`NOT IMPORTED — missing: ${missing.join(' · ')}.\nSet up the first image completely (our item #, finish, Fabricut code) before running the folder.`);
         const idxs = [currentIndex];
         queue.forEach((q, i) => { if (i > currentIndex && q.folder && q.folder === queue[currentIndex]?.folder) idxs.push(i); });
+        const stickyFab = String(folderMeta[folderKey]?.fabCode || '').toUpperCase();
+        const plateDocForRun = resolveBaseDoc(baseMeta.patternId, partIndex).doc;
         setIsProcessing(true);
         setAutoRun({ done: 0, total: idxs.length });
+        let stopped = false, skipped = 0;
         try {
-            for (let n = 0; n < idxs.length; n++) {
+            for (let n = 0; n < idxs.length && !stopped; n++) {
                 const entry = queue[idxs[n]];
-                const parsed = parseRenderFilename(entry.file.name);
-                await processOne(entry.file, {
-                    ...baseMeta,
-                    finishId: (n === 0 ? baseMeta.finishId : parsed?.finishId) || parsed?.finishId || '',
-                    fabCode: (n === 0 ? baseMeta.fabCode : parsed?.fabCode) || parsed?.fabCode || '',
-                    fabColorName: (n === 0 ? baseMeta.fabColorName : parsed?.fabColorName) || parsed?.fabColorName || '',
-                });
+                let meta = baseMeta;
+                if (n > 0) {
+                    const parsed = parseRenderFilename(entry.file.name);
+                    const fin = parsed?.finishId || '';
+                    const perFab = stickyFab || fabricutCodeForFinish(pairedDoc, fin) || fabricutCodeForFinish(plateDocForRun, fin) || baseMeta.fabCode || '';
+                    const color = parsed?.fabColorName || ourFinishNameOf(fin, finishLists) || '';
+                    meta = { ...baseMeta, finishId: fin, fabCode: perFab, fabColorName: color };
+                    if (!fin || !perFab) {
+                        const fix = await requestFix({
+                            file: entry.file, folder: entry.folder,
+                            finishId: fin, fabCode: perFab, fabColorName: color,
+                            reasons: [
+                                ...(!fin ? ['FINISH ID not readable from the filename'] : []),
+                                ...(!perFab ? ['no FABRICUT CODE on the CrossReference import for this item'] : []),
+                            ],
+                        });
+                        if (fix.action === 'stop') { stopped = true; setCurrentIndex(idxs[n]); break; }
+                        if (fix.action === 'skip') { skipped++; setAutoRun({ done: n + 1, total: idxs.length }); setCurrentIndex(idxs[n] + 1); continue; }
+                        meta = { ...meta, ...fix.values };
+                    }
+                }
+                await processOne(entry.file, meta);
                 setAutoRun({ done: n + 1, total: idxs.length });
                 setCurrentIndex(idxs[n] + 1);
             }
-            setNotes("");
-            setClientSku("");
+            if (!stopped) { setNotes(""); setClientSku(""); }
         } catch (error) {
             console.error("Folder Processing Error:", error);
             alert(`Folder run stopped after an upload error — the current image is the one that failed. Check console.`);
         }
         setAutoRun(null);
         setIsProcessing(false);
+        if (skipped) alert(`${skipped} image${skipped === 1 ? '' : 's'} skipped (missing info) — nothing was written for ${skipped === 1 ? 'it' : 'them'}.`);
     };
 
     const handleKeyDown = (e) => {
@@ -673,8 +739,8 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                                <label style={labelStyle}>FABRICUT CODE</label>
-                                <input type="text" value={fabCode} onChange={e => setFabCode(e.target.value)} onKeyDown={handleKeyDown} placeholder="e.g. HNFSRFRSB079" style={inputStyle} />
+                                <label style={labelStyle}>FABRICUT CODE {queue[currentIndex]?.folder ? '(STICKY PER FOLDER)' : ''}</label>
+                                <input type="text" value={fabCode} onChange={e => { const v = e.target.value; setFabCode(v); if (queue[currentIndex]?.folder) setFolderField({ fabCode: v.trim().toUpperCase() }); }} onKeyDown={handleKeyDown} placeholder="e.g. HNFSRFRSB079" style={inputStyle} />
                                 {fabCodeStatus && (
                                     <div style={{ fontFamily: theme.mono, fontSize: '9px', color: fabCodeStatus.ok ? theme.brass : '#a33', marginTop: '5px', letterSpacing: '.05em' }}>{fabCodeStatus.txt}</div>
                                 )}
@@ -825,6 +891,51 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                 </div>
             )}
             </>
+            )}
+
+            {/* FIX-IT-NOW POPUP — the folder run pauses here; nothing saves until resolved */}
+            {fixModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.85)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                    <div style={{ background: '#fff', width: '90%', maxWidth: '900px', display: 'flex', boxShadow: '0 10px 40px rgba(0,0,0,0.2)', overflow: 'hidden' }}>
+                        <div style={{ flex: 1, background: theme.paper, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', minHeight: '380px' }}>
+                            {fixModal.previewUrl ? <img src={fixModal.previewUrl} alt="needs info" style={{ maxWidth: '100%', maxHeight: '50vh', objectFit: 'contain' }} /> : <span style={{ color: theme.inkSoft }}>⚲</span>}
+                        </div>
+                        <div style={{ flex: 1, padding: '30px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                            <div style={{ fontFamily: theme.serif, fontSize: '1.4rem', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>Missing Information</div>
+                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.05em', wordBreak: 'break-all' }}>
+                                {fixModal.folder ? `${fixModal.folder} / ` : ''}{String(fixModal.file?.name || '')}
+                            </div>
+                            {(fixModal.reasons || []).map(r => (
+                                <div key={r} style={{ fontFamily: theme.mono, fontSize: '10px', color: '#a33', letterSpacing: '.04em' }}>⚠ {r}</div>
+                            ))}
+                            <div>
+                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft }}>FINISH ID *</label>
+                                <input type="text" value={fixModal.values.finishId} onChange={e => setFixModal(fm => ({ ...fm, values: { ...fm.values, finishId: e.target.value.toUpperCase() } }))} placeholder="e.g. P07 / EP3" style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, textTransform: 'uppercase', boxSizing: 'border-box', marginTop: '4px', outline: 'none' }} />
+                            </div>
+                            <div>
+                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft }}>FABRICUT CODE *</label>
+                                <input type="text" value={fixModal.values.fabCode} onChange={e => setFixModal(fm => ({ ...fm, values: { ...fm.values, fabCode: e.target.value.toUpperCase() } }))} placeholder="from the CrossReference" style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, textTransform: 'uppercase', boxSizing: 'border-box', marginTop: '4px', outline: 'none' }} />
+                            </div>
+                            <div>
+                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft }}>FABRICUT COLOR NAME</label>
+                                <input type="text" value={fixModal.values.fabColorName} onChange={e => setFixModal(fm => ({ ...fm, values: { ...fm.values, fabColorName: e.target.value.toUpperCase() } }))} placeholder="e.g. STAIN NICKEL" style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, textTransform: 'uppercase', boxSizing: 'border-box', marginTop: '4px', outline: 'none' }} />
+                            </div>
+                            <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <button
+                                    disabled={!fixModal.values.finishId || !fixModal.values.fabCode}
+                                    onClick={() => closeFix({ action: 'save', values: fixModal.values })}
+                                    style={{ padding: '13px', background: (!fixModal.values.finishId || !fixModal.values.fabCode) ? theme.paper2 : theme.ink, color: (!fixModal.values.finishId || !fixModal.values.fabCode) ? theme.inkSoft : '#fff', border: 'none', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.14em', cursor: (!fixModal.values.finishId || !fixModal.values.fabCode) ? 'not-allowed' : 'pointer' }}
+                                >
+                                    SAVE & CONTINUE FOLDER
+                                </button>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button onClick={() => closeFix({ action: 'skip' })} style={{ flex: 1, padding: '10px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>SKIP IMAGE (don't import)</button>
+                                    <button onClick={() => closeFix({ action: 'stop' })} style={{ flex: 1, padding: '10px', background: 'transparent', color: '#a33', border: '1px solid #a33', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>STOP FOLDER RUN</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

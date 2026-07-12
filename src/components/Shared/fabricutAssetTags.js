@@ -114,6 +114,20 @@ export function parseRenderFilename(fileName) {
     };
 }
 
+// Tier-aware Fabricut code for OUR finish id (mirrors priceLevels' tier rules): an exact xlsx
+// suffix wins, EP* finishes take the premium (plated) code, other finishes the painted code,
+// no finish the base code. Render filenames are NOT a trusted code source — this is.
+export function fabricutCodeForFinish(doc, finishId) {
+    const fab = doc?.manufacturingSpecs?.fabricut;
+    if (!fab) return '';
+    const f = U(finishId);
+    const exact = fab[`exact_${f}`]?.fabCode;
+    if (exact) return U(exact);
+    if (f.startsWith('EP')) return U(fab.fabCodePremium || fab.fabCodePainted || fab.fabCodeBase || '');
+    if (f) return U(fab.fabCodePainted || fab.fabCodeBase || fab.fabCodePremium || '');
+    return U(fab.fabCodeBase || fab.fabCodePainted || fab.fabCodePremium || '');
+}
+
 // Every Fabricut catalog code the CrossReference import stamped on a base doc.
 export function fabricutCodesOfDoc(doc) {
     const fab = doc?.manufacturingSpecs?.fabricut;
