@@ -1,7 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import {
+    buildPartIndex, assetSearchBlob, buildComboMeta, buildSingleMeta, resolveBaseDoc,
+    pairedCandidatesFor, pairedInfoOf, partCodeOf, END_TREATMENT_LABELS,
+} from './fabricutAssetTags';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -12,11 +16,22 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [globalFinishes, setGlobalFinishes] = useState([]);
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);
     const [inhouseFinishes, setInhouseFinishes] = useState([]);
+    const [masterFinishes, setMasterFinishes] = useState([]);
 
     const [globalLists, setGlobalLists] = useState({ prodTypes: [], customers: [] });
     const [collectionsData, setCollectionsData] = useState([]);
 
     const [searchQuery, setSearchQuery] = useState('');
+    const [chipFilters, setChipFilters] = useState({ type: '', dia: '', proj: '' });
+
+    // Bulk re-tag (Fabricut combo logic): select cards → assign fee/arm + optional plate override
+    const [bulkMode, setBulkMode] = useState(false);
+    const [bulkSelected, setBulkSelected] = useState(() => new Set());
+    const [bulkPairedId, setBulkPairedId] = useState(null);
+    const [bulkPairedQuery, setBulkPairedQuery] = useState('');
+    const [bulkPlateCode, setBulkPlateCode] = useState('');
+    const [bulkRename, setBulkRename] = useState(true);
+    const [bulkBusy, setBulkBusy] = useState(null); // { done, total }
     
     const [activeAsset, setActiveAsset] = useState(null); 
     const [isZoomed, setIsZoomed] = useState(false); 
@@ -85,16 +100,15 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     }, [activeBrand]);
 
     useEffect(() => {
-        let unsub1, unsub2, unsub3;
+        let unsub1, unsub2, unsub3, unsub4;
         try {
             unsub1 = onSnapshot(collection(db, "hq_global_finishes"), snap => setGlobalFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Global Finishes Missing"));
             unsub2 = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Outsource Finishes Missing"));
             unsub3 = onSnapshot(collection(db, "hq_inhouse_finishes"), snap => setInhouseFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Inhouse Finishes Missing"));
+            unsub4 = onSnapshot(doc(db, "system", "master_finishes"), docSnap => { if (docSnap.exists()) setMasterFinishes(docSnap.data().finishes || []); }, e => console.warn("Master Finishes Missing"));
         } catch (err) { console.error("Finishes DB Error:", err); }
-        return () => { 
-            if (typeof unsub1 === 'function') unsub1(); 
-            if (typeof unsub2 === 'function') unsub2(); 
-            if (typeof unsub3 === 'function') unsub3(); 
+        return () => {
+            [unsub1, unsub2, unsub3, unsub4].forEach(u => { if (typeof u === 'function') u(); });
         };
     }, []);
 
@@ -132,27 +146,44 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
         return unique;
     };
 
+    const partIndex = useMemo(() => buildPartIndex(hqParts), [hqParts]);
+    const finishLists = useMemo(() => [masterFinishes, globalFinishes, outsourceFinishes, inhouseFinishes], [masterFinishes, globalFinishes, outsourceFinishes, inhouseFinishes]);
+
+    // One lowercase blob per asset (name/ids/notes + tags[] + fab{} + Fabricut codes + our & their
+    // color names + linked-part docs) — search AND-matches every query token against it, so
+    // "french return square P01" or "decorative bracket 4-5/8 coverplate" work like the CPQ flow.
+    const blobMap = useMemo(() => {
+        const m = new Map();
+        (Array.isArray(assets) ? assets : []).forEach(a => m.set(a.id, assetSearchBlob(a, partIndex, finishLists)));
+        return m;
+    }, [assets, partIndex, finishLists]);
+
+    const hasTag = (a, t) => Array.isArray(a?.tags) && a.tags.includes(t);
+    const TYPE_CHIPS = [
+        { label: 'FRENCH RETURN', test: a => hasTag(a, 'FRENCH RETURN') },
+        { label: 'MITER RETURN', test: a => hasTag(a, 'MITER RETURN') },
+        { label: 'BRACKET ARM', test: a => hasTag(a, 'BRACKET ARM') || a?.fab?.pairedRole === 'ARM' || a?.fab?.role === 'BRACKET' },
+        { label: 'BACKPLATE', test: a => (a?.fab?.plateKind ? !a.fab.plateIsCover : hasTag(a, 'BACKPLATE')) },
+        { label: 'COVERPLATE', test: a => (a?.fab?.plateKind ? !!a.fab.plateIsCover : hasTag(a, 'COVERPLATE')) },
+        { label: 'POLE', test: a => hasTag(a, 'POLE') || a?.fab?.role === 'POLE' },
+        { label: 'FINIAL', test: a => hasTag(a, 'FINIAL') || a?.fab?.role === 'FINIAL' },
+        { label: 'RING', test: a => hasTag(a, 'RING') || a?.fab?.role === 'RING' },
+    ];
+    const DIA_CHIPS = ['3/4"', '1"', '1-3/8"'];
+    const PROJ_CHIPS = ['3-5/8"', '4-5/8"', '6"'];
+
+    const searchTokens = String(searchQuery).toLowerCase().split(/\s+/).filter(Boolean);
     const filteredAssets = safeAssets.filter(asset => {
         if (asset?.category === 'PROGRAM_PRINT') return false; // prints live in `program_prints`, never the gallery (hides any legacy test docs)
-        if (!searchQuery) return true;
-        const q = String(searchQuery).toLowerCase();
-        
-        const n = String(asset?.name || "").toLowerCase();
-        const p = String(asset?.patternId || "").toLowerCase();
-        const f = String(asset?.finishId || "").toLowerCase();
-        const custId = String(asset?.customerId || "").toLowerCase(); 
-        const sku = String(asset?.clientSku || asset?.customerPartId || "").toLowerCase(); 
-        const c = String(asset?.collection || asset?.category || "").toLowerCase();
-        const t = String(asset?.productType || "").toLowerCase();
-        const notes = String(asset?.notes || "").toLowerCase();
-        
-        const matchParts = Array.isArray(asset?.associatedParts) && asset.associatedParts.some(partId => {
-            const partObj = safeHqParts.find(hp => hp.id === partId || hp.itemId === partId || hp.legacyErpId === partId);
-            if (!partObj) return String(partId).toLowerCase().includes(q); 
-            return JSON.stringify(partObj).toLowerCase().includes(q);
-        });
-
-        return n.includes(q) || p.includes(q) || f.includes(q) || custId.includes(q) || sku.includes(q) || c.includes(q) || t.includes(q) || notes.includes(q) || matchParts;
+        if (chipFilters.type) {
+            const chip = TYPE_CHIPS.find(c => c.label === chipFilters.type);
+            if (chip && !chip.test(asset)) return false;
+        }
+        if (chipFilters.dia && !(hasTag(asset, chipFilters.dia) || asset?.fab?.diaLabel === chipFilters.dia)) return false;
+        if (chipFilters.proj && !(hasTag(asset, chipFilters.proj) || asset?.fab?.projLabel === chipFilters.proj)) return false;
+        if (!searchTokens.length) return true;
+        const blob = blobMap.get(asset.id) || '';
+        return searchTokens.every(t => blob.includes(t));
     });
 
     const MAX_DISPLAY = 100;
@@ -341,6 +372,66 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
         } catch (error) { console.error(error); alert("Failed to delete asset."); }
     };
 
+    // THE PLATE RULE, surfaced: backplate ships $0 inside the arm price; coverplate is the upgrade.
+    const plateBadgeOf = (asset) => {
+        const f = asset?.fab;
+        if (!f) return null;
+        if (f.plateKind) return f.plateIsCover
+            ? { txt: 'COVERPLATE · UPGRADE', bg: theme.brass }
+            : { txt: 'BACKPLATE · INCL. W/ ARM', bg: theme.inkSoft };
+        if (f.role === 'BRACKET' || f.includesBackplate) return { txt: 'INCL. BACKPLATE · CP UPGRADE AVAIL.', bg: theme.inkSoft };
+        return null;
+    };
+
+    const bulkPairedDoc = bulkPairedId ? safeHqParts.find(p => p.id === bulkPairedId) : null;
+    const bulkPairedInfo = bulkPairedDoc ? pairedInfoOf(bulkPairedDoc) : null;
+    const bulkSuggestions = useMemo(() => {
+        if (!bulkMode || bulkPairedId) return [];
+        return pairedCandidatesFor(bulkPlateCode, partIndex, bulkPairedQuery);
+    }, [bulkMode, bulkPairedId, bulkPlateCode, partIndex, bulkPairedQuery]);
+
+    const toggleBulk = (id) => setBulkSelected(prev => {
+        const n = new Set(prev);
+        if (n.has(id)) n.delete(id); else n.add(id);
+        return n;
+    });
+
+    // Re-derive fab{} / tags[] for every selected asset with the two-part combo logic (or plain
+    // single-item resolution when no fee/arm is picked — that's the Fabricut backfill).
+    const handleBulkApply = async () => {
+        const ids = [...bulkSelected];
+        if (!ids.length) return;
+        const plateOverride = String(bulkPlateCode || '').trim().toUpperCase();
+        setBulkBusy({ done: 0, total: ids.length });
+        let done = 0, skipped = 0;
+        for (const id of ids) {
+            const asset = safeAssets.find(a => a.id === id);
+            const plateCode = plateOverride || String(asset?.patternId || '').toUpperCase();
+            const derived = !asset ? null : bulkPairedDoc
+                ? buildComboMeta({ plateCode: resolveBaseDoc(plateCode, partIndex).base || plateCode, pairedDoc: bulkPairedDoc, finishId: asset.finishId, fabCode: asset.fabCode || asset.fab?.fabCode || '', fabColorName: asset.fab?.fabColorName || '', partIndex, finishLists })
+                : buildSingleMeta({ patternId: plateCode, finishId: asset.finishId, partIndex, finishLists });
+            if (!derived) {
+                skipped++;
+            } else {
+                const patch = {
+                    fab: derived.fab,
+                    tags: derived.tags,
+                    associatedParts: [...new Set([...(Array.isArray(asset.associatedParts) ? asset.associatedParts : []), ...derived.associatedParts])],
+                };
+                if (plateOverride) patch.patternId = plateOverride;
+                if (bulkRename && derived.name) patch.name = derived.name;
+                try {
+                    await updateDoc(doc(db, "global_assets", id), patch);
+                    done++;
+                } catch (e) { console.error("Bulk retag failed:", id, e); skipped++; }
+            }
+            setBulkBusy({ done: done + skipped, total: ids.length });
+        }
+        setBulkBusy(null);
+        setBulkSelected(new Set());
+        alert(`Re-tagged ${done} asset${done === 1 ? '' : 's'}${skipped ? `, skipped ${skipped} (no library match / error — see console)` : ''}.`);
+    };
+
     const openModal = (asset) => {
         setIsZoomed(false); 
         setMetaForm({
@@ -373,15 +464,95 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 
                 <div style={{ flex: 0.6, position: 'relative' }}>
                     <span style={{ position: 'absolute', left: '15px', top: '50%', transform: 'translateY(-50%)', fontSize: '1.2rem', color: theme.inkSoft }}>⚲</span>
-                    <input 
-                        type="text" 
-                        placeholder="Deep Search (e.g. 'H1-75BS/EP01', 'CUST-888', 'Heavyweight')..." 
+                    <input
+                        type="text"
+                        placeholder="Deep Search (e.g. 'french return square P01', 'HNFSRFRSB079', 'stain nickel')..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         style={{ width: '100%', padding: '12px 15px 12px 45px', fontSize: '0.95rem', fontFamily: theme.sans, border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box', backgroundColor: theme.paper }}
                     />
                 </div>
+                <button onClick={() => { setBulkMode(m => !m); setBulkSelected(new Set()); setBulkPairedId(null); setBulkPairedQuery(''); setBulkPlateCode(''); }} style={{ marginLeft: '15px', padding: '12px 20px', background: bulkMode ? theme.brass : 'transparent', color: bulkMode ? '#fff' : theme.ink, border: `1px solid ${bulkMode ? theme.brass : theme.ink}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.12em', textTransform: 'uppercase', cursor: 'pointer' }}>
+                    {bulkMode ? `✕ EXIT BULK (${bulkSelected.size})` : '☑ BULK RE-TAG'}
+                </button>
             </div>
+
+            {/* FABRICUT FILTER CHIPS — mirror the CPQ flow axes: what it is / rod diameter / projection */}
+            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '12px 30px', display: 'flex', gap: '25px', alignItems: 'center', flexWrap: 'wrap', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                {[
+                    ['TYPE', 'type', TYPE_CHIPS.map(c => c.label)],
+                    ['DIA', 'dia', DIA_CHIPS],
+                    ['PROJ', 'proj', PROJ_CHIPS],
+                ].map(([groupLabel, key, options]) => (
+                    <div key={key} style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.15em', color: theme.inkSoft }}>{groupLabel}</span>
+                        {options.map(opt => {
+                            const active = chipFilters[key] === opt;
+                            return (
+                                <button key={opt} onClick={() => setChipFilters(prev => ({ ...prev, [key]: active ? '' : opt }))} style={{ padding: '5px 10px', background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.inkSoft, border: `1px solid ${active ? theme.ink : theme.line}`, fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', cursor: 'pointer' }}>
+                                    {opt}
+                                </button>
+                            );
+                        })}
+                    </div>
+                ))}
+                {(chipFilters.type || chipFilters.dia || chipFilters.proj) && (
+                    <button onClick={() => setChipFilters({ type: '', dia: '', proj: '' })} style={{ padding: '5px 10px', background: 'transparent', color: theme.brass, border: 'none', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', textDecoration: 'underline', cursor: 'pointer' }}>CLEAR FILTERS</button>
+                )}
+            </div>
+
+            {/* BULK RE-TAG BAR — search by finish, tick the cards, assign the two-part combo */}
+            {bulkMode && (
+                <div style={{ background: theme.paper2, border: `1px solid ${theme.brass}`, padding: '15px 30px', display: 'flex', gap: '15px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', color: theme.inkSoft }}>SELECTED: {bulkSelected.size}</span>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <button onClick={() => setBulkSelected(new Set(displayAssets.map(a => a.id)))} style={{ padding: '6px 10px', background: '#fff', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>SELECT ALL SHOWN</button>
+                            <button onClick={() => setBulkSelected(new Set())} style={{ padding: '6px 10px', background: '#fff', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>CLEAR</button>
+                        </div>
+                    </div>
+                    <div style={{ minWidth: '180px' }}>
+                        <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', color: theme.inkSoft }}>PLATE CODE OVERRIDE (blank = keep each asset's)</span>
+                        <input type="text" value={bulkPlateCode} onChange={e => setBulkPlateCode(e.target.value)} placeholder="e.g. H1-1BP-R" style={{ width: '100%', padding: '8px', marginTop: '4px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.85rem', textTransform: 'uppercase', boxSizing: 'border-box', outline: 'none' }} />
+                    </div>
+                    <div style={{ minWidth: '280px', flex: 1 }}>
+                        <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', color: theme.inkSoft }}>PAIRED FEE / BRACKET ARM (blank = plain re-tag)</span>
+                        {bulkPairedDoc ? (
+                            <div style={{ marginTop: '4px' }}>
+                                <span style={{ background: '#fff', border: `1px solid ${theme.brass}`, color: theme.ink, padding: '6px 10px', fontFamily: theme.mono, fontSize: '10px', display: 'inline-block' }}>
+                                    {bulkPairedInfo?.endTreatment ? `${END_TREATMENT_LABELS[bulkPairedInfo.endTreatment]} · ` : ''}{bulkPairedInfo?.code} — {String(bulkPairedDoc.itemName || '')}
+                                    <span onClick={() => setBulkPairedId(null)} style={{ cursor: 'pointer', marginLeft: '8px', color: theme.inkSoft }}>×</span>
+                                </span>
+                            </div>
+                        ) : (
+                            <>
+                                <input type="text" value={bulkPairedQuery} onChange={e => setBulkPairedQuery(e.target.value)} placeholder="Search fee items / bracket arms…" style={{ width: '100%', padding: '8px', marginTop: '4px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.85rem', textTransform: 'uppercase', boxSizing: 'border-box', outline: 'none' }} />
+                                {bulkSuggestions.length > 0 && (
+                                    <div style={{ maxHeight: '120px', overflowY: 'auto', background: '#fff', border: `1px solid ${theme.line}`, borderTop: 'none' }}>
+                                        {bulkSuggestions.map(p => {
+                                            const info = pairedInfoOf(p);
+                                            return (
+                                                <button key={p.id} onClick={() => { setBulkPairedId(p.id); setBulkPairedQuery(''); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 8px', background: '#fff', border: 'none', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.ink, cursor: 'pointer' }}>
+                                                    {info?.endTreatment ? `[${END_TREATMENT_LABELS[info.endTreatment]}] ` : info?.role === 'ARM' ? '[ARM] ' : ''}{partCodeOf(p)} — {String(p.itemName || '')}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <label style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', color: theme.ink, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={bulkRename} onChange={e => setBulkRename(e.target.checked)} />
+                            RENAME TO COMBO CONVENTION
+                        </label>
+                        <button onClick={handleBulkApply} disabled={!!bulkBusy || bulkSelected.size === 0} style={{ padding: '10px 20px', background: (!!bulkBusy || bulkSelected.size === 0) ? theme.paper : theme.ink, color: (!!bulkBusy || bulkSelected.size === 0) ? theme.inkSoft : '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.12em', cursor: (!!bulkBusy || bulkSelected.size === 0) ? 'not-allowed' : 'pointer' }}>
+                            {bulkBusy ? `RE-TAGGING… ${bulkBusy.done}/${bulkBusy.total}` : `APPLY TO ${bulkSelected.size} SELECTED`}
+                        </button>
+                    </div>
+                </div>
+            )}
 
             <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
                 
@@ -516,23 +687,43 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                 {searchQuery ? 'NO MATCHING ASSETS FOUND IN LIBRARY' : 'NO ASSETS UPLOADED YET'}
                             </div>
                         ) : (
-                            displayAssets.map(asset => (
-                                <div key={asset.id} onClick={() => openModal(asset)} style={{ border: `1px solid ${theme.line}`, borderRadius: '2px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', background: '#fff' }} onMouseOver={e => { e.currentTarget.style.borderColor = theme.brass; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.05)'; }} onMouseOut={e => { e.currentTarget.style.borderColor = theme.line; e.currentTarget.style.boxShadow = 'none'; }}>
+                            displayAssets.map(asset => {
+                                const badge = plateBadgeOf(asset);
+                                const isSel = bulkSelected.has(asset.id);
+                                return (
+                                <div key={asset.id} onClick={() => bulkMode ? toggleBulk(asset.id) : openModal(asset)} style={{ border: `1px solid ${isSel ? theme.brass : theme.line}`, borderRadius: '2px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', background: '#fff', boxShadow: isSel ? `0 0 0 2px ${theme.brass}` : 'none' }} onMouseOver={e => { e.currentTarget.style.borderColor = theme.brass; e.currentTarget.style.boxShadow = isSel ? `0 0 0 2px ${theme.brass}` : '0 4px 12px rgba(0,0,0,0.05)'; }} onMouseOut={e => { e.currentTarget.style.borderColor = isSel ? theme.brass : theme.line; e.currentTarget.style.boxShadow = isSel ? `0 0 0 2px ${theme.brass}` : 'none'; }}>
 
                                     <div style={{ position: 'relative', width: '100%', height: '200px', background: theme.paper, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                         {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'1.5rem', color: theme.inkSoft}}>⚲</span>}
-                                        
+
+                                        {bulkMode && (
+                                            <div style={{ position: 'absolute', top: '8px', left: '8px', width: '22px', height: '22px', background: isSel ? theme.brass : 'rgba(255,255,255,0.92)', border: `1px solid ${isSel ? theme.brass : theme.line}`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: theme.mono, fontSize: '13px', zIndex: 3 }}>
+                                                {isSel ? '✓' : ''}
+                                            </div>
+                                        )}
+
                                         <div style={{ position: 'absolute', bottom: '8px', left: '8px', color: theme.ink, fontFamily: theme.mono, fontSize: '10px', background: 'rgba(255,255,255,0.9)', padding: '4px 8px', border: `1px solid ${theme.line}` }}>
                                             {String(asset.patternId || '')}{asset.finishId ? `/${String(asset.finishId)}` : ''}
                                         </div>
-                                        
+
                                         {(asset.clientSku || asset.customerPartId) && (
                                             <div style={{ position: 'absolute', top: '8px', right: '8px', color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.05em', background: theme.inkSoft, padding: '3px 6px', zIndex: 2 }}>
                                                 CUST: {String(asset.clientSku || asset.customerPartId)}
                                             </div>
                                         )}
                                     </div>
-                                    
+
+                                    {(badge || asset.fab?.pairedCode || asset.fab?.endTreatment) && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', padding: '6px 8px', background: theme.paper, borderTop: `1px solid ${theme.line}` }}>
+                                            {(asset.fab?.endTreatment || asset.fab?.pairedCode) && (
+                                                <span style={{ fontSize: '9px', fontFamily: theme.mono, color: theme.ink, letterSpacing: '.04em' }}>
+                                                    {END_TREATMENT_LABELS[asset.fab?.endTreatment] || asset.fab?.pairedCode}{asset.fab?.diaLabel ? ` · ${asset.fab.diaLabel}` : ''}{asset.fab?.projLabel ? ` · ${asset.fab.projLabel}` : ''}
+                                                </span>
+                                            )}
+                                            {badge && <span style={{ fontSize: '8px', fontFamily: theme.mono, color: '#fff', background: badge.bg, padding: '2px 5px', alignSelf: 'flex-start', letterSpacing: '.06em' }}>{badge.txt}</span>}
+                                        </div>
+                                    )}
+
                                     <div style={{ padding: '12px' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                             <span style={{ fontSize: '10px', fontFamily: theme.mono, color: theme.inkSoft }}>{String(asset.productType || 'N/A')}</span>
@@ -540,7 +731,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                         </div>
                                     </div>
                                 </div>
-                            ))
+                                );
+                            })
                         )}
                     </div>
                 </div>
@@ -616,6 +808,32 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                     <h2 style={{ margin: 0, color: theme.ink, fontFamily: theme.serif, fontWeight: 500, fontSize: '1.6rem' }}>Asset Metadata</h2>
                                     <button onClick={() => { setActiveAsset(null); setIsZoomed(false); }} style={{ background: 'none', border: 'none', fontSize: '2rem', color: theme.inkSoft, cursor: 'pointer', lineHeight: 1, fontFamily: theme.sans }}>×</button>
                                 </div>
+
+                                {activeAsset.fab && (
+                                    <div style={{ background: theme.paper, border: `1px solid ${theme.line}`, padding: '12px 15px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.15em', color: theme.inkSoft }}>FABRICUT IDENTITY</span>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
+                                            {[END_TREATMENT_LABELS[activeAsset.fab.endTreatment] || activeAsset.fab.pairedName || null,
+                                              activeAsset.fab.plateCode ? `${activeAsset.fab.plateIsCover ? 'COVERPLATE' : 'BACKPLATE'} ${activeAsset.fab.plateCode}${activeAsset.fab.plateOrientation ? ` (${activeAsset.fab.plateOrientation})` : ''}` : null,
+                                              activeAsset.fab.diaLabel, activeAsset.fab.projLabel,
+                                              activeAsset.fab.ourFinishName || activeAsset.fab.fabColorName || null,
+                                            ].filter(Boolean).join(' · ')}
+                                        </span>
+                                        {plateBadgeOf(activeAsset) && (
+                                            <span style={{ fontSize: '9px', fontFamily: theme.mono, color: '#fff', background: plateBadgeOf(activeAsset).bg, padding: '3px 6px', alignSelf: 'flex-start', letterSpacing: '.06em' }}>{plateBadgeOf(activeAsset).txt}</span>
+                                        )}
+                                        {(activeAsset.fabCode || activeAsset.fab.fabCode) && (
+                                            <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>FABRICUT CODE: {String(activeAsset.fabCode || activeAsset.fab.fabCode)}</span>
+                                        )}
+                                        {Array.isArray(activeAsset.tags) && activeAsset.tags.length > 0 && (
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                {activeAsset.tags.slice(0, 20).map(t => (
+                                                    <span key={t} style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '2px 5px', background: '#fff' }}>{t}</span>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
 
                                 <div style={{ display: 'flex', gap: '10px' }}>
                                     <div style={{ flex: 1 }}>

@@ -1,36 +1,57 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, doc, setDoc, serverTimestamp, onSnapshot } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import ProgramPrintUploader from './ProgramPrintUploader';
+import {
+    buildPartIndex, resolveBaseDoc, plateInfoOf, parseRenderFilename,
+    buildComboMeta, buildSingleMeta, pairedCandidatesFor, pairedInfoOf, partCodeOf,
+    END_TREATMENT_LABELS, DIA_LABELS, PROJ_LABELS,
+} from './fabricutAssetTags';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
 const BatchImageProcessor = ({ activeBrand, currentUser }) => {
+    // queue entries: { file, folder } — folder = the containing folder's name when the batch came
+    // in via SELECT FOLDER (Kermit renders: folder name IS the plate code), '' for loose files.
     const [queue, setQueue] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isProcessing, setIsProcessing] = useState(false);
-    
+    const [autoRun, setAutoRun] = useState(null); // { done, total } while PROCESS REST OF FOLDER runs
+
     const [hqParts, setHqParts] = useState([]);
-    const [globalLists, setGlobalLists] = useState({ prodTypes: [], customers: [] }); 
+    const [globalLists, setGlobalLists] = useState({ prodTypes: [], customers: [] });
 
     const [globalFinishes, setGlobalFinishes] = useState([]);
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);
     const [inhouseFinishes, setInhouseFinishes] = useState([]);
-    const [collectionsData, setCollectionsData] = useState([]); 
+    const [masterFinishes, setMasterFinishes] = useState([]);
+    const [collectionsData, setCollectionsData] = useState([]);
 
     const [patternId, setPatternId] = useState("");
-    const [finishId, setFinishId] = useState(""); 
-    
+    const [finishId, setFinishId] = useState("");
+    const [fabCode, setFabCode] = useState("");
+    const [fabColorName, setFabColorName] = useState("");
+
     const [customerId, setCustomerId] = useState("");
     const [clientSku, setClientSku] = useState("");
-    
+
     const [collectionName, setCollectionName] = useState("");
     const [productType, setProductType] = useState("");
     const [notes, setNotes] = useState("");
     const [associatedParts, setAssociatedParts] = useState([]);
-    const [associatedFinishes, setAssociatedFinishes] = useState([]); 
-    
+    const [associatedFinishes, setAssociatedFinishes] = useState([]);
+
+    // per-folder sticky settings: { [folderKey]: { pairedDocId, crop } }.
+    // crop = { x, y, w, h } as fractions of the image's natural size — set on the first image of a
+    // folder, applied to every image processed under that folder (the renders are identical frames).
+    const [folderMeta, setFolderMeta] = useState({});
+    const [pairedQuery, setPairedQuery] = useState("");
+    const [cropMode, setCropMode] = useState(false);
+    const [dragRect, setDragRect] = useState(null); // live drag, fractions
+    const dragStartRef = useRef(null);
+    const cropBoxRef = useRef(null);
+
     const [imagePreview, setImagePreview] = useState(null);
     const [mode, setMode] = useState('images'); // 'images' (existing conveyor) | 'prints' (PDF program-print uploader)
     const idInputRef = useRef(null);
@@ -73,31 +94,50 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     }, []);
 
     useEffect(() => {
-        let unsub1, unsub2, unsub3;
+        let unsub1, unsub2, unsub3, unsub4;
         try {
             unsub1 = onSnapshot(collection(db, "hq_global_finishes"), snap => setGlobalFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Missing Global Finishes"));
             unsub2 = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Missing Outsource Finishes"));
             unsub3 = onSnapshot(collection(db, "hq_inhouse_finishes"), snap => setInhouseFinishes(snap.docs.map(d=>({id: d.id, ...d.data()}))), e => console.warn("Missing Inhouse Finishes"));
+            unsub4 = onSnapshot(doc(db, "system", "master_finishes"), docSnap => { if (docSnap.exists()) setMasterFinishes(docSnap.data().finishes || []); }, e => console.warn("Missing Master Finishes"));
         } catch (err) { console.error("Finishes DB Error:", err); }
-        return () => { 
-            if (typeof unsub1 === 'function') unsub1(); 
-            if (typeof unsub2 === 'function') unsub2(); 
-            if (typeof unsub3 === 'function') unsub3(); 
+        return () => {
+            [unsub1, unsub2, unsub3, unsub4].forEach(u => { if (typeof u === 'function') u(); });
         };
     }, []);
 
-    const allFinishes = [...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(outsourceFinishes)?outsourceFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])];
+    const safeHqParts = Array.isArray(hqParts) ? hqParts : [];
+    const allFinishes = [...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])];
+    const partIndex = useMemo(() => buildPartIndex(hqParts), [hqParts]);
+    const finishLists = useMemo(() => [masterFinishes, globalFinishes, outsourceFinishes, inhouseFinishes], [masterFinishes, globalFinishes, outsourceFinishes, inhouseFinishes]);
 
     const handleFileSelect = (e) => {
         if (!e.target.files) return;
         const files = Array.from(e.target.files).filter(f => f && f.type && f.type.startsWith('image/'));
         if (files.length === 0) return;
-        setQueue(prev => [...prev, ...files]);
+        setQueue(prev => [...prev, ...files.map(file => ({ file, folder: '' }))]);
+    };
+
+    // SELECT FOLDER(S): the folder name is the plate code (H1-1BP-R…); works selecting one plate
+    // folder or the parent holding several — each file keeps its immediate parent as its folder.
+    const handleFolderSelect = (e) => {
+        if (!e.target.files) return;
+        const entries = Array.from(e.target.files)
+            .filter(f => f && f.type && f.type.startsWith('image/'))
+            .map(file => {
+                const segs = String(file.webkitRelativePath || '').split('/');
+                return { file, folder: segs.length >= 2 ? segs[segs.length - 2] : '' };
+            });
+        if (entries.length === 0) return;
+        entries.sort((a, b) => (a.folder + a.file.name).localeCompare(b.folder + b.file.name));
+        setQueue(prev => [...prev, ...entries]);
+        e.target.value = '';
     };
 
     useEffect(() => {
         if (Array.isArray(queue) && queue.length > 0 && currentIndex < queue.length) {
-            const file = queue[currentIndex];
+            const entry = queue[currentIndex];
+            const file = entry?.file;
             if (!file) return;
 
             let objectUrl = null;
@@ -105,19 +145,32 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                 objectUrl = URL.createObjectURL(file);
                 setImagePreview(objectUrl);
             } catch (err) { console.warn("Failed to read file", err); }
-            
-            let rawName = String(file.name || "").split('.')[0].toUpperCase();
-            let parts = rawName.split('_'); 
-            if (parts.length === 1) parts = rawName.split('-'); 
-            
-            if (parts.length > 1 && parts[parts.length - 1].length <= 6) {
-                setFinishId(parts.pop());
-                setPatternId(parts.join('-')); 
+
+            const parsed = parseRenderFilename(file.name);
+            if (entry.folder) {
+                // Kermit render folder: folder = plate code; filename carries fabricut code + finish
+                setPatternId(entry.folder.toUpperCase());
+                setFinishId(parsed?.finishId || "");
+                setFabCode(parsed?.fabCode || "");
+                setFabColorName(parsed?.fabColorName || "");
             } else {
-                setPatternId(rawName);
-                setFinishId("");
+                setFabCode(parsed?.fabCode || "");
+                setFabColorName(parsed?.fabColorName || "");
+                let rawName = String(file.name || "").split('.')[0].toUpperCase();
+                let parts = rawName.split('_');
+                if (parts.length === 1) parts = rawName.split('-');
+
+                if (parts.length > 1 && parts[parts.length - 1].length <= 6) {
+                    setFinishId(parts.pop());
+                    setPatternId(parts.join('-'));
+                } else {
+                    setPatternId(rawName);
+                    setFinishId("");
+                }
             }
-            
+            setCropMode(false);
+            setDragRect(null);
+
             if (idInputRef.current) idInputRef.current.focus();
 
             return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
@@ -126,39 +179,110 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         }
     }, [currentIndex, queue]);
 
-    const generateWatermarkedImages = (file, textStr) => {
+    const folderKey = queue[currentIndex]?.folder || '~loose~';
+    const currentFolderMeta = folderMeta[folderKey] || {};
+    const pairedDoc = currentFolderMeta.pairedDocId ? safeHqParts.find(p => p.id === currentFolderMeta.pairedDocId) : null;
+    const pairedInfo = pairedDoc ? pairedInfoOf(pairedDoc) : null;
+    const activeCrop = currentFolderMeta.crop || null;
+
+    const setFolderField = (patch) => setFolderMeta(prev => ({ ...prev, [folderKey]: { ...(prev[folderKey] || {}), ...patch } }));
+
+    // Library resolution of the typed pattern (exact, species-aware — not substring)
+    const resolved = useMemo(() => {
+        const r = resolveBaseDoc(patternId, partIndex);
+        if (!r.doc) return null;
+        const plate = plateInfoOf(r.base, r.doc);
+        const sk = r.doc.manufacturingSpecs?.customData?.sizeKey;
+        const bits = [];
+        if (plate) bits.push(plate.isCover ? 'COVERPLATE (UPGRADE)' : 'BACKPLATE (INCL. W/ ARM)', plate.orientation);
+        if (sk) bits.push(DIA_LABELS[sk.dia] || sk.dia, PROJ_LABELS[sk.projLetter] || '');
+        return { ...r, plate, summary: bits.filter(Boolean).join(' · ') };
+    }, [patternId, partIndex]);
+
+    // ----- CROP TOOL -----
+    const fracPoint = (e) => {
+        const box = cropBoxRef.current?.getBoundingClientRect();
+        if (!box || !box.width || !box.height) return null;
+        return {
+            x: Math.min(1, Math.max(0, (e.clientX - box.left) / box.width)),
+            y: Math.min(1, Math.max(0, (e.clientY - box.top) / box.height)),
+        };
+    };
+    const onCropDown = (e) => {
+        if (!cropMode) return;
+        e.preventDefault();
+        const p = fracPoint(e);
+        if (p) { dragStartRef.current = p; setDragRect({ x: p.x, y: p.y, w: 0, h: 0 }); }
+    };
+    const onCropMove = (e) => {
+        if (!cropMode || !dragStartRef.current) return;
+        const p = fracPoint(e);
+        if (!p) return;
+        const s = dragStartRef.current;
+        setDragRect({ x: Math.min(s.x, p.x), y: Math.min(s.y, p.y), w: Math.abs(p.x - s.x), h: Math.abs(p.y - s.y) });
+    };
+    const onCropUp = () => {
+        if (!cropMode || !dragStartRef.current) return;
+        dragStartRef.current = null;
+        setDragRect(rect => {
+            if (rect && rect.w > 0.02 && rect.h > 0.02) {
+                setFolderField({ crop: rect });
+                setCropMode(false);
+            }
+            return null;
+        });
+    };
+
+    // ----- IMAGE PIPELINE (crop → hi-res + watermarked thumb) -----
+    const generateWatermarkedImages = (file, textStr, crop) => {
         return new Promise((resolve) => {
             if (!file) return resolve({ hiResBlob: null, thumbBlob: null });
             const img = new Image();
             img.onload = () => {
                 try {
-                    const thCanvas = document.createElement('canvas');
-                    const thCtx = thCanvas.getContext('2d');
-                    thCanvas.width = 250;
-                    thCanvas.height = 250;
-                    const minDim = Math.min(img.width, img.height);
-                    const sx = (img.width - minDim) / 2;
-                    const sy = (img.height - minDim) / 2;
-                    thCtx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 250, 250);
+                    const sx = crop ? crop.x * img.width : 0;
+                    const sy = crop ? crop.y * img.height : 0;
+                    const sw = crop ? Math.max(1, crop.w * img.width) : img.width;
+                    const sh = crop ? Math.max(1, crop.h * img.height) : img.height;
 
-                    const thFontSize = 14;
-                    thCtx.font = `bold ${thFontSize}px monospace`;
-                    const thPad = thFontSize * 0.4;
-                    const thTxtW = thCtx.measureText(textStr).width;
-                    
-                    const thBoxX = 250 - thTxtW - thPad * 3;
-                    const thBoxY = 250 - thFontSize - thPad * 3;
+                    const makeThumb = (hiResBlob) => {
+                        const thCanvas = document.createElement('canvas');
+                        const thCtx = thCanvas.getContext('2d');
+                        thCanvas.width = 250;
+                        thCanvas.height = 250;
+                        const minDim = Math.min(sw, sh);
+                        const cx = sx + (sw - minDim) / 2;
+                        const cy = sy + (sh - minDim) / 2;
+                        thCtx.drawImage(img, cx, cy, minDim, minDim, 0, 0, 250, 250);
 
-                    thCtx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-                    thCtx.fillRect(thBoxX, thBoxY, thTxtW + thPad * 2, thFontSize + thPad * 2);
-                    thCtx.fillStyle = '#333333';
-                    thCtx.textBaseline = 'top';
-                    thCtx.fillText(textStr, thBoxX + thPad, thBoxY + thPad * 1.5);
+                        const thFontSize = 14;
+                        thCtx.font = `bold ${thFontSize}px monospace`;
+                        const thPad = thFontSize * 0.4;
+                        const thTxtW = thCtx.measureText(textStr).width;
 
-                    thCanvas.toBlob((thBlob) => {
-                        resolve({ hiResBlob: file, thumbBlob: thBlob });
-                    }, 'image/png', 0.9);
+                        const thBoxX = 250 - thTxtW - thPad * 3;
+                        const thBoxY = 250 - thFontSize - thPad * 3;
 
+                        thCtx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+                        thCtx.fillRect(thBoxX, thBoxY, thTxtW + thPad * 2, thFontSize + thPad * 2);
+                        thCtx.fillStyle = '#333333';
+                        thCtx.textBaseline = 'top';
+                        thCtx.fillText(textStr, thBoxX + thPad, thBoxY + thPad * 1.5);
+
+                        thCanvas.toBlob((thBlob) => {
+                            resolve({ hiResBlob, thumbBlob: thBlob });
+                        }, 'image/png', 0.9);
+                    };
+
+                    if (crop) {
+                        const hiCanvas = document.createElement('canvas');
+                        hiCanvas.width = Math.round(sw);
+                        hiCanvas.height = Math.round(sh);
+                        hiCanvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, hiCanvas.width, hiCanvas.height);
+                        hiCanvas.toBlob((hiBlob) => makeThumb(hiBlob || file), 'image/png', 1.0);
+                    } else {
+                        makeThumb(file);
+                    }
                 } catch (err) { resolve({ hiResBlob: file, thumbBlob: null }); }
             };
             img.onerror = () => resolve({ hiResBlob: file, thumbBlob: null });
@@ -166,87 +290,139 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         });
     };
 
+    // Upload one image + write its global_assets doc. `meta` is fully explicit so the
+    // process-rest-of-folder loop can run without touching form state.
+    const processOne = async (file, meta) => {
+        const safePattern = String(meta.patternId).toUpperCase().replace(/[^A-Z0-9-]/g, '');
+        // EP finishes were erroneously zero-padded (EP01 should be EP1) — strip it so gallery
+        // codes match the EP1..EP6 used on library parts. ONLY EP: P##/S## finishes are
+        // canonically zero-padded (master_finishes P01-P30, S01-S12), so leave those alone.
+        const cleanFinish = String(meta.finishId).toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1');
+        const safeFinish = cleanFinish.replace(/[^A-Z0-9-]/g, '');
+        const displayId = safeFinish ? `${String(meta.patternId).toUpperCase()}/${safeFinish}` : String(meta.patternId).toUpperCase();
+        const safeUrlId = safeFinish ? `${safePattern}_${safeFinish}` : safePattern;
+
+        const brandFolder = activeBrand ? String(activeBrand) : 'global';
+
+        // Fabricut identity: two-part combo (plate + fee/arm) when a paired item is set,
+        // otherwise single-item resolution. Both are additive — non-Fabricut ids stamp nothing.
+        const base = resolveBaseDoc(meta.patternId, partIndex);
+        const derived = meta.pairedDoc
+            ? buildComboMeta({ plateCode: base.base || meta.patternId, pairedDoc: meta.pairedDoc, finishId: safeFinish, fabCode: meta.fabCode, fabColorName: meta.fabColorName, partIndex, finishLists })
+            : buildSingleMeta({ patternId: meta.patternId, finishId: safeFinish, partIndex, finishLists });
+
+        const { hiResBlob, thumbBlob } = await generateWatermarkedImages(file, displayId, meta.crop || null);
+
+        const uniqueTimestamp = Date.now();
+        const uniqueSuffix = Math.floor(Math.random() * 10000);
+        const hiResRef = ref(storage, `global_assets/hires/${brandFolder}/${safeUrlId}_${uniqueTimestamp}_${uniqueSuffix}_original.png`);
+
+        let hiResUrl = null;
+        let thumbUrl = null;
+
+        if (hiResBlob && thumbBlob) {
+            const thumbRef = ref(storage, `global_assets/thumbs/${brandFolder}/${safeUrlId}_${uniqueTimestamp}_${uniqueSuffix}_thumb.png`);
+            const [hiUpload, thUpload] = await Promise.all([
+                uploadBytes(hiResRef, hiResBlob),
+                uploadBytes(thumbRef, thumbBlob)
+            ]);
+            const urls = await Promise.all([ getDownloadURL(hiUpload.ref), getDownloadURL(thUpload.ref) ]);
+            hiResUrl = urls[0];
+            thumbUrl = urls[1];
+        } else {
+            const fallbackUpload = await uploadBytes(hiResRef, file);
+            hiResUrl = await getDownloadURL(fallbackUpload.ref);
+            thumbUrl = hiResUrl;
+        }
+
+        const assetDocId = `ASSET-${brandFolder}-${safeUrlId}-${uniqueTimestamp}-${uniqueSuffix}`;
+        const mergedParts = [...new Set([...(Array.isArray(meta.associatedParts) ? meta.associatedParts : []), ...((derived && derived.associatedParts) || [])])];
+
+        await setDoc(doc(db, "global_assets", assetDocId), {
+            id: assetDocId,
+            patternId: String(meta.patternId).toUpperCase(),
+            finishId: safeFinish,
+            customerId: meta.customerId || '',
+            clientSku: String(meta.clientSku || '').toUpperCase(),
+            name: (derived && derived.name) || displayId,
+            collection: meta.collectionName || '',
+            productType: meta.productType || '',
+            notes: meta.notes || '',
+            associatedParts: mergedParts,
+            associatedFinishes: Array.isArray(meta.associatedFinishes) ? meta.associatedFinishes : [],
+            fabCode: String(meta.fabCode || '').toUpperCase(),
+            ...(derived ? { fab: derived.fab, tags: derived.tags } : {}),
+            originalUrl: hiResUrl,
+            thumbnailUrl: thumbUrl,
+            url: thumbUrl,
+            brandId: activeBrand || 'ALL',
+            uploadedBy: currentUser || 'Unknown',
+            createdAt: serverTimestamp()
+        }, { merge: true });
+    };
+
+    const metaFromForm = () => ({
+        patternId, finishId, fabCode, fabColorName,
+        pairedDoc, crop: activeCrop,
+        customerId, clientSku, collectionName, productType, notes,
+        associatedParts, associatedFinishes,
+    });
+
     const handleProcessAndNext = async (e) => {
         if (e) e.preventDefault();
         if (!patternId) return alert("You must provide a Pattern ID.");
-        
+
         setIsProcessing(true);
-        
+
         if (!Array.isArray(queue) || !queue[currentIndex]) {
             setIsProcessing(false);
             return;
         }
 
-        const currentFile = queue[currentIndex];
-        
-        const safePattern = String(patternId).toUpperCase().replace(/[^A-Z0-9-]/g, '');
-        // EP finishes were erroneously zero-padded (EP01 should be EP1) — strip it so gallery
-        // codes match the EP1..EP6 used on library parts. ONLY EP: P##/S## finishes are
-        // canonically zero-padded (master_finishes P01-P30, S01-S12), so leave those alone.
-        const cleanFinish = String(finishId).toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1');
-        const safeFinish = cleanFinish.replace(/[^A-Z0-9-]/g, '');
-        const displayId = safeFinish ? `${String(patternId).toUpperCase()}/${safeFinish}` : String(patternId).toUpperCase();
-        const safeUrlId = safeFinish ? `${safePattern}_${safeFinish}` : safePattern;
-        
-        const brandFolder = activeBrand ? String(activeBrand) : 'global';
-
         try {
-            const { hiResBlob, thumbBlob } = await generateWatermarkedImages(currentFile, displayId);
-
-            const uniqueTimestamp = Date.now();
-            const uniqueSuffix = Math.floor(Math.random() * 10000);
-            const hiResRef = ref(storage, `global_assets/hires/${brandFolder}/${safeUrlId}_${uniqueTimestamp}_${uniqueSuffix}_original.png`);
-            
-            let hiResUrl = null;
-            let thumbUrl = null;
-
-            if (hiResBlob && thumbBlob) {
-                const thumbRef = ref(storage, `global_assets/thumbs/${brandFolder}/${safeUrlId}_${uniqueTimestamp}_${uniqueSuffix}_thumb.png`);
-                const [hiUpload, thUpload] = await Promise.all([
-                    uploadBytes(hiResRef, hiResBlob),
-                    uploadBytes(thumbRef, thumbBlob)
-                ]);
-                const urls = await Promise.all([ getDownloadURL(hiUpload.ref), getDownloadURL(thUpload.ref) ]);
-                hiResUrl = urls[0];
-                thumbUrl = urls[1];
-            } else {
-                const fallbackUpload = await uploadBytes(hiResRef, currentFile);
-                hiResUrl = await getDownloadURL(fallbackUpload.ref);
-                thumbUrl = hiResUrl;
-            }
-
-            const assetDocId = `ASSET-${brandFolder}-${safeUrlId}-${uniqueTimestamp}-${uniqueSuffix}`;
-            
-            await setDoc(doc(db, "global_assets", assetDocId), {
-                id: assetDocId,
-                patternId: String(patternId).toUpperCase(),
-                finishId: safeFinish,
-                customerId: customerId || '',
-                clientSku: String(clientSku).toUpperCase(),
-                name: displayId, 
-                collection: collectionName,
-                productType: productType,
-                notes: notes,
-                associatedParts: Array.isArray(associatedParts) ? associatedParts : [],
-                associatedFinishes: Array.isArray(associatedFinishes) ? associatedFinishes : [],
-                originalUrl: hiResUrl, 
-                thumbnailUrl: thumbUrl, 
-                url: thumbUrl, 
-                brandId: activeBrand || 'ALL',
-                uploadedBy: currentUser || 'Unknown',
-                createdAt: serverTimestamp()
-            }, { merge: true });
-
-            setNotes(""); 
-            setClientSku(""); 
+            await processOne(queue[currentIndex].file, metaFromForm());
+            setNotes("");
+            setClientSku("");
             setCurrentIndex(prev => prev + 1);
             setIsProcessing(false);
-
         } catch (error) {
             console.error("Processing Error:", error);
             alert("Failed to process image. Check console.");
             setIsProcessing(false);
         }
+    };
+
+    // Blast through every remaining image of the current folder: same plate/paired/crop/fields,
+    // each file's OWN finish + fabricut code + color parsed from its filename.
+    const remainingInFolder = queue.filter((q, i) => i > currentIndex && q.folder && q.folder === queue[currentIndex]?.folder);
+    const handleProcessFolder = async () => {
+        if (!patternId) return alert("You must provide a Pattern ID.");
+        const baseMeta = metaFromForm();
+        const idxs = [currentIndex];
+        queue.forEach((q, i) => { if (i > currentIndex && q.folder && q.folder === queue[currentIndex]?.folder) idxs.push(i); });
+        setIsProcessing(true);
+        setAutoRun({ done: 0, total: idxs.length });
+        try {
+            for (let n = 0; n < idxs.length; n++) {
+                const entry = queue[idxs[n]];
+                const parsed = parseRenderFilename(entry.file.name);
+                await processOne(entry.file, {
+                    ...baseMeta,
+                    finishId: (n === 0 ? baseMeta.finishId : parsed?.finishId) || parsed?.finishId || '',
+                    fabCode: (n === 0 ? baseMeta.fabCode : parsed?.fabCode) || parsed?.fabCode || '',
+                    fabColorName: (n === 0 ? baseMeta.fabColorName : parsed?.fabColorName) || parsed?.fabColorName || '',
+                });
+                setAutoRun({ done: n + 1, total: idxs.length });
+                setCurrentIndex(idxs[n] + 1);
+            }
+            setNotes("");
+            setClientSku("");
+        } catch (error) {
+            console.error("Folder Processing Error:", error);
+            alert(`Folder run stopped after an upload error — the current image is the one that failed. Check console.`);
+        }
+        setAutoRun(null);
+        setIsProcessing(false);
     };
 
     const handleKeyDown = (e) => {
@@ -261,13 +437,13 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const isDone = safeQueue.length > 0 && currentIndex >= safeQueue.length;
     const visibleQueue = safeQueue.slice(currentIndex, currentIndex + 50);
 
-    const safeHqParts = Array.isArray(hqParts) ? hqParts : [];
-    const isLibraryMatch = Boolean(
-        patternId && safeHqParts.some(p => 
-            String(p?.id || "").toUpperCase().includes(String(patternId).toUpperCase()) || 
-            (p?.legacyErpId && String(p.legacyErpId).toUpperCase().includes(String(patternId).toUpperCase()))
-        )
-    );
+    const pairedSuggestions = useMemo(() => {
+        if (!queue[currentIndex]) return [];
+        return pairedCandidatesFor(patternId, partIndex, pairedQuery);
+    }, [patternId, partIndex, pairedQuery, queue, currentIndex]);
+
+    const inputStyle = { width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px', outline: 'none' };
+    const labelStyle = { fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', backgroundColor: theme.paper, minHeight: '100vh', fontFamily: theme.sans }}>
@@ -293,6 +469,10 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                     <div style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', fontWeight: 500, color: remaining > 0 ? theme.brass : theme.inkSoft }}>
                         {remaining} IMAGES REMAINING
                     </div>
+                    <label style={{ background: '#fff', color: theme.ink, padding: '10px 20px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', border: `1px solid ${theme.ink}`, transition: 'background 0.2s' }}>
+                        + SELECT FOLDER
+                        <input type="file" multiple webkitdirectory="" onChange={handleFolderSelect} style={{ display: 'none' }} />
+                    </label>
                     <label style={{ background: theme.ink, color: '#fff', padding: '10px 20px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', border: 'none', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
                         + SELECT BATCH
                         <input type="file" multiple accept="image/png, image/jpeg" onChange={handleFileSelect} style={{ display: 'none' }} />
@@ -301,73 +481,108 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             </div>
 
             {safeQueue.length === 0 ? (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px dashed ${theme.brass}`, color: theme.inkSoft, fontFamily: theme.serif, fontSize: '1.4rem' }}>
-                    Drag & Drop or Select a Batch of Images to Begin
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px dashed ${theme.brass}`, color: theme.inkSoft, fontFamily: theme.serif, fontSize: '1.4rem', padding: '60px 20px' }}>
+                    <div>Drag & Drop or Select a Batch of Images to Begin</div>
+                    <div style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase' }}>SELECT FOLDER = Kermit renders — folder name is the plate code, finishes read from filenames</div>
                 </div>
             ) : isDone ? (
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: theme.paper2, border: `1px solid ${theme.line}`, color: theme.ink }}>
                     <div style={{ fontSize: '3rem' }}>✅</div>
                     <h2 style={{ margin: '15px 0 10px 0', fontFamily: theme.serif, fontWeight: 500 }}>Batch Complete</h2>
                     <p style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.inkSoft }}>Processed {safeQueue.length} images.</p>
-                    <button onClick={() => { setQueue([]); setCurrentIndex(0); setPatternId(''); setFinishId(''); setCustomerId(''); setClientSku(''); setAssociatedParts([]); setAssociatedFinishes([]); }} style={{ marginTop: '20px', padding: '12px 24px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.18em', textTransform: 'uppercase', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>START NEW BATCH</button>
+                    <button onClick={() => { setQueue([]); setCurrentIndex(0); setPatternId(''); setFinishId(''); setFabCode(''); setFabColorName(''); setCustomerId(''); setClientSku(''); setAssociatedParts([]); setAssociatedFinishes([]); setFolderMeta({}); }} style={{ marginTop: '20px', padding: '12px 24px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.18em', textTransform: 'uppercase', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>START NEW BATCH</button>
                 </div>
             ) : (
                 <div style={{ display: 'flex', gap: '20px', flex: 1 }}>
-                    
+
                     {/* Sidebar Queue */}
                     <div style={{ width: '250px', background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto', maxHeight: '75vh' }}>
                         <div style={{ padding: '15px', background: theme.paper, color: theme.ink, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textAlign: 'center', position: 'sticky', top: 0, zIndex: 10, borderBottom: `1px solid ${theme.line}` }}>UPCOMING PIPELINE</div>
                         <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            {visibleQueue.map((file, localIdx) => {
+                            {visibleQueue.map((entry, localIdx) => {
                                 const idx = currentIndex + localIdx;
                                 const isCurrent = idx === currentIndex;
                                 return (
                                     <div key={idx} style={{ padding: '8px', fontFamily: theme.mono, fontSize: '10px', background: isCurrent ? theme.paper2 : '#fff', border: isCurrent ? `1px solid ${theme.brass}` : `1px solid ${theme.line}`, color: isCurrent ? theme.ink : theme.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                        {idx + 1}. {String(file?.name || 'Unknown')}
+                                        {idx + 1}. {entry?.folder ? `[${entry.folder}] ` : ''}{String(entry?.file?.name || 'Unknown')}
                                     </div>
                                 )
                             })}
                         </div>
                     </div>
 
-                    {/* Image Preview Window */}
+                    {/* Image Preview Window (with per-folder crop tool) */}
                     <div style={{ flex: 2, background: theme.paper, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${theme.line}`, overflow: 'hidden', position: 'relative' }}>
-                        {imagePreview && <img src={imagePreview} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 4px 24px rgba(0,0,0,0.05)' }} />}
-                        
+                        {imagePreview && (
+                            <div
+                                ref={cropBoxRef}
+                                onMouseDown={onCropDown} onMouseMove={onCropMove} onMouseUp={onCropUp} onMouseLeave={onCropUp}
+                                style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', maxHeight: '100%', cursor: cropMode ? 'crosshair' : 'default', lineHeight: 0 }}
+                            >
+                                <img src={imagePreview} alt="Preview" draggable={false} style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', boxShadow: '0 4px 24px rgba(0,0,0,0.05)', display: 'block' }} />
+                                {(dragRect || activeCrop) && (() => {
+                                    const r = dragRect || activeCrop;
+                                    return (
+                                        <div style={{ position: 'absolute', left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%`, border: `2px solid ${theme.brass}`, boxShadow: '0 0 0 9999px rgba(28,26,22,0.45)', pointerEvents: 'none' }} />
+                                    );
+                                })()}
+                            </div>
+                        )}
+
+                        <div style={{ position: 'absolute', top: '15px', left: '15px', display: 'flex', gap: '8px', zIndex: 5 }}>
+                            <button onClick={() => { setCropMode(m => !m); setDragRect(null); }} style={{ padding: '8px 14px', background: cropMode ? theme.brass : 'rgba(255,255,255,0.92)', color: cropMode ? '#fff' : theme.ink, border: `1px solid ${cropMode ? theme.brass : theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.08em', cursor: 'pointer' }}>
+                                {cropMode ? 'DRAG TO SET CROP…' : (activeCrop ? '✂ ADJUST CROP' : '✂ SET CROP')}
+                            </button>
+                            {activeCrop && !cropMode && (
+                                <button onClick={() => setFolderField({ crop: null })} style={{ padding: '8px 14px', background: 'rgba(255,255,255,0.92)', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.08em', cursor: 'pointer' }}>
+                                    ✕ CLEAR
+                                </button>
+                            )}
+                            {activeCrop && (
+                                <span style={{ padding: '8px 10px', background: 'rgba(255,255,255,0.92)', border: `1px solid ${theme.line}`, color: theme.brass, fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em' }}>
+                                    CROP APPLIES TO {folderKey === '~loose~' ? 'LOOSE FILES' : `FOLDER ${folderKey}`}
+                                </span>
+                            )}
+                        </div>
+
                         <div style={{ position: 'absolute', bottom: '20px', right: '20px', background: 'rgba(255,255,255,0.9)', border: `1px solid ${theme.line}`, color: theme.ink, padding: '6px 12px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em' }}>
-                            FILE: {String(safeQueue[currentIndex]?.name || "Unknown")}
+                            {queue[currentIndex]?.folder ? `${queue[currentIndex].folder} / ` : ''}{String(queue[currentIndex]?.file?.name || "Unknown")}
                         </div>
                     </div>
 
                     {/* Metadata Form Panel */}
-                    <div style={{ flex: 1.2, background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto' }}>
+                    <div style={{ flex: 1.2, background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto', maxHeight: '75vh' }}>
                         <div style={{ fontFamily: theme.serif, fontSize: '1.4rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>Metadata Injection</div>
 
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>PATTERN / ITEM ID</label>
-                                <input 
+                                <label style={labelStyle}>PATTERN / PLATE ID</label>
+                                <input
                                     ref={idInputRef}
-                                    type="text" 
-                                    value={patternId} 
-                                    onChange={e => setPatternId(e.target.value)} 
+                                    type="text"
+                                    value={patternId}
+                                    onChange={e => setPatternId(e.target.value)}
                                     onKeyDown={handleKeyDown}
-                                    placeholder="e.g. H1-75BS" 
-                                    style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px', outline: 'none' }} 
+                                    placeholder="e.g. H1-1BP-R"
+                                    style={inputStyle}
                                 />
-                                {isLibraryMatch && (
-                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginTop: '5px', letterSpacing: '.05em' }}>✓ Matches Master Library Part</div>
-                                )}
+                                {resolved ? (
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginTop: '5px', letterSpacing: '.05em' }}>
+                                        ✓ {String(resolved.doc.itemName || resolved.base)}{resolved.summary ? ` — ${resolved.summary}` : ''}
+                                    </div>
+                                ) : patternId ? (
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '5px', letterSpacing: '.05em' }}>— no exact Master Library match</div>
+                                ) : null}
                             </div>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>FINISH ID</label>
-                                <input 
-                                    type="text" 
-                                    value={finishId} 
-                                    onChange={e => setFinishId(e.target.value)} 
+                                <label style={labelStyle}>FINISH ID</label>
+                                <input
+                                    type="text"
+                                    value={finishId}
+                                    onChange={e => setFinishId(e.target.value)}
                                     onKeyDown={handleKeyDown}
                                     placeholder="e.g. EP1"
-                                    style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px', outline: 'none' }}
+                                    style={inputStyle}
                                 />
                                 {/^EP0+\d+$/.test(String(finishId).toUpperCase().trim()) && (
                                     <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginTop: '5px', letterSpacing: '.05em' }}>↳ EP leading zero auto-removed → {String(finishId).toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1')}</div>
@@ -375,38 +590,86 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             </div>
                         </div>
 
+                        {/* THE COMBO: fee item (french/miter return) or bracket arm shown WITH the plate */}
+                        <div style={{ border: `1px solid ${pairedDoc ? theme.brass : theme.line}`, background: theme.paper, padding: '12px' }}>
+                            <label style={labelStyle}>PAIRED FEE / BRACKET ARM (CPQ COMBO)</label>
+                            {pairedDoc ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                                    <span style={{ background: '#fff', border: `1px solid ${theme.brass}`, color: theme.ink, padding: '6px 10px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em' }}>
+                                        {pairedInfo?.endTreatment ? `${END_TREATMENT_LABELS[pairedInfo.endTreatment]} · ` : ''}{pairedInfo?.code} — {String(pairedDoc.itemName || '')}
+                                        <span onClick={() => setFolderField({ pairedDocId: null })} style={{ cursor: 'pointer', marginLeft: '8px', color: theme.inkSoft }}>×</span>
+                                    </span>
+                                </div>
+                            ) : (
+                                <>
+                                    <input
+                                        type="text"
+                                        value={pairedQuery}
+                                        onChange={e => setPairedQuery(e.target.value)}
+                                        placeholder="Search fee items / bracket arms…"
+                                        style={{ ...inputStyle, marginTop: '8px' }}
+                                    />
+                                    <div style={{ maxHeight: '150px', overflowY: 'auto', marginTop: '5px', display: 'flex', flexDirection: 'column' }}>
+                                        {pairedSuggestions.map(p => {
+                                            const info = pairedInfoOf(p);
+                                            return (
+                                                <button key={p.id} onClick={() => { setFolderField({ pairedDocId: p.id }); setPairedQuery(''); }} style={{ textAlign: 'left', padding: '7px 8px', background: '#fff', border: 'none', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: theme.ink, cursor: 'pointer' }}>
+                                                    {info?.endTreatment ? `[${END_TREATMENT_LABELS[info.endTreatment]}] ` : info?.role === 'ARM' ? '[ARM] ' : ''}{partCodeOf(p)} — {String(p.itemName || '')}
+                                                </button>
+                                            );
+                                        })}
+                                        {pairedSuggestions.length === 0 && (
+                                            <div style={{ padding: '7px 8px', fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft }}>Type to search the Master Library…</div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+                            <div style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.inkSoft, marginTop: '6px', letterSpacing: '.05em' }}>STICKY PER FOLDER — set once on the first image; the rest of the folder inherits it.</div>
+                        </div>
+
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>CUSTOMER</label>
-                                <select value={customerId} onChange={e => setCustomerId(e.target.value)} style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', marginTop: '5px', boxSizing: 'border-box', outline: 'none' }}>
+                                <label style={labelStyle}>FABRICUT CODE</label>
+                                <input type="text" value={fabCode} onChange={e => setFabCode(e.target.value)} onKeyDown={handleKeyDown} placeholder="e.g. HNFSRFRSB079" style={inputStyle} />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <label style={labelStyle}>FABRICUT COLOR NAME</label>
+                                <input type="text" value={fabColorName} onChange={e => setFabColorName(e.target.value)} onKeyDown={handleKeyDown} placeholder="e.g. STAIN NICKEL" style={inputStyle} />
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <div style={{ flex: 1 }}>
+                                <label style={labelStyle}>CUSTOMER</label>
+                                <select value={customerId} onChange={e => setCustomerId(e.target.value)} style={{ ...inputStyle, textTransform: 'none' }}>
                                     <option value="">Select...</option>
                                     {globalLists.customers.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
                             </div>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>CLIENT SKU / PART #</label>
-                                <input 
-                                    type="text" 
-                                    value={clientSku} 
-                                    onChange={e => setClientSku(e.target.value)} 
+                                <label style={labelStyle}>CLIENT SKU / PART #</label>
+                                <input
+                                    type="text"
+                                    value={clientSku}
+                                    onChange={e => setClientSku(e.target.value)}
                                     onKeyDown={handleKeyDown}
-                                    placeholder="e.g. CUST-999" 
-                                    style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px', outline: 'none' }} 
+                                    placeholder="e.g. CUST-999"
+                                    style={inputStyle}
                                 />
                             </div>
                         </div>
 
                         <div style={{ display: 'flex', gap: '15px' }}>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>COLLECTION</label>
-                                <select value={collectionName} onChange={e => setCollectionName(e.target.value)} style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', marginTop: '5px', boxSizing: 'border-box', outline: 'none' }}>
+                                <label style={labelStyle}>COLLECTION</label>
+                                <select value={collectionName} onChange={e => setCollectionName(e.target.value)} style={{ ...inputStyle, textTransform: 'none' }}>
                                     <option value="">Select...</option>
                                     {collectionsData.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                 </select>
                             </div>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>PRODUCT TYPE</label>
-                                <select value={productType} onChange={e => setProductType(e.target.value)} style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', marginTop: '5px', boxSizing: 'border-box', outline: 'none' }}>
+                                <label style={labelStyle}>PRODUCT TYPE</label>
+                                <select value={productType} onChange={e => setProductType(e.target.value)} style={{ ...inputStyle, textTransform: 'none' }}>
                                     <option value="">Select...</option>
                                     {globalLists.prodTypes.map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
@@ -414,22 +677,22 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                         </div>
 
                         <div>
-                            <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>SEARCHABLE OPEN NOTES</label>
-                            <textarea 
-                                value={notes} 
-                                onChange={e => setNotes(e.target.value)} 
-                                placeholder="Any keywords you want to search by later..." 
-                                style={{ width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', minHeight: '80px', boxSizing: 'border-box', marginTop: '5px', resize: 'vertical', outline: 'none' }} 
+                            <label style={labelStyle}>SEARCHABLE OPEN NOTES</label>
+                            <textarea
+                                value={notes}
+                                onChange={e => setNotes(e.target.value)}
+                                placeholder="Any keywords you want to search by later..."
+                                style={{ ...inputStyle, textTransform: 'none', minHeight: '60px', resize: 'vertical' }}
                             />
                         </div>
 
                         {/* PART TAGGING */}
-                        <select 
+                        <select
                             onChange={(e) => {
                                 if (e.target.value && !associatedParts.includes(e.target.value)) {
                                     setAssociatedParts(prev => [...prev, e.target.value]);
                                 }
-                            }} 
+                            }}
                             style={{ padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', width: '100%', boxSizing: 'border-box', outline: 'none' }}
                         >
                             <option value="">+ Link to Master Library Part...</option>
@@ -447,17 +710,17 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                         )}
 
                         {/* FINISHES ASSIGNMENT */}
-                        <select 
+                        <select
                             onChange={(e) => {
                                 if (e.target.value && !associatedFinishes.includes(e.target.value)) {
                                     setAssociatedFinishes(prev => [...prev, e.target.value]);
                                 }
-                            }} 
+                            }}
                             style={{ padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', width: '100%', boxSizing: 'border-box', outline: 'none' }}
                         >
                             <option value="">+ Link to Master Finish...</option>
                             <optgroup label="In-House & Global Finishes">
-                                {[...(Array.isArray(globalFinishes)?globalFinishes:[]), ...(Array.isArray(inhouseFinishes)?inhouseFinishes:[])].map(f => <option key={f.id} value={f.id}>{String(f.name || f.id)}</option>)}
+                                {allFinishes.map(f => <option key={f.id} value={f.id}>{String(f.name || f.id)}</option>)}
                             </optgroup>
                             <optgroup label="Outsourced Finishes">
                                 {(Array.isArray(outsourceFinishes)?outsourceFinishes:[]).map(f => <option key={f.id} value={f.id}>{String(f.name || f.id)}</option>)}
@@ -468,7 +731,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
                                 {associatedFinishes.map(finId => (
                                     <span key={finId} style={{ background: theme.paper2, color: theme.ink, border: `1px solid ${theme.line}`, padding: '4px 8px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                        {String(allFinishes.find(f => f.id === finId)?.name || finId)}
+                                        {String([...allFinishes, ...(Array.isArray(outsourceFinishes)?outsourceFinishes:[])].find(f => f.id === finId)?.name || finId)}
                                         <span onClick={() => setAssociatedFinishes(prev => prev.filter(id => id !== finId))} style={{ cursor: 'pointer', color: theme.inkSoft }}>×</span>
                                     </span>
                                 ))}
@@ -477,26 +740,35 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
                         <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textAlign: 'center', letterSpacing: '.1em', textTransform: 'uppercase' }}>Tip: Press Enter to submit instantly</div>
-                            <button 
-                                onClick={handleProcessAndNext} 
+                            <button
+                                onClick={handleProcessAndNext}
                                 disabled={isProcessing || !patternId}
-                                style={{ 
-                                    padding: '15px', 
-                                    background: (isProcessing || !patternId) ? theme.paper2 : theme.ink, 
-                                    color: (isProcessing || !patternId) ? theme.inkSoft : '#fff', 
-                                    fontFamily: theme.mono, 
-                                    fontSize: '11px', 
-                                    letterSpacing: '.18em', 
-                                    textTransform: 'uppercase', 
-                                    border: (isProcessing || !patternId) ? `1px solid ${theme.line}` : 'none', 
-                                    cursor: (isProcessing || !patternId) ? 'not-allowed' : 'pointer', 
+                                style={{
+                                    padding: '15px',
+                                    background: (isProcessing || !patternId) ? theme.paper2 : theme.ink,
+                                    color: (isProcessing || !patternId) ? theme.inkSoft : '#fff',
+                                    fontFamily: theme.mono,
+                                    fontSize: '11px',
+                                    letterSpacing: '.18em',
+                                    textTransform: 'uppercase',
+                                    border: (isProcessing || !patternId) ? `1px solid ${theme.line}` : 'none',
+                                    cursor: (isProcessing || !patternId) ? 'not-allowed' : 'pointer',
                                     transition: 'background 0.2s'
                                 }}
-                                onMouseOver={(e) => { if(!isProcessing && patternId) e.currentTarget.style.background = theme.brass; }} 
+                                onMouseOver={(e) => { if(!isProcessing && patternId) e.currentTarget.style.background = theme.brass; }}
                                 onMouseOut={(e) => { if(!isProcessing && patternId) e.currentTarget.style.background = theme.ink; }}
                             >
-                                {isProcessing ? "GENERATING & UPLOADING..." : "PROCESS & NEXT"}
+                                {isProcessing && !autoRun ? "GENERATING & UPLOADING..." : "PROCESS & NEXT"}
                             </button>
+                            {remainingInFolder.length > 0 && (
+                                <button
+                                    onClick={handleProcessFolder}
+                                    disabled={isProcessing || !patternId}
+                                    style={{ padding: '13px', background: (isProcessing || !patternId) ? theme.paper2 : theme.brass, color: (isProcessing || !patternId) ? theme.inkSoft : '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.14em', textTransform: 'uppercase', border: 'none', cursor: (isProcessing || !patternId) ? 'not-allowed' : 'pointer' }}
+                                >
+                                    {autoRun ? `PROCESSING FOLDER… ${autoRun.done}/${autoRun.total}` : `⚡ PROCESS WHOLE FOLDER (${remainingInFolder.length + 1}) — finishes from filenames`}
+                                </button>
+                            )}
                             <button onClick={() => { setNotes(""); setClientSku(""); setCurrentIndex(prev => prev + 1); }} disabled={isProcessing} style={{ padding: '10px', background: 'transparent', color: theme.inkSoft, border: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textDecoration: 'underline', cursor: 'pointer' }}>
                                 SKIP THIS IMAGE
                             </button>
