@@ -408,7 +408,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       const returnChosen = returnChosenAt(pos) || !!sel?.isReturnArm;
       const inlineBracket = !!sel?.usesReturnPlates;
       const hasInl = subs.some(o => o.inlineOnly);
-      return subs.filter(o => (returnChosen ? o.returnOnly
+      // Return plates exist only at their native diameter (RBP/RCP = ¾"); at 1"/1-3/8" a return
+      // uses the STANDARD plates — fall back to the regular pool when none survive the size gate.
+      const retPoolLive = subs.some(o => o.returnOnly && optAllowedAtSize(o));
+      return subs.filter(o => (returnChosen ? (retPoolLive ? o.returnOnly : (!o.returnOnly && !o.inlineOnly))
           : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
           : (!o.returnOnly && !o.inlineOnly)) && optAllowedAtSize(o));
   };

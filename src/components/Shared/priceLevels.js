@@ -43,14 +43,18 @@ export function fabricutCodeOf(part, findByCode) {
 //     finish suffix (…/EPn → plated), defaulting to painted.
 //   - Explicit null (backplates — "arm price includes the plate") → a $0 line, NOT a fallback.
 //   - Missing wholesale falls back to retail ÷ 2 (the Traversing sheet has no wholesale column).
-export function fabricutPriceOf(part, levelId) {
+export function fabricutPriceOf(part, levelId, finishCode) {
     const lvl = PRICE_LEVELS.find(l => l.id === levelId);
     const fab = part?.manufacturingSpecs?.fabricut;
     if (!lvl?.field || !fab) return null;
 
     const code = String(part.legacyErpId || part.itemId || '').trim().toUpperCase();
     const suffix = code.includes('/') ? code.split('/')[1] : '';
-    const tier = suffix.startsWith('EP') ? 'plated' : 'painted';
+    // Suffixless docs (FEE items, mill bases priced directly) tier by the CHOSEN finish when the
+    // caller passes it — a fee has no /P //EP variant docs; its painted vs plated price follows
+    // the finish picked on that step (french return $35 painted / $43 plated on ONE record).
+    const fcU = String(finishCode || '').toUpperCase();
+    const tier = (suffix.startsWith('EP') || (!suffix && fcU.startsWith('EP'))) ? 'plated' : 'painted';
     const tiered = (f) => fab[f] !== undefined ? fab[f] : fab[`${tier}${f[0].toUpperCase()}${f.slice(1)}`];
 
     let v = tiered(lvl.field);

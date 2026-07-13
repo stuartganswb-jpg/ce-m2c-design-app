@@ -1227,7 +1227,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               if (sel && (s.subOptions.some(o => o.returnOnly || o.inlineOnly))) {
                   const hasInl2 = s.subOptions.some(o => o.inlineOnly);
                   const o = s.subOptions.find(x => (x.optId || x.partId) === sel);
-                  const inPool = o && (returnChosen2 ? o.returnOnly
+                  // Same size-aware fallback as the picker: no returnOnly plate at this diameter →
+                  // a return runs on the STANDARD plates, so a standard pick must NOT clear.
+                  const sizeSel2 = sizeSelectionsOf(activeFlow, dynamicConfigParams);
+                  const sizeOk2 = (x) => {
+                      if (!sizeSel2) return true;
+                      const ap = [...libraryParts, ...liveAssemblies];
+                      return partAllowedAtSize(
+                          ap.find(y => y.id === x.partId || y.itemId === x.partId || y.legacyErpId === x.partId
+                              || (x.partName && (y.itemName === x.partName || y.legacyErpId === x.partName || y.itemId === x.partName))),
+                          sizeSel2, sizeLabelIndex);
+                  };
+                  const retPoolLive2 = s.subOptions.some(x => x.returnOnly && sizeOk2(x));
+                  const inPool = o && (returnChosen2 ? (retPoolLive2 ? o.returnOnly : (!o.returnOnly && !o.inlineOnly))
                       : inlineBracket2 ? (hasInl2 ? o.inlineOnly : o.returnOnly)
                       : (!o.returnOnly && !o.inlineOnly));
                   if (o && !inPool) { delete next[`${s.id}__sub`]; changed = true; }
@@ -1517,7 +1529,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           // On pole steps the SELECTION is the finish — species rides it (wood pole → oak/walnut item).
                           const linkedBase = speciesSwap(linkedSized, selFinish || finishObjForStep(step.id));
                           const linkedPart = finishVariantOf(linkedBase, fc);
-                          const fabLp = priceLevel !== 'STANDARD' ? fabricutPriceOf(linkedPart, priceLevel) : null;
+                          const fabLp = priceLevel !== 'STANDARD' ? fabricutPriceOf(linkedPart, priceLevel, fc) : null;
                           // Variant unpriced → base item price (M2C prices the base, CE the variant).
                           const lp = fabLp != null ? fabLp : (parseFloat(linkedPart.manufacturingSpecs?.basePrice ?? linkedPart.basePrice) || parseFloat(linkedBase.manufacturingSpecs?.basePrice ?? linkedBase.basePrice) || 0);
                           if (optionNativePrice === 0 && stepPrice === 0 && lp > 0) optionNativePrice = lp;
@@ -1537,7 +1549,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // = explicit $0, included in the arm). Fees and non-Fabricut items fall through
                   // untouched, so the quote is a faithful mix.
                   if (priceLevel !== 'STANDARD') {
-                      const fp = fabricutPriceOf(partObj, priceLevel);
+                      const fp = fabricutPriceOf(partObj, priceLevel, finishCodeForStep(step.id));
                       if (fp != null) optionNativePrice = fp;
                   }
 
@@ -1580,7 +1592,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           if (!pp && polePart) pp = parseFloat(polePart.manufacturingSpecs?.basePrice ?? polePart.basePrice) || 0;
                           if (!pp && matOpt.price !== undefined && matOpt.price !== '') pp = parseFloat(matOpt.price) || 0;
                           if (matStep.useClientPricing) { const cv = clientPriceFor(poleFinished) ?? clientPriceFor(polePart); if (cv != null) pp = cv; }
-                          if (priceLevel !== 'STANDARD') { const fp = fabricutPriceOf(poleFinished, priceLevel); if (fp != null) pp = fp; }
+                          if (priceLevel !== 'STANDARD') { const fp = fabricutPriceOf(poleFinished, priceLevel, finishCodeForStep(matStep.id)); if (fp != null) pp = fp; }
                           if (stepPrice === 0 && pp > 0) stepPrice = pp;
                           resolvedPartId = poleFinished.itemId || poleFinished.id;
                           resolvedErpId = poleFinished.legacyErpId || poleFinished.itemId || null;
@@ -2563,23 +2575,30 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               //  - In Line bracket (usesReturnPlates) -> inlineOnly copies (inline-position); flows
                               //    with NO inline copies fall back to returnOnly = the pre-split behavior
                               //  - otherwise                          -> regular plates (neither flag)
+                              // Size-native plates (if any) show only at their own diameter.
+                              const subSizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
+                              const subSizeOk = (o) => {
+                                  if (!subSizeSel) return true;
+                                  const ap = [...libraryParts, ...liveAssemblies];
+                                  return partAllowedAtSize(
+                                      ap.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
+                                          || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName))),
+                                      subSizeSel, sizeLabelIndex);
+                              };
                               if (currentStep.subOptions.some(o => o.returnOnly || o.inlineOnly)) {
                                   const returnChosen = isReturnChosenForPos(currentStep.position) || !!selMainOpt?.isReturnArm;
                                   const inlineBracket = !!selMainOpt?.usesReturnPlates;
                                   const hasInl = currentStep.subOptions.some(o => o.inlineOnly);
-                                  subs = subs.filter(o => returnChosen ? o.returnOnly
+                                  // Return plates exist only where the diameter has them (RBP/RCP are
+                                  // ¾"-native). At 1"/1-3/8" a return uses the STANDARD plates — so when
+                                  // no returnOnly plate survives the size gate, fall back to the regular
+                                  // pool instead of an empty backplate list.
+                                  const retPoolLive = subs.some(o => o.returnOnly && subSizeOk(o));
+                                  subs = subs.filter(o => returnChosen ? (retPoolLive ? o.returnOnly : (!o.returnOnly && !o.inlineOnly))
                                       : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
                                       : (!o.returnOnly && !o.inlineOnly));
                               }
-                              // Size-native plates (if any) show only at their own diameter.
-                              const subSizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
-                              if (subSizeSel) {
-                                  const ap = [...libraryParts, ...liveAssemblies];
-                                  subs = subs.filter(o => partAllowedAtSize(
-                                      ap.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
-                                          || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName))),
-                                      subSizeSel, sizeLabelIndex));
-                              }
+                              subs = subs.filter(subSizeOk);
                               // Basic brackets take no backplate — grey the picker and pin it to None.
                               const noPlate = basicNoBackplate(currentStep);
                               return (

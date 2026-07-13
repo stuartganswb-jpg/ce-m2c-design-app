@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc, getDoc, getDocs, collection, writeBatch } from "firebase/firestore";
+import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, writeBatch } from "firebase/firestore";
 import { parseFabricutWorkbook, buildFabricutPlan } from '../Shared/fabricutImport';
 
 const BRAND_NETSUITE_MAP = {
@@ -723,13 +723,13 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
-    // FABRICUT RETURN-FEE SEEDER (Stuart 2026-07-13): creates the six fee ITEMS that price the H1
-    // french & miter returns — base + /P + /EP each. CE → Fabricut prices: french $35 painted /
-    // $43 plated; miter $40 / $48. Backplate included (RBP at 3/4", standard BP at 1"/1-3/8");
-    // coverplate upcharges ride the CP items like any bracket. Each priced doc carries a Fabricut
-    // clientPricing row + fabricut.cost, and the base doc's customData.feeType is what the flow
-    // generator links onto the OPT-BEND / OPT-MITER options on the next Regenerate. Idempotent —
-    // existing docs are left untouched (edit them in the Master Library afterwards).
+    // FABRICUT RETURN-FEE SEEDER v2 (Stuart 2026-07-13): ONE record per fee — painted/plated tier
+    // prices live on the base doc exactly like the mill-base items (paintedCost / platedCost); the
+    // finish chosen on the End Treatment step picks the tier at quote time. French $35/P · $43/EP;
+    // miter $40/P · $48/EP (CE → Fabricut). Backplate included (RBP at 3/4", standard BP at
+    // 1"/1-3/8"); coverplate upcharges ride the CP items like any bracket. customData.feeType is
+    // what the flow generator links onto the return options on Regenerate. Re-runnable: existing
+    // base docs get their pricing refreshed; v1's separate /P //EP sibling docs are removed.
     const handleSeedFabricutFees = async () => {
         try {
             addLog('Seeding Fabricut return-fee items…', 'info');
@@ -741,31 +741,35 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 { base: 'CE-FEE-H1FR', name: 'H1 French Return Fee', feeType: 'FRENCH_RETURN', p: 35, ep: 43 },
                 { base: 'CE-FEE-H1MTR', name: 'H1 Miter Return Fee', feeType: 'MITER_RETURN', p: 40, ep: 48 },
             ];
-            let made = 0, kept = 0;
+            let made = 0, updated = 0, removed = 0;
             for (const fee of FEES) {
-                for (const [sfx, cost] of [['', null], ['P', fee.p], ['EP', fee.ep]]) {
-                    const code = sfx ? `${fee.base}/${sfx}` : fee.base;
-                    const id = code.replace(/[^A-Za-z0-9-]/g, '_');
-                    const ref = doc(db, 'Approved_Designs', id);
-                    const existing = await getDoc(ref);
-                    if (existing.exists()) { kept++; addLog(`↷ ${code} already exists — left untouched.`, 'warn'); continue; }
-                    await setDoc(ref, {
-                        id, brandId: 'ce', partClass: 'Inventory', productType: 'FEE',
-                        itemName: sfx ? `${fee.name} — ${sfx === 'P' ? 'Painted' : 'Plated'}` : fee.name,
-                        legacyErpId: code, sharedBrands: ['ce'],
-                        clientPricing: cost != null ? [{ customerId: fabCust.id, clientSku: '', price: cost, clientSalesPrice: '', source: 'FABRICUT' }] : [],
-                        manufacturingSpecs: {
-                            productType: 'FEE', partHandling: '', basePrice: '',
-                            customData: { feeType: fee.feeType },
-                            fabricut: { ...(cost != null ? { cost, tier: sfx } : {}), pricedWith: PRICED_WITH, source: 'FEE_SEEDER', importedAt: new Date().toISOString() }
-                        },
-                        createdAt: new Date().toISOString(), createdBy: 'FEE_SEEDER'
-                    });
-                    made++;
-                    addLog(`＋ ${code}${cost != null ? ` — $${cost} (${fabCust.name})` : ' (base / link record)'}`, 'success');
+                const id = fee.base.replace(/[^A-Za-z0-9-]/g, '_');
+                const ref = doc(db, 'Approved_Designs', id);
+                const existing = await getDoc(ref);
+                await setDoc(ref, {
+                    id, brandId: 'ce', partClass: 'Inventory', productType: 'FEE',
+                    itemName: fee.name, legacyErpId: fee.base, sharedBrands: ['ce'],
+                    // Single per-customer row (client pricing carries ONE value — the painted fee);
+                    // the painted/plated split is the FAB COST level's job via the tier fields below.
+                    clientPricing: [{ customerId: fabCust.id, clientSku: '', price: fee.p, clientSalesPrice: '', source: 'FABRICUT' }],
+                    manufacturingSpecs: {
+                        productType: 'FEE', partHandling: '', basePrice: '',
+                        customData: { feeType: fee.feeType },
+                        fabricut: { paintedCost: fee.p, platedCost: fee.ep, pricedWith: PRICED_WITH, source: 'FEE_SEEDER', importedAt: new Date().toISOString() }
+                    },
+                    ...(existing.exists() ? {} : { createdAt: new Date().toISOString(), createdBy: 'FEE_SEEDER' })
+                }, { merge: true });
+                if (existing.exists()) { updated++; addLog(`⟳ ${fee.base} refreshed — painted $${fee.p} / plated $${fee.ep} (${fabCust.name})`, 'success'); }
+                else { made++; addLog(`＋ ${fee.base} — painted $${fee.p} / plated $${fee.ep} (${fabCust.name})`, 'success'); }
+                // v1 seeded separate /P and /EP sibling docs — the tiers live on the base now.
+                for (const sfx of ['P', 'EP']) {
+                    const vid = `${fee.base}/${sfx}`.replace(/[^A-Za-z0-9-]/g, '_');
+                    const vref = doc(db, 'Approved_Designs', vid);
+                    const vsnap = await getDoc(vref);
+                    if (vsnap.exists()) { await deleteDoc(vref); removed++; addLog(`− removed ${fee.base}/${sfx} (tier prices now live on ${fee.base})`, 'warn'); }
                 }
             }
-            addLog(`✅ Fee seeding done: ${made} created, ${kept} already existed. NOW: System Admin → CPQ Flows → Regenerate the Fabricut H1 flow so its End Treatment options link these fees (then verify a french return prices $35 painted / $43 plated at FAB COST).`, 'success');
+            addLog(`✅ Fee seeding done: ${made} created, ${updated} refreshed, ${removed} v1 variant doc(s) removed. NOW: System Admin → CPQ Flows → Regenerate the Fabricut H1 flow, then verify a french return prices $35 with a painted finish / $43 with a plated finish at FAB COST.`, 'success');
         } catch (e) { console.error(e); addLog(`❌ Fee seeding failed: ${e.message}`, 'error'); }
     };
 
@@ -853,7 +857,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                             <span style={{ fontFamily: 'var(--serif)', fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Upload Fabricut_CE_CrossReference.xlsx — stamps Fabricut Retail + CE Cost onto every matching library item and finish variant (by CE item #), plus the size keys the H1 size-matrix flows resolve through. Run "Sync Master Library" first; re-run any time the workbook grows. Never touches names, dims or Base Price.</span>
                             <input type="file" accept=".xlsx" disabled={isSyncing} style={{ display: 'none' }} onChange={e => { handleFabricutImport(e.target.files[0]); e.target.value = ''; }} />
                         </label>
-                        <SyncButton onClick={handleSeedFabricutFees} disabled={isSyncing} label="✂ Seed H1 Return-Fee Items" sub="One-time: creates the french ($35/P · $43/EP) & miter ($40/P · $48/EP) return FEE items with Fabricut client pricing — backplate included, CP upcharge rides the plates. Then Regenerate the H1 flow to link them. Idempotent: existing fee docs are never touched." />
+                        <SyncButton onClick={handleSeedFabricutFees} disabled={isSyncing} label="✂ Seed H1 Return-Fee Items" sub="ONE record per fee, like every item: french ($35 painted · $43 plated) & miter ($40 · $48) with the tier prices on the base doc + a Fabricut client row — backplate included, CP upcharge rides the plates. Re-runnable (refreshes prices, removes the old /P //EP siblings). Then Regenerate the H1 flow to link them." />
                     </div>
                 </div>
 
