@@ -143,7 +143,11 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               // nothing: neither its part NOR its hidden includedParts. Firing includedParts for un-taken
               // steps is what dragged phantom joiner/ring hardware into the push.
               const qtyRaw = cart.quantities?.[stepId];
-              const qty = (qtyRaw === undefined || qtyRaw === null || qtyRaw === '') ? 1 : (parseInt(qtyRaw) || 0);
+              let qty = (qtyRaw === undefined || qtyRaw === null || qtyRaw === '') ? 1 : (parseInt(qtyRaw) || 0);
+              // Selection-only steps (hideQty) have no qty input; their stored 0 is a Vision-resume
+              // artifact, not "offered but not taken" — taken = a selection exists. Heal to the
+              // implicit 1 so the arm/backplate/material still hits the BOM.
+              if (qty <= 0 && step?.hideQty && userSelectionId) qty = 1;
               if (qty <= 0) return;
 
               // Hidden BOM-only accessories (e.g. bushings) attached to this step in Node Grouping — auto-added

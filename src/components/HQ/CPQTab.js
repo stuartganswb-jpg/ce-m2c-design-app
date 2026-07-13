@@ -899,7 +899,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // Quantities default to 0 on a Vision resume. Auto-filling per-position bracket /
                   // center counts was error-prone (end vs center), so operators enter them manually
                   // using the Engineering Specs note — which still shows the recommended counts.
-                  newStepQuantities[step.id] = 0;
+                  // EXCEPT selection-only steps (hideQty — end arms, L/R brackets, materials) and
+                  // SIZE selectors: they have NO qty input, so a seeded 0 could never be corrected
+                  // and zeroed their price/BOM/render. Left unseeded, they price at the implicit
+                  // default (pin defaultQty || 1) once a selection is made.
+                  if (!step.hideQty && step.type !== SIZE_STEP_TYPE) newStepQuantities[step.id] = 0;
 
                   if (step.calculatorTemplate) {
                       newDimensionInputs[step.id] = {
@@ -1407,8 +1411,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           let rawQty = stepQuantities[step.id];
           let qty = 1;
           if (rawQty !== undefined && rawQty !== '') {
-              qty = parseInt(rawQty) || 0; 
+              qty = parseInt(rawQty) || 0;
           } else {
+              qty = activeBomPins.find(p => p.partId === step.linkedPinId)?.defaultQty || 1;
+          }
+          // Selection-only steps (hideQty) have no qty input — a stored 0 (old Vision resumes
+          // seeded every step to 0) could never be corrected by the operator, so a made selection
+          // prices at the implicit default instead of zeroing out.
+          if (step.hideQty && qty === 0 && selectedValue) {
               qty = activeBomPins.find(p => p.partId === step.linkedPinId)?.defaultQty || 1;
           }
 
@@ -2321,7 +2331,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // alone, so a backplate/extras cloned alongside can't shift where the bracket lands.
           const anchorNames = String(mainStr).split(',').map(m => m.trim()).filter(Boolean);
           const rawQty = stepQuantities[step.id];
-          const count = (rawQty !== undefined && rawQty !== '') ? (parseInt(rawQty) || 0) : 1;
+          let count = (rawQty !== undefined && rawQty !== '') ? (parseInt(rawQty) || 0) : 1;
+          // Selection-only steps (hideQty): a stored 0 is a Vision-resume artifact, not "none" —
+          // the selection's geometry must still render (once, its implicit quantity).
+          if (step.hideQty && count === 0) count = 1;
           if (count >= 1 && meshNames.length) out.push({ stepId: step.id, meshNames, anchorNames, railNames, count });
       });
       return out;
