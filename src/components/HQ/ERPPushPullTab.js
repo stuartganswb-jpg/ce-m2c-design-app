@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, doc, updateDoc, deleteDoc, getDocs, query, where } from "firebase/firestore";
 import { SIZE_STEP_TYPE, makeSizeSwap, speciesVariantOf } from '../Shared/sizeMatrix';
@@ -29,7 +29,30 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const [syncLog, setSyncLog] = useState([]);
 
   // --- REPLACE WITH YOUR ACTUAL FIREBASE FUNCTION URL ---
-  const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app"; 
+  const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
+
+  // NetSuite refuses an estimate header shipping cost without a ship method (400: "Please choose
+  // a shipping method to account for the shipping cost"). Resolve one ONCE per session: prefer a
+  // Ship Item named like shipping/freight/delivery, else the first active one.
+  const shipMethodRef = useRef(undefined); // undefined = not looked up yet; null = none found
+  const resolveShipMethod = async () => {
+      if (shipMethodRef.current !== undefined) return shipMethodRef.current;
+      const runQ = async (q) => {
+          const r = await fetch(FIREBASE_FUNCTION_URL, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } })
+          });
+          const b = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
+          return b.items || [];
+      };
+      let rows = [];
+      try { rows = await runQ("SELECT id, itemid FROM item WHERE itemtype = 'ShipItem' AND NVL(isinactive,'F') = 'F' ORDER BY id"); } catch (e) { rows = []; }
+      if (!rows.length) { try { rows = await runQ("SELECT id, itemid FROM shipitem ORDER BY id"); } catch (e) { rows = []; } }
+      const pick = rows.find(x => /ship|freight|delivery|best way/i.test(String(x.itemid))) || rows[0] || null;
+      shipMethodRef.current = pick ? { id: String(pick.id), name: String(pick.itemid) } : null;
+      return shipMethodRef.current;
+  }; 
 
   useEffect(() => {
     if (!activeBrand) return;
@@ -374,17 +397,22 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           }
 
           const cpqGrandTotal = parseFloat(job.cpqData.totalPrice || 0);
-          const silentFeeBalance = Math.max(0, cpqGrandTotal - physicalItemsTotal);
-          // The rollup can only absorb DOWN to zero: if the physical lines at standard rates
-          // already exceed the quoted (net) total — e.g. a heavy trade discount — the estimate
-          // lands ABOVE the quote. Surface it instead of pushing a silent mismatch.
-          if (cpqGrandTotal - physicalItemsTotal < -0.005) {
-              const overBy = (physicalItemsTotal - cpqGrandTotal).toFixed(2);
-              addLog(`⚠️ Quoted total $${cpqGrandTotal.toFixed(2)} is BELOW the physical lines' standard-rate total $${physicalItemsTotal.toFixed(2)} — rollup floors at $0, estimate will land $${overBy} over the quote.`, 'warn');
-              if (!window.confirm(`Heads up: this quote's total ($${cpqGrandTotal.toFixed(2)}) is LOWER than the sum of its physical lines at standard rates ($${physicalItemsTotal.toFixed(2)}).\n\nThe rollup line can't go negative, so the NetSuite estimate would land $${overBy} ABOVE the quoted total.\n\nPush anyway?`)) {
-                  setIsPushing(false);
-                  return;
-              }
+          let silentFeeBalance = Math.max(0, cpqGrandTotal - physicalItemsTotal);
+          // Trade-discounted quotes routinely net BELOW the items' standard-rate sum (e.g. 60% off
+          // MSRP). The estimate must land at the QUOTED total — our actual selling price — so scale
+          // the item rates down proportionally (items only; labor/fees ride the rollup, which then
+          // absorbs just the rounding remainder). Rates round DOWN so the remainder stays ≥ 0 —
+          // the rollup line can never go negative.
+          if (cpqGrandTotal - physicalItemsTotal < -0.005 && physicalItemsTotal > 0) {
+              const factor = cpqGrandTotal / physicalItemsTotal;
+              let scaledSum = 0;
+              lineItems.forEach(li => {
+                  const r = Math.floor(li.rate * factor * 100) / 100;
+                  li.rate = r;
+                  scaledSum += r * li.quantity;
+              });
+              silentFeeBalance = Math.max(0, cpqGrandTotal - scaledSum);
+              addLog(`Discounted quote: item rates scaled to ${(factor * 100).toFixed(1)}% of standard so the estimate lands exactly at the quoted $${cpqGrandTotal.toFixed(2)} (rollup absorbs $${silentFeeBalance.toFixed(2)} rounding).`, 'info');
           }
 
           let nsCustomerId = job.customer?.id || "";
@@ -425,8 +453,18 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
           // Quote's shipping charge → estimate HEADER shipping cost (never a line item):
           // lines + rollup still sum to cpqData.totalPrice; NetSuite adds shipping on top.
+          // A ship METHOD must ride along or NetSuite 400s the whole estimate.
           const shippingAmount = parseFloat(job.shippingAmount) || 0;
-          if (shippingAmount > 0) shippingPayload.shippingcost = parseFloat(shippingAmount.toFixed(2));
+          if (shippingAmount > 0) {
+              const sm = await resolveShipMethod();
+              if (sm) {
+                  shippingPayload.shippingcost = parseFloat(shippingAmount.toFixed(2));
+                  shippingPayload.shipMethod = { id: sm.id };
+                  addLog(`Shipping charge $${shippingAmount.toFixed(2)} → estimate header via ship method "${sm.name}" (id ${sm.id}).`, 'info');
+              } else {
+                  addLog(`⚠️ No active Ship Item found in NetSuite — pushing WITHOUT the $${shippingAmount.toFixed(2)} shipping charge. Add it on the estimate manually, or create a Shipping Item in NetSuite and re-push.`, 'warn');
+              }
+          }
 
           const payload = {
               entity: { id: nsCustomerId },
@@ -451,7 +489,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
           addLog(`Payload constructed. Silent Fees/Assembly assigned $${silentFeeBalance.toFixed(2)}`, 'success');
           if (shippingPayload.shippingaddress) addLog(`Custom Shipping Override Attached.`, 'info');
-          if (shippingAmount > 0) addLog(`Shipping charge $${shippingAmount.toFixed(2)} → estimate header shipping cost.`, 'info');
 
           const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
           addLog(`Transmitting to NetSuite via Google Cloud...`, 'info');
