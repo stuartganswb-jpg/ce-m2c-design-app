@@ -5,6 +5,7 @@ import { mergeWindowConfig } from './systemWindows';
 import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
+import { fabricutCodeOf } from '../Shared/priceLevels';
 
 
 const AVAILABLE_BRANDS = [
@@ -57,7 +58,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [editSpecs, setEditSpecs] = useState({ customData: {}, dynamicDicts: {}, clientPricing: [], collections: [], bomRevision: "" }); 
   const [isSaving, setIsSaving] = useState(false);
   
-  const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' }); 
+  const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' });
+  const [isBulkFab, setIsBulkFab] = useState(false); // bulk Fabricut → clientPricing writer running
 
   const [pdfFile, setPdfFile] = useState(null);
   const [cadFile, setCadFile] = useState(null);
@@ -331,6 +333,47 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
   const handleRemoveClientPricing = (idx) => {
       setEditSpecs(prev => ({ ...prev, clientPricing: prev.clientPricing.filter((_, i) => i !== idx) }));
+  };
+
+  // ---- FABRICUT ⇄ CLIENT PRICING ----------------------------------------------------------
+  const findByCode = (c) => inventory.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === String(c || '').toUpperCase());
+  const fabricutCustomer = () => liveCustomers.find(c => /fabricut/i.test(String(c.name || '')));
+  // One Client Pricing row from an item's fabricut struct: SKU = pattern #, Client Cost = CE →
+  // Fabricut price ("Sale Price" column), Client Sales = Fabricut wholesale (retail ÷ 2 when the
+  // sheet had no wholesale). Group-priced docs (explicit null — BP plates) are skipped: their
+  // story lives in "Priced in conjunction with…", not in a $ row.
+  const fabClientRowFor = (part, fab, custId) => {
+      const cost = fab.cost !== undefined ? fab.cost : fab.paintedCost;
+      const retail = fab.retail !== undefined ? fab.retail : fab.paintedRetail;
+      if (cost === null && retail === null) return null; // included-with-arm ($0 group pricing)
+      if (cost === undefined && retail === undefined) return null; // no direct/sellable tier
+      let sales = fab.wholesale !== undefined ? fab.wholesale : fab.paintedWholesale;
+      if (sales === undefined || sales === null) sales = Number.isFinite(parseFloat(retail)) ? parseFloat(retail) / 2 : '';
+      const sku = fabricutCodeOf({ ...part, manufacturingSpecs: { ...(part.manufacturingSpecs || {}), fabricut: fab } }, findByCode) || '';
+      return { customerId: custId, clientSku: sku, price: (cost === null || cost === undefined) ? '' : cost, clientSalesPrice: sales === null ? '' : sales, source: 'FABRICUT' };
+  };
+  // Bulk: every item carrying direct Fabricut pricing gets/refreshes its Fabricut client-pricing
+  // row — the in-app control surface Stuart asked for (no more sheet re-upload just to see them).
+  const bulkFabricutClientPricing = async () => {
+      const cust = fabricutCustomer();
+      if (!cust) return alert("No CRM customer matching 'Fabricut' found for this brand — sync the Fabricut customer (11.1) first, or add rows manually.");
+      const targets = inventory.filter(p => {
+          const f = p.manufacturingSpecs?.fabricut;
+          return f && (f.cost !== undefined || f.retail !== undefined) && !(f.cost === null && f.retail === null);
+      });
+      if (!targets.length) return alert('No items with direct Fabricut pricing found in this brand.');
+      if (!window.confirm(`Write/refresh the "${cust.name}" Client Pricing row on ${targets.length} item(s)?\n\n• Client SKU = Fabricut pattern #\n• Client Cost = CE → Fabricut price\n• Client Sales = Fabricut wholesale (retail ÷ 2 when blank)\n\nExisting ${cust.name} rows are replaced; other customers' rows are untouched. Group-priced plates ($0 included) are skipped.`)) return;
+      setIsBulkFab(true);
+      let n = 0, failed = 0;
+      for (const p of targets) {
+          const row = fabClientRowFor(p, p.manufacturingSpecs.fabricut, cust.id);
+          if (!row) continue;
+          const rows = [...(p.clientPricing || []).filter(cp => cp.customerId !== cust.id), row];
+          try { await setDoc(doc(db, 'Approved_Designs', p.id), { clientPricing: rows }, { merge: true }); n++; }
+          catch (e) { console.error('Fabricut client-pricing write failed:', p.legacyErpId, e); failed++; }
+      }
+      setIsBulkFab(false);
+      alert(`✅ ${n} item(s) now carry the ${cust.name} Client Pricing row${failed ? ` (${failed} failed — see console)` : ''}.\n\nReopen any item to review; rows are editable/removable per item.`);
   };
 
   const handleDynamicFileUpload = async (key, file) => {
@@ -948,6 +991,105 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                         ))}
                     </div>
                  </div>
+
+                 {/* FABRICUT PRICING & GROUPING — reads/writes the SAME manufacturingSpecs.fabricut
+                     struct the CrossReference import stamps and the CPQ price levels consume
+                     (Shared/priceLevels.js). Blank = no data at that tier (standard pricing);
+                     "included w/ arm" = explicit null = quotes $0 (the arm price covers it). */}
+                 {(() => {
+                     const fab = editSpecs.fabricut;
+                     const codeUp = String(editSpecs.tempLegacyId || activePart.legacyErpId || '').toUpperCase();
+                     const isBpPlate = /(^|-)R?BP(-|\/|$)/.test(codeUp);
+                     const isCpPlate = /(^|-)R?CP(-|\/|$)/.test(codeUp);
+                     if (!fab) return (
+                         <div style={{ marginTop: '30px' }}>
+                             <button onClick={() => setEditSpecs(prev => ({ ...prev, fabricut: { source: 'MANUAL', importedAt: new Date().toISOString() } }))} style={{ padding: '10px 18px', background: 'transparent', border: '1px dashed var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>＋ Add Fabricut Pricing</button>
+                         </div>
+                     );
+                     const setF = (k, v) => setEditSpecs(prev => ({ ...prev, fabricut: { ...(prev.fabricut || {}), [k]: v } }));
+                     const numVal = (v) => (v === null || v === undefined) ? '' : v;
+                     const TIERS = [
+                         { key: 'direct', label: `This item's price${fab.tier ? ` · tier ${fab.tier}` : ''}`, hint: 'finish variants, single-finish & species items', f: { cost: 'cost', wholesale: 'wholesale', retail: 'retail' } },
+                         { key: 'painted', label: 'Painted tier (/P)', hint: 'on the mill base — prices the painted variants', f: { cost: 'paintedCost', wholesale: 'paintedWholesale', retail: 'paintedRetail' } },
+                         { key: 'plated', label: 'Plated tier (/EP1–6)', hint: 'on the mill base — prices the plated variants', f: { cost: 'platedCost', wholesale: 'platedWholesale', retail: 'platedRetail' } },
+                     ];
+                     const tierIncluded = (t) => fab[t.f.cost] === null && fab[t.f.retail] === null;
+                     const toggleIncl = (t) => (e) => {
+                         const v = e.target.checked ? null : '';
+                         setEditSpecs(prev => ({ ...prev, fabricut: { ...(prev.fabricut || {}), [t.f.cost]: v, [t.f.wholesale]: v, [t.f.retail]: v } }));
+                     };
+                     const cpCost = fab.cost !== undefined ? fab.cost : (fab.platedCost !== undefined ? fab.platedCost : fab.paintedCost);
+                     const cpRetail = fab.retail !== undefined ? fab.retail : (fab.platedRetail !== undefined ? fab.platedRetail : fab.paintedRetail);
+                     let groupSuggest = '';
+                     if (isBpPlate) groupSuggest = 'Included with bracket arms — $0 (the arm price covers this backplate)';
+                     else if (isCpPlate) {
+                         const c = parseFloat(cpCost), r = parseFloat(cpRetail);
+                         groupSuggest = `Upcharge included with bracket arms${Number.isFinite(c) ? ` — +$${c.toFixed(2)} cost` : ''}${Number.isFinite(r) ? ` / +$${r.toFixed(2)} retail` : ''} over the included backplate`;
+                     }
+                     const resolvedCode = fabricutCodeOf({ ...activePart, legacyErpId: codeUp, manufacturingSpecs: { ...(activePart.manufacturingSpecs || {}), fabricut: fab } }, findByCode);
+                     const cellStyle = { flex: 1 };
+                     return (
+                         <div style={{ marginTop: '30px', background: 'var(--paper)', padding: '24px', border: '1px solid var(--brass)' }}>
+                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: '1px solid var(--line)', paddingBottom: '10px', marginBottom: '18px' }}>
+                                 <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Fabricut Pricing & Grouping</h4>
+                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em' }}>{fab.source || 'CrossReference'}{fab.importedAt ? ` · ${String(fab.importedAt).slice(0, 10)}` : ''} · drives the CPQ price levels</span>
+                             </div>
+
+                             {resolvedCode && <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', marginBottom: '14px' }}>Resolved pattern #: <b>{resolvedCode}</b>{codeUp.includes('/') ? <span style={{ color: 'var(--ink-soft)' }}> (codes live on the base item)</span> : null}</div>}
+
+                             {TIERS.map(t => {
+                                 const incl = tierIncluded(t);
+                                 return (
+                                     <div key={t.key} style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', marginBottom: '14px' }}>
+                                         <div style={{ width: '230px' }}>
+                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink)' }}>{t.label}</div>
+                                             <div style={{ fontSize: '0.72rem', color: 'var(--ink-soft)' }}>{t.hint}</div>
+                                         </div>
+                                         {[['Cost (CE → Fabricut)', t.f.cost], ['Wholesale', t.f.wholesale], ['Retail (MSRP)', t.f.retail]].map(([lbl, k]) => (
+                                             <div key={k} style={cellStyle}>
+                                                 <label style={{ ...labelStyle, marginBottom: '4px' }}>{lbl}</label>
+                                                 <input type="number" step="0.01" disabled={incl} value={numVal(fab[k])} placeholder={k.toLowerCase().includes('wholesale') ? 'retail ÷ 2' : '—'} onChange={e => setF(k, e.target.value === '' ? '' : (parseFloat(e.target.value) || 0))} style={{ ...fieldStyle, opacity: incl ? 0.4 : 1 }} />
+                                             </div>
+                                         ))}
+                                         <label title="Explicit $0 — this tier is priced in conjunction with the arm (the arm price covers it)" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: incl ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', paddingBottom: '12px', whiteSpace: 'nowrap' }}>
+                                             <input type="checkbox" checked={incl} onChange={toggleIncl(t)} /> $0 · w/ arm
+                                         </label>
+                                     </div>
+                                 );
+                             })}
+
+                             <div style={{ display: 'flex', gap: '14px', marginTop: '4px', marginBottom: '16px' }}>
+                                 {[['Pattern # (painted)', 'fabCodePainted'], ['Pattern # (premium /EP)', 'fabCodePremium'], ['Pattern # (base)', 'fabCodeBase']].map(([lbl, k]) => (
+                                     <div key={k} style={{ flex: 1 }}>
+                                         <label style={{ ...labelStyle, marginBottom: '4px' }}>{lbl}</label>
+                                         <input value={fab[k] || ''} onChange={e => setF(k, e.target.value.toUpperCase())} placeholder={codeUp.includes('/') ? 'set on the base item' : '—'} style={{ ...fieldStyle, textTransform: 'uppercase' }} />
+                                     </div>
+                                 ))}
+                             </div>
+
+                             <div style={{ marginBottom: '18px' }}>
+                                 <label style={{ ...labelStyle, marginBottom: '4px' }}>Priced in conjunction with…</label>
+                                 <div style={{ display: 'flex', gap: '10px' }}>
+                                     <input value={fab.pricedWith || ''} onChange={e => setF('pricedWith', e.target.value)} placeholder={groupSuggest || 'e.g. Priced in conjunction with H1 bracket arms'} style={{ ...fieldStyle, flex: 1 }} />
+                                     {groupSuggest && !fab.pricedWith && <button onClick={() => setF('pricedWith', groupSuggest)} style={{ padding: '0 16px', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Use suggestion</button>}
+                                 </div>
+                                 {(isBpPlate || isCpPlate) && <div style={{ fontSize: '0.78rem', color: 'var(--brass)', marginTop: '6px' }}>{isBpPlate ? 'Backplate — the group pricing rule quotes this at $0; the bracket arm carries the value.' : 'Coverplate — quotes as a flat upcharge alongside the bracket arm (the numbers above are that upcharge).'}</div>}
+                             </div>
+
+                             <div style={{ display: 'flex', gap: '12px', borderTop: '1px dashed var(--line)', paddingTop: '14px' }}>
+                                 <button onClick={() => {
+                                     const cust = fabricutCustomer();
+                                     if (!cust) return alert("No CRM customer matching 'Fabricut' found for this brand — sync the Fabricut customer (11.1) first, or add the row manually above.");
+                                     const row = fabClientRowFor(activePart, fab, cust.id);
+                                     if (!row) return alert('This item has no direct sellable Fabricut price (group-priced $0 plates stay out of Client Pricing — their rule shows above).');
+                                     setEditSpecs(prev => ({ ...prev, clientPricing: [...(prev.clientPricing || []).filter(cp => cp.customerId !== cust.id), row] }));
+                                 }} style={{ padding: '10px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>↑ Add to Client Pricing (this item)</button>
+                                 <button onClick={bulkFabricutClientPricing} disabled={isBulkFab} style={{ padding: '10px 16px', background: isBulkFab ? 'var(--paper-2)' : 'var(--brass)', color: isBulkFab ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: isBulkFab ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{isBulkFab ? 'Writing…' : '⇄ Populate Client Pricing — ALL Fabricut items'}</button>
+                                 <span style={{ alignSelf: 'center', fontSize: '0.75rem', color: 'var(--ink-soft)' }}>SKU = pattern # · Client Cost = CE → Fabricut · Sales = wholesale. Save the record to keep field edits.</span>
+                             </div>
+                         </div>
+                     );
+                 })()}
 
                  <div style={{ marginTop: '30px', background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
                    <label style={labelStyle}>Record Visibility & Cross-Brand Sharing</label>
