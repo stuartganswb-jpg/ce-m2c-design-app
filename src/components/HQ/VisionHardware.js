@@ -25,6 +25,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const [activePlacedId, setActivePlacedId] = useState(null);
   const [showEngOverlay, setShowEngOverlay] = useState(false);
   const [showManualFab, setShowManualFab] = useState(false); // collapsed by default: dims auto-fill from the selected bracket; open only for one-off custom overrides
+  const [editingDraftId, setEditingDraftId] = useState(null); // a saved session line loaded for editing — Save Line updates it IN PLACE
+  const [loadDraftPick, setLoadDraftPick] = useState('');
   const [engOverlayPos, setEngOverlayPos] = useState({ x: 500, y: 400 });
   const [perspectiveStretch, setPerspectiveStretch] = useState({ L: 0, R: 0 }); 
   const [visScale, setVisScale] = useState(1.0); 
@@ -983,6 +985,27 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       setPlacedItems(placedItems.filter(i => i.id !== id)); if (activePlacedId === id) setActivePlacedId(null); 
   };
 
+  // Load a saved session line (cpq_drafts) back onto the Engineering board — dimensions,
+  // bracket/splice placements, and shop notes restore for editing. Save Line then UPDATES that
+  // same draft (same id), so a later Reopen-in-CPQ / re-finalize carries the corrected numbers.
+  const sessionDrafts = (visionConfigs || []).filter(c => c.masterQuoteId === activeSession?.quoteId && c.spatialData);
+  const handleLoadDraft = (id) => {
+      const cfg = (visionConfigs || []).find(c => c.id === id);
+      if (!cfg || !cfg.spatialData) return alert("This saved line carries no board data to load.");
+      const { attachments: savedAtts, shopNotes: savedNotes, ...savedEng } = cfg.spatialData;
+      setEngData({ ...defaultEngData, ...savedEng });
+      setAttachments(Array.isArray(savedAtts) ? savedAtts : []);
+      setShopNotes(Array.isArray(savedNotes) ? savedNotes : []);
+      setSidemark(cfg.sidemark || '');
+      const flowId = cfg.flowId || cfg.linkedCpqFlowId || cfg.cpqFlowId;
+      if (flowId) setQuoteFlowId(flowId);
+      const { engineeringNotes: _en, collection: savedCollection, bracketId: _bid, ...stepParams } = cfg.specs || {};
+      setDynamicConfigParams(stepParams || {});
+      setQuoteSelections({ collection: savedCollection || '' });
+      setEditingDraftId(cfg.id);
+      setViewMode('ENGINEERING');
+  };
+
   const handlePushToCPQ = async () => {
       if (!activeSession?.quoteId) return alert("Please select a customer in the main header to initialize a session.");
       if (!sidemark) return alert("Please enter a Sidemark for this specific item.");
@@ -994,7 +1017,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       // applies and CPQ opens without a pre-selected bracket.
 
       setIsPushingToCPQ(true);
-      const draftId = `DRAFT-${Date.now()}`;
+      // Editing a loaded line → keep its id so the draft UPDATES in place (re-finalize picks it up).
+      const draftId = editingDraftId || `DRAFT-${Date.now()}`;
 
       let capturedSvg = "";
       if (svgRef.current) {
@@ -1069,18 +1093,22 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           author: currentUser, createdAt: serverTimestamp() 
       };
       
-      try { 
-          await setDoc(doc(db, "cpq_drafts", draftId), payload); 
-          alert(`✅ "${sidemark}" line saved to session! Canvas cleared for the next line.`); 
-          
-          setSidemark(''); 
+      try {
+          await setDoc(doc(db, "cpq_drafts", draftId), payload);
+          alert(editingDraftId
+              ? `✅ "${sidemark}" UPDATED (same line ${draftId}). Reopen the quote in CPQ / re-finalize to carry the new numbers through.`
+              : `✅ "${sidemark}" line saved to session! Canvas cleared for the next line.`);
+
+          setEditingDraftId(null);
+          setLoadDraftPick('');
+          setSidemark('');
           setAttachments([]);
           setShopNotes([]);
           setQuoteFlowId('');
           setDynamicConfigParams({});
           setQuoteSelections({ collection: '' });
           setEngData(defaultEngData);
-          setShowQuotePanel(false); 
+          setShowQuotePanel(false);
       } 
       catch (e) { console.error(e); alert("Error saving line to session."); } 
       finally { setIsPushingToCPQ(false); }
@@ -1279,6 +1307,18 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     </div>
                                 ))}
                             </div>
+                            {sessionDrafts.length > 0 && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                        <select value={loadDraftPick} onChange={e => setLoadDraftPick(e.target.value)} style={{ ...fieldStyle, flex: 1 }}>
+                                            <option value="">Load saved line… ({sessionDrafts.length})</option>
+                                            {sessionDrafts.map(c => <option key={c.id} value={c.id}>{(c.sidemark || c.jobName || c.id)}{editingDraftId === c.id ? ' · editing' : ''}</option>)}
+                                        </select>
+                                        <button onClick={() => loadDraftPick && handleLoadDraft(loadDraftPick)} disabled={!loadDraftPick} title="Restore this saved line's dimensions, bracket/splice placements, and shop notes onto the board for editing" style={{ padding: '12px 18px', background: loadDraftPick ? 'var(--ink)' : 'var(--paper-2)', color: loadDraftPick ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: loadDraftPick ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Load</button>
+                                    </div>
+                                    {editingDraftId && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', letterSpacing: '.05em' }}>✎ Editing "{sidemark || editingDraftId}" — saving the line updates it in place.</div>}
+                                </div>
+                            )}
                             <button onClick={handleAutoPlaceBrackets} disabled={engData.shape !== 'STRAIGHT'} title={engData.shape !== 'STRAIGHT' ? 'Auto-place currently supports straight poles' : 'Bracket every 48" (36" on ¾" rod). Return / inside-mount ends count as supports; splices are kept and each gets a support bracket. Slide / edit / remove them in the Engineering view.'} style={{ padding: '12px 16px', background: engData.shape === 'STRAIGHT' ? 'var(--brass)' : 'var(--paper-2)', color: engData.shape === 'STRAIGHT' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: engData.shape === 'STRAIGHT' ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⚙ Auto-Place Brackets · ends + centers (edit in Engineering view)</button>
                             <div style={{ display: 'flex', gap: '16px' }}>
                                 <div style={{ flex: 1 }}>

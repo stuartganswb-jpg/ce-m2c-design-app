@@ -4,6 +4,19 @@
 // global cart and the active tab); CPQTab restores the locked job context (customer/shipping)
 // from the hq_reopen_quote payload on mount. From there the existing cart Edit + re-finalize
 // machinery applies — finalize merges into the SAME job id, so BOM/CPQ links stay intact.
+// "Reopen in Vision": jump back to the Vision Hardware board with this quote's session active —
+// that's where dimensions, bracket/splice placements, and shop notes live. The board's LOAD
+// control (Engineering view) pulls a saved line back for editing; re-saving updates the SAME
+// draft, so a follow-up Reopen-in-CPQ / re-finalize picks up the corrected numbers.
+// Handled by HQ.js (tab switch) + ClientVisionTab (session restore from hq_vision_reopen).
+export const reopenQuoteInVision = (job) => {
+    const jobId = job.jobId || job.id;
+    window.dispatchEvent(new CustomEvent('REOPEN_QUOTE_IN_VISION', {
+        detail: { session: { jobId, customerId: job.customer?.id || '', jobName: job.jobName || '' } }
+    }));
+    return true;
+};
+
 export const reopenQuoteInCpq = (job) => {
     const jobId = job.jobId || job.id;
     const items = Array.isArray(job.cpqData?.cartItems) ? job.cpqData.cartItems : [];

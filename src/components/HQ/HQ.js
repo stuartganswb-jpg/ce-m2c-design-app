@@ -179,11 +179,23 @@ function HQ() {
       localStorage.setItem('hq_reopen_quote', JSON.stringify(session));
       setActiveTab('8. CPQ Configurator');
     };
+    // Reopen-in-Vision (Shared/reopenQuote.js): restore the quote's Vision session (customer /
+    // job / quote id, consumed by ClientVisionTab on mount) and jump to the Vision board —
+    // dimensions, bracket placement, and shop notes are edited there.
+    const handleReopenVision = (e) => {
+      const s = e.detail?.session;
+      if (!s?.jobId) return;
+      localStorage.setItem('hq_active_quote_session', s.jobId);
+      localStorage.setItem('hq_vision_reopen', JSON.stringify(s));
+      setActiveTab('9. Client Vision');
+    };
     window.addEventListener('NAVIGATE_TAB', handleTabNavigation);
     window.addEventListener('REOPEN_QUOTE_IN_CPQ', handleReopenQuote);
+    window.addEventListener('REOPEN_QUOTE_IN_VISION', handleReopenVision);
     return () => {
       window.removeEventListener('NAVIGATE_TAB', handleTabNavigation);
       window.removeEventListener('REOPEN_QUOTE_IN_CPQ', handleReopenQuote);
+      window.removeEventListener('REOPEN_QUOTE_IN_VISION', handleReopenVision);
     };
   }, []);
 

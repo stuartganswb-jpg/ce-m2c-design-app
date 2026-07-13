@@ -74,6 +74,23 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
   const [sessionJobName, setSessionJobName] = useState('');
   const [sessionQuoteId, setSessionQuoteId] = useState(null);
 
+  // Reopen-in-Vision handoff (CRM "Reopen Vision" → HQ.js stashes hq_vision_reopen → we restore
+  // the quote's session here). One-shot: consumed and removed on mount. With the session set to
+  // the quote id, its saved lines appear as queued drafts and Vision Hardware's "Load saved
+  // line" control can pull one back onto the board for dimension / shop-note edits.
+  useEffect(() => {
+      try {
+          const raw = localStorage.getItem('hq_vision_reopen');
+          if (!raw) return;
+          localStorage.removeItem('hq_vision_reopen');
+          const s = JSON.parse(raw);
+          if (!s?.jobId) return;
+          setSessionCustomerId(s.customerId || '');
+          setSessionJobName(s.jobName || '');
+          setSessionQuoteId(s.jobId);
+      } catch (e) { /* malformed handoff — start with a clean session */ }
+  }, []);
+
   useEffect(() => {
       const allowed = CATEGORIES_BY_BRAND[activeBrand] || [{ id: 'HARDWARE', label: 'Drapery Hardware' }];
       if (!allowed.find(c => c.id === visionCategory)) {

@@ -6,7 +6,7 @@ import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
-import { reopenQuoteInCpq } from '../Shared/reopenQuote';
+import { reopenQuoteInCpq, reopenQuoteInVision } from '../Shared/reopenQuote';
 
 const printStyles = `
   @media print {
@@ -909,6 +909,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                           <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
                                                           <button onClick={() => openEditJobModal(job)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Modify</button>
                                                           <button onClick={() => reopenQuoteInCpq(job)} title="Reopen this quote's configuration in the CPQ Configurator" style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer' }}>Reopen CPQ</button>
+                                                          <button onClick={() => reopenQuoteInVision(job)} title="Reopen this quote's session on the Vision Hardware board — dimensions, bracket/splice placement, and shop notes live there (Engineering view → Load saved line)" style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--ink)', color: 'var(--ink)', cursor: 'pointer' }}>Reopen Vision</button>
                                                           <button onClick={() => handleDeleteJob(job.id)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
                                                       </div>
                                                   </div>
