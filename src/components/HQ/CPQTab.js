@@ -1332,6 +1332,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           const fc = String(finishCode).trim().toUpperCase();
           const cands = [`${baseCode}/${fc}`];
           if (/^P\d/.test(fc)) cands.push(`${baseCode}/P`);
+          // Generic plated doc: fee items carry ONE /EP record (painted $X vs plated $Y) instead
+          // of six /EP1..6 — the exact stocked /EPn still wins for real parts when it exists.
+          if (/^EP\d/.test(fc)) cands.push(`${baseCode}/EP`);
           for (const cand of cands) { const hit = byCode.get(cand); if (hit) return hit; }
           return basePart;
       };

@@ -832,6 +832,25 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   const t = String(o.endTreatment || '').toUpperCase();
                   return t === 'FRENCH_RETURN' || t === 'MITER_RETURN';
               });
+              // Return FEE ITEMS (customData.feeType FRENCH_RETURN / MITER_RETURN, base doc only):
+              // linking one as the option's partId lets the fee price through the item — per-customer
+              // clientPricing, painted (/P) vs plated (/EP) by the end's chosen finish, and the
+              // Fabricut price levels — instead of a single flat author price. Author option prices
+              // still override when set; fee items never push as NetSuite lines (they ride the rollup).
+              const feeItemFor = (t) => allApprovedDesigns.find(p =>
+                  String(p.manufacturingSpecs?.customData?.feeType || '').toUpperCase() === t &&
+                  !String(p.legacyErpId || p.itemId || '').includes('/') &&
+                  (p.brandId === activeBrand || (p.sharedBrands || []).includes(activeBrand)));
+              const groupFilled = group.map(o => {
+                  const t = String(o.endTreatment || '').toUpperCase();
+                  if ((t === 'FRENCH_RETURN' || t === 'MITER_RETURN') && !o.partId) {
+                      const fi = feeItemFor(t);
+                      if (fi) return { ...o, partId: fi.id };
+                  }
+                  return o;
+              });
+              const mtrFee = feeItemFor('MITER_RETURN');
+              const frFee = feeItemFor('FRENCH_RETURN');
               add({
                   title: label ? `${label} End Treatment` : 'End Treatment',
                   // one end = one treatment — never a quantity (Stuart 2026-07-10)
@@ -840,10 +859,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   // disable THIS side's outer Bracket & Mount step in CPQTab. Off by default — a return
                   // that still needs its bracket/backplate (e.g. french-return backplates) keeps the step.
                   position: pos,
-                  styleOptions: [...group,
+                  styleOptions: [...groupFilled,
                       ...(hasOwnReturn ? [] : [
-                          { optId: `OPT-MITER-${sfx}`, partId: '', partName: 'Mitered Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'MITER_RETURN', isFee: true },
-                          { optId: `OPT-BEND-${sfx}`, partId: '', partName: 'Bent Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'FRENCH_RETURN', isFee: true }]),
+                          { optId: `OPT-MITER-${sfx}`, partId: mtrFee ? mtrFee.id : '', partName: mtrFee ? (mtrFee.itemName || 'Mitered Return') : 'Mitered Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'MITER_RETURN', isFee: true },
+                          { optId: `OPT-BEND-${sfx}`, partId: frFee ? frFee.id : '', partName: frFee ? (frFee.itemName || 'Bent Return') : 'Bent Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'FRENCH_RETURN', isFee: true }]),
                       { optId: `OPT-FLUSH-${sfx}`, partId: '', partName: 'Flush Cut', targetNode: straightNodes, price: 0 }],
                   geometryMap: gmap,
                   ...(inc ? { includedParts: inc } : {})

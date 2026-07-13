@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc, getDocs, collection, writeBatch } from "firebase/firestore";
+import { doc, setDoc, getDoc, getDocs, collection, writeBatch } from "firebase/firestore";
 import { parseFabricutWorkbook, buildFabricutPlan } from '../Shared/fabricutImport';
 
 const BRAND_NETSUITE_MAP = {
@@ -723,6 +723,52 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
+    // FABRICUT RETURN-FEE SEEDER (Stuart 2026-07-13): creates the six fee ITEMS that price the H1
+    // french & miter returns — base + /P + /EP each. CE → Fabricut prices: french $35 painted /
+    // $43 plated; miter $40 / $48. Backplate included (RBP at 3/4", standard BP at 1"/1-3/8");
+    // coverplate upcharges ride the CP items like any bracket. Each priced doc carries a Fabricut
+    // clientPricing row + fabricut.cost, and the base doc's customData.feeType is what the flow
+    // generator links onto the OPT-BEND / OPT-MITER options on the next Regenerate. Idempotent —
+    // existing docs are left untouched (edit them in the Master Library afterwards).
+    const handleSeedFabricutFees = async () => {
+        try {
+            addLog('Seeding Fabricut return-fee items…', 'info');
+            const crmSnap = await getDocs(collection(db, 'crm_records'));
+            const fabCust = crmSnap.docs.map(d => ({ id: d.id, ...d.data() })).find(r => r.type === 'CUSTOMER' && /fabricut/i.test(String(r.name || '')));
+            if (!fabCust) { addLog('❌ No CRM customer matching "Fabricut" — run Sync Active Customers first, then re-run.', 'error'); return; }
+            const PRICED_WITH = 'Includes the backplate (RBP at 3/4", standard BP at 1"/1-3/8"). Coverplate upgrade prices like any bracket (+$10 cost / +$40 retail).';
+            const FEES = [
+                { base: 'CE-FEE-H1FR', name: 'H1 French Return Fee', feeType: 'FRENCH_RETURN', p: 35, ep: 43 },
+                { base: 'CE-FEE-H1MTR', name: 'H1 Miter Return Fee', feeType: 'MITER_RETURN', p: 40, ep: 48 },
+            ];
+            let made = 0, kept = 0;
+            for (const fee of FEES) {
+                for (const [sfx, cost] of [['', null], ['P', fee.p], ['EP', fee.ep]]) {
+                    const code = sfx ? `${fee.base}/${sfx}` : fee.base;
+                    const id = code.replace(/[^A-Za-z0-9-]/g, '_');
+                    const ref = doc(db, 'Approved_Designs', id);
+                    const existing = await getDoc(ref);
+                    if (existing.exists()) { kept++; addLog(`↷ ${code} already exists — left untouched.`, 'warn'); continue; }
+                    await setDoc(ref, {
+                        id, brandId: 'ce', partClass: 'Inventory', productType: 'FEE',
+                        itemName: sfx ? `${fee.name} — ${sfx === 'P' ? 'Painted' : 'Plated'}` : fee.name,
+                        legacyErpId: code, sharedBrands: ['ce'],
+                        clientPricing: cost != null ? [{ customerId: fabCust.id, clientSku: '', price: cost, clientSalesPrice: '', source: 'FABRICUT' }] : [],
+                        manufacturingSpecs: {
+                            productType: 'FEE', partHandling: '', basePrice: '',
+                            customData: { feeType: fee.feeType },
+                            fabricut: { ...(cost != null ? { cost, tier: sfx } : {}), pricedWith: PRICED_WITH, source: 'FEE_SEEDER', importedAt: new Date().toISOString() }
+                        },
+                        createdAt: new Date().toISOString(), createdBy: 'FEE_SEEDER'
+                    });
+                    made++;
+                    addLog(`＋ ${code}${cost != null ? ` — $${cost} (${fabCust.name})` : ' (base / link record)'}`, 'success');
+                }
+            }
+            addLog(`✅ Fee seeding done: ${made} created, ${kept} already existed. NOW: System Admin → CPQ Flows → Regenerate the Fabricut H1 flow so its End Treatment options link these fees (then verify a french return prices $35 painted / $43 plated at FAB COST).`, 'success');
+        } catch (e) { console.error(e); addLog(`❌ Fee seeding failed: ${e.message}`, 'error'); }
+    };
+
     // FABRICUT IMPORT: upload Fabricut_CE_CrossReference.xlsx → stamp Fabricut retail/cost pricing
     // + sizeKey metadata onto EXISTING library items, matched by CE item # (base + every finish
     // variant). Never creates items and never touches names/dims/basePrice — run "Sync Master
@@ -807,6 +853,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                             <span style={{ fontFamily: 'var(--serif)', fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Upload Fabricut_CE_CrossReference.xlsx — stamps Fabricut Retail + CE Cost onto every matching library item and finish variant (by CE item #), plus the size keys the H1 size-matrix flows resolve through. Run "Sync Master Library" first; re-run any time the workbook grows. Never touches names, dims or Base Price.</span>
                             <input type="file" accept=".xlsx" disabled={isSyncing} style={{ display: 'none' }} onChange={e => { handleFabricutImport(e.target.files[0]); e.target.value = ''; }} />
                         </label>
+                        <SyncButton onClick={handleSeedFabricutFees} disabled={isSyncing} label="✂ Seed H1 Return-Fee Items" sub="One-time: creates the french ($35/P · $43/EP) & miter ($40/P · $48/EP) return FEE items with Fabricut client pricing — backplate included, CP upcharge rides the plates. Then Regenerate the H1 flow to link them. Idempotent: existing fee docs are never touched." />
                     </div>
                 </div>
 
