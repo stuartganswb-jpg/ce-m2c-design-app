@@ -60,6 +60,9 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' });
   const [isBulkFab, setIsBulkFab] = useState(false); // bulk Fabricut → clientPricing writer running
+  const [orphanMode, setOrphanMode] = useState(false);     // show only unreferenced, NS-less items
+  const [orphanUsedSet, setOrphanUsedSet] = useState(null); // every part id/code referenced by a BOM or flow
+  const [orphanBusy, setOrphanBusy] = useState(false);
 
   const [pdfFile, setPdfFile] = useState(null);
   const [cadFile, setCadFile] = useState(null);
@@ -199,6 +202,54 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       ...inventory.map(p => (p.manufacturingSpecs?.vendorName || "").toUpperCase()).filter(Boolean)
   ])).sort();
 
+  // ---- ORPHAN SCAN (test leftovers): items with NO NetSuite id that NOTHING references --------
+  // "Used" = appears in any assembly BOM line (assembly_pins partId, or IS an assembly that has
+  // pins) or anywhere in a CPQ flow (linked assembly/item/pin, style/sub option, included part).
+  // Fresh scan each time the toggle turns on, so it reflects deletions/regenerates immediately.
+  const scanOrphans = async () => {
+      if (orphanMode) { setOrphanMode(false); return; }
+      setOrphanBusy(true);
+      try {
+          const used = new Set();
+          const addRef = (v) => { const s = String(v || '').trim().toUpperCase(); if (s && s !== 'PENDING' && s !== 'N/A') used.add(s); };
+          const pinsSnap = await getDocs(collection(db, 'assembly_pins'));
+          pinsSnap.docs.forEach(d => { const x = d.data() || {}; addRef(x.partId); addRef(x.assemblyId); });
+          const flowsSnap = await getDocs(collection(db, 'cpq_flows'));
+          flowsSnap.docs.forEach(d => {
+              const f = d.data() || {};
+              addRef(f.linkedAssemblyId);
+              (f.steps || []).forEach(s => {
+                  addRef(s.linkedItemId); addRef(s.linkedPinId);
+                  [...(s.styleOptions || []), ...(s.subOptions || [])].forEach(o => addRef(o && o.partId));
+                  (s.includedParts || []).forEach(ip => addRef(ip && ip.partId));
+              });
+          });
+          setOrphanUsedSet(used);
+          setOrphanMode(true);
+      } catch (e) { alert('Usage scan failed: ' + (e.message || e)); }
+      setOrphanBusy(false);
+  };
+  const isOrphanPart = (part) => {
+      if (part.netSuiteInternalId) return false;
+      if (!orphanUsedSet) return true;
+      const idU = String(part.id || '').toUpperCase();
+      const erpU = String(part.legacyErpId || part.itemId || '').toUpperCase();
+      return !orphanUsedSet.has(idU) && (!erpU || erpU === 'PENDING' || !orphanUsedSet.has(erpU));
+  };
+  const deleteOrphans = async (list) => {
+      if (!list.length) return alert('Nothing shown to delete.');
+      const preview = list.slice(0, 15).map(p => `• ${p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : (p.itemId || p.id)} — ${p.itemName || ''}`).join('\n');
+      if (!window.confirm(`Permanently DELETE the ${list.length} item(s) currently shown?\n\nAll have NO NetSuite id and are NOT referenced by any assembly BOM or CPQ flow.\n\n${preview}${list.length > 15 ? `\n…+${list.length - 15} more` : ''}\n\nThis cannot be undone.`)) return;
+      setOrphanBusy(true);
+      let n = 0, failed = 0;
+      for (const p of list) {
+          try { await deleteDoc(doc(db, 'Approved_Designs', p.id)); n++; }
+          catch (e) { console.error('Orphan delete failed:', p.id, e); failed++; }
+      }
+      setOrphanBusy(false);
+      alert(`🧹 Deleted ${n} orphan item(s)${failed ? ` — ${failed} failed (see console)` : ''}.`);
+  };
+
   const filteredInventory = inventory.filter(part => {
     if (part.manufacturingSpecs?.isRetired === true || retiredSet.has(String(part.netSuiteInternalId || ''))) return false; // hide retired (custitem28 / locked) items from the browse list
     const term = searchTerm.toLowerCase();
@@ -224,6 +275,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     if (partClassFilter !== "ALL") {
         if (partClassFilter === "INVENTORY") matchesClass = part.partClass === "Inventory" && specs.isInHouse !== false;
         else if (partClassFilter === "OUTSOURCED") matchesClass = part.partClass === "Inventory" && specs.isInHouse === false;
+        // Fees & charges (french/miter return fees, cut fees…) — same test the CPQ's isFeePart uses,
+        // so what prices as a fee is what filters as a fee. They carry clientPricing + fabricut
+        // structs like any item (per-customer fee pricing lives right on the fee record).
+        else if (partClassFilter === "FEES") matchesClass = String(specs.productType || part.productType || '').toUpperCase() === 'FEE' || part.partClass === 'Fee';
         else if (partClassFilter === "UNASSIGNED") matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && (!part.routingType || part.routingType === "UNASSIGNED");
         else matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && part.routingType?.toUpperCase() === partClassFilter.toUpperCase();
     }
@@ -237,7 +292,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     const noNsNumber = (!part.legacyErpId || ['PENDING', 'N/A'].includes(String(part.legacyErpId).toUpperCase())) && !part.netSuiteInternalId;
     const matchesAppOnly = !appOnlyFilter || noNsNumber;
 
-    return matchesSearch && matchesType && matchesCollection && matchesClass && matchesWatchlist && matchesAppOnly;
+    // Orphan mode: no NetSuite id AND unreferenced by any assembly BOM or CPQ flow (scan-built set).
+    const matchesOrphan = !orphanMode || isOrphanPart(part);
+
+    return matchesSearch && matchesType && matchesCollection && matchesClass && matchesWatchlist && matchesAppOnly && matchesOrphan;
   });
 
   const openPartDetails = (part) => {
@@ -712,6 +770,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               <option value="ALL">All Classes</option>
               <option value="INVENTORY">Raw Mat / Components (In-House)</option>
               <option value="OUTSOURCED">Outsourced Components</option>
+              <option value="FEES">Fees & Charges</option>
               <optgroup label="Assemblies & Kits">
                   <option value="UNASSIGNED">Unassigned / Pending</option>
                   {(globalLists.assemblyTypes || []).map(type => (
@@ -750,6 +809,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
           <input placeholder="Search Name, ERP, Bin..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '200px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }} />
           <button onClick={() => setAppOnlyFilter(v => !v)} title="Show only app-created parts with no NetSuite item # (legacyErpId PENDING + no internal id) — for finding residual items to clean up" style={{ padding: '10px 14px', border: `1px solid ${appOnlyFilter ? 'var(--brass)' : 'var(--line)'}`, background: appOnlyFilter ? 'var(--brass)' : '#fff', color: appOnlyFilter ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', whiteSpace: 'nowrap' }}>{appOnlyFilter ? '✓ App-only (no NS#)' : 'App-only (no NS#)'}</button>
+          <button onClick={scanOrphans} disabled={orphanBusy} title="Scan every assembly BOM (assembly_pins) and every CPQ flow (linked assemblies/items, style & sub options, included parts), then show ONLY items with no NetSuite id that nothing references — test leftovers safe to clean out" style={{ padding: '10px 14px', border: `1px solid ${orphanMode ? '#d9534f' : 'var(--line)'}`, background: orphanMode ? '#d9534f' : '#fff', color: orphanMode ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: orphanBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{orphanBusy ? '⟳ Scanning…' : orphanMode ? '✓ 🧹 Orphans' : '🧹 Orphans (unused · no NS#)'}</button>
+          {orphanMode && !orphanBusy && (
+              <button onClick={() => deleteOrphans(filteredInventory)} disabled={filteredInventory.length === 0} title="Delete every item currently shown (all unreferenced + NetSuite-less). Search/filters narrow what's shown first." style={{ padding: '10px 14px', border: 'none', background: filteredInventory.length ? '#d9534f' : 'var(--paper-2)', color: filteredInventory.length ? '#fff' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: filteredInventory.length ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>🗑 Delete {filteredInventory.length} shown</button>
+          )}
         </div>
       </div>
 
@@ -981,7 +1044,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                         {(editSpecs.clientPricing || []).map((cp, idx) => (
                             <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid var(--line)', padding: '12px 16px' }}>
                                 <div style={{ display: 'flex', gap: '24px', fontSize: '0.9rem', width: '100%', alignItems: 'center', color: 'var(--ink)' }}>
-                                    <span style={{ fontWeight: 500, flex: 1 }}>{cp.customerId}</span>
+                                    <span style={{ fontWeight: 500, flex: 1 }}>{(liveCustomers.find(c => c.id === cp.customerId)?.name || cp.customerId)}{liveCustomers.some(c => c.id === cp.customerId) && <span style={{ color: 'var(--ink-soft)', fontWeight: 400 }}> ({cp.customerId})</span>}</span>
                                     <span style={{ flex: 1, color: 'var(--ink-soft)' }}>SKU: <span style={{ color: 'var(--ink)' }}>{cp.clientSku || 'N/A'}</span></span>
                                     <span style={{ width: '100px', textAlign: 'right' }}>Cost: ${parseFloat(cp.price || 0).toFixed(2)}</span>
                                     <span style={{ fontWeight: 500, width: '120px', textAlign: 'right' }}>Sales: ${parseFloat(cp.clientSalesPrice || 0).toFixed(2)}</span>
