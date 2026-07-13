@@ -1489,6 +1489,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       if (partObj.manufacturingSpecs?.basePrice) optionNativePrice = parseFloat(partObj.manufacturingSpecs.basePrice);
                       else if (partObj.basePrice) optionNativePrice = parseFloat(partObj.basePrice);
                   }
+                  // Finish-variant docs can be identity-only (M2C prices the BASE item; CE prices the
+                  // variants) — an unpriced variant falls back to the base item's price instead of $0.
+                  if (!optionNativePrice && preVariantObj && preVariantObj !== partObj) {
+                      optionNativePrice = parseFloat(preVariantObj.manufacturingSpecs?.basePrice ?? preVariantObj.basePrice) || 0;
+                  }
 
                   // Choose / Swap Style: an author-set option price OVERRIDES the item price — but only a
                   // real one. Generated options default to 0, and letting that 0 win is what blanked out
@@ -1510,7 +1515,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           const linkedBase = speciesSwap(linkedSized, selFinish || finishObjForStep(step.id));
                           const linkedPart = finishVariantOf(linkedBase, fc);
                           const fabLp = priceLevel !== 'STANDARD' ? fabricutPriceOf(linkedPart, priceLevel) : null;
-                          const lp = fabLp != null ? fabLp : (parseFloat(linkedPart.manufacturingSpecs?.basePrice ?? linkedPart.basePrice) || 0);
+                          // Variant unpriced → base item price (M2C prices the base, CE the variant).
+                          const lp = fabLp != null ? fabLp : (parseFloat(linkedPart.manufacturingSpecs?.basePrice ?? linkedPart.basePrice) || parseFloat(linkedBase.manufacturingSpecs?.basePrice ?? linkedBase.basePrice) || 0);
                           if (optionNativePrice === 0 && stepPrice === 0 && lp > 0) optionNativePrice = lp;
                           resolvedPartId = linkedPart.itemId || linkedPart.id;
                           resolvedErpId = linkedPart.legacyErpId || linkedPart.itemId || resolvedErpId;
@@ -1566,6 +1572,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       const poleFinished = polePart ? finishVariantOf(polePart, finishCodeForStep(matStep.id)) : null;
                       if (poleFinished) {
                           let pp = parseFloat(poleFinished.manufacturingSpecs?.basePrice ?? poleFinished.basePrice) || 0;
+                          // Unpriced finish variant → the base pole item's price (M2C prices the base);
+                          // still nothing → the material option's own authored per-foot price.
+                          if (!pp && polePart) pp = parseFloat(polePart.manufacturingSpecs?.basePrice ?? polePart.basePrice) || 0;
+                          if (!pp && matOpt.price !== undefined && matOpt.price !== '') pp = parseFloat(matOpt.price) || 0;
                           if (matStep.useClientPricing) { const cv = clientPriceFor(poleFinished) ?? clientPriceFor(polePart); if (cv != null) pp = cv; }
                           if (priceLevel !== 'STANDARD') { const fp = fabricutPriceOf(poleFinished, priceLevel); if (fp != null) pp = fp; }
                           if (stepPrice === 0 && pp > 0) stepPrice = pp;

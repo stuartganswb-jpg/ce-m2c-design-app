@@ -922,17 +922,24 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           // price, layer Z, per-option projection (Vision), the hides-bracket flag, and per-style finish
           // scoping. Matched by (step title || optId) — both are stable across regenerations.
           const USER_OPT_FIELDS = ['price', 'layerZ', 'projection', 'hidesBracket', 'finishAllowedOptions'];
-          const oldOptByKey = {}; const feeByTitle = {};
+          const oldOptByKey = {}; const oldOptByPart = {}; const feeByTitle = {}; const priceByTitle = {}; const ovrByTitle = {};
           (oldFlow.steps || []).forEach(s => {
               const t = norm(s.title);
               [...(s.styleOptions || []), ...(s.subOptions || [])].forEach(o => {
                   const k = o && (o.optId || o.partId);
                   if (k != null) oldOptByKey[`${t}||${k}`] = o;
+                  // Secondary index: optIds embed the cluster id, which CHANGES when the assembly is
+                  // re-imported — (title, partId, position) survives that, so authored prices do too.
+                  if (o && o.partId) { const pk = `${t}||${o.partId}||${norm(o.position)}`; if (!oldOptByPart[pk]) oldOptByPart[pk] = o; }
               });
               if (s.type === 'STATIC_FEE' && s.basePrice !== undefined) feeByTitle[t] = s.basePrice;
+              // Step-level prices the author set survive a regenerate on EVERY step, not just fees.
+              if (s.type !== 'STATIC_FEE' && s.basePrice !== undefined && s.basePrice !== '') priceByTitle[t] = s.basePrice;
+              if (s.priceOverride !== undefined && s.priceOverride !== '') ovrByTitle[t] = s.priceOverride;
           });
           const applyUser = (opts, t) => (opts || []).map(o => {
-              const old = oldOptByKey[`${t}||${o.optId || o.partId}`];
+              const old = oldOptByKey[`${t}||${o.optId || o.partId}`]
+                  || (o.partId ? oldOptByPart[`${t}||${o.partId}||${norm(o.position)}`] : null);
               if (!old) return o;
               const merged = { ...o };
               USER_OPT_FIELDS.forEach(f => { if (old[f] !== undefined) merged[f] = old[f]; });
@@ -944,6 +951,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               if (next.styleOptions) next.styleOptions = applyUser(next.styleOptions, t);
               if (next.subOptions) next.subOptions = applyUser(next.subOptions, t);
               if (next.type === 'STATIC_FEE' && feeByTitle[t] !== undefined) next.basePrice = feeByTitle[t];
+              if (next.type !== 'STATIC_FEE' && priceByTitle[t] !== undefined && (next.basePrice === undefined || next.basePrice === '')) next.basePrice = priceByTitle[t];
+              if (ovrByTitle[t] !== undefined && (next.priceOverride === undefined || next.priceOverride === '')) next.priceOverride = ovrByTitle[t];
               return next;
           });
           try {
@@ -1772,7 +1781,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                                                         ? <img src={img} alt="" onClick={() => setZoomImg({ url: img, label: o.partName || okey })} title="Click to enlarge" style={{ width: '34px', height: '34px', objectFit: 'contain', background: 'var(--paper)', cursor: 'zoom-in', flexShrink: 0 }} />
                                                                         : <span style={{ width: '34px', height: '34px', flexShrink: 0, border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)' }}>no img</span>}
                                                                     <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--ink)' }}>{o.partName || okey}</span>
-                                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{(o.price !== undefined && o.price !== '' && o.price !== null) ? `$${o.price}` : ''}</span>
+                                                                    <span style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>$</span>
+                                                                    <input type="number" step="0.01" value={o.price !== undefined && o.price !== null ? o.price : ''} placeholder="item"
+                                                                        title="Author price override for this option (per foot on a Pole/Rod Material step). 0 or blank = price from the item itself (finish variant, then base). Persisted by Save Step below."
+                                                                        onChange={(e) => { const v = e.target.value; setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(x => (x.optId || x.partId) === okey ? { ...x, price: v === '' ? '' : (parseFloat(v) || 0) } : x) })); }}
+                                                                        style={{ width: '84px', padding: '5px 6px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
                                                                     <label title="When this option is the customer's pick, hide this step's position outer Bracket & Mount step (e.g. a french return that replaces the end bracket). Leave OFF to keep the bracket step — e.g. when you still offer french-return backplates there." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: o.hidesBracket ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                                         <input type="checkbox" checked={!!o.hidesBracket} onChange={(e) => setNewStep(prev => ({ ...prev, styleOptions: (prev.styleOptions || []).map(x => (x.optId || x.partId) === okey ? { ...x, hidesBracket: e.target.checked } : x) }))} style={{ cursor: 'pointer' }} />
                                                                         hides bracket
@@ -1786,7 +1799,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                                 </div>
                                             )}
 
-                                            {!flowSettings.linkedAssemblyId ? (
+                                            {isGeneratedFlow ? (
+                                                <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Generated flow — options come from the assembly's tags (Regenerate to add/remove them). Set each option's price in the list above, then Save Step. The BOM-pin checkboxes are disabled here: they key options differently and would create duplicates alongside the generated ones.</div>
+                                            ) : !flowSettings.linkedAssemblyId ? (
                                                 <div style={{ fontSize: '0.9rem', color: '#d9534f', fontStyle: 'italic' }}>Link a Master Assembly to this flow first (in the settings above).</div>
                                             ) : linkedBomPins.length === 0 ? (
                                                 <div style={{ fontSize: '0.9rem', color: '#d9534f', fontStyle: 'italic' }}>No BOM components found for this assembly. Add them in Node Cluster / BOM Engine.</div>
