@@ -236,6 +236,15 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       const erpU = String(part.legacyErpId || part.itemId || '').toUpperCase();
       return !orphanUsedSet.has(idU) && (!erpU || erpU === 'PENDING' || !orphanUsedSet.has(erpU));
   };
+  const deleteSingleOrphan = async (part, e) => {
+      e.stopPropagation(); // the card's onClick opens the editor — a delete tap must never do both
+      const label = `${part.legacyErpId && part.legacyErpId !== 'PENDING' ? part.legacyErpId : (part.itemId || part.id)} — ${part.itemName || ''}`;
+      if (!window.confirm(`Delete "${label}"?\n\nNo NetSuite id · not referenced by any BOM or CPQ flow.\n\nThis cannot be undone.`)) return;
+      try {
+          await deleteDoc(doc(db, 'Approved_Designs', part.id));
+          if (activePart?.id === part.id) setActivePart(null);
+      } catch (err) { alert('Delete failed: ' + (err.message || err)); }
+  };
   const deleteOrphans = async (list) => {
       if (!list.length) return alert('Nothing shown to delete.');
       const preview = list.slice(0, 15).map(p => `• ${p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : (p.itemId || p.id)} — ${p.itemName || ''}`).join('\n');
@@ -866,6 +875,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               <div key={part.id} onClick={() => openPartDetails(part)} style={{ background: '#fff', border: activePart?.id === part.id ? `1px solid ${classColor}` : '1px solid var(--line)', cursor: 'pointer', position: 'relative', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', boxShadow: activePart?.id === part.id ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}>
                 {isWatchlist && <div style={{ position: 'absolute', top: '-10px', right: '-10px', background: '#d9534f', color: '#fff', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', zIndex: 2, boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>★ {currentWatchList}</div>}
                 {isSharedIn && <div style={{ position: 'absolute', top: '10px', left: '10px', background: 'var(--paper-2)', color: 'var(--ink)', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', zIndex: 2 }}>Shared from {part.brandId.toUpperCase()}</div>}
+                {orphanMode && <button onClick={(e) => deleteSingleOrphan(part, e)} title="Delete this orphan item (no NetSuite id · unreferenced by any BOM or CPQ flow)" style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 3, width: '28px', height: '28px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontSize: '1.05rem', lineHeight: 1, boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>×</button>}
 
                 <div style={{ height: '180px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                   {(part.finalImageUrl || part.componentImageUrl) ? <img src={part.finalImageUrl || part.componentImageUrl} alt="Part" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <span style={{ color: 'var(--ink-soft)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>{part.manufacturingSpecs?.cadUrl ? '🧊 3D CAD' : 'No Image'}</span>}
