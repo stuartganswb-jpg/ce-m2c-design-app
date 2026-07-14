@@ -6,8 +6,9 @@
 // saved to the assembly doc (specSheetOverrides). Wall-mount styles carry bulk-entered
 // dims in system/spec_sheet_config. Editions: H1 (internal) or Fabricut customer codes.
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, getDocs, query, collection, where } from 'firebase/firestore';
 import { db } from '../../firebase';
+import { SIZE_FAMILIES } from '../Shared/sizeMatrix';
 import { loadGLBScene } from '../Shared/componentExport';
 import { normalizeCategory, normalizePosition, normalizeEndTreatment } from '../Shared/assemblyTags';
 import {
@@ -55,10 +56,85 @@ const viewBbox = (meshes, view) => {
   return { minU, maxU, minV, maxV };
 };
 
-const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
+const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, onClose }) => {
   const [status, setStatus] = useState('Loading 3D model…');
   const [error, setError] = useState('');
   const [pageIndex, setPageIndex] = useState(0);
+
+  // ---- SIZE-MATRIX ROUTING (Stuart 2026-07-14) ------------------------------------------------
+  // One kept assembly covers a whole diameter × projection family in CPQ, but spec sheets need
+  // TRUE geometry per cell. Each cell maps to a SOURCE assembly whose GLB + pins carry that
+  // cell's real parts and codes (e.g. the retired ¾" × 3.625" assembly = the 75|S source; the
+  // designer's spec masters register here as they land — this picker IS the spec-master
+  // registry). Mapping lives in system/spec_sheet_config.sizeSources[family]["dia|proj"]; the
+  // family's base cell always uses the assembly the modal was opened with.
+  const sizeFamilyKey = React.useMemo(() => {
+    for (const p of (basePins || [])) {
+      const part = (libraryParts || []).find(x => x.id === p.partId || x.itemId === p.partId || x.legacyErpId === p.partId);
+      const fam = part?.manufacturingSpecs?.customData?.sizeKey?.family;
+      if (fam) return fam;
+    }
+    return null;
+  }, [basePins, libraryParts]);
+  const sizeFam = sizeFamilyKey ? SIZE_FAMILIES[sizeFamilyKey] : null;
+  const [sizeSel, setSizeSel] = useState(null); // { dia, proj }
+  useEffect(() => { if (sizeFam && !sizeSel) setSizeSel({ dia: sizeFam.baseDia, proj: sizeFam.baseProj }); }, [sizeFam, sizeSel]);
+  const isBaseCell = !sizeFam || !sizeSel || (sizeSel.dia === sizeFam.baseDia && sizeSel.proj === sizeFam.baseProj);
+  const cellKey = sizeSel ? `${sizeSel.dia}|${sizeSel.proj}` : '';
+  const cellLabel = (sizeFam && sizeSel)
+    ? `${sizeFam.dia.options.find(o => o.value === sizeSel.dia)?.label || sizeSel.dia} · ${sizeFam.proj.options.find(o => o.value === sizeSel.proj)?.label || sizeSel.proj}`
+    : '';
+  const [sizeSources, setSizeSources] = useState({});
+  const [srcState, setSrcState] = useState({ assembly: null, pins: null, loading: false, missing: false });
+  const [showSrcPicker, setShowSrcPicker] = useState(false);
+  const [srcPickerList, setSrcPickerList] = useState(null);
+  const [srcPickId, setSrcPickId] = useState('');
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      if (!sizeFam || !sizeSel || isBaseCell) { setSrcState({ assembly: null, pins: null, loading: false, missing: false }); return; }
+      const entry = sizeSources?.[sizeFamilyKey]?.[cellKey];
+      if (!entry?.assemblyId) { setSrcState({ assembly: null, pins: null, loading: false, missing: true }); return; }
+      setSrcState(s => ({ ...s, loading: true, missing: false }));
+      try {
+        const [aSnap, pSnap] = await Promise.all([
+          getDoc(doc(db, 'Approved_Designs', entry.assemblyId)),
+          getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', entry.assemblyId))),
+        ]);
+        if (dead) return;
+        if (!aSnap.exists()) { setSrcState({ assembly: null, pins: null, loading: false, missing: true }); return; }
+        setSrcState({ assembly: { id: aSnap.id, ...aSnap.data() }, pins: pSnap.docs.map(d => ({ id: d.id, ...d.data() })), loading: false, missing: false });
+      } catch (e) {
+        console.error('Spec source load failed', e);
+        if (!dead) setSrcState({ assembly: null, pins: null, loading: false, missing: true });
+      }
+    })();
+    return () => { dead = true; };
+  }, [sizeFam, sizeSel, isBaseCell, sizeSources, sizeFamilyKey, cellKey]);
+  // Everything below runs against the SOURCE for the selected cell (base cell = the opened assembly).
+  const assembly = srcState.assembly || baseAssembly;
+  const pins = srcState.pins || basePins;
+  const cellBlocked = !!(sizeFam && !isBaseCell && (srcState.loading || srcState.missing));
+  const loadSrcPickerList = async () => {
+    if (srcPickerList) return;
+    try {
+      const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('brandId', '==', baseAssembly?.brandId || ''), where('partClass', '==', 'Assembly')));
+      setSrcPickerList(snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(a => a.manufacturingSpecs?.cadUrl)
+        .sort((a, b) => String(a.itemName || '').localeCompare(String(b.itemName || ''))));
+    } catch (e) { setSrcPickerList([]); }
+  };
+  const saveCellSource = async () => {
+    const pick = (srcPickerList || []).find(a => a.id === srcPickId);
+    if (!pick || !sizeSel) return;
+    const next = { ...(sizeSources || {}) };
+    next[sizeFamilyKey] = { ...(next[sizeFamilyKey] || {}), [cellKey]: { assemblyId: pick.id, name: pick.itemName || pick.itemId, cadUrl: pick.manufacturingSpecs?.cadUrl || '', savedAt: Date.now() } };
+    try {
+      await setDoc(doc(db, 'system', 'spec_sheet_config'), { sizeSources: next }, { merge: true });
+      setSizeSources(next);
+      setShowSrcPicker(false);
+    } catch (e) { alert('Failed to save the size source: ' + (e.message || e)); }
+  };
   const [edition, setEdition] = useState('H1'); // 'H1' | 'FAB'
   // 'tab11' = true 1:1 on 11×17 · 'letterReduced' = same 11×17 master reduced onto 8.5×11
   // (~64%, marked not-to-scale) · 'fit' = compact 8.5×11 fit-scale layout
@@ -71,6 +147,8 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     : null;
   const [choiceData, setChoiceData] = useState(null);
   const [manualDims, setManualDims] = useState(() => assembly?.specSheetOverrides?.manualDims || []);
+  // Manual dims belong to the SOURCE assembly's geometry — reload when the size cell swaps it.
+  useEffect(() => { setManualDims(assembly?.specSheetOverrides?.manualDims || []); setDirty(false); }, [assembly?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [wallCfg, setWallCfg] = useState({});
   const [showWallCfg, setShowWallCfg] = useState(false);
   const [dimTool, setDimTool] = useState(false);
@@ -141,7 +219,7 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
         ]);
         if (dead) return;
         sceneRef.current = scene;
-        if (cfgSnap?.exists()) setWallCfg(cfgSnap.data()?.wallPlates || {});
+        if (cfgSnap?.exists()) { setWallCfg(cfgSnap.data()?.wallPlates || {}); setSizeSources(cfgSnap.data()?.sizeSources || {}); }
         const brackets = choicesFor('BRACKET');
         if (!brackets.length) throw new Error('No bracket choices found (need BRACKET-category cluster pins with choiceNode).');
         const plates = choicesFor('BACKPLATE');
@@ -694,7 +772,23 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ background: '#f4f5f7', borderRadius: '8px', width: 'min(1240px, 96vw)', maxHeight: '94vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 16px', borderBottom: '1px solid #d5d8dd', flexWrap: 'wrap' }}>
-          <strong style={{ fontSize: '0.95rem' }}>Spec Sheet — {assembly?.itemName || assembly?.itemId}</strong>
+          <strong style={{ fontSize: '0.95rem' }}>Spec Sheet — {baseAssembly?.itemName || baseAssembly?.itemId}</strong>
+          {sizeFam && sizeSel && (
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }} title="Diameter × projection — mirrors the CPQ size questions; each cell draws from its registered spec-geometry source">
+              <select value={sizeSel.dia} onChange={e => { setSizeSel(s => ({ ...s, dia: e.target.value })); setPageIndex(0); }} style={{ padding: '5px', fontSize: '0.8rem' }}>
+                {sizeFam.dia.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <select value={sizeSel.proj} onChange={e => { setSizeSel(s => ({ ...s, proj: e.target.value })); setPageIndex(0); }} style={{ padding: '5px', fontSize: '0.8rem' }}>
+                {sizeFam.proj.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              {!isBaseCell && srcState.assembly && (
+                <span style={{ fontSize: '0.72rem', color: '#2e7d4f', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`Geometry source: ${srcState.assembly.itemName || srcState.assembly.id}`}>
+                  ⛓ {srcState.assembly.itemName || srcState.assembly.id}
+                  <button style={{ ...btn, padding: '1px 6px', marginLeft: '4px', fontSize: '0.7rem' }} title="Change this cell's geometry source" onClick={() => { setShowSrcPicker(true); loadSrcPickerList(); }}>✎</button>
+                </span>
+              )}
+            </div>
+          )}
           <select value={pageIndex} onChange={e => setPageIndex(+e.target.value)} style={{ padding: '5px', fontSize: '0.8rem' }}>
             {pages.map((p, i) => <option key={p.key} value={i}>{p.title}</option>)}
           </select>
@@ -750,12 +844,34 @@ const SpecSheetModal = ({ assembly, pins, libraryParts, onClose }) => {
             </table>
           </div>
         )}
+        {(showSrcPicker || (srcState.missing && !isBaseCell)) && sizeFam && (
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid #d5d8dd', background: '#fff8ec' }}>
+            <div style={{ fontSize: '0.85rem', marginBottom: '8px' }}>
+              <b>{cellLabel}</b> — {srcState.missing ? 'no spec geometry registered for this size yet.' : 'change this size\'s geometry source.'} Pick the assembly whose GLB carries this cell's TRUE parts (e.g. the retired 3.625" assembly for ¾" × 3-5/8", or the designer's spec master once it's built in 1.6):
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <select value={srcPickId} onFocus={loadSrcPickerList} onChange={e => setSrcPickId(e.target.value)} style={{ padding: '6px', fontSize: '0.8rem', minWidth: '360px' }}>
+                <option value="">{srcPickerList === null ? 'Click to load assemblies…' : '-- Select the source assembly --'}</option>
+                {(srcPickerList || []).map(a => <option key={a.id} value={a.id}>{a.itemName || a.itemId}</option>)}
+              </select>
+              <button style={btnOn} disabled={!srcPickId} onClick={saveCellSource}>Save as {cellLabel} source</button>
+              {showSrcPicker && <button style={btn} onClick={() => setShowSrcPicker(false)}>Cancel</button>}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: '#7a6a45', marginTop: '6px' }}>
+              Keep the source assembly's record in the library — its GLB and pins ARE this size's spec archive (the CPQ flow linked to it can be deleted; the assembly doc must stay).
+            </div>
+          </div>
+        )}
         <div style={{ padding: '8px 16px', fontSize: '0.8rem', color: '#555', minHeight: '20px' }}>
           {error ? <span style={{ color: '#b00020' }}>⚠ {error}</span> : (status || (dimTool ? 'Manual dim: click two points on a drawing, then enter the value.' : ''))}
         </div>
         <div ref={svgHostRef} onClick={handleSvgClick}
           style={{ flex: 1, overflow: 'auto', padding: '0 16px 16px', cursor: dimTool ? 'crosshair' : 'default' }}>
-          {pageData && (
+          {cellBlocked ? (
+            <div style={{ padding: '80px 20px', textAlign: 'center', color: '#777', fontSize: '0.95rem' }}>
+              {srcState.loading ? `Loading ${cellLabel} geometry…` : `No spec geometry for ${cellLabel} yet — register its source assembly above.`}
+            </div>
+          ) : pageData && (
             <div style={{ background: '#fff', boxShadow: '0 1px 6px rgba(0,0,0,0.2)', maxWidth: `${PAPERS[layoutPaper].W}px`, margin: '0 auto', aspectRatio: `${PAPERS[layoutPaper].W}/${PAPERS[layoutPaper].H}` }}
               dangerouslySetInnerHTML={{ __html: pageData.svg }} />
           )}
