@@ -221,6 +221,30 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     return (preferred.length ? preferred : cls).flatMap(c => c.nodes || []);
   }, [clusters]);
 
+  // LEGACY SOURCES (pre-choice-pin era, e.g. the retired 3.625" assembly): pins carry no
+  // choiceNode, so choicesFor() finds nothing — but the GLB nodes are NAMED with the item codes
+  // (designer convention: "H1-75BE LEFT"). Derive the choices from the clusters' node names so
+  // any old assembly can serve as a spec-geometry source without re-pinning.
+  const legacyChoicesFor = useCallback((cat) => {
+    const cls = clusters.filter(c => c.cat === cat && !c.hidden && (c.nodes || []).length && ['LEFT', 'SHARED', 'CENTER', ''].includes(c.pos || ''));
+    const preferred = cls.filter(c => c.pos === 'LEFT');
+    const out = [];
+    (preferred.length ? preferred : cls).forEach(c => (c.nodes || []).forEach(n => {
+      const leaf = String(n).split('__').pop().replace(/^\d+_?/, '').trim();
+      const code = leaf
+        .replace(/\s+(LEFT|RIGHT|CENTER|CTR|L|R)$/i, '')
+        .replace(/[\s_]v\d+.*$/i, '')
+        .replace(/\.\d{3}$/, '')
+        .trim().toUpperCase();
+      if (!/^(H\d|CE-|FI)/i.test(code) || /STDOFF|STANDOFF/i.test(code)) return; // item-code-shaped names only (skip Body1/screws/standoffs)
+      out.push({ partName: code, choiceNode: n, clusterId: c.id, endTreatment: '' });
+    }));
+    const seen = new Set();
+    const deduped = out.filter(x => seen.has(x.partName) ? false : (seen.add(x.partName), true));
+    const rank = (p) => { const m = (p.partName || '').match(/-(H|R|S|V)$/i); return m ? 'HRSV'.indexOf(m[1].toUpperCase()) : 9; };
+    return deduped.sort((a, b) => rank(a) - rank(b) || String(a.partName).localeCompare(String(b.partName)));
+  }, [clusters]);
+
   // Fabricut customer code for a part (stamped by the CrossReference import).
   const fabCodeFor = useCallback((partName) => {
     const part = (libraryParts || []).find(p => p.legacyErpId === partName || p.itemId === partName || p.id === partName);
@@ -251,17 +275,21 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         ]);
         if (dead) return;
         sceneRef.current = scene;
+        setError(''); // a fresh source is loading — clear any stale banner from the previous one
         // Row/wall-mount/finial caches are keyed by RAW pin names, which collide across size
         // sources (the 3.625" source pins the same …ILE names as the master) — flush on every
         // source load so a cell switch can never reuse the other source's geometry.
         rowCacheRef.current = {};
         wallMountsRef.current = null;
         finialsRef.current = null;
+        setPageData(null); // never leave the previous source's drawing on screen during a swap
         if (cfgSnap?.exists()) { setWallCfg(cfgSnap.data()?.wallPlates || {}); setSizeSources(cfgSnap.data()?.sizeSources || {}); }
-        const brackets = choicesFor('BRACKET');
-        if (!brackets.length) throw new Error('No bracket choices found (need BRACKET-category cluster pins with choiceNode).');
-        const plates = choicesFor('BACKPLATE');
-        if (!plates.length) throw new Error('No backplate choices found (need BACKPLATE-category cluster pins with choiceNode).');
+        // Choice pins first; legacy sources (no choiceNode pins) derive choices from the GLB's
+        // code-named cluster nodes instead.
+        const brackets = choicesFor('BRACKET').length ? choicesFor('BRACKET') : legacyChoicesFor('BRACKET');
+        if (!brackets.length) throw new Error('No bracket choices found (need BRACKET-category cluster pins with choiceNode, or code-named bracket nodes).');
+        const plates = choicesFor('BACKPLATE').length ? choicesFor('BACKPLATE') : legacyChoicesFor('BACKPLATE');
+        if (!plates.length) throw new Error('No backplate choices found (need BACKPLATE-category cluster pins with choiceNode, or code-named backplate nodes).');
         // A plate is a RETURN plate if its pin OR its cluster carries the return flag —
         // the same part code (e.g. H1-75RCP-S) exists in both the L/R bracket-backplate
         // cluster and the french/miter return-backplate cluster, so the CLUSTER chip is
@@ -294,8 +322,18 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // the FINIAL cluster holds ALL end-treatment choices (canonical tag spec):
         // plain finials → catalog grid page; french/miter returns → bracket-style pages;
         // inside mounts → single-row page (their threaded plate is nested in the geometry)
-        const endChoices = choicesFor('FINIAL');
-        const et = (p) => normalizeEndTreatment(p.endTreatment || '');
+        const endChoices = choicesFor('FINIAL').length ? choicesFor('FINIAL') : legacyChoicesFor('FINIAL');
+        // Explicit tag first; legacy (untagged) choices classify by NAME grammar — the miter/bend
+        // node names carry it ("34X14 MTR LEFT", "…RND BEND LEFT").
+        const et = (p) => {
+          const tagged = normalizeEndTreatment(p.endTreatment || '');
+          if (tagged) return tagged;
+          const nm = `${p.partName || ''} ${p.choiceNode || ''}`;
+          if (/MTR|MITER|MITRE/i.test(nm)) return 'MITER_RETURN';
+          if (/BEND|FRENCH/i.test(nm)) return 'FRENCH_RETURN';
+          if (/INSIDE|(^|[^A-Z])IM([^A-Z]|$)/i.test(nm)) return 'INSIDE_MOUNT';
+          return '';
+        };
         const finials = endChoices.filter(p => !et(p) || et(p) === 'FINIAL');
         const returnArms = endChoices.filter(p => et(p) === 'FRENCH_RETURN' || et(p) === 'MITER_RETURN');
         const insideMounts = endChoices.filter(p => et(p) === 'INSIDE_MOUNT');
@@ -307,7 +345,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     })();
     return () => { dead = true; };
-  }, [assembly, choicesFor, clusterById]);
+  }, [assembly, choicesFor, legacyChoicesFor, clusterById]);
 
   // ---- derive pages from choices (re-chunked when the scale mode changes) ----
   useEffect(() => {
@@ -387,7 +425,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
     // gets its own labeled detail image in the page corner.
-    const ringPins = choicesFor('RING');
+    const ringPins = choicesFor('RING').length ? choicesFor('RING') : legacyChoicesFor('RING');
     let ringChoices = ringPins
       .map(p => ({ partName: p.partName, meshes: extractWorldMeshes(scene, [p.choiceNode]) }))
       .filter(r => r.meshes.length);
@@ -605,7 +643,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, ringItems };
-  }, [nodesFor, wallCfg, choicesFor]);
+  }, [nodesFor, wallCfg, choicesFor, legacyChoicesFor]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
   const buildWallMounts = useCallback(() => {
