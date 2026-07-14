@@ -9,6 +9,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
 import { buildCodeIndex, matchItemByName, normCode } from '../Shared/itemCodeMatch';
+import { analyzeFusionFbx, buildGlbFromAnalysis, UNIT_CHOICES } from '../Shared/fusionImport';
 import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
 import { downloadItemStarterTemplate, parseItemStarterWorkbook } from '../Shared/itemStarterXlsx';
 import { TAG_CATEGORIES, TAG_LOCATIONS, END_TREATMENTS, normalizeLocation, normalizePosition, normalizeCategory, suggestTagsFromName } from '../Shared/assemblyTags';
@@ -115,6 +116,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [codeOptions, setCodeOptions] = useState([]); // alphabetical Master-Library codes for the item # picker
     const assignGenRef = useRef(0);                      // invalidates in-flight thumbnail runs on reload
     const [zoomThumb, setZoomThumb] = useState(null);    // { url, label } — enlarged thumbnail overlay
+    // FUSION IMPORT (.fbx → house .glb, replaces the Blender pass): { slot, fileName, buffer,
+    // analysis, rows:[{key,keep,finalName,origName,bodies,tris,size}], unitId, mode, busy, err }
+    const [fusionJob, setFusionJob] = useState(null);
     const assignSceneRef = useRef(null);                 // loaded scene kept for split/thumbnails
     const [syncId, setSyncId] = useState('');            // assembly whose pins we're linking to the library
     const [syncBusy, setSyncBusy] = useState(false);
@@ -167,8 +171,56 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         return () => unsub();
     }, [activeBrand]);
 
+    // Fusion .fbx dropped on a slot → analyze + open the conversion checklist instead of the
+    // normal .glb path. Convert & Load then feeds the produced .glb through onUpload as usual.
+    const openFusionImport = async (slot, file) => {
+        setFusionJob({ slot, fileName: file.name, buffer: null, analysis: null, rows: [], unitId: 'cm', mode: 'PRODUCTION', busy: true, err: '' });
+        try {
+            const buffer = await file.arrayBuffer();
+            const analysis = await analyzeFusionFbx(buffer);
+            const index = await ensureCodeIndex().catch(() => null);
+            const rows = analysis.components.map(c => {
+                const m = index ? matchItemByName(c.cleanName, index) : null;
+                // hardware/screw bodies default to KEPT (they render) but keep their cleaned name;
+                // a matched item code becomes the suggested canonical mesh name.
+                return { key: c.key, keep: true, origName: c.origName, bodies: c.bodies, tris: c.tris, size: c.size, finalName: m ? `${m.code}${/LEFT|RIGHT/i.test(slot.position || '') ? ` ${slot.position}` : ''}` : c.cleanName, matched: !!m };
+            });
+            setFusionJob(j => j && j.fileName === file.name ? { ...j, buffer, analysis, rows, unitId: analysis.unitGuess, busy: false } : j);
+            addLog(`Fusion import: ${file.name} — ${analysis.components.length} component(s), units read ${analysis.unitGuess.toUpperCase()} (FBX factor ${analysis.unitScaleFactor ?? '?'})`, 'info');
+        } catch (e) {
+            console.error(e);
+            setFusionJob(j => j && j.fileName === file.name ? { ...j, busy: false, err: e.message || String(e) } : j);
+        }
+    };
+    const runFusionConvert = async (download) => {
+        const job = fusionJob;
+        if (!job || !job.analysis) return;
+        setFusionJob(j => ({ ...j, busy: true, err: '' }));
+        try {
+            const buf = await buildGlbFromAnalysis(job.analysis, job.rows, { mode: job.mode, unitId: job.unitId });
+            const outName = job.fileName.replace(/\.fbx$/i, '') + (job.mode === 'SPEC' ? ' SPEC' : '') + '.glb';
+            if (download) {
+                const url = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
+                const a = document.createElement('a'); a.href = url; a.download = outName; a.click();
+                URL.revokeObjectURL(url);
+                setFusionJob(j => ({ ...j, busy: false }));
+                addLog(`Fusion import: ${outName} downloaded (${job.mode}).`, 'success');
+            } else {
+                const glbFile = new File([buf], outName, { type: 'model/gltf-binary' });
+                const slot = job.slot;
+                setFusionJob(null);
+                addLog(`Fusion import: converted ${job.fileName} → ${outName} (${job.mode}, units ${job.unitId}).`, 'success');
+                await onUpload(slot, glbFile);
+            }
+        } catch (e) {
+            console.error(e);
+            setFusionJob(j => j ? { ...j, busy: false, err: e.message || String(e) } : j);
+        }
+    };
+
     const onUpload = async (slot, file) => {
         if (!file) return;
+        if (/\.fbx$/i.test(file.name || '')) { openFusionImport(slot, file); return; }
         setBusy(slot.id);
         try {
             const buf = await file.arrayBuffer();
@@ -1071,7 +1123,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '8px' }}>
                                     <label style={{ ...sel, cursor: 'pointer', background: 'var(--ink)', color: '#fff', textTransform: 'uppercase' }}>
                                         {busy === slot.id ? 'Loading…' : (layer ? 'Replace .glb' : 'Upload .glb')}
-                                        <input type="file" accept=".glb,.gltf" style={{ display: 'none' }} onChange={e => onUpload(slot, e.target.files[0])} />
+                                        <input type="file" accept=".glb,.gltf,.fbx" style={{ display: 'none' }} onChange={e => onUpload(slot, e.target.files[0])} />
                                     </label>
                                     {layer && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{layer.fileName} · {(layer.choices || []).length} choice(s)</span>}
                                     {layer && <button onClick={() => removeLayer(slot.id)} style={{ ...sel, cursor: 'pointer', marginLeft: 'auto' }}>clear</button>}
@@ -1190,6 +1242,95 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     </div>
                 </div>
             )}
+
+            {/* ⚙ FUSION IMPORT — .fbx → house .glb conversion checklist (replaces the Blender pass):
+                unit hypothesis + measured dims (the validator), keep/drop + rename per component,
+                PRODUCTION (inches) vs SPEC (true meters) export. */}
+            {fusionJob && (() => {
+                const job = fusionJob;
+                const unit = UNIT_CHOICES.find(u => u.id === job.unitId) || UNIT_CHOICES[0];
+                const dimsIn = (size) => size.map(v => v * unit.toIn);
+                const fmt = (v) => (v >= 10 ? v.toFixed(1) : v.toFixed(2));
+                const suspicious = (d) => d.some(v => v > 120) || Math.max(...d) < 0.05;
+                const keptCount = job.rows.filter(r => r.keep).length;
+                const totalTris = job.rows.filter(r => r.keep).reduce((s, r) => s + r.tris, 0);
+                const patchRow = (key, patch) => setFusionJob(j => ({ ...j, rows: j.rows.map(r => r.key === key ? { ...r, ...patch } : r) }));
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,14,0.72)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div style={{ background: '#fff', borderRadius: '2px', padding: '26px 28px', width: 'min(860px, 94vw)', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 18px 60px rgba(0,0,0,0.35)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
+                                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>⚙ Fusion Import — {job.slot?.label}</h3>
+                                <button onClick={() => setFusionJob(null)} style={{ background: 'transparent', border: 'none', fontSize: '1.3rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                            </div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: '14px' }}>
+                                {job.fileName}{job.analysis ? ` · FBX unit factor ${job.analysis.unitScaleFactor ?? '?'} · ${job.rows.length} component(s)` : ''} · no Blender required
+                            </div>
+
+                            {job.busy && !job.analysis && <div style={{ padding: '40px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.1rem' }}>Reading Fusion export…</div>}
+                            {job.err && <div style={{ padding: '12px 14px', background: '#fdf0ef', border: '1px solid #d9534f', color: '#a94442', fontFamily: 'var(--mono)', fontSize: '11px', marginBottom: '12px' }}>{job.err}</div>}
+
+                            {job.analysis && (
+                                <>
+                                    <div style={{ display: 'flex', gap: '18px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' }}>
+                                        <div>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Source units (auto-detected — dims below must read right)</span>
+                                            <div style={{ display: 'flex', gap: '6px' }}>
+                                                {UNIT_CHOICES.map(u => (
+                                                    <button key={u.id} onClick={() => setFusionJob(j => ({ ...j, unitId: u.id }))} style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', border: `1px solid ${job.unitId === u.id ? 'var(--brass)' : 'var(--line)'}`, background: job.unitId === u.id ? 'var(--brass)' : '#fff', color: job.unitId === u.id ? '#fff' : 'var(--ink)' }}>{u.label}</button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Export flavor</span>
+                                            <div style={{ display: 'flex', gap: '6px' }}>
+                                                <button onClick={() => setFusionJob(j => ({ ...j, mode: 'PRODUCTION' }))} title="Geometry in inches — the master-GLB render convention (CPQ / Vision)" style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', border: `1px solid ${job.mode === 'PRODUCTION' ? 'var(--ink)' : 'var(--line)'}`, background: job.mode === 'PRODUCTION' ? 'var(--ink)' : '#fff', color: job.mode === 'PRODUCTION' ? '#fff' : 'var(--ink)' }}>Production (in)</button>
+                                                <button onClick={() => setFusionJob(j => ({ ...j, mode: 'SPEC' }))} title="Geometry in TRUE meters — for spec-master assemblies the 📐 dimension tool measures" style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', border: `1px solid ${job.mode === 'SPEC' ? 'var(--ink)' : 'var(--line)'}`, background: job.mode === 'SPEC' ? 'var(--ink)' : '#fff', color: job.mode === 'SPEC' ? '#fff' : 'var(--ink)' }}>Spec (true m)</button>
+                                            </div>
+                                        </div>
+                                        <div style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{keptCount}/{job.rows.length} kept · ~{Math.round(totalTris / 1000)}k tris</div>
+                                    </div>
+
+                                    <div style={{ overflowY: 'auto', border: '1px solid var(--line)', flex: 1, minHeight: '160px' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                            <thead style={{ position: 'sticky', top: 0, background: 'var(--paper)' }}>
+                                                <tr>{['Keep', 'Mesh name (edit — item code + SIDE)', 'Fusion component', 'Bodies', 'Tris', `W × H × D (inches)`].map((h, i) => <th key={h} style={{ padding: '8px 10px', textAlign: i >= 3 ? 'center' : 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', borderBottom: '2px solid var(--ink)' }}>{h}</th>)}</tr>
+                                            </thead>
+                                            <tbody>
+                                                {job.rows.map(r => {
+                                                    const d = dimsIn(r.size);
+                                                    const bad = suspicious(d);
+                                                    return (
+                                                        <tr key={r.key} style={{ opacity: r.keep ? 1 : 0.45 }}>
+                                                            <td style={{ padding: '7px 10px', borderBottom: '1px solid var(--paper-2)' }}><input type="checkbox" checked={r.keep} onChange={e => patchRow(r.key, { keep: e.target.checked })} /></td>
+                                                            <td style={{ padding: '7px 10px', borderBottom: '1px solid var(--paper-2)' }}>
+                                                                <input value={r.finalName} onChange={e => patchRow(r.key, { finalName: e.target.value })} style={{ width: '100%', padding: '6px 8px', border: `1px solid ${r.matched ? '#7dbb81' : 'var(--line)'}`, fontFamily: 'var(--mono)', fontSize: '11px', outline: 'none', boxSizing: 'border-box' }} />
+                                                            </td>
+                                                            <td style={{ padding: '7px 10px', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.origName}>{r.origName}</td>
+                                                            <td style={{ padding: '7px 10px', borderBottom: '1px solid var(--paper-2)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{r.bodies}</td>
+                                                            <td style={{ padding: '7px 10px', borderBottom: '1px solid var(--paper-2)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{(r.tris / 1000).toFixed(1)}k</td>
+                                                            <td style={{ padding: '7px 10px', borderBottom: '1px solid var(--paper-2)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', color: bad ? '#d9534f' : 'var(--ink)', fontWeight: bad ? 700 : 400 }} title={bad ? 'Implausible size — wrong source-unit hypothesis? Switch units above until these read as real inches.' : ''}>{d.map(fmt).join(' × ')}{bad ? ' ⚠' : ''}</td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', margin: '10px 0 14px' }}>
+                                        Green name = matched to a Master Library code. Bodies merge to ONE mesh per row (position+normal only, neutral material — the engine colors by finish). ⚠ dims = pick a different source unit before converting; these numbers are what the spec sheets will measure.
+                                    </div>
+
+                                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                                        <button onClick={() => setFusionJob(null)} style={{ padding: '12px 22px', background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Cancel</button>
+                                        <button onClick={() => runFusionConvert(true)} disabled={job.busy || !keptCount} style={{ padding: '12px 22px', background: '#fff', border: '1px solid var(--ink)', color: 'var(--ink)', cursor: job.busy || !keptCount ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>{job.busy ? 'Working…' : '⬇ Download .glb'}</button>
+                                        <button onClick={() => runFusionConvert(false)} disabled={job.busy || !keptCount} style={{ padding: '12px 22px', background: job.busy || !keptCount ? 'var(--paper-2)' : 'var(--brass)', color: job.busy || !keptCount ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: job.busy || !keptCount ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{job.busy ? 'Converting…' : '✓ Convert & Load into Slot'}</button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                );
+            })()}
         </div>
     );
 }
