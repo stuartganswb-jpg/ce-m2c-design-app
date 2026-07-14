@@ -28,7 +28,15 @@ const FinishingFloor = () => {
   const [activeTab, setActiveTab] = useState('ACTIVE FLOOR');
   const [perms, setPerms] = useState({});
   
-  const [workOrders, setWorkOrders] = useState([]);
+  const [workOrdersRaw, setWorkOrders] = useState([]);
+  // DIVISION SWITCHER (Stuart 2026-07-14, matches the WMS header pattern): filter the finishing
+  // queues in place instead of bouncing back to the landing screen. 'all' = every division; work
+  // orders WITHOUT a brand stamp (legacy) stay visible under every division — never hide work.
+  const [floorBrand, setFloorBrand] = useState(() => { try { return localStorage.getItem('ff_brand') || 'all'; } catch (e) { return 'all'; } });
+  const pickFloorBrand = (b) => { setFloorBrand(b); try { localStorage.setItem('ff_brand', b); } catch (e) { /* storage unavailable */ } };
+  const workOrders = floorBrand === 'all'
+    ? workOrdersRaw
+    : workOrdersRaw.filter(w => { const b = String(w?.brand || w?.brandId || '').toLowerCase(); return !b || b === floorBrand; });
   const [recipes, setRecipes] = useState({});
   const [paintProfiles, setPaintProfiles] = useState({});
   const [activePots, setActivePots] = useState({});
@@ -151,7 +159,16 @@ const FinishingFloor = () => {
       <header style={{ backgroundColor: '#fff', color: 'var(--ink)', padding: '18px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '4px solid var(--brass)', borderBottom: '1px solid var(--line)' }}>
         <div>
             <h1 style={{ margin: 0, fontSize: '1.6rem', fontFamily: 'var(--serif)', fontWeight: 500, letterSpacing: '0.05em' }}>Finishing O.S.</h1>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', letterSpacing: '.18em', textTransform: 'uppercase' }}>Shop Floor Execution</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', letterSpacing: '.18em', textTransform: 'uppercase' }}>Shop Floor Execution</span>
+                <select value={floorBrand} onChange={e => pickFloorBrand(e.target.value)} title="Division filter — work orders without a division stamp always show" style={{ padding: '2px 5px', fontSize: '10px', fontFamily: 'var(--mono)', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', outline: 'none', textTransform: 'uppercase', cursor: 'pointer' }}>
+                    <option value="all">All Divisions</option>
+                    <option value="ce">Classical Elements</option>
+                    <option value="m2c">M2C Studio</option>
+                    <option value="uniquity">Uniquity</option>
+                    <option value="leyla">Leyla Gans LLC</option>
+                </select>
+            </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
           <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Operator: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{user.name}</strong></span>
