@@ -59,6 +59,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [genBusy, setGenBusy] = useState(false);
     const [onOrdModal, setOnOrdModal] = useState(null); // snapshot row → open PO/WO inbound detail popup
     const [cutModal, setCutModal] = useState(null);     // rod-cut order builder ({itemid, internalId, available, qty, target})
+    const [snapWatch, setSnapWatch] = useState('');     // snapshot watchlist filter (catalog is growing)
+    const [routeModal, setRouteModal] = useState(null); // in-house items WITH a vendor → per-item PO-vs-WO choice {buy, make, items}
 
     // BUILDER STATE
     const [activeBuilder, setActiveBuilder] = useState("PO"); // 'PO' or 'WO'
@@ -819,17 +821,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         return { part, size, ptype, isPole, available, minOnHand, cap, recommended };
     };
 
-    // Generate finishing WOs for every row with an Order qty > 0 → fin_workorders (Setup phase), grouped
-    // by finish. Stock builds skip the shop floor. Mirrors RTGDispatch.pushToFinishing's stock contract.
-    const generateFinishingWOs = async () => {
-        const rows = (salesHist?.rows) || [];
-        const toMake = rows.map(r => { const info = reorderFor(r); const qty = parseInt(orderQty[r.internalId] ?? info.recommended) || 0; return { r, info, qty }; }).filter(x => x.qty > 0);
-        if (!toMake.length) return alert('Enter an Order quantity on at least one row first (or accept a Recommended amount).');
-        if (!window.confirm(`Generate ${toMake.length} finishing work order(s) — ${toMake.reduce((s, x) => s + x.qty, 0)} pcs total — and send them to the Finishing Floor Setup queue (grouped by finish)?`)) return;
-        setGenBusy(true);
-        try {
+    // ---- ORDER GENERATION (Stuart 2026-07-14) -------------------------------------------------
+    // The Order column is ALWAYS manually entered (Rec is guidance, never auto-filled). Rows with a
+    // qty route by sourcing: BOUGHT items (isInHouse false + vendor) group into ONE app PO per
+    // vendor (hq_purchase_orders, status Approved → RTG Dispatch pushes each to NetSuite); MADE
+    // items get one finishing WO per row (unchanged contract); in-house items that ALSO carry a
+    // vendor prompt per item — PO to the vendor or WO to the floor.
+    const createStockFinWOs = async (toMake) => {
+        let n = 0;
+        {
             const reqDate = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
-            let n = 0;
             for (const { r, info, qty } of toMake) {
                 const finish = finishOf(r.itemid);
                 const woId = `WO-STK-${r.internalId}-${Date.now()}`;
@@ -860,11 +861,71 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 await setDoc(doc(db, "hq_work_orders", woId), { id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Dispatched', pushedToFinishing: true, erpId: r.itemid, recipe: finish || 'PENDING-RECIPE', qty, reqDate, paintSize: info.size || null, customer: 'Internal Stock', createdAt: Date.now(), createdBy: currentUser || '' }, { merge: true });
                 n++;
             }
-            addLog(`Generated ${n} finishing work order(s) → Setup queue (grouped by finish).`, 'success');
+        }
+        return n;
+    };
+    // One app PO per vendor (same doc shape as the grid's PO builder — RTG Dispatch picks these up
+    // and pushes each to NetSuite). Returns [{vendor, lines}].
+    const createStockPOs = async (buyList) => {
+        const byVendor = new Map();
+        buyList.forEach(x => {
+            const v = String(x.info.part?.manufacturingSpecs?.vendorName || '').trim();
+            if (!byVendor.has(v)) byVendor.set(v, []);
+            byVendor.get(v).push(x);
+        });
+        const made = [];
+        for (const [vendor, list] of byVendor.entries()) {
+            const newPoId = `PO-${(vendor || 'VEND').replace(/[^a-zA-Z0-9]/g, '').substring(0, 5)}-${Date.now().toString().slice(-6)}`;
+            const items = list.map(({ r, info, qty }) => ({
+                itemId: info.part?.legacyErpId || info.part?.itemId || r.itemid,
+                vendorPart: info.part?.manufacturingSpecs?.vendorId || 'N/A',
+                quantity: qty, rate: info.part?.manufacturingSpecs?.cost || 0,
+                description: info.part?.itemName || r.itemid
+            }));
+            await setDoc(doc(db, "hq_purchase_orders", newPoId), {
+                id: newPoId, poId: newPoId, brand: activeBrand, status: "Approved",
+                vendor, items, source: 'SALES_SNAPSHOT',
+                reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], createdAt: Date.now(), createdBy: currentUser || ''
+            });
+            made.push({ vendor, lines: items.length });
+            addLog(`✅ PO ${newPoId} → ${vendor || 'NO VENDOR'} (${items.length} line${items.length === 1 ? '' : 's'}).`, 'success');
+        }
+        return made;
+    };
+    const executeOrders = async (buy, make) => {
+        const pieces = [];
+        if (buy.length) pieces.push(`${new Set(buy.map(x => String(x.info.part?.manufacturingSpecs?.vendorName || '').trim())).size} vendor PO(s) covering ${buy.length} item(s)`);
+        if (make.length) pieces.push(`${make.length} finishing work order(s)`);
+        if (!pieces.length) return alert('Nothing to generate.');
+        if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}\n\nPOs land in RTG Dispatch (one per vendor) for the NetSuite push; work orders go to the Finishing Floor Setup queue.`)) return;
+        setGenBusy(true);
+        try {
+            const pos = buy.length ? await createStockPOs(buy) : [];
+            const wos = make.length ? await createStockFinWOs(make) : 0;
             setOrderQty({});
-            alert(`✅ ${n} finishing work order(s) sent to the Finishing Floor Setup queue.`);
-        } catch (e) { addLog(`Generate WOs failed: ${e.message}`, 'error'); alert('Failed to generate work orders:\n\n' + (e.message || e)); }
+            alert(`✅ Generated:\n${pos.map(p => `• PO → ${p.vendor || 'NO VENDOR'} (${p.lines} lines)`).join('\n')}${pos.length && wos ? '\n' : ''}${wos ? `• ${wos} finishing work order(s) → Setup queue` : ''}`);
+        } catch (e) { addLog(`Generate orders failed: ${e.message}`, 'error'); alert('Failed to generate orders:\n\n' + (e.message || e)); }
         setGenBusy(false);
+    };
+    // Router: split the entered rows by sourcing; in-house items that ALSO have a vendor go to the
+    // per-item PO-vs-WO chooser first.
+    const generateOrders = () => {
+        const rows = (salesHist?.rows) || [];
+        const toMake = rows.map(r => { const info = reorderFor(r); const qty = parseInt(orderQty[r.internalId]) || 0; return { r, info, qty }; }).filter(x => x.qty > 0);
+        if (!toMake.length) return alert('Enter an Order quantity on at least one row first — the Rec column is guidance; Order always starts at 0.');
+        const buy = [], make = [], ambiguous = [], noVendor = [];
+        toMake.forEach(x => {
+            const specs = x.info.part?.manufacturingSpecs || {};
+            const vendorName = String(specs.vendorName || '').trim();
+            const outsourced = specs.isInHouse === false;
+            if (outsourced && vendorName) buy.push(x);
+            else if (outsourced && !vendorName) noVendor.push(x);
+            else if (vendorName) ambiguous.push(x);
+            else make.push(x);
+        });
+        if (noVendor.length) alert(`⚠️ ${noVendor.length} outsourced item(s) have NO vendor set and were skipped — add the vendor in the Master Library first:\n\n${noVendor.slice(0, 10).map(x => `• ${x.r.itemid}`).join('\n')}`);
+        if (ambiguous.length) { setRouteModal({ buy, make, items: ambiguous.map(x => ({ ...x, choice: 'PO' })) }); return; }
+        executeOrders(buy, make);
     };
 
     // --- AGGREGATING DEMAND FROM VARIANTS TO ROOT ITEM ---
@@ -993,14 +1054,24 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             {salesHist && (() => {
                 const OLD_BLUE = '#3f7fc4';
                 const term = salesHistSearch.trim().toUpperCase();
-                const rows = (salesHist.rows || []).filter(r => !term || String(r.itemid).toUpperCase().includes(term));
+                // Watchlist of a snapshot row = its matched library part's watchlist (same resolution
+                // as the main grid) — the catalog is growing, so the report needs this narrowing.
+                const watchOf = (r) => {
+                    const part = partByKey['id:' + String(r.internalId)] || partByKey['erp:' + String(r.itemid).toUpperCase()];
+                    const s = part?.manufacturingSpecs || {};
+                    const nsW = s.customData?.watchlist && s.customData.watchlist !== 'N/A' ? s.customData.watchlist : '';
+                    return String(s.watchList || nsW || 'NONE').toUpperCase();
+                };
+                const rows = (salesHist.rows || []).filter(r =>
+                    (!term || String(r.itemid).toUpperCase().includes(term)) &&
+                    (snapWatch === '' || watchOf(r) === snapWatch.toUpperCase()));
                 const gt = salesHist.months.map((m, i) => rows.reduce((s, r) => s + (r.cells[i]?.v || 0), 0));
                 const gtTotal = rows.reduce((s, r) => s + r.total, 0);
                 const reo = rows.map(r => reorderFor(r));
                 const totAvail = reo.reduce((s, x) => s + x.available, 0);
                 const totMin = reo.reduce((s, x) => s + x.minOnHand, 0);
                 const totRec = reo.reduce((s, x) => s + x.recommended, 0);
-                const totOrder = rows.reduce((s, r, i) => s + (parseInt(orderQty[r.internalId] ?? reo[i].recommended) || 0), 0);
+                const totOrder = rows.reduce((s, r) => s + (parseInt(orderQty[r.internalId]) || 0), 0);
                 const totOnOrd = rows.reduce((s, r) => s + (r.onOrd || 0), 0);
                 const numTd = { padding: '7px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', borderBottom: '1px solid var(--paper-2)' };
                 const monthTh = { padding: '8px 6px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)', borderBottom: '2px solid var(--ink)', whiteSpace: 'nowrap' };
@@ -1020,10 +1091,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
 
                             <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
                                 <input value={salesHistSearch} onChange={e => setSalesHistSearch(e.target.value)} placeholder="Search item # (e.g. HAFICBR1)…" style={{ flex: 1, maxWidth: '300px', padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
+                                <select value={snapWatch} onChange={e => setSnapWatch(e.target.value)} title="Filter by the item's watchlist (from the Master Library)" style={{ padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem', background: snapWatch ? 'var(--paper-2)' : '#fff' }}>
+                                    <option value="">All Watchlists</option>
+                                    <option value="NONE">None / Unassigned</option>
+                                    {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
+                                </select>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{salesHist.loading ? 'Loading…' : `${rows.length} item${rows.length === 1 ? '' : 's'}`}</span>
                                 <button onClick={lockRetiredByInternalId} disabled={!salesHist.withOld} title="Notate the OLD counterparts by NetSuite internal ID and hide them app-wide" style={{ marginLeft: 'auto', padding: '9px 16px', background: salesHist.withOld ? 'var(--brass)' : 'var(--paper-2)', color: salesHist.withOld ? '#fff' : 'var(--ink-soft)', border: salesHist.withOld ? 'none' : '1px solid var(--line)', cursor: salesHist.withOld ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🔒 Lock {salesHist.withOld || ''} OLD</button>
                                 <button onClick={downloadSalesHistoryCsv} disabled={!rows.length} style={{ padding: '9px 16px', background: rows.length ? 'var(--ink)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⬇ Download CSV</button>
-                                <button onClick={generateFinishingWOs} disabled={genBusy || !rows.length} title="Create finishing work orders for every row with an Order qty and send them to the Finishing Floor" style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : '⚙ Generate Work Orders'}</button>
+                                <button onClick={generateOrders} disabled={genBusy || !rows.length} title="Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → one finishing WO each; in-house items with a vendor ask PO-or-WO per item" style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : '⚙ Generate Orders (PO + WO)'}</button>
                             </div>
 
                             <div style={{ overflow: 'auto', flex: 1, border: '1px solid var(--line)' }}>
@@ -1054,7 +1130,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         <tbody>
                                             {rows.map(r => {
                                                 const info = reorderFor(r);
-                                                const ov = orderQty[r.internalId] ?? info.recommended;
+                                                // Order is ALWAYS entered by hand — Rec is guidance, never a prefill.
+                                                const ov = orderQty[r.internalId] ?? '';
                                                 return (
                                                 <tr key={r.internalId}>
                                                     <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}</td>
@@ -1069,7 +1146,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <td style={{ ...numTd }}>{r.onOrd > 0 ? <button onClick={() => setOnOrdModal(r)} title="Open POs / work orders — click for detail" style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{Math.round(r.onOrd)}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{info.minOnHand || '·'}</td>
                                                     <td style={{ ...numTd, fontWeight: 600, color: info.recommended > 0 ? '#3a7d44' : 'var(--line)' }}>{info.recommended || '·'}</td>
-                                                    <td style={{ ...numTd }}><input type="number" min="0" value={ov} onChange={e => setOrderQty(prev => ({ ...prev, [r.internalId]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', outline: 'none' }} /></td>
+                                                    <td style={{ ...numTd }}><input type="number" min="0" value={ov} placeholder="0" onChange={e => setOrderQty(prev => ({ ...prev, [r.internalId]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', outline: 'none' }} /></td>
                                                     <td style={{ ...numTd }}>{(info.isPole && /8(1[05])/.test(String(r.itemid))) ? <button title="Cut 8 ft rods down to 6 ft / 4 ft" onClick={() => setCutModal({ itemid: r.itemid, internalId: r.internalId, available: info.available, qty: '', target: '4FT' })} style={{ padding: '3px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>✂</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                 </tr>
                                                 );
@@ -1197,6 +1274,32 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     </div>
                 );
             })()}
+
+            {/* 🔀 PO-vs-WO CHOOSER — in-house items that ALSO carry a vendor: pick sourcing per item */}
+            {routeModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ background: '#fff', padding: '32px', width: '720px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                        <h2 style={{ margin: '0 0 6px 0', fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>Choose Sourcing</h2>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>These items are set up in-house but also carry a vendor — purchase order to the vendor, or work order to the floor?</div>
+                        {routeModal.items.map((x, idx) => (
+                            <div key={x.r.internalId} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '10px 0', borderBottom: '1px solid var(--paper-2)' }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: 'var(--ink)' }}>{x.r.itemid} <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}>× {x.qty}</span></div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{x.info.part?.itemName || ''} · vendor: {x.info.part?.manufacturingSpecs?.vendorName}</div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                    <button onClick={() => setRouteModal(m => ({ ...m, items: m.items.map((y, i) => i === idx ? { ...y, choice: 'PO' } : y) }))} style={{ padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', border: `1px solid ${x.choice === 'PO' ? 'var(--brass)' : 'var(--line)'}`, background: x.choice === 'PO' ? 'var(--brass)' : '#fff', color: x.choice === 'PO' ? '#fff' : 'var(--ink)' }}>PO → {String(x.info.part?.manufacturingSpecs?.vendorName || 'vendor').split(' ')[0]}</button>
+                                    <button onClick={() => setRouteModal(m => ({ ...m, items: m.items.map((y, i) => i === idx ? { ...y, choice: 'WO' } : y) }))} style={{ padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', border: `1px solid ${x.choice === 'WO' ? 'var(--ink)' : 'var(--line)'}`, background: x.choice === 'WO' ? 'var(--ink)' : '#fff', color: x.choice === 'WO' ? '#fff' : 'var(--ink)' }}>WO → Floor</button>
+                                </div>
+                            </div>
+                        ))}
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '20px' }}>
+                            <button onClick={() => setRouteModal(null)} style={{ padding: '12px 22px', background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Cancel</button>
+                            <button onClick={() => { const m = routeModal; setRouteModal(null); executeOrders([...m.buy, ...m.items.filter(x => x.choice === 'PO')], [...m.make, ...m.items.filter(x => x.choice === 'WO')]); }} style={{ padding: '12px 22px', background: '#3a7d44', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Continue → Generate</button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {wipModal && (
                 <div onClick={() => setWipModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
