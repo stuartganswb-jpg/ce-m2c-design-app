@@ -6,7 +6,7 @@
 // saved to the assembly doc (specSheetOverrides). Wall-mount styles carry bulk-entered
 // dims in system/spec_sheet_config. Editions: H1 (internal) or Fabricut customer codes.
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { doc, getDoc, setDoc, updateDoc, getDocs, query, collection, where } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, getDocs, query, collection, where, deleteField } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { SIZE_FAMILIES } from '../Shared/sizeMatrix';
 import { loadGLBScene } from '../Shared/componentExport';
@@ -69,12 +69,16 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // registry). Mapping lives in system/spec_sheet_config.sizeSources[family]["dia|proj"]; the
   // family's base cell always uses the assembly the modal was opened with.
   const sizeFamilyKey = React.useMemo(() => {
+    const counts = {};
     for (const p of (basePins || [])) {
       const part = (libraryParts || []).find(x => x.id === p.partId || x.itemId === p.partId || x.legacyErpId === p.partId);
       const fam = part?.manufacturingSpecs?.customData?.sizeKey?.family;
-      if (fam) return fam;
+      if (fam) counts[fam] = (counts[fam] || 0) + 1;
     }
-    return null;
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    // ≥5 family-stamped pins = a genuine size-family assembly. A stray cross-collection pin
+    // (Brimar/Flat Iron assemblies share the odd H1 plate) must NOT sprout size dropdowns.
+    return top && top[1] >= 5 ? top[0] : null;
   }, [basePins, libraryParts]);
   const sizeFam = sizeFamilyKey ? SIZE_FAMILIES[sizeFamilyKey] : null;
   const [sizeSel, setSizeSel] = useState(null); // { dia, proj }
@@ -123,6 +127,20 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         .filter(a => a.manufacturingSpecs?.cadUrl)
         .sort((a, b) => String(a.itemName || '').localeCompare(String(b.itemName || ''))));
     } catch (e) { setSrcPickerList([]); }
+  };
+  // Undo a mis-registered cell (e.g. the wrong assembly picked from the list): removes the
+  // mapping so the cell goes back to "no spec geometry registered".
+  const clearCellSource = async () => {
+    if (!sizeSel || !sizeSources?.[sizeFamilyKey]?.[cellKey]) { setShowSrcPicker(false); return; }
+    try {
+      await updateDoc(doc(db, 'system', 'spec_sheet_config'), { [`sizeSources.${sizeFamilyKey}.${cellKey}`]: deleteField() });
+      const next = { ...(sizeSources || {}) };
+      next[sizeFamilyKey] = { ...(next[sizeFamilyKey] || {}) };
+      delete next[sizeFamilyKey][cellKey];
+      setSizeSources(next);
+      setShowSrcPicker(false);
+      setSrcPickId('');
+    } catch (e) { alert('Failed to remove the mapping: ' + (e.message || e)); }
   };
   const saveCellSource = async () => {
     const pick = (srcPickerList || []).find(a => a.id === srcPickId);
@@ -230,7 +248,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // what actually distinguishes them.
         const plateIsReturn = (p) => {
           const cl = clusterById[p.clusterId];
-          return !!(p.returnOnly || cl?.returnOnly || cl?.usesReturnPlates);
+          // Flags first; the LOCKED code grammar backstops legacy untagged pins — a family
+          // ending RBP/RCP is a return plate even on assemblies built before the tag spec
+          // (the retired 3.625" source paired ILE with RCP without this).
+          return !!(p.returnOnly || cl?.returnOnly || cl?.usesReturnPlates) || /R[BC]P$/i.test(familyOf(p.partName));
         };
         // inline plates (the I set, at pole height) pair ONLY with inline brackets (the
         // ILE clip); standard plates (the D set, at arm height) pair with the rest —
@@ -271,7 +292,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // ---- derive pages from choices (re-chunked when the scale mode changes) ----
   useEffect(() => {
     if (!choiceData) return;
-    const { brackets, stdFams = {}, inlFams = {}, retFams = {}, platesFlagged, inlineFlagged, finials = [], returnArms = [], insideMounts = [] } = choiceData;
+    const { brackets, stdFams = {}, inlFams = {}, platesFlagged, inlineFlagged, finials = [], insideMounts = [] } = choiceData;
+    // Returns don't exist at 3-5/8" projection (sizeMatrix returnsMinProj) — an S cell prints
+    // NO return-plate families and NO return-arm pages, matching the CPQ availability rule.
+    const returnsHere = !sizeFam || !sizeSel || (sizeFam.returnsMinProj || []).includes(sizeSel.proj);
+    const retFams = returnsHere ? (choiceData.retFams || {}) : {};
+    const returnArms = returnsHere ? (choiceData.returnArms || []) : [];
     // 1:1 rows are ~4" tall (ring drop + plate + padding) — two fit on 11×17's 10.5" printable height
     const maxRows = scaleMode === 'actual' ? 2 : MAX_ROWS_PER_PAGE;
     const pageList = [];
@@ -321,7 +347,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     pageList.push({ key: '__WM__', title: '⊞ Wall mounts (1:1)', family: '' });
     setPages(pageList);
     setPageIndex(0);
-  }, [choiceData, scaleMode, clusterById]);
+  }, [choiceData, scaleMode, clusterById, sizeFam, sizeSel]);
 
   // ---- build rows for a page (cached per bracket × family) ----
   const buildRows = useCallback((bracketPin, familyPins, opts = {}) => {
@@ -330,7 +356,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (!bracket.length) throw new Error(`Bracket node "${bracketPin.choiceNode}" not found in GLB.`);
     const poleNodes = nodesFor('POLE');
     const ringNodes = nodesFor('RING');
-    const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
+    let pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
+    if (!pole.length) {
+      // Legacy source assemblies (pre-canonical tags) may have no resolvable POLE cluster —
+      // find the rod by NODE NAME so the drawing still gets its axes and break marks.
+      const nameHits = [];
+      scene.traverse(o => { if (o.isMesh && /pole|rod/i.test(o.name || '') && !/finial|bracket|plate|ring|screw/i.test(o.name || '')) nameHits.push(o.name); });
+      if (nameHits.length) pole = extractWorldMeshes(scene, nameHits);
+    }
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
     // gets its own labeled detail image in the page corner.
@@ -343,7 +376,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     }
     let ring = [];
     const plateChoices = familyPins || [];
-    if (!pole.length) throw new Error('No POLE cluster nodes found.');
+    if (!pole.length) throw new Error('No POLE cluster nodes found — tag this source assembly\'s pole cluster (category POLE) in 1.6 / ⚖.');
     // basic brackets have no plate — the bracket itself marks the wall side for axis inference
     const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
     const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
@@ -855,6 +888,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
                 {(srcPickerList || []).map(a => <option key={a.id} value={a.id}>{a.itemName || a.itemId}</option>)}
               </select>
               <button style={btnOn} disabled={!srcPickId} onClick={saveCellSource}>Save as {cellLabel} source</button>
+              {!!sizeSources?.[sizeFamilyKey]?.[cellKey] && <button style={{ ...btn, color: '#b00020', borderColor: '#b00020' }} title="Undo — remove this cell's mapping entirely" onClick={clearCellSource}>✕ Remove mapping</button>}
               {showSrcPicker && <button style={btn} onClick={() => setShowSrcPicker(false)}>Cancel</button>}
             </div>
             <div style={{ fontSize: '0.75rem', color: '#7a6a45', marginTop: '6px' }}>
