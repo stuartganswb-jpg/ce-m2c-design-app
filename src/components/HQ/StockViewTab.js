@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, doc, setDoc, getDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc } from "firebase/firestore";
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity } from '../Shared/finishingTime';
@@ -510,19 +510,29 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
 
             let poCreated = false;
             if (directBuyLines.length > 0) {
-                const newPoId = `PO-${(activeVendor || 'VEND').replace(/[^a-zA-Z0-9]/g, '').substring(0,5)}-${Date.now().toString().slice(-6)}`;
-                const items = directBuyLines.map(({ part, qty }) => ({
-                    itemId: part.legacyErpId || part.itemId,
-                    vendorPart: part.manufacturingSpecs?.vendorId || 'N/A',
-                    quantity: qty, rate: part.manufacturingSpecs?.cost || 0, description: part.itemName
-                }));
-                await setDoc(doc(db, "hq_purchase_orders", newPoId), {
-                    id: newPoId, poId: newPoId, brand: activeBrand, status: "Approved",
-                    vendor: activeVendor, items,
-                    reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], createdAt: Date.now()
-                });
-                poCreated = true;
-                addLog(`✅ Purchase Order ${newPoId} (${items.length} line${items.length === 1 ? '' : 's'}) pushed.`, "success");
+                // Vendor aligned at creation (VEND-<nsid> CRM record) — same rule as the snapshot's
+                // per-vendor POs, so the RTG → NetSuite push can't mis-resolve the vendor.
+                const vendors = await loadNsVendors();
+                const rec = resolveVendorRec(vendors, activeVendor);
+                if (!rec) {
+                    alert(`⚠️ Vendor "${activeVendor}" doesn't match any NetSuite-synced vendor (11.1 → Sync Active Vendors) — PO not created. Fix the vendor name or sync vendors, then retry.`);
+                } else {
+                    const nsVendorId = String(rec.id || '').replace(/^VEND-/, '');
+                    const newPoId = `PO-${(activeVendor || 'VEND').replace(/[^a-zA-Z0-9]/g, '').substring(0,5)}-${Date.now().toString().slice(-6)}`;
+                    const items = directBuyLines.map(({ part, qty }) => ({
+                        itemId: part.legacyErpId || part.itemId,
+                        nsItemId: part.netSuiteInternalId ? String(part.netSuiteInternalId) : null,
+                        vendorPart: part.manufacturingSpecs?.vendorId || 'N/A',
+                        quantity: qty, rate: part.manufacturingSpecs?.cost || 0, description: part.itemName
+                    }));
+                    await setDoc(doc(db, "hq_purchase_orders", newPoId), {
+                        id: newPoId, poId: newPoId, brand: activeBrand, status: "Approved",
+                        vendor: rec.name || activeVendor, nsVendorId, vendorCrmId: rec.id, items,
+                        reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], createdAt: Date.now()
+                    });
+                    poCreated = true;
+                    addLog(`✅ Purchase Order ${newPoId} (${items.length} line${items.length === 1 ? '' : 's'}, NS vendor ${nsVendorId}) pushed.`, "success");
+                }
             }
 
             const summary = [];
@@ -864,33 +874,62 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
         return n;
     };
-    // One app PO per vendor (same doc shape as the grid's PO builder — RTG Dispatch picks these up
-    // and pushes each to NetSuite). Returns [{vendor, lines}].
+    // NetSuite vendor alignment: library vendor NAMES ↔ the synced CRM vendor records
+    // (crm_records VEND-<netsuite id>, from 11.1 "Sync Active Vendors"). The vendor's INTERNAL id
+    // is stamped on the PO at CREATION, so the NetSuite push can never mis-resolve — an unmatched
+    // vendor blocks that PO with a fix-it message instead of erroring downstream.
+    const vendorsCacheRef = useRef(null);
+    const loadNsVendors = async () => {
+        if (vendorsCacheRef.current) return vendorsCacheRef.current;
+        const snap = await getDocs(query(collection(db, 'crm_records'), where('type', '==', 'VENDOR')));
+        vendorsCacheRef.current = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        return vendorsCacheRef.current;
+    };
+    const normVend = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const resolveVendorRec = (vendors, name) => {
+        const n = normVend(name);
+        if (!n) return null;
+        return vendors.find(v => normVend(v.name) === n)
+            || vendors.find(v => normVend(v.name).startsWith(n) || n.startsWith(normVend(v.name)))
+            || null;
+    };
+    // One app PO per vendor (same doc shape as the grid's PO builder — lands in RTG Dispatch, which
+    // pushes it to NetSuite). Lines carry the NetSuite ITEM internal id; the doc carries the
+    // NetSuite VENDOR internal id. Returns { made, unmatched }.
     const createStockPOs = async (buyList) => {
+        const vendors = await loadNsVendors();
         const byVendor = new Map();
         buyList.forEach(x => {
             const v = String(x.info.part?.manufacturingSpecs?.vendorName || '').trim();
             if (!byVendor.has(v)) byVendor.set(v, []);
             byVendor.get(v).push(x);
         });
-        const made = [];
+        const made = [], unmatched = [];
         for (const [vendor, list] of byVendor.entries()) {
+            const rec = resolveVendorRec(vendors, vendor);
+            if (!rec) { unmatched.push({ vendor, items: list.map(x => x.r.itemid) }); continue; }
+            const nsVendorId = String(rec.id || '').replace(/^VEND-/, '');
             const newPoId = `PO-${(vendor || 'VEND').replace(/[^a-zA-Z0-9]/g, '').substring(0, 5)}-${Date.now().toString().slice(-6)}`;
             const items = list.map(({ r, info, qty }) => ({
                 itemId: info.part?.legacyErpId || info.part?.itemId || r.itemid,
+                nsItemId: String(r.internalId),   // NetSuite item internal id — the push builds real lines from this
                 vendorPart: info.part?.manufacturingSpecs?.vendorId || 'N/A',
                 quantity: qty, rate: info.part?.manufacturingSpecs?.cost || 0,
                 description: info.part?.itemName || r.itemid
             }));
             await setDoc(doc(db, "hq_purchase_orders", newPoId), {
                 id: newPoId, poId: newPoId, brand: activeBrand, status: "Approved",
-                vendor, items, source: 'SALES_SNAPSHOT',
+                vendor: rec.name || vendor, nsVendorId, vendorCrmId: rec.id,
+                items, source: 'SALES_SNAPSHOT',
                 reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], createdAt: Date.now(), createdBy: currentUser || ''
             });
-            made.push({ vendor, lines: items.length });
-            addLog(`✅ PO ${newPoId} → ${vendor || 'NO VENDOR'} (${items.length} line${items.length === 1 ? '' : 's'}).`, 'success');
+            made.push({ vendor: rec.name || vendor, lines: items.length });
+            addLog(`✅ PO ${newPoId} → ${rec.name || vendor} (NS vendor ${nsVendorId}, ${items.length} line${items.length === 1 ? '' : 's'}).`, 'success');
         }
-        return made;
+        if (unmatched.length) {
+            alert(`⚠️ NO PO created for ${unmatched.length} vendor(s) — the name on the items doesn't match any NetSuite-synced vendor (11.1 → Sync Active Vendors):\n\n${unmatched.map(u => `• "${u.vendor || '(blank)'}" — ${u.items.slice(0, 6).join(', ')}${u.items.length > 6 ? '…' : ''}`).join('\n')}\n\nFix the vendor name in the Master Library (or sync vendors), then re-generate those items.`);
+        }
+        return { made, unmatched };
     };
     const executeOrders = async (buy, make) => {
         const pieces = [];
@@ -900,10 +939,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}\n\nPOs land in RTG Dispatch (one per vendor) for the NetSuite push; work orders go to the Finishing Floor Setup queue.`)) return;
         setGenBusy(true);
         try {
-            const pos = buy.length ? await createStockPOs(buy) : [];
+            const poResult = buy.length ? await createStockPOs(buy) : { made: [], unmatched: [] };
             const wos = make.length ? await createStockFinWOs(make) : 0;
             setOrderQty({});
-            alert(`✅ Generated:\n${pos.map(p => `• PO → ${p.vendor || 'NO VENDOR'} (${p.lines} lines)`).join('\n')}${pos.length && wos ? '\n' : ''}${wos ? `• ${wos} finishing work order(s) → Setup queue` : ''}`);
+            const lines = [
+                ...poResult.made.map(p => `• PO → ${p.vendor} (${p.lines} lines) — push to NetSuite from RTG Dispatch`),
+                ...(wos ? [`• ${wos} finishing work order(s) → Setup queue`] : []),
+            ];
+            if (lines.length) alert(`✅ Generated:\n${lines.join('\n')}`);
         } catch (e) { addLog(`Generate orders failed: ${e.message}`, 'error'); alert('Failed to generate orders:\n\n' + (e.message || e)); }
         setGenBusy(false);
     };

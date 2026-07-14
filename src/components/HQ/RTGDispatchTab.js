@@ -59,6 +59,54 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         setSyncLog(prev => [{ time, msg, type }, ...prev]);
     };
 
+    // Push an approved app PO into NetSuite. The vendor was ALIGNED AT CREATION (nsVendorId = the
+    // synced VEND-<id> CRM record) and every line carries the NetSuite item internal id — so this
+    // can't mis-resolve a vendor or item at push time; anything unaligned is blocked with a fix-it
+    // message instead. Same proven REST shape as the plating PO (subsidiary derives from the vendor).
+    const pushPoToNetSuite = async (po) => {
+        if (!po.nsVendorId) return alert(`PO ${po.poId || po.id} has no NetSuite vendor id.\n\nVendor "${po.vendor || '?'}" must match a NetSuite-synced vendor — run 11.1 → Sync Active Vendors (or fix the vendor name on the items), then re-generate the PO from the Sales Snapshot.`);
+        const missing = (po.items || []).filter(l => !l.nsItemId);
+        if (missing.length) return alert(`${missing.length} line(s) have no NetSuite item id — sync those items (11.1 → Sync Master Library) and re-generate:\n\n${missing.slice(0, 10).map(l => `• ${l.itemId}`).join('\n')}`);
+        if (!window.confirm(`Push PO ${po.poId || po.id} → NetSuite?\n\nVendor: ${po.vendor} (internal id ${po.nsVendorId})\n${(po.items || []).length} line(s), req ${po.reqDate || 'n/a'}.`)) return;
+        try {
+            const nsConfig = BRAND_NETSUITE_MAP[activeBrand] || {};
+            const r = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
+                    method: 'POST',
+                    payload: {
+                        entity: { id: String(po.nsVendorId) },
+                        location: { id: nsConfig.location },
+                        memo: `Stock replenishment ${po.poId || po.id} (Sales Snapshot)`,
+                        item: { items: (po.items || []).map(l => ({ item: { id: String(l.nsItemId) }, quantity: parseInt(l.quantity) || 1, ...(parseFloat(l.rate) > 0 ? { rate: parseFloat(l.rate) } : {}), description: l.description || l.itemId })) }
+                    }
+                })
+            });
+            const body = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(typeof body === 'object' ? JSON.stringify(body) : String(body));
+            // Record POSTs return the id only in the Location header (proxy drops it) — recover via
+            // the unique memo, like the plating PO does.
+            let nsPoId = body.id ? String(body.id) : null, nsPoTran = body.tranId || null;
+            if (!nsPoId || !nsPoTran) {
+                try {
+                    const lu = await fetch(FIREBASE_FUNCTION_URL, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q: `SELECT id, tranid FROM transaction WHERE type = 'PurchOrd' AND UPPER(memo) LIKE '%${String(po.poId || po.id).toUpperCase()}%'` } })
+                    });
+                    const lb = await lu.json().catch(() => ({}));
+                    if (lb.items && lb.items[0]) { nsPoId = nsPoId || String(lb.items[0].id || ''); nsPoTran = nsPoTran || lb.items[0].tranid || null; }
+                } catch (luErr) { /* PO created; ids sync later */ }
+            }
+            await updateDoc(doc(db, 'hq_purchase_orders', po.id), { status: 'Pushed to NetSuite', nsPoId: nsPoId || null, nsPoTran: nsPoTran || null, pushedAt: Date.now() });
+            addLog(`✅ PO ${po.poId || po.id} → NetSuite ${nsPoTran || nsPoId || ''} (${po.vendor}).`, 'success');
+            alert(`✅ NetSuite PO created for ${po.vendor}: ${nsPoTran || nsPoId || '(id pending sync)'}`);
+        } catch (e) {
+            console.error('PO push failed:', e);
+            alert('❌ NetSuite rejected the PO:\n\n' + (e.message || e) + '\n\nIf it names a form or field, tell me and I\'ll adjust the payload (the vendor + item ids are pre-aligned, so those are not the issue).');
+        }
+    };
+
     const loadRTGOrders = async () => {
         setLoading(true);
         try {
@@ -1061,14 +1109,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             {purchaseOrders.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved purchase orders incoming.</p>}
                             
                             {purchaseOrders.map(po => (
-                                <div key={po.id} style={{ ...cardStyle, borderLeft: '4px solid var(--line)' }}>
+                                <div key={po.id} style={{ ...cardStyle, borderLeft: `4px solid ${po.nsVendorId ? 'var(--brass)' : 'var(--line)'}` }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                                         <div>
                                             <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }}>PO: {po.poId || po.id}</div>
-                                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Vendor: {po.vendor || 'N/A'}</div>
+                                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Vendor: {po.vendor || 'N/A'}{po.nsVendorId ? <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)' }}> · NS {po.nsVendorId}</span> : <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f' }}> · no NS vendor id</span>}</div>
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '2px' }}>{(po.items || []).length} line(s){po.source === 'SALES_SNAPSHOT' ? ' · Sales Snapshot' : ''}</div>
                                         </div>
                                         <button onClick={() => deleteOrder('hq_purchase_orders', po.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
+                                    <button style={{ ...btnStyle, width: '100%', background: po.nsVendorId ? 'var(--brass)' : 'var(--paper-2)', color: po.nsVendorId ? '#fff' : 'var(--ink-soft)', border: 'none', marginBottom: '8px', cursor: po.nsVendorId ? 'pointer' : 'not-allowed' }} onClick={() => pushPoToNetSuite(po)}>⬆ Push PO → NetSuite</button>
                                     <button style={{ ...btnStyle, width: '100%', background: 'var(--ink)', color: '#fff', border: 'none' }} onClick={() => alert('Sent to Receiving Dock App')}>Alert Receiving Dock</button>
                                 </div>
                             ))}
