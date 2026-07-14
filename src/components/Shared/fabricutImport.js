@@ -125,6 +125,14 @@ export function buildFabricutPlan(rows, libIndex, nowTs) {
     // group xlsx rows by base code
     const groups = new Map();
     rows.forEach(r => {
+        // BARE row = just a CE code, nothing else (Jul13 sheet lists species/variant codes this way
+        // to document them). It must NOT become a group: (a) an all-null tier would stamp the doc
+        // as explicit-$0 ("included with arm" semantics — wrong for a wood species item), and
+        // (b) being a group blocks the dash-species claim below. Rows with metadata but no prices
+        // (BP plates, finial tops/collars priced inside their combo) still group — their explicit
+        // nulls are the intended $0-component semantics.
+        const isBare = !r.desc && !r.collection && !r.fabCode && r.retail == null && r.sale == null && r.wholesale == null;
+        if (isBare) return;
         const [base, suffix = ''] = r.ceItem.split('/');
         if (!groups.has(base)) groups.set(base, { base, tiers: {}, exact: {}, desc: r.desc, collection: r.collection, itemType: r.itemType, fabByTier: {} });
         const g = groups.get(base);
@@ -166,6 +174,16 @@ export function buildFabricutPlan(rows, libIndex, nowTs) {
                 if (!/^[A-Z0-9]{1,3}$/.test(sfx) || groups.has(li.code)) return;
                 targets.push({ li, claimed: true });
             });
+            // Stem-different species (wood pole → H1-138WHTOAK/WLNUT): the mapped codes don't share
+            // the base's stem, so the dash rule can't reach them — claim them explicitly so the
+            // species items carry the same per-foot Fabricut pricing as their base.
+            const stemMap = SPECIES_STEM_MAPS[g.base];
+            if (stemMap) {
+                Object.values(stemMap).forEach(code => {
+                    const c = String(code).trim().toUpperCase();
+                    libIndex.forEach(li => { if (li.code === c && !groups.has(li.code)) targets.push({ li, claimed: true }); });
+                });
+            }
         }
         if (!targets.length) { gaps.push({ base: g.base, desc: g.desc, collection: g.collection }); return; }
         basesMatched++;
@@ -179,6 +197,11 @@ export function buildFabricutPlan(rows, libIndex, nowTs) {
         // with H1-1JNR / H1-138JNR so joiners size-swap. (The bare pole H1-75R stays style "R",
         // matching H1-1R / H1-138R; plates RBP-/RCP- are untouched — no dash after the R.)
         if (style && fam?.family === 'H1-RND' && style.startsWith('R-')) style = style.slice(2);
+        // Wood arms (Jul13): W{S|E|6}B — the projection letter sits INSIDE the code, so the trailing
+        // strip in styleFromCode can't catch it. Collapse to one style 'WB' + the desc-derived proj
+        // letter so the Projection step swaps WSB ↔ WEB ↔ W6B like the metal 'B' arms. WDB (double,
+        // dual-projection) keeps its own style — doubles sit outside the projection matrix.
+        if (style && /^W[SE6]B$/.test(style)) style = 'WB';
 
         targets.forEach(({ li, claimed }) => {
             if (claimed) {

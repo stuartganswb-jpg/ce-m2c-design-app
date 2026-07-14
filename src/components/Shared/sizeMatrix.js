@@ -149,7 +149,12 @@ export function sizeVariantOf(part, sel, sizeIndex) {
 // customData.speciesMap = { "-O": "H1-138WHTOAK", "-W": "H1-138WLNUT" }. Runs BETWEEN the size swap
 // and the /P //EPn finish-variant swap; identity when the finish has no bomSuffix.
 export function speciesVariantOf(part, finishObj, findByCode) {
-    const sfx = String(finishObj?.bomSuffix || '').trim().toUpperCase();
+    let sfx = String(finishObj?.bomSuffix || '').trim().toUpperCase();
+    // Tolerant spellings (Stuart tags finishes "OAK" / "WALNUT" in 4.5): normalize to the dash
+    // suffix the item codes actually carry (-O oak / -W walnut); any other value gains the dash.
+    if (sfx === 'OAK' || sfx === 'O' || sfx === '-O') sfx = '-O';
+    else if (sfx === 'WALNUT' || sfx === 'WAL' || sfx === 'W' || sfx === '-W') sfx = '-W';
+    else if (sfx && !sfx.startsWith('-')) sfx = `-${sfx}`;
     if (!part || !sfx || typeof findByCode !== 'function') return part;
     const baseCode = String((part.legacyErpId && part.legacyErpId !== 'PENDING' ? part.legacyErpId : part.itemId) || '').trim().toUpperCase();
     if (!baseCode || baseCode.includes('/')) return part;
